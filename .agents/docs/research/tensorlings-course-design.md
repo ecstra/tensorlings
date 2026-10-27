@@ -80,8 +80,9 @@ Each rule gets exercises where the wrong combination fails and the right one wor
 ## The app
 
 - `run.py` draws a full-screen app with the `rich` package in the terminal's alternate screen, so it redraws in place and never scrolls.
-- The screen follows rustlings. From the top it shows a lesson panel titled with the exercise's title that scrolls with the arrow keys, a hint panel that `h` opens and closes, a result panel with each test, two labeled lines with the progress and the exercise file, and a key bar.
-- The owner tried a header at the top first. Two bare lines felt cramped, a dot between the parts looked bad, and spaced words with no labels meant nothing. So every piece on the screen has a label or sits in a titled panel.
+- From the top the screen shows one labeled line with the exercise file and the progress, a lesson panel titled with the exercise's title that scrolls with the arrow keys, a hint panel that `h` opens and closes, a result panel with each test, and a key bar.
+- On a narrow terminal the progress bar shrinks, then goes, so the file path stays whole. See `status_line` in `run.py`.
+- The owner tried several tops before this one. Two bare lines felt cramped, a dot between the parts looked bad, and spaced words with no labels meant nothing. Rustlings keeps progress and the file at the bottom, and the owner wanted them on one line at the top. So every piece on the screen has a label or sits in a titled panel.
 - The hint has its own panel between the lesson and the result, because it is help and not a result.
 - Keys are `n` next, `h` to show or hide the hint, `l` list, `x` reset, `q` quit, `r` run again, and the arrows to scroll.
 - The list screen works like rustlings, with DONE and PENDING, the current exercise marked, and keys to move, continue at, reset, search and filter.

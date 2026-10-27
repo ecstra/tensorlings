@@ -29,6 +29,7 @@ born: 2026-10-27
 | 9 | Show the hint in its own panel instead of inside the result | | owner | done |
 | 10 | Drop the dot separators from the header and panel titles | | owner | done |
 | 11 | Move progress and the file under the result with labels, like rustlings | | owner | done |
+| 12 | Put Exercise and Progress on one line at the top | | owner | done |
 
 ## Done when
 

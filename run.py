@@ -1930,45 +1930,50 @@ def without_double_blanks(lines: list[list[Segment]]) -> list[list[Segment]]:
 STATUS_HEIGHT = 2
 
 
-def status_lines(
+def status_line(
     exercise: Exercise,
     progress: Progress,
+    width: int,
 ) -> RenderableType:
-    """Progress and the current file above the keys, labeled the way rustlings does it."""
     done = len(progress.done)
     total = len(EXERCISES)
-    progress_line = Table.grid(padding=(0, 2))
-    progress_line.add_row(
-        ProgressBar(
-            total=total,
-            completed=done,
-            width=20,
-            complete_style="green",
-        ),
-        Text(f"{done} of {total} exercises done"),
+    cells: list[RenderableType] = [
+        Text("Exercise", style="dim"),
+        Text(relative(exercise.path), style=ACCENT),
+        Text("Progress", style="dim"),
+    ]
+
+    # The learner needs the whole file path more than the bar, so on a narrow
+    # terminal the bar shrinks, then goes.
+    if width >= 80:
+        cells.append(
+            ProgressBar(
+                total=total,
+                completed=done,
+                width=20 if width >= 100 else 10,
+                complete_style="green",
+            ),
+        )
+
+    cells.append(Text(f"{done} of {total} done"))
+
+    grid = Table.grid(
+        expand=True,
+        padding=(0, 2),
     )
 
-    grid = Table.grid(padding=(0, 3))
-    grid.add_column(
-        style="dim",
-        no_wrap=True,
-    )
-    grid.add_column(
-        no_wrap=True,
-        overflow="ellipsis",
-    )
-    grid.add_row(
-        "Progress",
-        progress_line,
-    )
-    grid.add_row(
-        "Exercise",
-        Text(relative(exercise.path), style=ACCENT),
-    )
+    for cell in cells:
+        grid.add_column(
+            ratio=1 if cell is cells[1] else None,
+            no_wrap=True,
+            overflow="ellipsis",
+        )
+
+    grid.add_row(*cells)
 
     return Padding(
         grid,
-        pad=(0, 1),
+        pad=(0, 1, 1, 1),
     )
 
 
@@ -2023,6 +2028,14 @@ def render_watch(
 
     sections: list[Layout] = [
         Layout(
+            status_line(
+                exercise=exercise,
+                progress=progress,
+                width=width,
+            ),
+            size=STATUS_HEIGHT,
+        ),
+        Layout(
             Panel(
                 ScrollView(
                     lines=lesson_lines,
@@ -2064,15 +2077,6 @@ def render_watch(
                 border_style=result_style,
             ),
             size=result_height,
-        ),
-    )
-    sections.append(
-        Layout(
-            status_lines(
-                exercise=exercise,
-                progress=progress,
-            ),
-            size=STATUS_HEIGHT,
         ),
     )
     sections.append(
