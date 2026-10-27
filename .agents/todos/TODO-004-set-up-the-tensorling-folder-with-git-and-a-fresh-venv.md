@@ -4,10 +4,11 @@ kind: todo
 description: the course lives in the renamed tensorling folder, under local git, with the venv rebuilt and the test tools in the repo
 updated: 2026-10-27
 links: []
-status: open
+status: done
 by: owner
 area: course
 born: 2026-10-27
+done: 2026-10-27
 ---
 
 ## What
@@ -21,9 +22,11 @@ born: 2026-10-27
 | 1 | Install the pinned packages into the new venv | | owner | done |
 | 2 | Move the screen test driver and the wrong answer checks into the repo | | owner | done |
 | 3 | Ignore the venv and the learner's own exercise files in git | | owner | done |
-| 4 | Start local git and commit the work on a branch | | owner | pending |
-| 5 | Verify the course runs from the new folder | | owner | pending |
+| 4 | Start local git and commit the work on a branch | | owner | done |
+| 5 | Verify the course runs from the new folder | | owner | done |
 
 ## Done when
 
 `git log` on the work branch holds every file of the course and the brain, `.venv/bin/python run.py dev check` passes from the new folder, and the test tools run from the repo.
+
+Met on 2026-10-27 on branch `feat/tensorlings-phase-1a`, in commits 50becdb (the agent kit), 049585a (the brain), a3b730a (the course) and da73691 (the dev tools), after the empty start commit ab5e7e1 on `main`.

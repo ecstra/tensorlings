@@ -102,7 +102,8 @@ Each rule gets exercises where the wrong combination fails and the right one wor
 - `run.py dev check` runs every exercise twice. The starting file must fail and the solution must pass.
 - A lesson lint in the dev check flags sentences over 25 words, filler words, dashes and semicolons, a missing "Why it exists" or "Your task" paragraph, a lesson taller than 48 lines at width 96, and any term from `JARGON` in `run.py` used before an exercise lists it in `introduces`. A new technical term gets added to `JARGON` the first time a lesson needs it.
 - A separate reviewer agent reads every lesson as a complete beginner before the owner sees it.
-- The app is driven in a pseudo terminal before each hand over, rendering each screen with the `pyte` terminal emulator in a throwaway environment, at a normal size and at 80 by 24.
+- `dev/wrong_answers.py` runs common wrong answers through the checks. Every one must fail with a message a beginner can act on, and the script exits with 1 if one passes. New exercises add their likely mistakes to its `CASES`.
+- `dev/drive_screen.py` drives the app in a pseudo terminal on a scratch copy of the course and prints each screen through the `pyte` terminal emulator. It runs before each hand over, at a normal size and at 80 by 24. Its docstring has the command.
 
 ## Limits on this machine
 
