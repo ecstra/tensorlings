@@ -1959,11 +1959,11 @@ def header(
     )
     grid.add_column(no_wrap=True)
     grid.add_row(
-        Text("tensorlings", style=f"bold {ACCENT}"),
+        Text.assemble(("tensorlings", f"bold {ACCENT}"), "   ", exercise.chapter.title),
         Align.right(progress_line),
     )
     grid.add_row(
-        Text.assemble((exercise.name, "bold"), " · ", exercise.title),
+        Text.assemble((exercise.name, "bold"), "   ", exercise.title),
         Align.right(Text(relative(exercise.path), style=ACCENT)),
     )
 
@@ -2036,7 +2036,7 @@ def render_watch(
                     lines=lesson_lines,
                     offset=scroll.offset,
                 ),
-                title=f"Lesson · {exercise.chapter.title}",
+                title="Lesson",
                 title_align="left",
                 subtitle=lesson_note,
                 subtitle_align="right",
@@ -2740,7 +2740,7 @@ def run_once(
                 outcome=outcome,
                 check_again="Run this command again after you change the file.",
             ),
-            title=f"{exercise.name} · {exercise.title}",
+            title=f"{exercise.name}   {exercise.title}",
             title_align="left",
             border_style="green" if outcome.passed else "red",
         ),

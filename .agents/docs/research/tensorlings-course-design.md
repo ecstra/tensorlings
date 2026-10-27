@@ -81,7 +81,7 @@ Each rule gets exercises where the wrong combination fails and the right one wor
 
 - `run.py` draws a full-screen app with the `rich` package in the terminal's alternate screen, so it redraws in place and never scrolls.
 - The screen has a header with the exercise and progress, a lesson panel that scrolls with the arrow keys, a hint panel that `h` opens and closes, a result panel with each test, and a key bar.
-- The header takes two lines and a blank one under them, the course name and progress first, then the exercise and its file. The owner found a tighter header cramped.
+- The header takes two lines and a blank one under them, the course name, chapter and progress first, then the exercise and its file. The owner found a tighter header cramped. Spacing and color separate the parts, never a dot, which the owner disliked.
 - The hint has its own panel between the lesson and the result, because it is help and not a result.
 - Keys are `n` next, `h` to show or hide the hint, `l` list, `x` reset, `q` quit, `r` run again, and the arrows to scroll.
 - The list screen works like rustlings, with DONE and PENDING, the current exercise marked, and keys to move, continue at, reset, search and filter.
