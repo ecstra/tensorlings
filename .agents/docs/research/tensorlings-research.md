@@ -1,0 +1,71 @@
+---
+name: tensorlings-research
+kind: doc
+description: what expert courses agree a deep learning expert must know, the teaching research, and the research on designing modules, behind tensorlings
+updated: 2026-10-27
+links: []
+---
+
+# tensorlings research
+
+The research behind the tensorlings course, gathered on 2026-10-27. The design built from it is in [the course design](tensorlings-course-design.md). Two earlier versions of the course, AIlings, failed with the owner and the reasons are recorded at the end, so they are not repeated.
+
+## What an expert needs, by survey
+
+The curriculum comes from what these sources agree on, not from any single framing.
+
+- Karpathy, [Neural Networks Zero to Hero](https://karpathy.ai/zero-to-hero.html) and [its repo](https://github.com/karpathy/nn-zero-to-hero): micrograd, a bigram model, an MLP language model, activations and BatchNorm, backprop by hand through tensors, a WaveNet style model, GPT, the tokenizer.
+- Karpathy, [LLM101n syllabus](https://github.com/karpathy/LLM101n): bigram, micrograd, MLP, attention, transformer, tokenization, optimization with AdamW, device, precision, distributed training, datasets, KV cache, quantization, SFT and LoRA, RLHF, PPO and DPO, deployment, VQ-VAE and the diffusion transformer.
+- [Stanford CS336](http://cs336.stanford.edu/spring2025/): tokenizer, transformer and optimizer from scratch, GPUs, Triton kernels, FlashAttention, parallelism, scaling laws, inference, evaluation, data filtering, SFT, RLHF and DPO, mixture of experts.
+- [Stanford CS231n](https://cs231n.stanford.edu/schedule.html): linear classifiers, optimizers, backprop, CNNs, BatchNorm, ResNet, RNN and LSTM, attention, detection and segmentation, distributed training, self supervised learning, VAEs, GANs, diffusion.
+- [Stanford CS224n](https://web.stanford.edu/class/cs224n/): word vectors, backprop, RNN language models, transformers, pretraining, post training, PEFT, RAG and agents, evaluation, tokenization, interpretability.
+- [MIT 6.7960](https://ocw.mit.edu/courses/6-7960-deep-learning-fall-2024/pages/syllabus/): MLPs, CNNs, RNNs, graph networks, transformers, invariances, autodiff, generalization.
+- [Dive into Deep Learning](https://d2l.ai/): linear and softmax regression, MLPs, dropout, initialization, custom layers, CNNs to ResNet and DenseNet, RNN, LSTM, GRU, encoder and decoder, beam search, attention, transformers, ViT, optimizers and schedules, multi GPU, transposed convolution, word2vec, BERT, GANs, reinforcement learning.
+- [Understanding Deep Learning](https://penguinrandomhouse.com/books/730887/understanding-deep-learning-by-simon-j-d-prince): losses, fitting, initialization, regularization, CNNs, residual networks, transformers, graph networks, GANs, normalizing flows, VAEs, diffusion, reinforcement learning.
+- [PyTorch torch.nn](https://docs.pytorch.org/docs/2.14/nn.html): the plain list of layers the field uses, linear, convolution, pooling, padding, activations, normalization (BatchNorm, GroupNorm, InstanceNorm, LayerNorm, RMSNorm), recurrent, transformer, dropout, embedding, losses, upsampling.
+- [GPT-2 to Llama comparison](https://sebastianraschka.com/faq/docs/gpt-llama-qwen-gemma-comparison.html): current language models swap LayerNorm for RMSNorm, learned positions for RoPE, the GELU MLP for SwiGLU, and full attention for grouped query attention.
+
+Every serious syllabus covers six things together, data, the model, the loss, the optimizer, the systems it runs on, and evaluation. Architecture is one of the six, which is why the course covers all of them.
+
+## The frame that failed
+
+The first two versions framed every module as a constrained MLP, a frame taken from a chat the owner pasted. It holds for some layers. Convolution is a Linear layer with most weights removed and the rest shared, and an RNN reuses one layer at every step. It fails for others.
+
+- Attention, gates and FiLM multiply two signals together, which an MLP only approximates ([Jayakumar and colleagues 2020](https://mlanthology.org/iclr/2020/jayakumar2020iclr-multiplicative)).
+- Normalizing flows need layers that run backwards exactly.
+- GANs, VAEs and diffusion are mostly a training objective around ordinary layers.
+- Reinforcement learning changes where the learning signal comes from.
+
+Other corrections to that chat, checked against sources.
+
+- The forget gate was added to the LSTM in 2000 so it can clear its memory on long input streams ([Gers and colleagues](https://mlanthology.org/neco/2000/gers2000neco-learning)). It is not only about variance.
+- Rewriting (QKᵀ)V as Q(KᵀV) is linear attention ([Katharopoulos and colleagues 2020](https://nebius.com/blog/posts/mixers-are-rnns)). Mamba is a recurrence whose update depends on the input ([paper](https://arxiv.org/pdf/2312.00752)), later shown to resemble linear attention with gates ([analysis](https://arxiv.org/pdf/2405.16605)).
+
+## Research on combining and designing modules
+
+- Programming constructs made differentiable ([The Elements of Differentiable Programming](https://arxiv.org/abs/2403.14606)): an if becomes a gate, an index becomes softmax addressing, a loop becomes recurrence, a switch becomes top k routing. Hard steps can also be relaxed with [Gumbel softmax and straight through estimators](https://arxiv.org/html/2410.13331v1) or [NeuralSort](https://www.emergentmind.com/papers/1903.08850.md).
+- Token mixing alternates with channel mixing, and that alternation matters more than which token mixer is used ([MetaFormer](https://openaccess.thecvf.com/content/CVPR2022/html/Yu_MetaFormer_Is_Actually_What_You_Need_for_Vision_CVPR_2022_paper.html)).
+- LayerNorm before each sublayer keeps gradients healthy at the start ([Xiong and colleagues 2020](https://arxiv.org/pdf/2002.04745)). A residual branch scaled from zero starts the network as the identity ([ReZero](https://arxiv.org/abs/2003.04887)).
+- Gates and residuals share a line of descent, from LSTM gates to [Highway networks](https://proceedings.neurips.cc/paper_files/paper/2015/file/215a71a12769b056c3c32e7299f1c5ed-Paper.pdf) to ResNet.
+- Conditioning a network on a side input is a scale and a shift per feature ([FiLM](https://mlanthology.org/distill/2018/dumoulin2018distill-featurewise)), the same move as AdaLN in diffusion transformers.
+- Top k routing needs a load balancing term ([Shazeer and colleagues 2017](https://arxiv.org/pdf/1701.06538)).
+- Structure follows symmetry ([Geometric Deep Learning](https://arxiv.org/abs/2104.13478)) and relations ([Battaglia and colleagues 2018](https://arxiv.org/abs/1806.01261)). Structure that matches the solving algorithm needs fewer examples ([Xu and colleagues 2020](https://arxiv.org/abs/1905.13211)).
+- Diagnose before changing the model, training error against test error ([Karpathy's recipe](https://karpathy.github.io/2019/04/25/recipe/), [ResNet](https://arxiv.org/abs/1512.03385)).
+- Broad true assumptions last and narrow tricks lose to scale ([the bitter lesson](http://www.incompleteideas.net/IncIdeas/BitterLesson.html)).
+- Small synthetic tasks that isolate one capability are how architectures get tested ([Zoology](https://arxiv.org/abs/2312.04927)).
+
+## Research on teaching
+
+- Karpathy's advice on expertise is concrete projects taken one after another, depth first, learning what each needs, and teaching what you learn ([summary](https://www.goodreads.com/author_blog_posts/24921801-the-mental-equivalent-of-sweating?tab=book)). Deliberate practice asks for small tasks with clear goals and immediate feedback ([summary](https://td.org/insights/science-of-learning-101-what-kind-of-practice-makes-expert)). So the course pairs tiny exercises with a project at the end of each part.
+- Building a thing from scratch, then using the library version, is how Dive into Deep Learning checks understanding ([section](https://D2L.AI/chapter_linear-regression/linear-regression-scratch.html)).
+- Mayer's principles ([summary](https://cloud.wikis.utexas.edu/wiki/x/8QJqAw)): cut what is not needed, highlight the key point, split material into small steps, teach the names of things before using them.
+- Plain language guidelines ([quick guide](https://www.stylemanual.gov.au/style-manual-resources/quick-guides/quick-guide-plain-language), [top ten](https://centerforplainlanguage.org/plain-language-top-ten-making-words-work/)): short sentences with one idea each, active voice, every term defined where it first appears.
+- Concrete examples before the abstract idea ([concreteness fading](https://www.doi.org/10.1007/S10648-014-9249-3)), and contrasting a failing case with a working one before explaining ([A time for telling](https://www.wright.edu/sites/www.wright.edu/files/uploads/2017/Feb/event/Schwartz_Bransford_1998_TimeForTelling.pdf)).
+
+## What failed with the owner in AIlings
+
+- Lessons in README files, which the owner never opens.
+- Exercises that were only a prediction to type in, which read as a quiz with no code to write.
+- Text that assumed knowledge the owner had forgotten, such as why a Linear layer exists at all.
+- A watch screen that scrolled instead of redrawing in place.
+- A scope too narrow for the owner's goal, only architectures and only one framing of them.
