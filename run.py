@@ -32,7 +32,6 @@ from types import ModuleType
 
 try:
     import torch
-    from rich.align import Align
     from rich.console import Console, ConsoleOptions, Group, RenderableType, RenderResult
     from rich.layout import Layout
     from rich.live import Live
@@ -1928,13 +1927,14 @@ def without_double_blanks(lines: list[list[Segment]]) -> list[list[Segment]]:
     return kept
 
 
-HEADER_HEIGHT = 3
+STATUS_HEIGHT = 2
 
 
-def header(
+def status_lines(
     exercise: Exercise,
     progress: Progress,
 ) -> RenderableType:
+    """Progress and the current file above the keys, labeled the way rustlings does it."""
     done = len(progress.done)
     total = len(EXERCISES)
     progress_line = Table.grid(padding=(0, 2))
@@ -1945,31 +1945,30 @@ def header(
             width=20,
             complete_style="green",
         ),
-        Text(f"{done} of {total} done"),
+        Text(f"{done} of {total} exercises done"),
     )
 
-    grid = Table.grid(
-        expand=True,
-        padding=(0, 2),
+    grid = Table.grid(padding=(0, 3))
+    grid.add_column(
+        style="dim",
+        no_wrap=True,
     )
     grid.add_column(
-        ratio=1,
         no_wrap=True,
         overflow="ellipsis",
     )
-    grid.add_column(no_wrap=True)
     grid.add_row(
-        Text.assemble(("tensorlings", f"bold {ACCENT}"), "   ", exercise.chapter.title),
-        Align.right(progress_line),
+        "Progress",
+        progress_line,
     )
     grid.add_row(
-        Text.assemble((exercise.name, "bold"), "   ", exercise.title),
-        Align.right(Text(relative(exercise.path), style=ACCENT)),
+        "Exercise",
+        Text(relative(exercise.path), style=ACCENT),
     )
 
     return Padding(
         grid,
-        pad=(0, 1, 1, 1),
+        pad=(0, 1),
     )
 
 
@@ -1997,7 +1996,7 @@ def render_watch(
     hint_lines = len(console.render_lines(hint, console.options.update_width(width - 4), pad=False))
     hint_height = min(hint_lines + 2, max(4, height * 25 // 100)) if show_hint else 0
 
-    lesson_height = max(3, height - HEADER_HEIGHT - 1 - hint_height - result_height - 2)
+    lesson_height = max(3, height - STATUS_HEIGHT - 1 - hint_height - result_height - 2)
     lesson_lines = without_double_blanks(
         console.render_lines(
             Markdown(exercise.lesson, code_theme=CODE_THEME),
@@ -2024,19 +2023,12 @@ def render_watch(
 
     sections: list[Layout] = [
         Layout(
-            header(
-                exercise=exercise,
-                progress=progress,
-            ),
-            size=HEADER_HEIGHT,
-        ),
-        Layout(
             Panel(
                 ScrollView(
                     lines=lesson_lines,
                     offset=scroll.offset,
                 ),
-                title="Lesson",
+                title=exercise.title,
                 title_align="left",
                 subtitle=lesson_note,
                 subtitle_align="right",
@@ -2072,6 +2064,15 @@ def render_watch(
                 border_style=result_style,
             ),
             size=result_height,
+        ),
+    )
+    sections.append(
+        Layout(
+            status_lines(
+                exercise=exercise,
+                progress=progress,
+            ),
+            size=STATUS_HEIGHT,
         ),
     )
     sections.append(
@@ -2740,7 +2741,7 @@ def run_once(
                 outcome=outcome,
                 check_again="Run this command again after you change the file.",
             ),
-            title=f"{exercise.name}   {exercise.title}",
+            title=exercise.title,
             title_align="left",
             border_style="green" if outcome.passed else "red",
         ),

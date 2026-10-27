@@ -28,6 +28,7 @@ born: 2026-10-27
 | 8 | Give the header room so the top of the screen is not cramped | | owner | done |
 | 9 | Show the hint in its own panel instead of inside the result | | owner | done |
 | 10 | Drop the dot separators from the header and panel titles | | owner | done |
+| 11 | Move progress and the file under the result with labels, like rustlings | | owner | done |
 
 ## Done when
 
