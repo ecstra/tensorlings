@@ -25,6 +25,8 @@ born: 2026-10-27
 | 5 | Drive the app in a pseudo terminal | | owner | done |
 | 6 | Get a beginner reader review and fix what it finds | | owner | done |
 | 7 | Replace the old AIlings course and write a new handover | | owner | done |
+| 8 | Give the header room so the top of the screen is not cramped | | owner | done |
+| 9 | Show the hint in its own panel instead of inside the result | | owner | done |
 
 ## Done when
 

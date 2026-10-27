@@ -80,11 +80,13 @@ Each rule gets exercises where the wrong combination fails and the right one wor
 ## The app
 
 - `run.py` draws a full-screen app with the `rich` package in the terminal's alternate screen, so it redraws in place and never scrolls.
-- The screen has a header with the exercise and progress, a lesson panel that scrolls with the arrow keys, a result panel with each test, and a key bar.
-- Keys are `n` next, `h` hint, `l` list, `x` reset, `q` quit, `r` run again, and the arrows to scroll.
+- The screen has a header with the exercise and progress, a lesson panel that scrolls with the arrow keys, a hint panel that `h` opens and closes, a result panel with each test, and a key bar.
+- The header takes two lines and a blank one under them, the course name and progress first, then the exercise and its file. The owner found a tighter header cramped.
+- The hint has its own panel between the lesson and the result, because it is help and not a result.
+- Keys are `n` next, `h` to show or hide the hint, `l` list, `x` reset, `q` quit, `r` run again, and the arrows to scroll.
 - The list screen works like rustlings, with DONE and PENDING, the current exercise marked, and keys to move, continue at, reset, search and filter.
 - Commands are `init`, `run`, `hint`, `reset`, `check-all`, `--manual-run` and `dev check`.
-- The result panel puts the most important thing first, because a tall result is cut off at the bottom. The hint comes first when shown, then the done message, then the tests. Only the first failing test shows its details, the way a compiler shows its first error. Functions that still return nothing share one note instead of one message each. See `result_body` in `run.py`.
+- The result panel puts the most important thing first, because a tall result is cut off at the bottom. The done message comes first, then the tests. Only the first failing test shows its details, the way a compiler shows its first error. Functions that still return nothing share one note instead of one message each. See `result_body` in `run.py`.
 - Common PyTorch errors get a plain words explanation above PyTorch's own message, from the table `PLAIN_ERRORS` in `run.py`. A new error that confuses learners gets a row there.
 - Anything the learner's code prints is caught and shown in the result panel, since printing straight to the screen would break the drawing.
 - Arrow keys are read one escape sequence at a time in `KeyReader.read_escape_sequence`, so a held arrow key scrolls instead of reading as escape.

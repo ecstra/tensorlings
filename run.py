@@ -32,6 +32,7 @@ from types import ModuleType
 
 try:
     import torch
+    from rich.align import Align
     from rich.console import Console, ConsoleOptions, Group, RenderableType, RenderResult
     from rich.layout import Layout
     from rich.live import Live
@@ -1493,7 +1494,7 @@ WELCOME = prose(
 
     **Keys**
 
-    - `h` shows a hint
+    - `h` shows or hides a hint
     - `l` lists every exercise
     - `x` resets the file to how it started
     - `↑` and `↓` scroll the lesson
@@ -1820,16 +1821,10 @@ def indented(
 def result_body(
     exercise: Exercise,
     outcome: Outcome | None,
-    show_hint: bool,
     check_again: str,
 ) -> RenderableType:
     """The result panel, most important first, since a tall result is cut off at the bottom."""
     parts: list[RenderableType] = []
-
-    if show_hint:
-        parts.append(Text("Hint", style="bold yellow"))
-        parts.append(indented(text=exercise.hint, left=2))
-        parts.append(Text(""))
 
     if outcome is None:
         parts.append(Text("Checking your code...", style="dim"))
@@ -1933,35 +1928,49 @@ def without_double_blanks(lines: list[list[Segment]]) -> list[list[Segment]]:
     return kept
 
 
+HEADER_HEIGHT = 3
+
+
 def header(
     exercise: Exercise,
     progress: Progress,
 ) -> RenderableType:
-    title = Text.assemble(
-        ("tensorlings", f"bold {ACCENT}"),
-        "   ",
-        (exercise.name, "bold"),
-        "   ",
-        exercise.title,
-        no_wrap=True,
-        overflow="ellipsis",
-    )
     done = len(progress.done)
     total = len(EXERCISES)
-    status = Table.grid(padding=(0, 2))
-    status.add_column(width=24)
-    status.add_column(no_wrap=True)
-    status.add_row(
+    progress_line = Table.grid(padding=(0, 2))
+    progress_line.add_row(
         ProgressBar(
             total=total,
             completed=done,
-            width=24,
+            width=20,
             complete_style="green",
         ),
-        Text.assemble(f"{done} of {total} done", "   edit ", (relative(exercise.path), ACCENT)),
+        Text(f"{done} of {total} done"),
     )
 
-    return Group(title, status)
+    grid = Table.grid(
+        expand=True,
+        padding=(0, 2),
+    )
+    grid.add_column(
+        ratio=1,
+        no_wrap=True,
+        overflow="ellipsis",
+    )
+    grid.add_column(no_wrap=True)
+    grid.add_row(
+        Text("tensorlings", style=f"bold {ACCENT}"),
+        Align.right(progress_line),
+    )
+    grid.add_row(
+        Text.assemble((exercise.name, "bold"), " · ", exercise.title),
+        Align.right(Text(relative(exercise.path), style=ACCENT)),
+    )
+
+    return Padding(
+        grid,
+        pad=(0, 1, 1, 1),
+    )
 
 
 def render_watch(
@@ -1979,12 +1988,16 @@ def render_watch(
     body = result_body(
         exercise=exercise,
         outcome=outcome,
-        show_hint=show_hint,
         check_again=check_again,
     )
     result_lines = len(console.render_lines(body, console.options.update_width(width - 4), pad=False))
     result_height = min(result_lines + 2, max(6, height * 40 // 100))
-    lesson_height = max(3, height - 3 - result_height - 2)
+
+    hint = Text(exercise.hint, overflow="fold")
+    hint_lines = len(console.render_lines(hint, console.options.update_width(width - 4), pad=False))
+    hint_height = min(hint_lines + 2, max(4, height * 25 // 100)) if show_hint else 0
+
+    lesson_height = max(3, height - HEADER_HEIGHT - 1 - hint_height - result_height - 2)
     lesson_lines = without_double_blanks(
         console.render_lines(
             Markdown(exercise.lesson, code_theme=CODE_THEME),
@@ -2009,14 +2022,13 @@ def render_watch(
     else:
         result_style = "red"
 
-    layout = Layout()
-    layout.split_column(
+    sections: list[Layout] = [
         Layout(
             header(
                 exercise=exercise,
                 progress=progress,
             ),
-            size=2,
+            size=HEADER_HEIGHT,
         ),
         Layout(
             Panel(
@@ -2032,6 +2044,24 @@ def render_watch(
             ),
             ratio=1,
         ),
+    ]
+
+    if show_hint:
+        sections.append(
+            Layout(
+                Panel(
+                    hint,
+                    title="Hint",
+                    title_align="left",
+                    subtitle="more below, make the window taller to see it" if hint_lines + 2 > hint_height else "",
+                    subtitle_align="right",
+                    border_style="yellow",
+                ),
+                size=hint_height,
+            ),
+        )
+
+    sections.append(
         Layout(
             Panel(
                 body,
@@ -2043,6 +2073,8 @@ def render_watch(
             ),
             size=result_height,
         ),
+    )
+    sections.append(
         Layout(
             key_bar(
                 keys=keys,
@@ -2051,6 +2083,9 @@ def render_watch(
             size=1,
         ),
     )
+
+    layout = Layout()
+    layout.split_column(*sections)
 
     return layout
 
@@ -2321,8 +2356,7 @@ class App:
         if self.manual:
             keys.append(("r", "run"))
 
-        if not self.show_hint:
-            keys.append(("h", "hint"))
+        keys.append(("h", "hide hint" if self.show_hint else "hint"))
 
         keys.extend(
             [
@@ -2573,9 +2607,9 @@ class App:
             elif self.finish():
                 return "quit"
         elif key == "n":
-            self.message = "Pass every test first. Press h for a hint."
+            self.message = "Pass every test first." if self.show_hint else "Pass every test first. Press h for a hint."
         elif key == "h":
-            self.show_hint = True
+            self.show_hint = not self.show_hint
         elif key == "l":
             self.run_list()
         elif key == "x":
@@ -2704,7 +2738,6 @@ def run_once(
             result_body(
                 exercise=exercise,
                 outcome=outcome,
-                show_hint=False,
                 check_again="Run this command again after you change the file.",
             ),
             title=f"{exercise.name} · {exercise.title}",
