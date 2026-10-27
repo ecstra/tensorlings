@@ -1,0 +1,61 @@
+{
+  "outputStyle": "Plain & Short",
+  "env": {
+    "CLAUDE_CODE_SUBAGENT_MODEL": "opus",
+    "CLAUDE_CODE_MAX_TOOL_USE_CONCURRENCY": "20"
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -c \"import sys;'' in sys.path and sys.path.remove('');import os,pathlib,runpy;h='.agents/skills/agent-brain/scripts/hooks.py';c=pathlib.Path(os.environ.get('CLAUDE_PROJECT_DIR') or os.environ.get('GEMINI_PROJECT_DIR') or os.getcwd());p=next((d/h for d in [c,*c.parents] if (d/h).is_file()),None);p or sys.exit(0);sys.path.insert(0,str(p.parent));sys.argv[0]=str(p);runpy.run_path(str(p),run_name='__main__')\" session-start --agent claude"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -c \"import sys;'' in sys.path and sys.path.remove('');import os,pathlib,runpy;h='.agents/skills/agent-brain/scripts/hooks.py';c=pathlib.Path(os.environ.get('CLAUDE_PROJECT_DIR') or os.environ.get('GEMINI_PROJECT_DIR') or os.getcwd());p=next((d/h for d in [c,*c.parents] if (d/h).is_file()),None);p or sys.exit(0);sys.path.insert(0,str(p.parent));sys.argv[0]=str(p);runpy.run_path(str(p),run_name='__main__')\" prompt --agent claude"
+          }
+        ]
+      }
+    ],
+    "PostToolBatch": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -c \"import sys;'' in sys.path and sys.path.remove('');import os,pathlib,runpy;h='.agents/skills/agent-brain/scripts/hooks.py';c=pathlib.Path(os.environ.get('CLAUDE_PROJECT_DIR') or os.environ.get('GEMINI_PROJECT_DIR') or os.getcwd());p=next((d/h for d in [c,*c.parents] if (d/h).is_file()),None);p or sys.exit(0);sys.path.insert(0,str(p.parent));sys.argv[0]=str(p);runpy.run_path(str(p),run_name='__main__')\" tick --agent claude"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -c \"import sys;'' in sys.path and sys.path.remove('');import os,pathlib,runpy;h='.agents/skills/agent-brain/scripts/hooks.py';c=pathlib.Path(os.environ.get('CLAUDE_PROJECT_DIR') or os.environ.get('GEMINI_PROJECT_DIR') or os.getcwd());p=next((d/h for d in [c,*c.parents] if (d/h).is_file()),None);p or sys.exit(0);sys.path.insert(0,str(p.parent));sys.argv[0]=str(p);runpy.run_path(str(p),run_name='__main__')\" pre-write --agent claude"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -c \"import sys;'' in sys.path and sys.path.remove('');import os,pathlib,runpy;h='.agents/skills/agent-brain/scripts/hooks.py';c=pathlib.Path(os.environ.get('CLAUDE_PROJECT_DIR') or os.environ.get('GEMINI_PROJECT_DIR') or os.getcwd());p=next((d/h for d in [c,*c.parents] if (d/h).is_file()),None);p or sys.exit(0);sys.path.insert(0,str(p.parent));sys.argv[0]=str(p);runpy.run_path(str(p),run_name='__main__')\" post-write --agent claude"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,41 @@
+# Worktrees are disabled (.agents/SYSTEM.md, rule 10.2). The one
+# sanctioned home, if the owner ever asks, is this folder, and its
+# contents never enter git.
+.agents/.worktrees/
+
+# Secrets live in .env and never enter git. An .env.example stays
+# tracked, so a fresh clone knows which keys it needs.
+.env
+.env.*
+!.env.example
+
+# The brain tool keeps the owner's standing word to proceed, the auto
+# ack with its end, in this file. It belongs to one machine and one
+# stretch of work, so it never enters git, and neither does the
+# temporary file the tool writes it through.
+.agents/.ack
+.agents/..ack.*.tmp
+
+# The brain tool keeps the current work, the chain from the plan down
+# to the step the agent is on, in this file. It belongs to one machine
+# too, so it never enters git, and neither does its write in flight.
+.agents/.task
+.agents/..task.*.tmp
+
+# Python leaves compiled bytecode beside the brain tool. It never ships.
+__pycache__/
+*.pyc
+
+# Claude Code keeps one person's own settings here. The shared ones are
+# in .claude/settings.json, which does ship.
+.claude/settings.local.json
+
+# The tensorlings app keeps one learner's progress, their answers in the
+# exercise files and the reference solutions they have unlocked here.
+# `run.py init` writes the exercises from run.py, which is the source.
+.tensorlings-state.json
+exercises/
+solutions/
+
+# The virtual environment is rebuilt from requirements.txt on each machine.
+.venv/
