@@ -654,11 +654,6 @@ TENSORS1_SOURCE = source_file(
 
     # TODO: Convert the list of lists into a tensor of floats.
     #   to_tensor([[1, 2], [3, 4]]) returns tensor([[1., 2.], [3., 4.]])
-    #
-    # Why: data usually arrives as Python lists, and PyTorch only works with
-    #   tensors. Models compute with floats, so whole numbers get converted too.
-    #   Models also read many inputs at once, stacked as the rows of one tensor.
-    #   That stack is called a batch.
     def to_tensor(rows: list[list[float]]) -> Tensor:
         ...
 
@@ -666,18 +661,12 @@ TENSORS1_SOURCE = source_file(
     # TODO: Turn each image into one long row of its pixels. images has shape
     #   (count, height, width), and the result has shape (count, height * width).
     #   For 10 images of 28 by 28 pixels, the result has shape (10, 784).
-    #
-    # Why: the simplest models read every input as one flat row of numbers, so
-    #   an image gets laid out flat first.
     def flatten_images(images: Tensor) -> Tensor:
         ...
 
 
     # TODO: Return how many numbers the tensors hold altogether, as an int.
     #   count_numbers([torch.zeros((784, 10)), torch.zeros((10,))]) returns 7850
-    #
-    # Why: the numbers a model learns are called its parameters, and their count
-    #   is how a model's size is given. The smallest GPT-2 has 124 million.
     def count_numbers(tensors: list[Tensor]) -> int:
         ...
 
@@ -788,7 +777,7 @@ TENSORS1 = Exercise(
         "of each row.",
         "count_numbers": ".numel() counts the entries of one tensor. Add up the counts of every tensor in the list.",
     },
-    introduces=("model", "training", "tensor", "shape", "dimension", "batch", "parameter"),
+    introduces=("model", "training", "tensor", "shape", "dimension"),
     check=check_tensors1,
 )
 
@@ -845,10 +834,6 @@ TENSORS2_SOURCE = source_file(
     # TODO: Keep the last `count` columns of every row of grid.
     #   last_columns(torch.tensor([[5, 6, 7, 8], [1, 2, 3, 4]]), 2)
     #   returns tensor([[7, 8], [3, 4]])
-    #
-    # Why: a text model splits text into tokens, short pieces such as words, and
-    #   gets each sentence as a row of token ids. It can only read so many tokens
-    #   at once, called its context, so it keeps the most recent ones.
     def last_columns(
         grid: Tensor,
         count: int,
@@ -860,10 +845,6 @@ TENSORS2_SOURCE = source_file(
     #   column on its own. Return them as a pair, in that order.
     #   split_last_column(torch.tensor([[1, 2, 0], [3, 4, 1]]))
     #   returns (tensor([[1, 2], [3, 4]]), tensor([0, 1]))
-    #
-    # Why: training data often keeps the right answer for each row, called its
-    #   label, in the last column. The model gets the other columns as input and
-    #   has to guess the label.
     def split_last_column(table: Tensor) -> tuple[Tensor, Tensor]:
         ...
 
@@ -871,9 +852,6 @@ TENSORS2_SOURCE = source_file(
     # TODO: Return the rows of table at the given positions, in the same order.
     #   positions can be a flat tensor or a grid of positions.
     #   pick_rows(table, torch.tensor([2, 0])) returns row 2 of table, then row 0
-    #
-    # Why: a text model keeps a table with one row of numbers for every token it
-    #   knows, and reads the row of each token id in a sentence.
     def pick_rows(
         table: Tensor,
         positions: Tensor,
@@ -1011,7 +989,7 @@ TENSORS2 = Exercise(
         "before the last one. The second is the last column, picked by index.",
         "pick_rows": "A tensor of positions picks rows, whatever its shape. Use the whole positions tensor at once.",
     },
-    introduces=("index", "slice", "token", "label"),
+    introduces=("index", "slice"),
     check=check_tensors2,
 )
 
@@ -1062,9 +1040,6 @@ TENSORS3_SOURCE = source_file(
 
     # TODO: Replace every negative entry of x with 0, and keep the rest as they are.
     #   zero_negatives(torch.tensor([-2.0, 0.0, 3.5])) returns tensor([0.0, 0.0, 3.5])
-    #
-    # Why: models do this to their numbers between steps. It is called ReLU,
-    #   and a later chapter shows why it matters.
     def zero_negatives(x: Tensor) -> Tensor:
         ...
 
@@ -1072,9 +1047,6 @@ TENSORS3_SOURCE = source_file(
     # TODO: Subtract b from a entry by entry, then square each difference.
     #   squared_differences(torch.tensor([2.0, 3.0, 5.0]), torch.tensor([1.0, 3.0, 7.0]))
     #   returns tensor([1.0, 0.0, 4.0])
-    #
-    # Why: this measures how far a model's guesses are from the right answers.
-    #   Squaring makes a big miss count far more than a small one.
     def squared_differences(
         a: Tensor,
         b: Tensor,
@@ -1083,14 +1055,10 @@ TENSORS3_SOURCE = source_file(
 
 
     # TODO: Set values to 0 wherever ids equals pad_id. values and ids have the
-    #   same shape.
+    #   same shape. pad_id is the id that fills out short rows of ids so they all
+    #   have the same length, which is called padding.
     #   zero_padding(torch.tensor([[0.5, 0.2, 0.9]]), torch.tensor([[4, 7, 0]]), 0)
     #   returns tensor([[0.5, 0.2, 0.0]])
-    #
-    # Why: the sentences in a batch have different lengths, so the short ones
-    #   get filled out with an extra id, pad_id, to make a full grid. This is
-    #   called padding. Zeroing the values at the padding makes it add nothing
-    #   to a sum.
     def zero_padding(
         values: Tensor,
         ids: Tensor,
@@ -1271,9 +1239,6 @@ TENSORS4_SOURCE = source_file(
     #   has shape (columns,).
     #   add_to_rows(torch.tensor([[1.0, 2.0], [3.0, 4.0]]), torch.tensor([10.0, 20.0]))
     #   returns tensor([[11.0, 22.0], [13.0, 24.0]])
-    #
-    # Why: most models add a number they learn to each column of their output.
-    #   That number is called a bias.
     def add_to_rows(
         grid: Tensor,
         row: Tensor,
@@ -1286,9 +1251,6 @@ TENSORS4_SOURCE = source_file(
     #   rescale_columns(torch.tensor([[0.0, 10.0], [255.0, 20.0]]),
     #                   torch.tensor([0.0, 10.0]), torch.tensor([255.0, 20.0]))
     #   returns tensor([[0.0, 0.0], [1.0, 1.0]])
-    #
-    # Why: inputs come in very different ranges, like pixels from 0 to 255 next
-    #   to values from 0 to 1. Models learn faster when the ranges are similar.
     def rescale_columns(
         grid: Tensor,
         lows: Tensor,
@@ -1301,9 +1263,6 @@ TENSORS4_SOURCE = source_file(
     #   (rows, columns) and divisors has shape (rows,).
     #   divide_rows(torch.tensor([[2.0, 4.0], [9.0, 3.0]]), torch.tensor([2.0, 3.0]))
     #   returns tensor([[1.0, 2.0], [3.0, 1.0]])
-    #
-    # Why: this turns totals into averages, such as dividing each sentence's
-    #   added up numbers by how many tokens it has.
     def divide_rows(
         grid: Tensor,
         divisors: Tensor,
@@ -1419,7 +1378,7 @@ TENSORS4 = Exercise(
         "divide_rows": "Each row of grid needs its own divisor. Check which shape divisors needs for that, and how "
         "to give it that shape.",
     },
-    introduces=("broadcasting", "bias"),
+    introduces=("broadcasting",),
     check=check_tensors4,
 )
 
@@ -1466,9 +1425,6 @@ TENSORS5_SOURCE = source_file(
 
     # TODO: Return the mean of each column of grid.
     #   column_means(torch.tensor([[1.0, 2.0], [3.0, 6.0]])) returns tensor([2.0, 4.0])
-    #
-    # Why: data is checked and centered with the mean of each column before a
-    #   model trains on it.
     def column_means(grid: Tensor) -> Tensor:
         ...
 
@@ -1477,9 +1433,6 @@ TENSORS5_SOURCE = source_file(
     #   row's highest score is its pick. Return the fraction of rows whose pick
     #   equals the right answer in answers, as a float.
     #   accuracy(torch.tensor([[0.1, 0.9], [0.8, 0.2]]), torch.tensor([1, 1])) returns 0.5
-    #
-    # Why: a model that sorts inputs into choices, such as which digit an image
-    #   shows, gives a score to each choice. This fraction is its accuracy.
     def accuracy(
         scores: Tensor,
         answers: Tensor,
@@ -1490,9 +1443,6 @@ TENSORS5_SOURCE = source_file(
     # TODO: Divide each row of grid by its own sum, so every row adds up to 1.
     #   rows_to_fractions(torch.tensor([[1.0, 3.0], [2.0, 2.0]]))
     #   returns tensor([[0.25, 0.75], [0.5, 0.5]])
-    #
-    # Why: this is the last step of turning a model's scores into a chance for
-    #   each choice.
     def rows_to_fractions(grid: Tensor) -> Tensor:
         ...
 
@@ -1671,8 +1621,8 @@ MATMUL1_LESSON = prose(
 
     A **layer** is one step of a model, holding weights it learns. The most
     common one, called Linear, computes several weighted sums of each input
-    row, one per output, and adds a bias to each. A later chapter builds it as
-    `nn.Linear`.
+    row, one per output. It then adds a **bias** to each output, a separate
+    number it learns. A later chapter builds it as `nn.Linear`.
     """,
 )
 
@@ -1688,9 +1638,6 @@ MATMUL1_SOURCE = source_file(
     #   by its weight in weights, then add up the results.
     #   weighted_sums(torch.tensor([[1.0, 2.0], [3.0, 4.0]]), torch.tensor([10.0, 1.0]))
     #   returns tensor([12.0, 34.0])
-    #
-    # Why: scoring an input by weighing each of its numbers is the core of almost
-    #   every model.
     def weighted_sums(
         grid: Tensor,
         weights: Tensor,
@@ -1703,9 +1650,6 @@ MATMUL1_SOURCE = source_file(
     #   is a[i] @ b[j].
     #   dot_all_pairs(torch.tensor([[1.0, 0.0]]), torch.tensor([[2.0, 3.0], [4.0, 5.0]]))
     #   returns tensor([[2.0, 4.0]])
-    #
-    # Why: search systems score a query against many documents this way, and
-    #   models that read text compare every token with every other.
     def dot_all_pairs(
         a: Tensor,
         b: Tensor,
@@ -1720,8 +1664,6 @@ MATMUL1_SOURCE = source_file(
     #   linear(torch.tensor([[1.0, 2.0]]), torch.tensor([[1.0, 0.0], [1.0, 1.0]]),
     #          torch.tensor([0.5, 0.0]))
     #   returns tensor([[1.5, 3.0]])
-    #
-    # Why: this is the layer most models are built from.
     def linear(
         x: Tensor,
         weight: Tensor,
@@ -1841,7 +1783,7 @@ MATMUL1 = Exercise(
         "linear": "Each output is the dot product of a row of x with one row of weight. Multiply x by weight with "
         "its dimensions swapped, then add the bias.",
     },
-    introduces=("weight", "weighted sum", "dot product", "matrix", "matrix multiplication", "layer"),
+    introduces=("weight", "weighted sum", "dot product", "matrix", "matrix multiplication", "layer", "bias"),
     check=check_matmul1,
 )
 
@@ -1870,8 +1812,10 @@ QUIZ1_LESSON = prose(
     new.
 
     A model can sort sentences into classes, such as whether a review is
-    positive or negative. It gets each sentence as a row of token ids, filled
-    out with padding, and needs one row of numbers per sentence. So it picks the
+    positive or negative. Text gets split into **tokens**, short pieces such as
+    words, and each token has an id number. The model gets each sentence as a
+    row of token ids, filled out with padding, and needs one row of numbers
+    per sentence. So it picks the
     table row of every token, zeroes the rows at the padding, and averages the
     rest. Each sentence's average then goes through a Linear layer that gives
     one score per class. The class with the highest score is the answer.
@@ -1904,8 +1848,6 @@ QUIZ1_SOURCE = source_file(
     #   (sentences, size).
     #   sentence_averages(torch.tensor([[1, 2, 0]]), table, 0) returns the
     #   average of table[1] and table[2], with shape (1, size)
-    #
-    # Why: this turns each sentence into one row of numbers a model can score.
     def sentence_averages(
         ids: Tensor,
         table: Tensor,
@@ -1917,9 +1859,6 @@ QUIZ1_SOURCE = source_file(
     # TODO: Run the sentence averages through linear from matmul1, with weight of
     #   shape (classes, size) and bias of shape (classes,). Return the position
     #   of the highest score in each row, with shape (sentences,).
-    #
-    # Why: each score belongs to one class, such as positive or negative, and the
-    #   highest score is the class the model picks.
     def predict(
         ids: Tensor,
         table: Tensor,
@@ -2074,7 +2013,7 @@ QUIZ1 = Exercise(
         "predict": "Run the averages through a layer the way linear does in matmul1, then take the argmax of each "
         "row.",
     },
-    introduces=(),
+    introduces=("token",),
     check=check_quiz1,
 )
 

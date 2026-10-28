@@ -32,4 +32,4 @@ The TODOs described each task in deep learning words, like batch, example and fe
 
 ## Done when
 
-Every TODO in the seven exercises reads as a plain instruction with an example and a why, every check passes, and the owner has tried tensors1 and understood it.
+Every TODO in the seven exercises reads as a plain instruction with an example, explains any deep learning word it uses and carries no why section, every check passes, and the owner has tried tensors1 and understood it.

@@ -120,7 +120,7 @@ From [the research](tensorlings-research.md#research-on-tasks-that-make-the-lear
 - The lesson teaches every tool its tasks need, on its own small example. A task never needs a function or argument that no lesson showed.
 - No line of a solution appears in the lesson or the hints as the task writes it.
 - The file gives the scaffolding and leaves the tensor work as `TODO`s, as rustlings does.
-- The TODO says the goal in plain words.
+- The TODO says the operation in plain programming words, like "convert the list of lists into a tensor of floats", and shows an example call with its result. A deep learning word in a TODO is explained right there, and the lint fails a starting file that uses one no lesson or TODO has explained. A TODO carries no why section, since the owner found one on every task to be noise.
 - The tests include the case that catches the likely mistake, such as a square batch where rows and columns mix up.
 
 ## Verification
