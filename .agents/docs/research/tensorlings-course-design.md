@@ -92,7 +92,8 @@ Each rule gets exercises where the wrong combination fails and the right one wor
 - Common PyTorch errors get a plain words explanation above PyTorch's own message, from the table `PLAIN_ERRORS` in `run.py`. A new error that confuses learners gets a row there.
 - Checks run in a thread worker so the screen never freezes, one at a time under `CHECK_LOCK`, and only the latest check of a burst of saves is shown. The app polls the file's time twice a second.
 - The list screen works like rustlings, with DONE and PENDING, the current exercise marked, and keys to continue at, reset, search and filter. Resetting the open file asks first in a small box.
-- The mouse is captured, so the learner selects text by dragging, and the app copies it when the mouse lets go, as Claude Code does. Cmd+C never reaches a terminal app on a Mac, since the terminal keeps it. Copying also goes through `pbcopy`, since macOS Terminal ignores Textual's own copy.
+- The mouse is captured, so the learner selects text by dragging and copies it with `ctrl+c`. Cmd+C never reaches a terminal app on a Mac, since the terminal keeps it. Copying on release was tried and the owner turned it off. Copying also goes through `pbcopy`, since macOS Terminal ignores Textual's own copy.
+- The tab bar never takes focus. A focused tab bar paints the active tab as a solid block, which flashed on every click.
 - Commands are `init`, `run`, `hint`, `reset`, `check-all`, `--manual-run` and `dev check`.
 
 ## Writing rules

@@ -45,7 +45,7 @@ try:
     from textual.binding import Binding
     from textual.containers import Vertical, VerticalScroll
     from textual.screen import ModalScreen, Screen
-    from textual.widgets import DataTable, Footer, Input, Static, TabbedContent, TabPane
+    from textual.widgets import DataTable, Footer, Input, Static, TabbedContent, TabPane, Tabs
     from textual.widgets import Markdown as MarkdownWidget
 except ModuleNotFoundError as missing:
     print(f"tensorlings needs the {missing.name} package. Install the pinned packages first.\n")
@@ -1596,7 +1596,7 @@ WELCOME = prose(
     - `1`, `2` and `3` show the lesson, the hints and the result. After each save the result shows by itself.
     - Each exercise has three hints. `2` opens the first, and the next one opens after you save again.
     - The arrow keys and the mouse wheel scroll. `l` lists every exercise, `x` resets the file, and `q` quits.
-    - Drag over text to select it. It's copied when you let go.
+    - Drag over text to select it, then press `ctrl+c` to copy it. A Mac terminal keeps `cmd+c` for itself.
     """,
 )
 
@@ -2530,6 +2530,9 @@ class WatchScreen(Screen[None]):
         yield Footer(show_command_palette=False)
 
     def on_mount(self) -> None:
+        # A focused tab bar paints the active tab as a solid block, which flashes on every click.
+        # Keys and clicks switch tabs without focus, and the arrow keys stay with the tab's content.
+        self.query_one(Tabs).can_focus = False
         self.open_exercise(self.exercise)
         self.set_interval(0.5, self.poll_file)
 
@@ -2860,19 +2863,6 @@ class TensorlingsApp(App[None]):
     ) -> None:
         self.progress.welcomed = True
         save_progress(self.progress)
-
-    def on_text_selected(self) -> None:
-        """Copy a selection when the mouse lets go, as Claude Code does. Cmd+C never reaches a terminal app on a Mac."""
-        text = self.screen.get_selected_text()
-
-        if not text:
-            return
-
-        self.copy_to_clipboard(text)
-        self.notify(
-            "Copied",
-            timeout=1.5,
-        )
 
     def copy_to_clipboard(
         self,
