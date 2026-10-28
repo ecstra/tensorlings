@@ -18,6 +18,8 @@ import io
 import json
 import os
 import re
+import shutil
+import subprocess
 import sys
 import tempfile
 import textwrap
@@ -1536,7 +1538,7 @@ WELCOME = prose(
     - `1`, `2` and `3` show the lesson, the hints and the result. After each save the result shows by itself.
     - Each exercise has three hints. `2` opens the first, and the next one opens after you save again.
     - The arrow keys and the mouse wheel scroll. `l` lists every exercise, `x` resets the file, and `q` quits.
-    - Drag over text to select it and press `cmd+c` to copy it, as in any terminal.
+    - To copy, hold `option` while you drag over the text, then press `cmd+c`. In macOS Terminal hold `fn` instead.
     """,
 )
 
@@ -2804,6 +2806,24 @@ class TensorlingsApp(App[None]):
         self.progress.welcomed = True
         save_progress(self.progress)
 
+    def copy_to_clipboard(
+        self,
+        text: str,
+    ) -> None:
+        super().copy_to_clipboard(text)
+
+        # macOS Terminal ignores the escape code Textual copies with, so hand the text to pbcopy too.
+        pbcopy = shutil.which("pbcopy")
+
+        if pbcopy is None:
+            return
+
+        subprocess.run(
+            [pbcopy],
+            input=text.encode(),
+            check=False,
+        )
+
 
 # ---------------------------------------------------------------------------
 # Commands
@@ -2997,12 +3017,10 @@ def main(arguments: list[str]) -> int:
             print(f"The app needs a terminal. Use `{START_COMMAND} run` to check one exercise without it.")
             return 1
 
-        # The terminal keeps the mouse, so dragging selects text and cmd+c copies it as usual.
-        # Terminals turn the wheel into arrow keys in a full-screen app, so it still scrolls the open tab.
         TensorlingsApp(
             progress=progress,
             manual="--manual-run" in flags,
-        ).run(mouse=False)
+        ).run()
         print(f"See you next time. Run {START_COMMAND} to continue where you left off.")
 
         return 0

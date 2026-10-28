@@ -6,7 +6,8 @@ updated: 2026-10-28
 links: [decisions/DEC-004-the-app-is-built-on-textual.md]
 date: 2026-10-28
 area: course
-status: standing
+status: superseded
+superseded-by: DEC-009
 ---
 
 ## Decision
