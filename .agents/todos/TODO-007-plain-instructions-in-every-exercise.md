@@ -24,11 +24,11 @@ The TODOs described each task in deep learning words, like batch, example and fe
 
 | # | Step | Points at | By | Status |
 |---|---|---|---|---|
-| 1 | Rewrite every TODO as a plain instruction, an example call with its result, and a short why | | owner | pending |
-| 2 | Rename functions to plain names and trim deep learning words from the lessons | | owner | pending |
-| 3 | Lint the starting files' comments for terms no lesson explained | | owner | pending |
-| 4 | Run the dev check, the wrong answers and the screen driver | | owner | pending |
-| 5 | Reset the owner's exercise files to the new versions | | owner | pending |
+| 1 | Rewrite every TODO as a plain instruction, an example call with its result, and a short why | | owner | done |
+| 2 | Rename functions to plain names and trim deep learning words from the lessons | | owner | done |
+| 3 | Lint the starting files' comments for terms no lesson explained | | owner | done |
+| 4 | Run the dev check, the wrong answers and the screen driver | | owner | done |
+| 5 | Reset the owner's exercise files to the new versions | | owner | done |
 
 ## Done when
 
