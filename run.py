@@ -925,41 +925,52 @@ def check_tensors2(checker: Checker) -> None:
             ),
         )
 
-    table = torch.tensor(
-        [
-            [0.5, 1.0, 0.0],
-            [2.0, 3.5, 1.0],
-            [1.5, 0.5, 1.0],
-            [4.0, 2.0, 0.0],
-        ],
+    # Two sizes, so code that only works for one number of rows or columns fails.
+    tables = (
+        torch.tensor(
+            [
+                [0.5, 1.0, 0.0],
+                [2.0, 3.5, 1.0],
+                [1.5, 0.5, 1.0],
+                [4.0, 2.0, 0.0],
+            ],
+        ),
+        torch.tensor(
+            [
+                [7.0, 1.0, 2.0, 1.0],
+                [3.0, 0.5, 9.0, 0.0],
+            ],
+        ),
     )
 
-    checker.test(
-        function="split_last_column",
-        description="gives every column but the last as the first tensor",
-        run=lambda split_last_column: expect_tensor(
-            call="the first tensor split_last_column(table) returns",
-            actual=part_of_pair(
-                call="split_last_column(table)",
-                actual=split_last_column(table),
-                position=0,
+    for table in tables:
+        rows, columns = table.shape
+        checker.test(
+            function="split_last_column",
+            description=f"gives every column but the last as the first tensor, for {rows} rows and {columns} columns",
+            run=lambda split_last_column, table=table: expect_tensor(
+                call=f"the first tensor split_last_column({value_text(table)}) returns",
+                actual=part_of_pair(
+                    call=f"split_last_column({value_text(table)})",
+                    actual=split_last_column(table),
+                    position=0,
+                ),
+                expected=table[:, :-1],
             ),
-            expected=table[:, :-1],
-        ),
-    )
-    checker.test(
-        function="split_last_column",
-        description="gives the last column as the second tensor, one number per row",
-        run=lambda split_last_column: expect_tensor(
-            call="the second tensor split_last_column(table) returns",
-            actual=part_of_pair(
-                call="split_last_column(table)",
-                actual=split_last_column(table),
-                position=1,
+        )
+        checker.test(
+            function="split_last_column",
+            description=f"gives the last column as the second tensor, for {rows} rows and {columns} columns",
+            run=lambda split_last_column, table=table: expect_tensor(
+                call=f"the second tensor split_last_column({value_text(table)}) returns",
+                actual=part_of_pair(
+                    call=f"split_last_column({value_text(table)})",
+                    actual=split_last_column(table),
+                    position=1,
+                ),
+                expected=table[:, -1],
             ),
-            expected=table[:, -1],
-        ),
-    )
+        )
 
     rows = random_tensor((5, 3))
 
@@ -1327,25 +1338,32 @@ def check_tensors4(checker: Checker) -> None:
             ),
         )
 
-    pixels_and_values = torch.tensor(
-        [
-            [0.0, 10.0],
-            [255.0, 20.0],
-            [51.0, 15.0],
-        ],
-    )
-    lows = torch.tensor([0.0, 10.0])
-    highs = torch.tensor([255.0, 20.0])
-
-    checker.test(
-        function="rescale_columns",
-        description="puts every column of 3 rows between 0 and 1",
-        run=lambda rescale_columns: expect_tensor(
-            call=f"rescale_columns({value_text(pixels_and_values)}, {value_text(lows)}, {value_text(highs)})",
-            actual=rescale_columns(pixels_and_values, lows, highs),
-            expected=torch.tensor([[0.0, 0.0], [1.0, 1.0], [0.2, 0.5]]),
+    # Two sets of columns, so code written for one set of numbers fails.
+    rescalings = (
+        (
+            torch.tensor([[0.0, 10.0], [255.0, 20.0], [51.0, 15.0]]),
+            torch.tensor([0.0, 10.0]),
+            torch.tensor([255.0, 20.0]),
+            torch.tensor([[0.0, 0.0], [1.0, 1.0], [0.2, 0.5]]),
+        ),
+        (
+            torch.tensor([[2.0, -1.0, 5.0], [4.0, 1.0, 9.0]]),
+            torch.tensor([2.0, -1.0, 1.0]),
+            torch.tensor([4.0, 1.0, 9.0]),
+            torch.tensor([[0.0, 0.0, 0.5], [1.0, 1.0, 1.0]]),
         ),
     )
+
+    for grid, lows, highs, rescaled in rescalings:
+        checker.test(
+            function="rescale_columns",
+            description=f"puts every column of {grid.shape[0]} rows between 0 and 1",
+            run=lambda rescale_columns, grid=grid, lows=lows, highs=highs, rescaled=rescaled: expect_tensor(
+                call=f"rescale_columns({value_text(grid)}, {value_text(lows)}, {value_text(highs)})",
+                actual=rescale_columns(grid, lows, highs),
+                expected=rescaled,
+            ),
+        )
 
     divisions = (
         (torch.tensor([[2.0, 4.0, 6.0], [8.0, 4.0, 12.0]]), torch.tensor([2, 4])),
