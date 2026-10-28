@@ -6,7 +6,8 @@ updated: 2026-10-28
 links: [decisions/DEC-011-lessons-teach-every-tool-and-tasks-build-a-model.md]
 date: 2026-10-28
 area: course
-status: standing
+status: superseded
+superseded-by: DEC-013
 ---
 
 ## Decision

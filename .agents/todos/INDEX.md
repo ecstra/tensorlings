@@ -21,6 +21,7 @@ Built by the brain tool from the folder it lists.
 - [TODO-005](TODO-005-lessons-that-sound-human-tasks-that-need-thinking-clearer-results-and-a-better-tui.md), the owner's second round on phase 1a, lesson language, answers given away, results, and the TUI
 - [TODO-006](TODO-006-six-exercises-one-topic-each-with-a-closing-quiz.md), rework phase 1a as one Section 1 topic per exercise, rustlings style, with real model operations as tasks, a closing quiz, and sections in place of parts
 - [TODO-007](TODO-007-plain-instructions-in-every-exercise.md), every TODO says the operation in plain words with an example, then why it exists, after the owner could not follow tensors1
+- [TODO-008](TODO-008-try-tensors1-and-indexing1-in-the-new-exercise-method.md), build tensors1 with explain then try and fix the error, and indexing1 with try first, checked by name with no print lines, for the owner to try
 
 ## Closed
 

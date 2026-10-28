@@ -29,6 +29,7 @@ The TODOs described each task in deep learning words, like batch, example and fe
 | 3 | Lint the starting files' comments for terms no lesson explained | | owner | done |
 | 4 | Run the dev check, the wrong answers and the screen driver | | owner | done |
 | 5 | Reset the owner's exercise files to the new versions | | owner | done |
+| 6 | try tensors1 and indexing1 in the new exercise method | TODO-008 | agent | pending |
 
 ## Done when
 

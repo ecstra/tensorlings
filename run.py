@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import ast
 import contextlib
-import importlib.util
 import io
 import json
 import os
@@ -135,6 +134,10 @@ def run_with_time_limit(run: Callable[[], object]) -> None:
 # PyTorch's own wording for common mistakes, each with the same message in plain words.
 PLAIN_ERRORS: tuple[tuple[str, str], ...] = (
     (
+        r"expected sequence of length (\d+) at dim \d+ \(got (\d+)\)",
+        "Every row of a tensor needs the same length. One row here has {1} numbers, but the rows before it have {0}.",
+    ),
+    (
         r"The size of tensor a \((\d+)\) must match the size of tensor b \((\d+)\)",
         "These two shapes cannot be broadcast together. Compared from the right, a size {0} meets a size {1}. "
         "Two sizes only fit when they are equal or one of them is 1.",
@@ -218,41 +221,80 @@ def describe_crash(
     return "\n".join(lines)
 
 
+@dataclass(frozen=True)
+class Crash:
+    """A top level statement of the learner's file that raised, and the names it would have set."""
+
+    names: tuple[str, ...]
+    text: str
+
+
+def assigned_names(statement: ast.stmt) -> tuple[str, ...]:
+    if isinstance(statement, ast.Assign):
+        targets = statement.targets
+    elif isinstance(statement, (ast.AnnAssign, ast.AugAssign)):
+        targets = [statement.target]
+    else:
+        return ()
+
+    return tuple(node.id for target in targets for node in ast.walk(target) if isinstance(node, ast.Name))
+
+
 def load_module(
     path: Path,
     name: str,
-) -> ModuleType:
+) -> tuple[ModuleType, list[Crash]]:
+    """Run the file one top level statement at a time. A line that crashes on purpose,
+    as in a fix the error task, then hides nothing that comes after it."""
     if not path.exists():
         raise Problem(f"{relative(path)} is missing. Press x to bring back the original.")
 
-    spec = importlib.util.spec_from_file_location(
-        name=f"tensorlings_{name}_{time.monotonic_ns()}",
-        location=path,
-    )
-    module = importlib.util.module_from_spec(spec)
-
     try:
-        run_with_time_limit(lambda: spec.loader.exec_module(module))
-    except TookTooLong:
-        raise Problem(f"{path.name} was still running after {TIME_LIMIT_SECONDS} seconds while loading. Look for a loop that never ends.") from None
+        tree = ast.parse(
+            path.read_text(),
+            filename=str(path),
+        )
     except SyntaxError as error:
         raise Problem(f'Python cannot read line {error.lineno} of {path.name}. Its message is "{error.msg}".') from None
-    except Exception as error:
-        crash = describe_crash(
-            error=error,
-            path=path,
-        )
-        raise Problem(f"{path.name} crashed while loading.\n\n{crash}") from None
 
-    return module
+    module = ModuleType(f"tensorlings_{name}_{time.monotonic_ns()}")
+    module.__file__ = str(path)
+    crashes: list[Crash] = []
+
+    for statement in tree.body:
+        code = compile(
+            ast.Module(body=[statement], type_ignores=[]),
+            filename=str(path),
+            mode="exec",
+        )
+
+        try:
+            run_with_time_limit(lambda: exec(code, module.__dict__))
+        except TookTooLong:
+            raise Problem(f"{path.name} was still running after {TIME_LIMIT_SECONDS} seconds while loading. Look for a loop that never ends.") from None
+        except Exception as error:
+            crashes.append(
+                Crash(
+                    names=assigned_names(statement),
+                    text=describe_crash(
+                        error=error,
+                        path=path,
+                    ),
+                ),
+            )
+
+    return module, crashes
 
 
 @dataclass(frozen=True)
 class TestResult:
+    # The function or the name the test is about.
     function: str
     description: str
     passed: bool
     detail: str = ""
+    # What a passing name holds, shown in the result in place of print lines.
+    shown: str = ""
 
 
 class Checker:
@@ -262,10 +304,28 @@ class Checker:
         self,
         module: ModuleType,
         path: Path,
+        crashes: list[Crash],
     ) -> None:
         self.module = module
         self.path = path
+        self.crashes = crashes
+        self.checked_names: set[str] = set()
         self.results: list[TestResult] = []
+
+    def fail(
+        self,
+        function: str,
+        description: str,
+        detail: str,
+    ) -> None:
+        self.results.append(
+            TestResult(
+                function=function,
+                description=description,
+                passed=False,
+                detail=detail,
+            ),
+        )
 
     def test(
         self,
@@ -277,18 +337,79 @@ class Checker:
         found = getattr(self.module, function, None)
 
         if not callable(found):
-            self.results.append(
-                TestResult(
-                    function=function,
-                    description=description,
-                    passed=False,
-                    detail=f"{self.path.name} has no function called {function}. Check the name in its def line.",
-                ),
+            self.fail(
+                function=function,
+                description=description,
+                detail=f"{self.path.name} has no function called {function}. Check the name in its def line.",
             )
             return
 
+        self.run_test(
+            function=function,
+            description=description,
+            run=lambda: run(found),
+        )
+
+    def check_name(
+        self,
+        name: str,
+        description: str,
+        run: Callable[[object], None],
+    ) -> None:
+        """Run one test of a name the file sets. A line that crashed fails only the tests of the names it sets."""
+        self.checked_names.add(name)
+        crash = next((crash for crash in self.crashes if name in crash.names), None)
+
+        if crash is not None and "ellipsis" in crash.text:
+            self.fail(
+                function=name,
+                description=description,
+                detail=f"The line that sets {name} still has a ... where a TODO goes, so it is {NOT_STARTED}.",
+            )
+            return
+
+        if crash is not None:
+            self.fail(
+                function=name,
+                description=description,
+                detail=crash.text,
+            )
+            return
+
+        if not hasattr(self.module, name):
+            self.fail(
+                function=name,
+                description=description,
+                detail=f"{self.path.name} never sets {name}. Check the spelling on the line that should.",
+            )
+            return
+
+        value = getattr(self.module, name)
+
+        if value is Ellipsis:
+            self.fail(
+                function=name,
+                description=description,
+                detail=f"{name} is still ..., so it is {NOT_STARTED}.",
+            )
+            return
+
+        self.run_test(
+            function=name,
+            description=description,
+            run=lambda: run(value),
+            shown=value_summary(value),
+        )
+
+    def run_test(
+        self,
+        function: str,
+        description: str,
+        run: Callable[[], None],
+        shown: str = "",
+    ) -> None:
         try:
-            run_with_time_limit(lambda: run(found))
+            run_with_time_limit(run)
         except TookTooLong:
             self.results.append(
                 TestResult(
@@ -334,8 +455,13 @@ class Checker:
                 function=function,
                 description=description,
                 passed=True,
+                shown=shown,
             ),
         )
+
+    def unchecked_crashes(self) -> list[Crash]:
+        """Crashes no test has reported, which fail the file as a whole."""
+        return [crash for crash in self.crashes if not set(crash.names) & self.checked_names]
 
 
 def shape_text(shape: tuple[int, ...]) -> str:
@@ -351,6 +477,19 @@ def value_text(value: object) -> str:
         return re.sub(r"\n\s*", " ", str(value))
 
     return repr(value)
+
+
+def value_summary(value: object) -> str:
+    """What a name holds, short enough for one row of the result."""
+    if not isinstance(value, Tensor):
+        return value_text(value)
+
+    shape = f"shape {shape_text(tuple(value.shape))}"
+
+    if value.numel() > SHOWN_ENTRIES:
+        return shape
+
+    return f"{value_text(value)}   {shape}"
 
 
 NOT_STARTED = "not written yet"
@@ -383,7 +522,7 @@ def reject_missing_return(
     actual: object,
 ) -> None:
     if actual is None:
-        raise Mismatch(f"{call} returned None, which usually means it is {NOT_STARTED}.")
+        raise Mismatch(f"{call} is None, which usually means it is {NOT_STARTED}.")
 
 
 def expect_tensor(
@@ -397,10 +536,10 @@ def expect_tensor(
     )
 
     if isinstance(actual, (list, tuple)):
-        raise Mismatch(f"{call} returned a Python {type(actual).__name__}. Turn it into a tensor with torch.tensor(...).")
+        raise Mismatch(f"{call} is a Python {type(actual).__name__}. Turn it into a tensor with torch.tensor(...).")
 
     if not isinstance(actual, Tensor):
-        raise Mismatch(f"{call} returned a {type(actual).__name__}. It should return a tensor.")
+        raise Mismatch(f"{call} is a {type(actual).__name__}. It should be a tensor.")
 
     small = actual.numel() <= SHOWN_ENTRIES and expected.numel() <= SHOWN_ENTRIES
 
@@ -440,7 +579,7 @@ def expect_value(
 
     if actual != expected:
         raise Mismatch(
-            f"{call} returned {value_text(actual)}, but it should return {value_text(expected)}.",
+            f"{call} is {value_text(actual)}, but it should be {value_text(expected)}.",
         )
 
 
@@ -475,10 +614,13 @@ class Exercise:
     lesson: str
     source: str
     solution: str
-    # One hint per function, shown for the functions that don't pass yet.
+    # One hint per function or name, shown for the ones that don't pass yet.
     hints: dict[str, str]
     introduces: tuple[str, ...]
     check: Callable[[Checker], None]
+    # The learner tries the first TODO before the lesson opens, which helps them
+    # learn the lesson's way once they see it (Sinha and Kapur 2021).
+    try_first: bool = False
 
     @property
     def path(self) -> Path:
@@ -487,6 +629,31 @@ class Exercise:
     @property
     def solution_path(self) -> Path:
         return SOLUTIONS_DIR / self.chapter.folder / f"{self.name}.py"
+
+    @property
+    def lesson_open(self) -> bool:
+        """A try first lesson opens once the file differs from how it started."""
+        if not self.try_first:
+            return True
+
+        try:
+            return self.path.read_text() != self.source
+        except OSError:
+            return True
+
+
+TRY_FIRST = prose(
+    """
+    Try the first TODO before you read anything, with what you already know.
+    It's fine if it doesn't work.
+
+    The lesson opens here as soon as you save a change to the file.
+    """,
+)
+
+
+def lesson_text(exercise: Exercise) -> str:
+    return exercise.lesson if exercise.lesson_open else TRY_FIRST
 
 
 # Two checks never run the learner's code at once. Each one swaps out
@@ -502,7 +669,7 @@ def attempt(
 
     with CHECK_LOCK, contextlib.redirect_stdout(printed), contextlib.redirect_stderr(printed):
         try:
-            module = load_module(
+            module, crashes = load_module(
                 path=path,
                 name=exercise.name,
             )
@@ -516,6 +683,7 @@ def attempt(
         checker = Checker(
             module=module,
             path=path,
+            crashes=crashes,
         )
 
         try:
@@ -527,8 +695,10 @@ def attempt(
                 printed=printed.getvalue(),
             )
 
+    unchecked = checker.unchecked_crashes()
+
     return Outcome(
-        problem=None,
+        problem=f"{path.name} crashed while loading.\n\n{unchecked[0].text}" if unchecked else None,
         results=checker.results,
         printed=printed.getvalue(),
     )
@@ -549,10 +719,10 @@ def expect_floats(
     )
 
     if isinstance(actual, (list, tuple)):
-        raise Mismatch(f"{call} returned a Python {type(actual).__name__}. Turn it into a tensor with torch.tensor(...).")
+        raise Mismatch(f"{call} is a Python {type(actual).__name__}. Turn it into a tensor with torch.tensor(...).")
 
     if not isinstance(actual, Tensor):
-        raise Mismatch(f"{call} returned a {type(actual).__name__}. It should return a tensor.")
+        raise Mismatch(f"{call} is a {type(actual).__name__}. It should be a tensor.")
 
     if not actual.dtype.is_floating_point:
         raise Mismatch(f"{call} holds integers. Add .float() so it holds floats.")
@@ -621,26 +791,6 @@ TENSORS1_LESSON = prose(
 
     A tensor can have more than two dimensions. Ten images of 28 by 28 pixels
     fit in one tensor of shape `(10, 28, 28)`.
-
-    A tensor holds one type of number. Python ints give integers and Python
-    floats give floats. Pass `dtype=torch.float32` to `torch.tensor` to get
-    floats either way, or call `.float()` on a tensor.
-
-    ```python
-    m.dtype            # torch.int64
-    m.float().dtype    # torch.float32
-    ```
-
-    `.reshape` puts the same entries into a new shape, keeping their order row
-    by row. A size of `-1` tells it to work that size out from the others.
-
-    ```python
-    t = torch.arange(6)    # tensor([0, 1, 2, 3, 4, 5])
-    t.reshape(2, 3)        # tensor([[0, 1, 2], [3, 4, 5]])
-    t.reshape(3, -1)       # shape (3, 2)
-    ```
-
-    `.numel()` counts the entries, so `m.numel()` is `6`.
     """,
 )
 
@@ -649,32 +799,23 @@ TENSORS1_SOURCE = source_file(
     # tensors1.py
 
     import torch
-    from torch import Tensor
 
+    # torch.tensor turns a list into a tensor.
+    a = torch.tensor([3, 5, 2])            # a has shape (3,)
 
-    # TODO: Convert the list of lists into a tensor of floats.
-    #   to_tensor([[1, 2], [3, 4]]) returns tensor([[1., 2.], [3., 4.]])
-    def to_tensor(rows: list[list[float]]) -> Tensor:
-        ...
+    # TODO: Turn [10, 20, 30, 40] into a tensor called b, the same way.
+    b = ...
 
+    # A list of lists gives a tensor with rows and columns.
+    c = torch.tensor([[1, 2, 3],
+                      [4, 5, 6]])          # c has shape (2, 3), 2 rows of 3
 
-    # TODO: Turn each image into one long row of its pixels. images has shape
-    #   (count, height, width), and the result has shape (count, height * width).
-    #   For 10 images of 28 by 28 pixels, the result has shape (10, 784).
-    def flatten_images(images: Tensor) -> Tensor:
-        ...
+    # TODO: Make d, a tensor with 3 rows of 2 numbers. Any numbers work.
+    d = ...
 
-
-    # TODO: Return how many numbers the tensors hold altogether, as an int.
-    #   count_numbers([torch.zeros((784, 10)), torch.zeros((10,))]) returns 7850
-    def count_numbers(tensors: list[Tensor]) -> int:
-        ...
-
-
-    # What the check tests
-    #   to_tensor on whole numbers and on decimals, and that it gives floats
-    #   flatten_images on 2 images of 3 by 4 pixels and 1 image of 28 by 28
-    #   count_numbers on tensors of shape (784, 10) and (10,), and on one of shape (3, 4, 5)
+    # TODO: This line crashes. Save the file, read the error in the Result tab,
+    #   then fix the line.
+    e = torch.tensor([[1, 2], [3, 4, 5]])
     ''',
 )
 
@@ -683,82 +824,79 @@ TENSORS1_SOLUTION = source_file(
     # tensors1.py, a solution for comparison
 
     import torch
-    from torch import Tensor
 
+    a = torch.tensor([3, 5, 2])
 
-    def to_tensor(rows: list[list[float]]) -> Tensor:
-        return torch.tensor(rows, dtype=torch.float32)
+    b = torch.tensor([10, 20, 30, 40])
 
+    c = torch.tensor([[1, 2, 3],
+                      [4, 5, 6]])
 
-    # -1 works out the length of each row, height * width, from the number of entries.
-    def flatten_images(images: Tensor) -> Tensor:
-        return images.reshape(images.shape[0], -1)
+    d = torch.tensor([[1, 2],
+                      [3, 4],
+                      [5, 6]])
 
-
-    def count_numbers(tensors: list[Tensor]) -> int:
-        return sum(tensor.numel() for tensor in tensors)
+    # Every row of a tensor needs the same length.
+    e = torch.tensor([[1, 2], [3, 4]])
     ''',
 )
 
 
+def expect_shape(
+    call: str,
+    actual: object,
+    shape: tuple[int | None, ...],
+) -> None:
+    """A tensor of the given shape, where None stands for any size."""
+    reject_missing_return(
+        call=call,
+        actual=actual,
+    )
+
+    if isinstance(actual, (list, tuple)):
+        raise Mismatch(f"{call} is a Python {type(actual).__name__}. Turn it into a tensor with torch.tensor(...).")
+
+    if not isinstance(actual, Tensor):
+        raise Mismatch(f"{call} is a {type(actual).__name__}. It should be a tensor.")
+
+    fits = actual.dim() == len(shape) and all(
+        wanted is None or size == wanted for size, wanted in zip(actual.shape, shape)
+    )
+
+    if fits:
+        return
+
+    wanted_text = "(" + ", ".join("any size" if size is None else str(size) for size in shape) + ")"
+
+    raise Mismatch(f"{call} has shape {shape_text(tuple(actual.shape))}, but it should have shape {wanted_text}.")
+
+
 def check_tensors1(checker: Checker) -> None:
-    whole_numbers = [[1, 2], [3, 4], [5, 6]]
-    decimals = [[0.5, 1.5, 2.5]]
-
-    for rows in (whole_numbers, decimals):
-        checker.test(
-            function="to_tensor",
-            description=f"turns {rows} into a tensor",
-            run=lambda to_tensor, rows=rows: expect_tensor(
-                call=f"to_tensor({rows})",
-                actual=to_tensor(rows),
-                expected=torch.tensor(rows, dtype=torch.float32),
-            ),
-        )
-
-    checker.test(
-        function="to_tensor",
-        description="gives floats when the lists hold whole numbers",
-        run=lambda to_tensor: expect_floats(
-            call=f"to_tensor({whole_numbers})",
-            actual=to_tensor(whole_numbers),
+    checker.check_name(
+        name="b",
+        description="is a tensor of 10, 20, 30 and 40",
+        run=lambda b: expect_tensor(
+            call="b",
+            actual=b,
+            expected=torch.tensor([10, 20, 30, 40]),
         ),
     )
-
-    image_sets = (
-        torch.arange(24).reshape(2, 3, 4),
-        torch.arange(784).reshape(1, 28, 28),
-    )
-
-    for images in image_sets:
-        count, height, width = images.shape
-        checker.test(
-            function="flatten_images",
-            description=f"turns {count} images of {height} by {width} into shape ({count}, {height * width})",
-            run=lambda flatten_images, images=images: expect_tensor(
-                call=f"flatten_images on images of shape {shape_text(tuple(images.shape))}",
-                actual=flatten_images(images),
-                expected=images.reshape(images.shape[0], -1),
-            ),
-        )
-
-    layer_tensors = [torch.zeros((784, 10)), torch.zeros((10,))]
-    checker.test(
-        function="count_numbers",
-        description="counts 7850 numbers in tensors of shape (784, 10) and (10,)",
-        run=lambda count_numbers: expect_value(
-            call="count_numbers on tensors of shape (784, 10) and (10,)",
-            actual=count_numbers(layer_tensors),
-            expected=7850,
+    checker.check_name(
+        name="d",
+        description="is a tensor with 3 rows of 2 numbers",
+        run=lambda d: expect_shape(
+            call="d",
+            actual=d,
+            shape=(3, 2),
         ),
     )
-    checker.test(
-        function="count_numbers",
-        description="counts 60 numbers in one tensor of shape (3, 4, 5)",
-        run=lambda count_numbers: expect_value(
-            call="count_numbers on one tensor of shape (3, 4, 5)",
-            actual=count_numbers([torch.zeros((3, 4, 5))]),
-            expected=60,
+    checker.check_name(
+        name="e",
+        description="is a tensor with 2 rows of the same length",
+        run=lambda e: expect_shape(
+            call="e",
+            actual=e,
+            shape=(2, None),
         ),
     )
 
@@ -771,14 +909,150 @@ TENSORS1 = Exercise(
     source=TENSORS1_SOURCE,
     solution=TENSORS1_SOLUTION,
     hints={
-        "to_tensor": "torch.tensor builds a tensor from a list of lists. Ask it for floats with its dtype argument, "
-        "or call .float() on what it gives back.",
-        "flatten_images": "Keep the first size, the number of images, as it is, and let reshape work out the length "
-        "of each row.",
-        "count_numbers": ".numel() counts the entries of one tensor. Add up the counts of every tensor in the list.",
+        "b": "Pass the list to torch.tensor, as the line that makes a does.",
+        "d": "Write a list of 3 inner lists with 2 numbers in each, and pass it to torch.tensor, as the line that "
+        "makes c does.",
+        "e": "The error says one row is longer than the other. Make both rows the same length.",
     },
     introduces=("model", "training", "tensor", "shape", "dimension"),
     check=check_tensors1,
+)
+
+INDEXING1_LESSON = prose(
+    """
+    If you looped over the rows for the first TODO, that works. Square
+    brackets on a tensor do it in one step, and the TODOs after it use them.
+
+    Give one position per dimension, separated by commas. Positions start at
+    0, and negative positions count from the end. Leave out the later
+    positions to take those dimensions whole.
+
+    ```python
+    x = torch.tensor([[1, 2, 3],
+                      [4, 5, 6],
+                      [7, 8, 9]])
+    ```
+
+    | Code | Result | Picks |
+    |---|---|---|
+    | `x[0]` | `tensor([1, 2, 3])` | row 0 |
+    | `x[1, 2]` | `tensor(6)` | row 1, column 2 |
+    | `x[:, 0]` | `tensor([1, 4, 7])` | column 0 |
+    | `x[0:2]` | `tensor([[1, 2, 3], [4, 5, 6]])` | rows 0 and 1 |
+    | `x[:, 0:2]` | `tensor([[1, 2], [4, 5], [7, 8]])` | columns 0 and 1 |
+
+    A single position is an **index**. A bare `:` takes the whole dimension,
+    so `x[:, 0]` is column 0 of every row. `start:stop` is a **slice**, which
+    takes the positions from `start` up to, but not including, `stop`. Leave
+    out `start` to begin at 0, or `stop` to run to the end, so `x[1:]` is
+    every row after the first.
+    """,
+)
+
+INDEXING1_SOURCE = source_file(
+    '''
+    # indexing1.py
+
+    import torch
+
+    grid = torch.tensor([[1, 2, 3],
+                         [4, 5, 6],
+                         [7, 8, 9]])
+
+    # TODO: Try this before the lesson, with what you know from Python lists.
+    #   Get the first column of grid, [1, 4, 7], as a tensor. The lesson tab
+    #   opens once you save a change.
+    first_column = ...
+
+    # The TODOs below use the square brackets the lesson shows.
+
+    # TODO: Get the middle row, [4, 5, 6].
+    middle_row = ...
+
+    # TODO: Get the 9.
+    nine = ...
+
+    # TODO: Get the last two columns, [[2, 3], [5, 6], [8, 9]].
+    last_two_columns = ...
+    ''',
+)
+
+INDEXING1_SOLUTION = source_file(
+    '''
+    # indexing1.py, a solution for comparison
+
+    import torch
+
+    grid = torch.tensor([[1, 2, 3],
+                         [4, 5, 6],
+                         [7, 8, 9]])
+
+    # A loop like torch.tensor([row[0] for row in grid]) works too.
+    first_column = grid[:, 0]
+
+    middle_row = grid[1]
+
+    nine = grid[2, 2]
+
+    last_two_columns = grid[:, 1:]
+    ''',
+)
+
+
+def check_indexing1(checker: Checker) -> None:
+    grid = torch.tensor([[1, 2, 3], [4, 5, 6], [7, 8, 9]])
+
+    for name, description, expected in (
+        ("first_column", "is column 0, [1, 4, 7]", grid[:, 0]),
+        ("middle_row", "is row 1, [4, 5, 6]", grid[1]),
+    ):
+        checker.check_name(
+            name=name,
+            description=description,
+            run=lambda value, name=name, expected=expected: expect_tensor(
+                call=name,
+                actual=value,
+                expected=expected,
+            ),
+        )
+
+    checker.check_name(
+        name="nine",
+        description="is the 9 in row 2, column 2",
+        run=lambda nine: expect_value(
+            call="nine",
+            actual=nine,
+            expected=9,
+        ),
+    )
+    checker.check_name(
+        name="last_two_columns",
+        description="is columns 1 and 2",
+        run=lambda last_two_columns: expect_tensor(
+            call="last_two_columns",
+            actual=last_two_columns,
+            expected=grid[:, 1:],
+        ),
+    )
+
+
+INDEXING1 = Exercise(
+    name="indexing1",
+    chapter=TENSORS,
+    title="Picking parts of a tensor",
+    lesson=INDEXING1_LESSON,
+    source=INDEXING1_SOURCE,
+    solution=INDEXING1_SOLUTION,
+    hints={
+        "first_column": "Each row of grid works like an inner list. Collect the first entry of every row in a list, "
+        "then pass the list to torch.tensor.",
+        "middle_row": "One position picks a whole row. Counting starts at 0.",
+        "nine": "Give the row and the column, separated by a comma.",
+        "last_two_columns": "Take every row with a bare colon, and a slice of the columns that starts at 1.",
+    },
+    introduces=("index", "slice"),
+    check=check_indexing1,
+    try_first=True,
 )
 
 TENSORS2_LESSON = prose(
@@ -2048,6 +2322,7 @@ CHAPTERS: list[Chapter] = [
 
 EXERCISES: list[Exercise] = [
     TENSORS1,
+    INDEXING1,
     TENSORS2,
     TENSORS3,
     TENSORS4,
@@ -2235,10 +2510,17 @@ def code_tokens(code: str) -> list[str]:
 
 
 def solution_bodies(solution: str) -> dict[str, list[str]]:
-    """Each solution function's body as code tokens, with the return keyword left out."""
+    """Each solution function's body as code tokens, with the return keyword left out,
+    and the value of each top level name the solution sets."""
     bodies: dict[str, list[str]] = {}
 
     for node in ast.parse(solution).body:
+        if isinstance(node, ast.Assign):
+            for name in assigned_names(node):
+                bodies[name] = code_tokens(ast.get_source_segment(solution, node.value))
+
+            continue
+
         if not isinstance(node, ast.FunctionDef):
             continue
 
@@ -2512,7 +2794,7 @@ def result_view(
     parts: list[RenderableType] = []
 
     if outcome.passed:
-        parts.append(Text("✓ Exercise done. Every function passes.", style="bold green"))
+        parts.append(Text("✓ Exercise done. Everything passes.", style="bold green"))
         parts.append(Text.assemble("A solution to compare with is in ", (relative(exercise.solution_path), ACCENT), "."))
         parts.append(Text("Press n for the next exercise.", style="bold"))
         parts.append(Text(""))
@@ -2528,10 +2810,12 @@ def result_view(
         failing = [result for result in results if not result.passed]
 
         if not failing:
+            # A name shows what it holds, so the learner sees their line work without printing it.
+            shown = next((result.shown for result in results if result.shown), "passes")
             table.add_row(
                 Text("✓", style="bold green"),
                 Text(function, style="bold"),
-                Text("passes", style="green"),
+                Text(shown, style="green"),
             )
             continue
 
@@ -2565,7 +2849,7 @@ def result_view(
         parts.append(Text(""))
 
     if not outcome.passed:
-        parts.append(Text(f"{passing_functions(outcome)} of {len(functions)} functions pass. {check_again}", style="dim"))
+        parts.append(Text(f"{passing_functions(outcome)} of {len(functions)} pass. {check_again}", style="dim"))
 
     if not outcome.printed.strip():
         return Group(*parts)
@@ -3004,6 +3288,7 @@ class WatchScreen(Screen[None]):
         self.latest_check = 0
         self.show_result_when_checked = False
         self.watched_time = 0.0
+        self.lesson_shown_open = True
         self.check_again = "Press r to check again." if manual else "Save the file to check again."
 
     @property
@@ -3069,8 +3354,7 @@ class WatchScreen(Screen[None]):
         self.show_result_when_checked = False
         self.watched_time = modified_time(exercise.path)
 
-        self.query_one("#lesson-title", Static).update(exercise.title)
-        self.query_one("#lesson-text", MarkdownWidget).update(exercise.lesson)
+        self.show_lesson()
         self.query_one("#lesson", VerticalScroll).scroll_home(animate=False)
         self.action_show_tab("lesson")
 
@@ -3126,6 +3410,13 @@ class WatchScreen(Screen[None]):
         self.show_hint()
         self.refresh_bindings()
 
+        # A try first lesson opens on the first saved change, and closes again after a reset.
+        if exercise.lesson_open != self.lesson_shown_open:
+            self.show_lesson()
+
+            if exercise.lesson_open:
+                self.notify("The lesson is open now. Press 1 to read it.")
+
         # After a save the learner wants the outcome, as rustlings shows it. Opening an exercise shows the lesson.
         if self.show_result_when_checked:
             self.show_result_when_checked = False
@@ -3177,6 +3468,12 @@ class WatchScreen(Screen[None]):
                 check_again=self.check_again,
             ),
         )
+
+    def show_lesson(self) -> None:
+        exercise = self.exercise
+        self.lesson_shown_open = exercise.lesson_open
+        self.query_one("#lesson-title", Static).update(exercise.title)
+        self.query_one("#lesson-text", MarkdownWidget).update(lesson_text(exercise))
 
     def show_hint(self) -> None:
         self.query_one("#hint-text", Static).update(
