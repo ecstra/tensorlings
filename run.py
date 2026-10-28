@@ -588,7 +588,7 @@ TENSORS = Chapter(
         ## Further reading
 
         - [PyTorch, introduction to tensors](https://docs.pytorch.org/tutorials/beginner/basics/tensorqs_tutorial.html)
-        - [PyTorch, broadcasting semantics](https://docs.pytorch.org/docs/stable/notes/broadcasting.html)
+        - [PyTorch, broadcasting semantics](https://docs.pytorch.org/docs/2.14/notes/broadcasting.html)
         - [Dive into Deep Learning, data manipulation](https://d2l.ai/chapter_preliminaries/ndarray.html)
         """,
     ),
@@ -615,8 +615,8 @@ TENSORS1_LESSON = prose(
     ```
 
     The **shape** gives the size of each **dimension**. `m` has 2 rows and 3
-    columns, so its first dimension has size 2. This course writes shapes the
-    short way, as `(2, 3)` and `(3,)`.
+    columns, so its first dimension has size 2. `v` is flat, with a single
+    dimension. This course writes shapes the short way, as `(2, 3)` and `(3,)`.
 
     Models read many examples at once. A **batch** holds them in one tensor,
     with the examples along the first dimension. A batch of 4 examples, each
@@ -777,8 +777,7 @@ TENSORS1 = Exercise(
     hints={
         "make_batch": "torch.tensor builds a tensor from nested lists. Ask it for floats with its dtype argument, or "
         "call .float() on what it gives back.",
-        "flatten_images": "Keep the first size, which images.shape[0] gives, and pass -1 as the second size to "
-        "reshape so it works out the rest.",
+        "flatten_images": "Keep the batch's first size as it is, and let reshape work out the length of each row.",
         "count_parameters": ".numel() counts the entries of one tensor. Add up the counts of every tensor in the "
         "list.",
     },
@@ -789,8 +788,9 @@ TENSORS1 = Exercise(
 TENSORS2_LESSON = prose(
     """
     Square brackets read parts of a tensor. Give one position per dimension,
-    separated by commas. Positions start at 0, and negative positions count
-    from the end.
+    separated by commas. Leave out the later positions to take those
+    dimensions whole. Positions start at 0, and negative positions count from
+    the end.
 
     ```python
     x = torch.tensor([[1, 2, 3],
@@ -827,10 +827,10 @@ TENSORS2_LESSON = prose(
 
     Models that read text split it into **tokens**, short pieces such as
     words, and give each one an id number. A batch of sentences becomes a
-    tensor of ids with shape `(sentences, length)`. A model reads a fixed
-    number of tokens at a time, so it keeps the most recent ones. It also
-    keeps a table with one row of numbers per token id, and reads the row of
-    every id in its input.
+    tensor of ids with shape `(sentences, length)`. A model reads at most a
+    fixed number of tokens, called its context. When a sentence is longer, it
+    keeps the most recent ones. It also keeps a table with one row of numbers
+    per token id, and reads the row of every id in its input.
 
     A table of training examples often holds each example's label, the answer
     the model should learn to give, in its last column.
@@ -861,7 +861,7 @@ TENSORS2_SOURCE = source_file(
 
 
     # TODO: Return the row of table for every id in ids, in the same order. ids
-    #   can have any shape, and the result has the shape of ids, then the row size.
+    #   can have any shape.
     def look_up(
         table: Tensor,
         ids: Tensor,
@@ -997,8 +997,7 @@ TENSORS2 = Exercise(
         "context positions before the end.",
         "split_labels": "Take every row both times. The inputs are a slice of the columns that stops before the "
         "last one. The labels are the last column, picked by index.",
-        "look_up": "Index table with the whole ids tensor at once. The result already has the shape of ids, then "
-        "the row size.",
+        "look_up": "A tensor of positions picks rows, whatever its shape. Use the whole ids tensor as one position.",
     },
     introduces=("index", "slice", "token"),
     check=check_tensors2,
@@ -1027,6 +1026,8 @@ TENSORS3_LESSON = prose(
     (a > 0).float()    # tensor([1., 0., 1.])
     b == 5             # tensor([False,  True, False])
     b != 5             # tensor([ True, False,  True])
+
+    torch.tensor([1, 2, 3]) == torch.tensor([1, 0, 3])    # tensor([ True, False,  True])
     ```
 
     `torch.where(condition, x, y)` takes each entry from `x` where the
@@ -1037,15 +1038,15 @@ TENSORS3_LESSON = prose(
     torch.where(b > 4, b, -1.0)    # tensor([-1.,  5.,  6.])
     ```
 
-    Models run elementwise math all the time. Between their steps they often
-    replace every negative number with 0, which is called ReLU. Section 3 shows
-    why that matters. To see how far their outputs are from the right answers,
-    called targets, they square the difference of each pair.
+    Between their steps, models often replace every negative number with 0,
+    which is called ReLU. A later chapter shows why that matters. To see how
+    far their outputs are from the right answers, called targets, they square
+    the difference of each pair.
 
     Sentences in a batch have different lengths. The short ones are filled out
     with a padding id, which means no token here, so the batch keeps one shape.
-    The model then sets the values at padding positions to 0, so they count for
-    nothing.
+    The model then sets the values at padding positions to 0, so they add
+    nothing to a sum.
     """,
 )
 
@@ -1221,30 +1222,31 @@ TENSORS4_LESSON = prose(
     ```text
     (2, 3) with (3,)      fit, the (3,) is reused for every row
     (2, 3) with (2, 1)    fit, the (2, 1) is reused for every column
-    (2, 3) with (2,)      an error, since 3 meets 2
+    (2, 3) with (2,)      an error, since 3 and 2 differ and neither is 1
     ```
 
     To give each row its own number, the numbers need shape `(rows, 1)`.
     `.unsqueeze(1)` adds a dimension of size 1 at position 1, so a tensor of
-    shape `(2,)` becomes `(2, 1)`.
+    shape `(2,)` becomes `(2, 1)`. The same rules hold for any number of
+    dimensions, so `.unsqueeze(2)` turns `(2, 4)` into `(2, 4, 1)`.
 
     ```python
     r = torch.tensor([1.0, 10.0])
     r.unsqueeze(1)        # tensor([[ 1.], [10.]])
-    m / r.unsqueeze(1)    # tensor([[1.0000, 2.0000, 3.0000], [0.4000, 0.5000, 0.6000]])
+    m * r.unsqueeze(1)    # tensor([[ 1.,  2.,  3.], [40., 50., 60.]])
     ```
 
     A square tensor hides a trap. With `s` of shape `(3, 3)` and `t` of shape
     `(3,)`, `s / t` runs without an error. The `(3,)` lines up with the
-    columns, so each column gets divided when each row was meant to. The
-    numbers are wrong and nothing says so.
+    columns, so each column gets its own number, when each row was meant to
+    get one. The numbers are wrong and nothing says so.
 
     A batch of shape `(examples, features)` broadcasts with one number per
     feature, shape `(features,)`. Models add a **bias** this way, one learned
     number per column, added to every example. Data gets prepared this way
     too. Features come in very different ranges, such as pixels from 0 to 255
-    next to values from 0 to 1. Models learn faster when every column is
-    rescaled to run from 0 to 1.
+    next to values from 0 to 1. Models learn faster when the columns have
+    similar ranges, so each column is often rescaled to run from 0 to 1.
     """,
 )
 
@@ -1275,9 +1277,10 @@ TENSORS4_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the average token value of each sentence. totals has shape
-    #   (sentences, size) and holds each sentence's token values added up.
-    #   lengths has shape (sentences,) and holds how many tokens each sentence has.
+    # TODO: Each token has a row of numbers. totals has shape (sentences, size)
+    #   and holds each sentence's token rows added up. lengths has shape
+    #   (sentences,) and holds how many tokens each sentence has. Return each
+    #   sentence's average row, shape (sentences, size).
     def average_per_sentence(
         totals: Tensor,
         lengths: Tensor,
@@ -1387,12 +1390,11 @@ TENSORS4 = Exercise(
     source=TENSORS4_SOURCE,
     solution=TENSORS4_SOLUTION,
     hints={
-        "add_bias": "The shapes (examples, features) and (features,) already fit, since they line up from the "
-        "right. A plain + works.",
+        "add_bias": "Line the two shapes up from the right and check them against the broadcasting rule.",
         "rescale": "Subtract each column's low first, so every column starts at 0. Then divide by each column's "
         "range, its high minus its low.",
-        "average_per_sentence": "Divide each row of totals by its own length. For that, lengths needs shape "
-        "(sentences, 1), which .unsqueeze(1) gives.",
+        "average_per_sentence": "Each row of totals needs its own length. Check which shape lengths needs for "
+        "that, and how to give it that shape.",
     },
     introduces=("broadcasting", "bias"),
     check=check_tensors4,
@@ -1415,7 +1417,7 @@ TENSORS5_LESSON = prose(
     `.mean()` takes `dim` the same way, so `x.mean(dim=0)` is
     `tensor([2.5000, 3.5000, 4.5000])`. It only works on floats. `.max()` gives
     the largest entry and `.argmax()` gives its position, and both take `dim`
-    too.
+    too. With `dim`, `.max()` gives back two tensors, `.values` and `.indices`.
 
     ```python
     x.max()            # tensor(6.)
@@ -1423,21 +1425,23 @@ TENSORS5_LESSON = prose(
     ```
 
     Operations like these, which combine many entries into fewer, are called
-    **reductions**. `keepdim=True` keeps the reduced dimension with size 1, so
-    `x.sum(dim=1, keepdim=True)` has shape `(2, 1)`. That shape broadcasts
-    against the rows of `x`, as the last exercise showed.
+    **reductions**. They work the same on any number of dimensions, so
+    `torch.ones((2, 4, 3)).sum(dim=1)` has shape `(2, 3)`. `keepdim=True`
+    keeps the reduced dimension with size 1, so `x.sum(dim=1, keepdim=True)`
+    has shape `(2, 1)`. That shape broadcasts against the rows of `x`, as the
+    last exercise showed.
 
     A reduction over the examples of a batch, along dimension 0, describes the
-    data, such as the average of each feature. A reduction along each row
-    gives one answer per example.
+    data. A reduction along each row gives one answer per example.
 
     A model that sorts examples into classes, such as which digit an image
     shows, gives each class a score. A batch of scores has shape `(examples,
     classes)`, and the class with the highest score is the model's answer. Its
     accuracy is the share of examples it gets right.
 
-    Dividing each row by its own total makes every row add up to 1. Models turn
-    positive scores into shares of 1 this way, one share per class.
+    Dividing each row by its own total turns positive numbers into fractions
+    that add up to 1. Models use this as the last step of turning scores into a
+    chance for each class.
     """,
 )
 
@@ -1622,13 +1626,13 @@ MATMUL1_LESSON = prose(
     v @ w            # tensor(320.)
     ```
 
-    A tensor with two dimensions is a **matrix**. Put a matrix on the left of
-    `@` and a flat tensor on the right. `@` then takes the dot product of every
-    row with the flat tensor, so it gives one result per row.
+    A tensor with two dimensions is a **matrix**. With a matrix on the left and
+    a flat tensor on the right, `@` gives one dot product per row.
 
     With a matrix on each side, `@` takes the dot product of every row on the
     left with every column on the right. This is **matrix multiplication**.
-    `(n, k) @ (k, m)` gives `(n, m)`, and the two inner sizes must match.
+    `(n, k) @ (k, m)` gives `(n, m)`, and the two middle sizes, both `k`, must
+    match.
 
     ```python
     a = torch.tensor([[1.0, 2.0],
@@ -1640,18 +1644,17 @@ MATMUL1_LESSON = prose(
     ```
 
     `.T` swaps the two dimensions of a matrix, so its rows become columns and
-    `b.T` has shape `(3, 2)`. Multiplying by `b.T` takes the dot product of
-    every row on the left with every row of `b`.
+    `b.T` has shape `(3, 2)`.
 
     A **layer** is a step of a model that holds weights. The most common one
     computes several weighted sums of each example, called its outputs, and
     adds a bias to each. PyTorch stores its weights as a matrix of shape
     `(outputs, inputs)`, one row of weights per output, and its bias with shape
     `(outputs,)`. A batch of shape `(examples, inputs)` comes out with shape
-    `(examples, outputs)`. Section 3 builds it as `nn.Linear`.
+    `(examples, outputs)`. A later chapter builds it as `nn.Linear`.
 
     Scoring every row of one matrix against every row of another is common
-    too. Search engines score a query against every document this way, and
+    too. Search systems score a query against many documents this way, and
     models that read text compare every token with every other.
     """,
 )
@@ -1839,13 +1842,11 @@ QUIZ1_LESSON = prose(
     through a layer that gives one score per class. The class with the highest
     score is the answer.
 
-    Every step uses a tool from an earlier exercise.
-
     | Step | Taught in |
     |---|---|
     | read a table row for every token id | tensors2 |
     | mark the padding with a comparison | tensors3 |
-    | add a dimension of size 1 so the marks line up with the rows | tensors4 |
+    | add a dimension of size 1 so each mark lines up with a token's whole row | tensors4 |
     | add up along a dimension and divide by a count | tensors4 and tensors5 |
     | run a layer | matmul1 |
     | pick the highest score in each row | tensors5 |
@@ -1864,7 +1865,7 @@ QUIZ1_SOURCE = source_file(
 
     # TODO: Turn each sentence into the average of the table rows of its tokens,
     #   leaving the padding out. ids has shape (sentences, length) and table has
-    #   shape (vocabulary, size). The result has shape (sentences, size).
+    #   shape (number of token ids, size). The result has shape (sentences, size).
     def sentence_averages(
         ids: Tensor,
         table: Tensor,
@@ -1908,8 +1909,8 @@ QUIZ1_SOLUTION = source_file(
     ) -> Tensor:
         rows = table[ids]
 
-        # Shape (sentences, length, 1), so each mark lines up with a whole row.
-        real = (ids != pad_id).unsqueeze(2)
+        # Shape (sentences, length, 1), so each mark lines up with a token's whole row.
+        real = (ids != pad_id).float().unsqueeze(2)
         totals = (rows * real).sum(dim=1)
         lengths = real.sum(dim=1)
 
@@ -2025,9 +2026,8 @@ QUIZ1 = Exercise(
     source=QUIZ1_SOURCE,
     solution=QUIZ1_SOLUTION,
     hints={
-        "sentence_averages": "table[ids] gives one row per token, with shape (sentences, length, size). ids != "
-        "pad_id marks the real tokens, and .unsqueeze(2) lines the marks up with the rows. Zero the padding rows, "
-        "add up along the tokens, and divide by how many real tokens each sentence has.",
+        "sentence_averages": "table[ids] gives one row per token, with shape (sentences, length, size). Then follow "
+        "the steps in the lesson's table.",
         "predict": "Run the averages through a layer the way linear does in matmul1, then take the argmax of each "
         "row.",
     },
