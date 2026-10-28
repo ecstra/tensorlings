@@ -4,10 +4,11 @@ kind: todo
 description: every TODO says the operation in plain words with an example, then why it exists, after the owner could not follow tensors1
 updated: 2026-10-28
 links: []
-status: open
+status: done
 by: owner
 area: course
 born: 2026-10-28
+done: 2026-10-28
 ---
 
 ## What
@@ -29,8 +30,10 @@ The TODOs described each task in deep learning words, like batch, example and fe
 | 3 | Lint the starting files' comments for terms no lesson explained | | owner | done |
 | 4 | Run the dev check, the wrong answers and the screen driver | | owner | done |
 | 5 | Reset the owner's exercise files to the new versions | | owner | done |
-| 6 | try tensors1 and indexing1 in the new exercise method | TODO-008 | agent | pending |
+| 6 | try tensors1 and indexing1 in the new exercise method | TODO-008 | agent | done |
 
 ## Done when
 
 Every TODO in the seven exercises reads as a plain instruction with an example, explains any deep learning word it uses and carries no why section, every check passes, and the owner has tried tensors1 and understood it.
+
+Met on 2026-10-28 through TODO-008. Commits 94e3ec2 and 53c8d04 made the TODOs plain, and the owner then approved tensors1 and indexing1 in the explain then try format.

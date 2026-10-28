@@ -30,7 +30,8 @@ The six exercises had become Karpathy's makemore bigram model, which was never i
 | 6 | Run the dev check, the lesson lint, the wrong answers and the screen driver | | owner | done |
 | 7 | Get a beginner reader review and fix what it finds | | owner | done |
 | 8 | Reset the owner's exercise files to the new versions | | owner | done |
-| 9 | plain instructions in every exercise | TODO-007 | agent | pending |
+| 9 | plain instructions in every exercise | TODO-007 | agent | done |
+| 10 | convert the rest of phase 1a to explain then try | TODO-009 | agent | pending |
 
 ## Done when
 

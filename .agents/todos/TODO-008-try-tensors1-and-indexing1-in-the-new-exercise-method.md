@@ -4,10 +4,11 @@ kind: todo
 description: build tensors1 with explain then try and fix the error, and indexing1 with try first, checked by name with no print lines, for the owner to try
 updated: 2026-10-28
 links: []
-status: open
+status: done
 by: owner
 area: course
 born: 2026-10-28
+done: 2026-10-28
 ---
 
 ## What
@@ -35,3 +36,5 @@ The owner chose three methods from the research. Explain then try puts a short e
 ## Done when
 
 tensors1 and indexing1 work in the app as described, with no print lines, every check passes, and the owner has tried them.
+
+Met on 2026-10-28. The owner tried both and said "tensor-1 and indexing-1 is fine, convert the rest in that format". Commits dce8288 to 95a9ac4 built them, dropped the lesson lock and kept the result table.

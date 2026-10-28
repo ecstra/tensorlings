@@ -134,6 +134,15 @@ def run_with_time_limit(run: Callable[[], object]) -> None:
 # PyTorch's own wording for common mistakes, each with the same message in plain words.
 PLAIN_ERRORS: tuple[tuple[str, str], ...] = (
     (
+        r"list indices must be integers or slices, not tuple",
+        "Square brackets with a comma, like x[:, 0], only work on a tensor. This is a Python list, so turn it into "
+        "a tensor with torch.tensor first.",
+    ),
+    (
+        r"name '(\w+)' is not defined",
+        "{0} was never set, because the line that sets it crashed or is missing. Fix that line first.",
+    ),
+    (
         r"object is not subscriptable",
         "Square brackets pick parts of something that holds values, like a tensor or a list. Here they come right "
         "after something that holds nothing to pick, such as a function like torch.tensor.",
@@ -579,7 +588,11 @@ def expect_value(
         actual=actual,
     )
 
-    if isinstance(actual, Tensor) and actual.dim() == 0:
+    # Comparing a tensor of several numbers with one number gives a tensor, which can't answer a plain if.
+    if isinstance(actual, Tensor) and actual.numel() != 1:
+        raise Mismatch(f"{call} is {value_text(actual)}, but it should be the single number {value_text(expected)}.")
+
+    if isinstance(actual, Tensor):
         actual = actual.item()
 
     if actual != expected:
@@ -686,34 +699,21 @@ def attempt(
 # ---------------------------------------------------------------------------
 
 
-def expect_floats(
-    call: str,
-    actual: object,
+def check_named_tensors(
+    checker: Checker,
+    wanted: tuple[tuple[str, str, Tensor], ...],
 ) -> None:
-    reject_missing_return(
-        call=call,
-        actual=actual,
-    )
-
-    if isinstance(actual, (list, tuple)):
-        raise Mismatch(f"{call} is a Python {type(actual).__name__}. Turn it into a tensor with torch.tensor(...).")
-
-    if not isinstance(actual, Tensor):
-        raise Mismatch(f"{call} is a {type(actual).__name__}. It should be a tensor.")
-
-    if not actual.dtype.is_floating_point:
-        raise Mismatch(f"{call} holds integers. Add .float() so it holds floats.")
-
-
-def random_tensor(
-    shape: tuple[int, ...],
-    seed: int = 0,
-) -> Tensor:
-    """Random numbers that are the same on every run, so a failing check fails the same way twice."""
-    return torch.randn(
-        size=shape,
-        generator=torch.Generator().manual_seed(seed),
-    )
+    """Check each name against the tensor it should hold, in the order the file sets them."""
+    for name, description, expected in wanted:
+        checker.check_name(
+            name=name,
+            description=description,
+            run=lambda value, name=name, expected=expected: expect_tensor(
+                call=name,
+                actual=value,
+                expected=expected,
+            ),
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -981,20 +981,13 @@ INDEXING1_SOLUTION = source_file(
 def check_indexing1(checker: Checker) -> None:
     grid = torch.tensor([[1, 2, 3], [4, 5, 6], [7, 8, 9]])
 
-    for name, description, expected in (
-        ("first_column", "is column 0, [1, 4, 7]", grid[:, 0]),
-        ("middle_row", "is row 1, [4, 5, 6]", grid[1]),
-    ):
-        checker.check_name(
-            name=name,
-            description=description,
-            run=lambda value, name=name, expected=expected: expect_tensor(
-                call=name,
-                actual=value,
-                expected=expected,
-            ),
-        )
-
+    check_named_tensors(
+        checker=checker,
+        wanted=(
+            ("first_column", "is column 0, [1, 4, 7]", grid[:, 0]),
+            ("middle_row", "is row 1, [4, 5, 6]", grid[1]),
+        ),
+    )
     checker.check_name(
         name="nine",
         description="is the 9 in row 2, column 2",
@@ -1004,14 +997,9 @@ def check_indexing1(checker: Checker) -> None:
             expected=9,
         ),
     )
-    checker.check_name(
-        name="last_two_columns",
-        description="is columns 1 and 2",
-        run=lambda last_two_columns: expect_tensor(
-            call="last_two_columns",
-            actual=last_two_columns,
-            expected=grid[:, 1:],
-        ),
+    check_named_tensors(
+        checker=checker,
+        wanted=(("last_two_columns", "is columns 1 and 2", grid[:, 1:]),),
     )
 
 
@@ -1033,254 +1021,26 @@ INDEXING1 = Exercise(
     check=check_indexing1,
 )
 
-TENSORS2_LESSON = prose(
-    """
-    Square brackets read parts of a tensor. Give one position per dimension,
-    separated by commas. Leave out the later positions to take those
-    dimensions whole. Positions start at 0, and negative positions count from
-    the end.
-
-    ```python
-    x = torch.tensor([[1, 2, 3],
-                      [4, 5, 6],
-                      [7, 8, 9]])
-    ```
-
-    | Code | Result | Selects |
-    |---|---|---|
-    | `x[0]` | `tensor([1, 2, 3])` | row 0 |
-    | `x[-1]` | `tensor([7, 8, 9])` | the last row |
-    | `x[1, 2]` | `tensor(6)` | row 1, column 2 |
-    | `x[:, 0]` | `tensor([1, 4, 7])` | column 0 |
-    | `x[0:2]` | rows 0 and 1 | a range of rows |
-    | `x[:-1]` | rows 0 and 1 | every row but the last |
-    | `x[:, -2:]` | columns 1 and 2 | the last two columns |
-
-    A single position is an **index**. `start:stop` is a **slice**, which
-    takes the positions from `start` up to, but not including, `stop`. Leave
-    out `start` to begin at 0, or `stop` to run to the end. A bare `:` takes
-    the whole dimension.
-
-    An index removes its dimension and a slice keeps it. `x[:, 0]` has shape
-    `(3,)`, while `x[:, 0:1]` has shape `(3, 1)`. `.item()` turns a tensor with
-    one entry into a plain Python number, so `x[1, 2].item()` is `6`.
-
-    A tensor of positions picks several rows at once, in the order given. The
-    result's shape is the shape of the positions, then the shape of one row.
-
-    ```python
-    x[torch.tensor([2, 0])]                    # tensor([[7, 8, 9], [1, 2, 3]])
-    x[torch.tensor([[2, 0], [1, 1]])].shape    # torch.Size([2, 2, 3])
-    ```
-    """,
-)
-
-TENSORS2_SOURCE = source_file(
-    '''
-    # tensors2.py
-
-    import torch
-    from torch import Tensor
-
-
-    # TODO: Keep the last `count` columns of every row of grid.
-    #   last_columns(torch.tensor([[5, 6, 7, 8], [1, 2, 3, 4]]), 2)
-    #   returns tensor([[7, 8], [3, 4]])
-    def last_columns(
-        grid: Tensor,
-        count: int,
-    ) -> Tensor:
-        ...
-
-
-    # TODO: Split table into two tensors, every column but the last, and the last
-    #   column on its own. Return them as a pair, in that order.
-    #   split_last_column(torch.tensor([[1, 2, 0], [3, 4, 1]]))
-    #   returns (tensor([[1, 2], [3, 4]]), tensor([0, 1]))
-    def split_last_column(table: Tensor) -> tuple[Tensor, Tensor]:
-        ...
-
-
-    # TODO: Return the rows of table at the given positions, in the same order.
-    #   positions can be a flat tensor or a grid of positions.
-    #   pick_rows(table, torch.tensor([2, 0])) returns row 2 of table, then row 0
-    def pick_rows(
-        table: Tensor,
-        positions: Tensor,
-    ) -> Tensor:
-        ...
-
-
-    # What the check tests
-    #   last_columns keeps the last 2, 1 and 4 columns of a grid with 4 columns
-    #   split_last_column on a table with 4 rows and 3 columns
-    #   pick_rows with flat positions and with a 2 by 2 grid of positions
-    ''',
-)
-
-TENSORS2_SOLUTION = source_file(
-    '''
-    # tensors2.py, a solution for comparison
-
-    import torch
-    from torch import Tensor
-
-
-    def last_columns(
-        grid: Tensor,
-        count: int,
-    ) -> Tensor:
-        return grid[:, -count:]
-
-
-    # The last column is picked by index, so it loses that dimension and is flat.
-    def split_last_column(table: Tensor) -> tuple[Tensor, Tensor]:
-        return table[:, :-1], table[:, -1]
-
-
-    def pick_rows(
-        table: Tensor,
-        positions: Tensor,
-    ) -> Tensor:
-        return table[positions]
-    ''',
-)
-
-
-def part_of_pair(
-    call: str,
-    actual: object,
-    position: int,
-) -> object:
-    reject_missing_return(
-        call=call,
-        actual=actual,
-    )
-
-    if not isinstance(actual, tuple) or len(actual) != 2:
-        raise Mismatch(f"{call} should return two tensors as a pair, like return first, second.")
-
-    return actual[position]
-
-
-def check_tensors2(checker: Checker) -> None:
-    grid = torch.tensor([[5, 6, 7, 8], [1, 2, 3, 4]])
-
-    for count in (2, 1, 4):
-        checker.test(
-            function="last_columns",
-            description=f"keeps the last {count} of 4 columns",
-            run=lambda last_columns, count=count: expect_tensor(
-                call=f"last_columns({value_text(grid)}, {count})",
-                actual=last_columns(grid, count),
-                expected=grid[:, -count:],
-            ),
-        )
-
-    # Two sizes, so code that only works for one number of rows or columns fails.
-    tables = (
-        torch.tensor(
-            [
-                [0.5, 1.0, 0.0],
-                [2.0, 3.5, 1.0],
-                [1.5, 0.5, 1.0],
-                [4.0, 2.0, 0.0],
-            ],
-        ),
-        torch.tensor(
-            [
-                [7.0, 1.0, 2.0, 1.0],
-                [3.0, 0.5, 9.0, 0.0],
-            ],
-        ),
-    )
-
-    for table in tables:
-        rows, columns = table.shape
-        checker.test(
-            function="split_last_column",
-            description=f"gives every column but the last as the first tensor, for {rows} rows and {columns} columns",
-            run=lambda split_last_column, table=table: expect_tensor(
-                call=f"the first tensor split_last_column({value_text(table)}) returns",
-                actual=part_of_pair(
-                    call=f"split_last_column({value_text(table)})",
-                    actual=split_last_column(table),
-                    position=0,
-                ),
-                expected=table[:, :-1],
-            ),
-        )
-        checker.test(
-            function="split_last_column",
-            description=f"gives the last column as the second tensor, for {rows} rows and {columns} columns",
-            run=lambda split_last_column, table=table: expect_tensor(
-                call=f"the second tensor split_last_column({value_text(table)}) returns",
-                actual=part_of_pair(
-                    call=f"split_last_column({value_text(table)})",
-                    actual=split_last_column(table),
-                    position=1,
-                ),
-                expected=table[:, -1],
-            ),
-        )
-
-    rows = random_tensor((5, 3))
-
-    for positions in (torch.tensor([3, 0, 3]), torch.tensor([[1, 4], [0, 0]])):
-        checker.test(
-            function="pick_rows",
-            description=f"picks the rows for positions of shape {shape_text(tuple(positions.shape))}",
-            run=lambda pick_rows, positions=positions: expect_tensor(
-                call=f"pick_rows(table, {value_text(positions)}) for a table of shape (5, 3)",
-                actual=pick_rows(rows, positions),
-                expected=rows[positions],
-            ),
-        )
-
-
-TENSORS2 = Exercise(
-    name="tensors2",
-    chapter=TENSORS,
-    title="Indexing and slicing",
-    lesson=TENSORS2_LESSON,
-    source=TENSORS2_SOURCE,
-    solution=TENSORS2_SOLUTION,
-    hints={
-        "last_columns": "The columns run along dimension 1. Take every row, and a slice of dimension 1 that starts "
-        "count positions before the end.",
-        "split_last_column": "Take every row both times. The first tensor is a slice of the columns that stops "
-        "before the last one. The second is the last column, picked by index.",
-        "pick_rows": "A tensor of positions picks rows, whatever its shape. Use the whole positions tensor at once.",
-    },
-    introduces=("index", "slice"),
-    check=check_tensors2,
-)
-
-TENSORS3_LESSON = prose(
+MATH1_LESSON = prose(
     """
     Math between two tensors of the same shape works entry by entry. This is
     **elementwise** math. `+`, `-`, `*`, `/` and `**`, which raises to a power,
-    all work this way. A plain number works with a tensor of any shape.
+    all work this way. A plain number works with every entry of a tensor.
 
     ```python
-    a = torch.tensor([1.0, -2.0, 3.0])
-    b = torch.tensor([4.0, 5.0, 6.0])
-    a + b     # tensor([5., 3., 9.])
-    a * b     # tensor([  4., -10.,  18.])
-    a ** 2    # tensor([1., 4., 9.])
-    a * 10    # tensor([ 10., -20.,  30.])
+    a = torch.tensor([1.0, 2.0, 3.0])
+    b = torch.tensor([10.0, 20.0, 30.0])
+    a + b     # tensor([11., 22., 33.])
+    a * 2     # tensor([2., 4., 6.])
     ```
 
-    Comparisons work entry by entry too. They give a tensor of `True` and
-    `False`, and `.float()` turns those into 1s and 0s.
+    Comparisons work entry by entry too. Each one gives a tensor of `True` and
+    `False`, one per entry, and `.float()` turns those into 1s and 0s.
 
     ```python
-    a > 0              # tensor([ True, False,  True])
-    (a > 0).float()    # tensor([1., 0., 1.])
-    b == 5             # tensor([False,  True, False])
-    b != 5             # tensor([ True, False,  True])
-
-    torch.tensor([1, 2, 3]) == torch.tensor([1, 0, 3])    # tensor([ True, False,  True])
+    c = torch.tensor([-2.0, 0.5, -1.0, 4.0])
+    c > 1              # tensor([False, False, False,  True])
+    (c > 1).float()    # tensor([0., 0., 0., 1.])
     ```
 
     `torch.where(condition, x, y)` takes each entry from `x` where the
@@ -1288,171 +1048,110 @@ TENSORS3_LESSON = prose(
     place of `x` or `y`.
 
     ```python
-    torch.where(b > 4, b, -1.0)    # tensor([-1.,  5.,  6.])
+    torch.where(c > 1, 1.0, c)    # tensor([-2.0000,  0.5000, -1.0000,  1.0000])
     ```
     """,
 )
 
-TENSORS3_SOURCE = source_file(
+MATH1_SOURCE = source_file(
     '''
-    # tensors3.py
+    # math1.py
 
     import torch
-    from torch import Tensor
 
+    a = torch.tensor([1.0, 2.0, 3.0])
+    b = torch.tensor([10.0, 20.0, 30.0])
 
-    # TODO: Replace every negative entry of x with 0, and keep the rest as they are.
-    #   zero_negatives(torch.tensor([-2.0, 0.0, 3.5])) returns tensor([0.0, 0.0, 3.5])
-    def zero_negatives(x: Tensor) -> Tensor:
-        ...
+    # + adds two tensors entry by entry, so a + b is [11., 22., 33.].
+    added = a + b
 
+    # TODO: Multiply a and b entry by entry.
+    multiplied = ...
 
-    # TODO: Subtract b from a entry by entry, then square each difference.
-    #   squared_differences(torch.tensor([2.0, 3.0, 5.0]), torch.tensor([1.0, 3.0, 7.0]))
-    #   returns tensor([1.0, 0.0, 4.0])
-    def squared_differences(
-        a: Tensor,
-        b: Tensor,
-    ) -> Tensor:
-        ...
+    # A plain number works with every entry, so a * 2 is [2., 4., 6.].
+    doubled = a * 2
 
+    # TODO: Square every entry of a. ** raises to a power, as in plain Python.
+    squared = ...
 
-    # TODO: Set values to 0 wherever ids equals pad_id. values and ids have the
-    #   same shape. pad_id is the id that fills out short rows of ids so they all
-    #   have the same length, which is called padding.
-    #   zero_padding(torch.tensor([[0.5, 0.2, 0.9]]), torch.tensor([[4, 7, 0]]), 0)
-    #   returns tensor([[0.5, 0.2, 0.0]])
-    def zero_padding(
-        values: Tensor,
-        ids: Tensor,
-        pad_id: int,
-    ) -> Tensor:
-        ...
+    c = torch.tensor([-2.0, 0.5, -1.0, 4.0])
 
+    # A comparison gives True or False for every entry.
+    above_one = c > 1                         # [False, False, False, True]
 
-    # What the check tests
-    #   zero_negatives on a flat tensor with negatives, a zero and positives, and on a (3, 4) tensor
-    #   squared_differences on 3 numbers each, and on two (2, 3) tensors
-    #   zero_padding with pad_id 0 and with pad_id 9
+    # TODO: Mark the entries of c that are below 0.
+    negative = ...
+
+    # torch.where(condition, x, y) takes each entry from x where the condition is
+    # True, and from y where it is False.
+    capped = torch.where(c > 1, 1.0, c)       # [-2.0, 0.5, -1.0, 1.0]
+
+    # TODO: Replace the negative entries of c with 0.0, and keep the rest.
+    no_negatives = ...
     ''',
 )
 
-TENSORS3_SOLUTION = source_file(
+MATH1_SOLUTION = source_file(
     '''
-    # tensors3.py, a solution for comparison
+    # math1.py, a solution for comparison
 
     import torch
-    from torch import Tensor
 
+    a = torch.tensor([1.0, 2.0, 3.0])
+    b = torch.tensor([10.0, 20.0, 30.0])
 
-    def zero_negatives(x: Tensor) -> Tensor:
-        return torch.where(x > 0, x, 0.0)
+    added = a + b
 
+    multiplied = a * b
 
-    def squared_differences(
-        a: Tensor,
-        b: Tensor,
-    ) -> Tensor:
-        return (a - b) ** 2
+    doubled = a * 2
 
+    squared = a ** 2
 
-    def zero_padding(
-        values: Tensor,
-        ids: Tensor,
-        pad_id: int,
-    ) -> Tensor:
-        return torch.where(ids == pad_id, 0.0, values)
+    c = torch.tensor([-2.0, 0.5, -1.0, 4.0])
+
+    above_one = c > 1
+
+    negative = c < 0
+
+    capped = torch.where(c > 1, 1.0, c)
+
+    no_negatives = torch.where(c < 0, 0.0, c)
     ''',
 )
 
 
-def check_tensors3(checker: Checker) -> None:
-    mixed = torch.tensor([-2.0, 0.0, 3.5, -0.1])
-    grid = random_tensor((3, 4))
-
-    checker.test(
-        function="zero_negatives",
-        description="turns the negatives of a flat tensor into 0",
-        run=lambda zero_negatives: expect_tensor(
-            call=f"zero_negatives({value_text(mixed)})",
-            actual=zero_negatives(mixed),
-            expected=torch.tensor([0.0, 0.0, 3.5, 0.0]),
-        ),
-    )
-    checker.test(
-        function="zero_negatives",
-        description="keeps the shape of a (3, 4) tensor",
-        run=lambda zero_negatives: expect_tensor(
-            call="zero_negatives on a random (3, 4) tensor",
-            actual=zero_negatives(grid),
-            expected=grid.clamp(min=0),
+def check_math1(checker: Checker) -> None:
+    check_named_tensors(
+        checker=checker,
+        wanted=(
+            ("multiplied", "is [10., 40., 90.]", torch.tensor([10.0, 40.0, 90.0])),
+            ("squared", "is [1., 4., 9.]", torch.tensor([1.0, 4.0, 9.0])),
+            ("negative", "marks the entries of c below 0", torch.tensor([True, False, True, False])),
+            ("no_negatives", "is c with its negatives set to 0", torch.tensor([0.0, 0.5, 0.0, 4.0])),
         ),
     )
 
-    a = torch.tensor([2.0, 3.0, 5.0])
-    b = torch.tensor([1.0, 3.0, 7.0])
-    random_a = random_tensor((2, 3))
-    random_b = random_tensor(
-        shape=(2, 3),
-        seed=1,
-    )
 
-    checker.test(
-        function="squared_differences",
-        description="gives [1, 0, 4] for [2, 3, 5] and [1, 3, 7]",
-        run=lambda squared_differences: expect_tensor(
-            call=f"squared_differences({value_text(a)}, {value_text(b)})",
-            actual=squared_differences(a, b),
-            expected=torch.tensor([1.0, 0.0, 4.0]),
-        ),
-    )
-    checker.test(
-        function="squared_differences",
-        description="works on two (2, 3) tensors",
-        run=lambda squared_differences: expect_tensor(
-            call="squared_differences on two random (2, 3) tensors",
-            actual=squared_differences(random_a, random_b),
-            expected=(random_a - random_b) ** 2,
-        ),
-    )
-
-    values = random_tensor((2, 4))
-    padded_ids = (
-        (torch.tensor([[4, 7, 0, 0], [3, 0, 0, 0]]), 0),
-        (torch.tensor([[4, 7, 9, 9], [3, 9, 9, 9]]), 9),
-    )
-
-    for ids, pad_id in padded_ids:
-        checker.test(
-            function="zero_padding",
-            description=f"zeroes the values where the ids are {pad_id}",
-            run=lambda zero_padding, ids=ids, pad_id=pad_id: expect_tensor(
-                call=f"zero_padding(values, {value_text(ids)}, {pad_id})",
-                actual=zero_padding(values, ids, pad_id),
-                expected=torch.where(ids == pad_id, 0.0, values),
-            ),
-        )
-
-
-TENSORS3 = Exercise(
-    name="tensors3",
+MATH1 = Exercise(
+    name="math1",
     chapter=TENSORS,
     title="Math on whole tensors",
-    lesson=TENSORS3_LESSON,
-    source=TENSORS3_SOURCE,
-    solution=TENSORS3_SOLUTION,
+    lesson=MATH1_LESSON,
+    source=MATH1_SOURCE,
+    solution=MATH1_SOLUTION,
     hints={
-        "zero_negatives": "x > 0 marks the entries to keep. torch.where can take each entry from x where that is "
-        "true and 0.0 where it is false.",
-        "squared_differences": "Subtract, then raise the result to the power 2 with **. Both work on whole tensors.",
-        "zero_padding": "ids == pad_id marks the padding. torch.where can put 0.0 there and keep values "
-        "everywhere else.",
+        "multiplied": "* works entry by entry, the way + does in the line that sets added.",
+        "squared": "Raise the whole tensor to the power 2. It squares every entry at once.",
+        "negative": "Compare c with 0, the way above_one compares it with 1.",
+        "no_negatives": "Use torch.where as capped does. The condition is c below 0, and the value to put there is "
+        "0.0.",
     },
-    introduces=("elementwise", "padding"),
-    check=check_tensors3,
+    introduces=("elementwise",),
+    check=check_math1,
 )
 
-TENSORS4_LESSON = prose(
+BROADCASTING1_LESSON = prose(
     """
     Elementwise math also works between tensors of different shapes. PyTorch
     lines the shapes up from the right. Two sizes fit when they are equal or
@@ -1474,8 +1173,7 @@ TENSORS4_LESSON = prose(
 
     To give each row its own number, the numbers need shape `(rows, 1)`.
     `.unsqueeze(1)` adds a dimension of size 1 at position 1, so a tensor of
-    shape `(2,)` becomes `(2, 1)`. The same rules hold for any number of
-    dimensions, so `.unsqueeze(2)` turns `(2, 4)` into `(2, 4, 1)`.
+    shape `(2,)` becomes `(2, 1)`.
 
     ```python
     r = torch.tensor([1.0, 10.0])
@@ -1490,173 +1188,87 @@ TENSORS4_LESSON = prose(
     """,
 )
 
-TENSORS4_SOURCE = source_file(
+BROADCASTING1_SOURCE = source_file(
     '''
-    # tensors4.py
+    # broadcasting1.py
 
     import torch
-    from torch import Tensor
 
+    grid = torch.tensor([[1.0, 2.0, 3.0],
+                         [4.0, 5.0, 6.0]])               # shape (2, 3)
 
-    # TODO: Add row to every row of grid. grid has shape (rows, columns) and row
-    #   has shape (columns,).
-    #   add_to_rows(torch.tensor([[1.0, 2.0], [3.0, 4.0]]), torch.tensor([10.0, 20.0]))
-    #   returns tensor([[11.0, 22.0], [13.0, 24.0]])
-    def add_to_rows(
-        grid: Tensor,
-        row: Tensor,
-    ) -> Tensor:
-        ...
+    # Shapes (2, 3) and (3,) line up from the right, so the row of 3 numbers is
+    # added to every row of grid.
+    plus_row = grid + torch.tensor([10.0, 20.0, 30.0])   # [[11., 22., 33.], [14., 25., 36.]]
 
+    # TODO: Multiply every row of grid by [1.0, 0.0, -1.0].
+    times_row = ...
 
-    # TODO: Rescale each column of grid so it runs from 0 to 1. lows and highs
-    #   hold each column's smallest and largest possible value.
-    #   rescale_columns(torch.tensor([[0.0, 10.0], [255.0, 20.0]]),
-    #                   torch.tensor([0.0, 10.0]), torch.tensor([255.0, 20.0]))
-    #   returns tensor([[0.0, 0.0], [1.0, 1.0]])
-    def rescale_columns(
-        grid: Tensor,
-        lows: Tensor,
-        highs: Tensor,
-    ) -> Tensor:
-        ...
+    # .unsqueeze(1) turns shape (2,) into (2, 1), one number for each row.
+    row_numbers = torch.tensor([1.0, 2.0]).unsqueeze(1)  # [[1.], [2.]]
+    scaled = grid * row_numbers                          # [[1., 2., 3.], [8., 10., 12.]]
 
-
-    # TODO: Divide each row of grid by its own number in divisors. grid has shape
-    #   (rows, columns) and divisors has shape (rows,).
-    #   divide_rows(torch.tensor([[2.0, 4.0], [9.0, 3.0]]), torch.tensor([2.0, 3.0]))
-    #   returns tensor([[1.0, 2.0], [3.0, 1.0]])
-    def divide_rows(
-        grid: Tensor,
-        divisors: Tensor,
-    ) -> Tensor:
-        ...
-
-
-    # What the check tests
-    #   add_to_rows on a (3, 2) grid, and on a (2, 2) grid where a wrong shape still runs
-    #   rescale_columns on 3 rows, with pixels from 0 to 255 in the first column
-    #   divide_rows on 2 rows, and on a (3, 3) grid where a wrong shape still runs
+    # TODO: This line crashes. Read the error in the Result tab, then fix it so
+    #   row 0 of grid gets 100 added and row 1 gets 200 added.
+    per_row = grid + torch.tensor([100.0, 200.0])
     ''',
 )
 
-TENSORS4_SOLUTION = source_file(
+BROADCASTING1_SOLUTION = source_file(
     '''
-    # tensors4.py, a solution for comparison
+    # broadcasting1.py, a solution for comparison
 
     import torch
-    from torch import Tensor
 
+    grid = torch.tensor([[1.0, 2.0, 3.0],
+                         [4.0, 5.0, 6.0]])
 
-    def add_to_rows(
-        grid: Tensor,
-        row: Tensor,
-    ) -> Tensor:
-        return grid + row
+    plus_row = grid + torch.tensor([10.0, 20.0, 30.0])
 
+    times_row = grid * torch.tensor([1.0, 0.0, -1.0])
 
-    def rescale_columns(
-        grid: Tensor,
-        lows: Tensor,
-        highs: Tensor,
-    ) -> Tensor:
-        return (grid - lows) / (highs - lows)
+    row_numbers = torch.tensor([1.0, 2.0]).unsqueeze(1)
+    scaled = grid * row_numbers
 
-
-    # divisors.unsqueeze(1) has shape (rows, 1), so each row gets its own number.
-    def divide_rows(
-        grid: Tensor,
-        divisors: Tensor,
-    ) -> Tensor:
-        return grid / divisors.unsqueeze(1)
+    # Shape (2, 1) lines up with the rows, so each row gets its own number.
+    per_row = grid + torch.tensor([100.0, 200.0]).unsqueeze(1)
     ''',
 )
 
 
-def check_tensors4(checker: Checker) -> None:
-    grids = (
-        (random_tensor((3, 2)), torch.tensor([10.0, -1.0])),
-        (random_tensor((2, 2)), torch.tensor([10.0, -1.0])),
-    )
-
-    for grid, row in grids:
-        checker.test(
-            function="add_to_rows",
-            description=f"adds the row to every row of a {shape_text(tuple(grid.shape))} grid",
-            run=lambda add_to_rows, grid=grid, row=row: expect_tensor(
-                call=f"add_to_rows on a random {shape_text(tuple(grid.shape))} grid with row {value_text(row)}",
-                actual=add_to_rows(grid, row),
-                expected=grid + row,
-            ),
-        )
-
-    # Two sets of columns, so code written for one set of numbers fails.
-    rescalings = (
-        (
-            torch.tensor([[0.0, 10.0], [255.0, 20.0], [51.0, 15.0]]),
-            torch.tensor([0.0, 10.0]),
-            torch.tensor([255.0, 20.0]),
-            torch.tensor([[0.0, 0.0], [1.0, 1.0], [0.2, 0.5]]),
-        ),
-        (
-            torch.tensor([[2.0, -1.0, 5.0], [4.0, 1.0, 9.0]]),
-            torch.tensor([2.0, -1.0, 1.0]),
-            torch.tensor([4.0, 1.0, 9.0]),
-            torch.tensor([[0.0, 0.0, 0.5], [1.0, 1.0, 1.0]]),
+def check_broadcasting1(checker: Checker) -> None:
+    check_named_tensors(
+        checker=checker,
+        wanted=(
+            ("times_row", "is every row of grid times [1, 0, -1]", torch.tensor([[1.0, 0.0, -3.0], [4.0, 0.0, -6.0]])),
+            ("per_row", "is grid with 100 added to row 0 and 200 to row 1", torch.tensor([[101.0, 102.0, 103.0], [204.0, 205.0, 206.0]])),
         ),
     )
 
-    for grid, lows, highs, rescaled in rescalings:
-        checker.test(
-            function="rescale_columns",
-            description=f"puts every column of {grid.shape[0]} rows between 0 and 1",
-            run=lambda rescale_columns, grid=grid, lows=lows, highs=highs, rescaled=rescaled: expect_tensor(
-                call=f"rescale_columns({value_text(grid)}, {value_text(lows)}, {value_text(highs)})",
-                actual=rescale_columns(grid, lows, highs),
-                expected=rescaled,
-            ),
-        )
 
-    divisions = (
-        (torch.tensor([[2.0, 4.0, 6.0], [8.0, 4.0, 12.0]]), torch.tensor([2, 4])),
-        (random_tensor((3, 3)), torch.tensor([1, 2, 5])),
-    )
-
-    for grid, divisors in divisions:
-        checker.test(
-            function="divide_rows",
-            description=f"divides each of {grid.shape[0]} rows by its own number",
-            run=lambda divide_rows, grid=grid, divisors=divisors: expect_tensor(
-                call=f"divide_rows on a {shape_text(tuple(grid.shape))} grid with divisors {value_text(divisors)}",
-                actual=divide_rows(grid, divisors),
-                expected=grid / divisors.unsqueeze(1),
-            ),
-        )
-
-
-TENSORS4 = Exercise(
-    name="tensors4",
+BROADCASTING1 = Exercise(
+    name="broadcasting1",
     chapter=TENSORS,
     title="Broadcasting",
-    lesson=TENSORS4_LESSON,
-    source=TENSORS4_SOURCE,
-    solution=TENSORS4_SOLUTION,
+    lesson=BROADCASTING1_LESSON,
+    source=BROADCASTING1_SOURCE,
+    solution=BROADCASTING1_SOLUTION,
     hints={
-        "add_to_rows": "Line the two shapes up from the right and check them against the broadcasting rule.",
-        "rescale_columns": "Subtract each column's low first, so every column starts at 0. Then divide by each "
-        "column's range, its high minus its low.",
-        "divide_rows": "Each row of grid needs its own divisor. Check which shape divisors needs for that, and how "
-        "to give it that shape.",
+        "times_row": "Multiply grid by a tensor of the three numbers, the way plus_row adds one.",
+        "per_row": "The two numbers need shape (2, 1) to line up with the rows. Give them that shape the way "
+        "row_numbers does.",
     },
     introduces=("broadcasting",),
-    check=check_tensors4,
+    check=check_broadcasting1,
 )
 
-TENSORS5_LESSON = prose(
+REDUCTIONS1_LESSON = prose(
     """
-    `.sum()` adds up entries. With no arguments it adds all of them. With
-    `dim` it adds along one dimension, and that dimension disappears from the
-    shape.
+    Try the first TODO before you read on, with what you know from Python.
+
+    If you added up the rows in a loop, that works. `.sum()` does it in one
+    step. With no arguments it adds every entry. With `dim` it adds along one
+    dimension, and that dimension disappears from the shape.
 
     ```python
     x = torch.tensor([[1.0, 2.0, 3.0],
@@ -1667,168 +1279,135 @@ TENSORS5_LESSON = prose(
     ```
 
     `.mean()` takes `dim` the same way, so `x.mean(dim=0)` is
-    `tensor([2.5000, 3.5000, 4.5000])`. It only works on floats. `.max()` gives
-    the largest entry and `.argmax()` gives its position, and both take `dim`
-    too. With `dim`, `.max()` gives back two tensors, `.values` and `.indices`.
+    `tensor([2.5000, 3.5000, 4.5000])`. It only works on floats. `.argmax()`
+    gives the position of the largest entry, and with `dim` it gives one
+    position per row or per column.
 
     ```python
-    x.max()            # tensor(6.)
     x.argmax(dim=1)    # tensor([2, 2]), the column of the largest entry in each row
     ```
 
     Operations like these, which combine many entries into fewer, are called
-    **reductions**. They work the same on any number of dimensions, so
-    `torch.ones((2, 4, 3)).sum(dim=1)` has shape `(2, 3)`. `keepdim=True`
-    keeps the reduced dimension with size 1, so `x.sum(dim=1, keepdim=True)`
-    has shape `(2, 1)`. That shape broadcasts against the rows of `x`, as the
-    last exercise showed.
+    **reductions**. `keepdim=True` keeps the reduced dimension with size 1, so
+    `x.sum(dim=1, keepdim=True)` has shape `(2, 1)`. That shape broadcasts
+    against the rows of `x`, as broadcasting1 showed.
     """,
 )
 
-TENSORS5_SOURCE = source_file(
+REDUCTIONS1_SOURCE = source_file(
     '''
-    # tensors5.py
+    # reductions1.py
 
     import torch
-    from torch import Tensor
 
+    grid = torch.tensor([[1.0, 2.0, 3.0],
+                         [4.0, 5.0, 6.0]])
 
-    # TODO: Return the mean of each column of grid.
-    #   column_means(torch.tensor([[1.0, 2.0], [3.0, 6.0]])) returns tensor([2.0, 4.0])
-    def column_means(grid: Tensor) -> Tensor:
-        ...
+    # TODO: Try this before reading the lesson, with what you know from Python.
+    #   Add up every number in grid. The answer is 21.
+    total = ...
 
+    # The TODOs below use what the lesson shows.
 
-    # TODO: Each row of scores holds one score per choice, and the position of a
-    #   row's highest score is its pick. Return the fraction of rows whose pick
-    #   equals the right answer in answers, as a float.
-    #   accuracy(torch.tensor([[0.1, 0.9], [0.8, 0.2]]), torch.tensor([1, 1])) returns 0.5
-    def accuracy(
-        scores: Tensor,
-        answers: Tensor,
-    ) -> float:
-        ...
+    # grid.sum(dim=0) adds down each column.
+    column_totals = grid.sum(dim=0)             # [5., 7., 9.]
 
+    # TODO: Add up each row instead, giving [6., 15.].
+    row_totals = ...
 
-    # TODO: Divide each row of grid by its own sum, so every row adds up to 1.
-    #   rows_to_fractions(torch.tensor([[1.0, 3.0], [2.0, 2.0]]))
-    #   returns tensor([[0.25, 0.75], [0.5, 0.5]])
-    def rows_to_fractions(grid: Tensor) -> Tensor:
-        ...
+    # TODO: Take the mean of each column, giving [2.5, 3.5, 4.5].
+    column_means = ...
 
+    scores = torch.tensor([[0.1, 0.7, 0.2],
+                           [0.8, 0.1, 0.1]])
 
-    # What the check tests
-    #   column_means on a (4, 3) grid, and on a (3, 3) grid where a wrong dimension still runs
-    #   accuracy on 4 rows with 3 right, and on 3 square rows where a wrong dimension still runs
-    #   rows_to_fractions on 2 rows of 3, and on a (3, 3) grid where a wrong shape still runs
+    # argmax gives the position of the largest entry. With dim=1, one per row.
+    best_in_row = scores.argmax(dim=1)          # [1, 0]
+
+    # TODO: Find the position of the largest entry in each column of scores.
+    best_in_column = ...
+
+    # keepdim=True keeps the added up dimension with size 1, so the totals have
+    # shape (2, 1) and line up with the rows of grid.
+    totals = grid.sum(dim=1, keepdim=True)      # [[6.], [15.]]
+
+    # TODO: Divide each row of grid by its own total, so each row adds up to 1.
+    fractions = ...
     ''',
 )
 
-TENSORS5_SOLUTION = source_file(
+REDUCTIONS1_SOLUTION = source_file(
     '''
-    # tensors5.py, a solution for comparison
+    # reductions1.py, a solution for comparison
 
     import torch
-    from torch import Tensor
 
+    grid = torch.tensor([[1.0, 2.0, 3.0],
+                         [4.0, 5.0, 6.0]])
 
-    def column_means(grid: Tensor) -> Tensor:
-        return grid.mean(dim=0)
+    # A loop like sum(sum(row) for row in grid) works too.
+    total = grid.sum()
 
+    column_totals = grid.sum(dim=0)
 
-    # The comparison gives True and False, and the mean of those as floats is the fraction that is True.
-    def accuracy(
-        scores: Tensor,
-        answers: Tensor,
-    ) -> float:
-        return (scores.argmax(dim=1) == answers).float().mean().item()
+    row_totals = grid.sum(dim=1)
 
+    column_means = grid.mean(dim=0)
 
-    # keepdim=True gives the sums shape (rows, 1), so each row gets divided by its own sum.
-    def rows_to_fractions(grid: Tensor) -> Tensor:
-        return grid / grid.sum(dim=1, keepdim=True)
+    scores = torch.tensor([[0.1, 0.7, 0.2],
+                           [0.8, 0.1, 0.1]])
+
+    best_in_row = scores.argmax(dim=1)
+
+    best_in_column = scores.argmax(dim=0)
+
+    totals = grid.sum(dim=1, keepdim=True)
+
+    # Shapes (2, 3) and (2, 1) line up row by row.
+    fractions = grid / totals
     ''',
 )
 
 
-def check_tensors5(checker: Checker) -> None:
-    for grid in (random_tensor((4, 3)), random_tensor((3, 3))):
-        checker.test(
-            function="column_means",
-            description=f"averages each column of a {shape_text(tuple(grid.shape))} grid",
-            run=lambda column_means, grid=grid: expect_tensor(
-                call=f"column_means on a random {shape_text(tuple(grid.shape))} grid",
-                actual=column_means(grid),
-                expected=grid.mean(dim=0),
-            ),
-        )
+def check_reductions1(checker: Checker) -> None:
+    grid = torch.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
 
-    four_examples = torch.tensor(
-        [
-            [0.1, 0.7, 0.2],
-            [0.9, 0.05, 0.05],
-            [0.2, 0.3, 0.5],
-            [0.6, 0.3, 0.1],
-        ],
+    checker.check_name(
+        name="total",
+        description="is 21, every number added up",
+        run=lambda total: expect_value(
+            call="total",
+            actual=total,
+            expected=21,
+        ),
     )
-    # Along dimension 1 every answer is right. Along dimension 0 two of the three are.
-    square_scores = torch.tensor(
-        [
-            [0.5, 0.2, 0.3],
-            [0.1, 0.6, 0.3],
-            [0.9, 0.05, 0.05],
-        ],
-    )
-    score_cases = (
-        (four_examples, torch.tensor([1, 0, 2, 2]), 0.75),
-        (square_scores, torch.tensor([0, 1, 0]), 1.0),
+    check_named_tensors(
+        checker=checker,
+        wanted=(
+            ("row_totals", "is [6., 15.], one total per row", torch.tensor([6.0, 15.0])),
+            ("column_means", "is [2.5, 3.5, 4.5], one mean per column", torch.tensor([2.5, 3.5, 4.5])),
+            ("best_in_column", "is [1, 0, 0], the row of each column's largest entry", torch.tensor([1, 0, 0])),
+            ("fractions", "is grid with each row divided by its own total", grid / grid.sum(dim=1, keepdim=True)),
+        ),
     )
 
-    for scores, answers, fraction in score_cases:
-        checker.test(
-            function="accuracy",
-            description=f"gives {fraction} for {scores.shape[0]} rows",
-            run=lambda accuracy, scores=scores, answers=answers, fraction=fraction: expect_value(
-                call=f"accuracy(scores, {value_text(answers)}) for scores {value_text(scores)}",
-                actual=accuracy(scores, answers),
-                expected=fraction,
-            ),
-        )
 
-    positive_grids = (
-        torch.tensor([[1.0, 1.0, 2.0], [3.0, 0.0, 1.0]]),
-        torch.tensor([[1.0, 1.0, 2.0], [0.0, 3.0, 1.0], [5.0, 0.0, 5.0]]),
-    )
-
-    for grid in positive_grids:
-        checker.test(
-            function="rows_to_fractions",
-            description=f"makes each of {grid.shape[0]} rows add up to 1",
-            run=lambda rows_to_fractions, grid=grid: expect_tensor(
-                call=f"rows_to_fractions({value_text(grid)})",
-                actual=rows_to_fractions(grid),
-                expected=grid / grid.sum(dim=1, keepdim=True),
-            ),
-        )
-
-
-TENSORS5 = Exercise(
-    name="tensors5",
+REDUCTIONS1 = Exercise(
+    name="reductions1",
     chapter=TENSORS,
     title="Reductions",
-    lesson=TENSORS5_LESSON,
-    source=TENSORS5_SOURCE,
-    solution=TENSORS5_SOLUTION,
+    lesson=REDUCTIONS1_LESSON,
+    source=REDUCTIONS1_SOURCE,
+    solution=REDUCTIONS1_SOLUTION,
     hints={
-        "column_means": "Going down a column means moving along dimension 0. A mean along that dimension leaves "
-        "one value per column.",
-        "accuracy": "argmax along dimension 1 gives each row's pick. Compare the picks with answers, turn the True "
-        "and False into floats, and take their mean as a plain number.",
-        "rows_to_fractions": "Each row's sum is a sum along dimension 1. Keep that dimension so the sums line up "
-        "with the rows, then divide.",
+        "total": "Loop over the rows of grid and add up each row's numbers with Python's sum, then add those up.",
+        "row_totals": "Rows run along dimension 1. Use the line for column_totals with the other dimension.",
+        "column_means": ".mean takes dim the same way .sum does.",
+        "best_in_column": "Use argmax as best_in_row does, along the other dimension.",
+        "fractions": "Divide grid by totals. Their shapes, (2, 3) and (2, 1), line up row by row.",
     },
     introduces=("reduction",),
-    check=check_tensors5,
+    check=check_reductions1,
 )
 
 
@@ -1858,9 +1437,12 @@ MATMUL = Chapter(
 
 MATMUL1_LESSON = prose(
     """
+    Try the first TODO before you read on, with what you already know.
+
     A **weighted sum** multiplies each value by its own **weight** and adds the
-    results. With tensors that is an elementwise multiply and a sum. The **dot
-    product**, written `@` between two flat tensors, does both in one step.
+    results. With tensors that is an elementwise multiply and a sum, as you may
+    have written. The **dot product**, written `@` between two flat tensors,
+    does both in one step.
 
     ```python
     v = torch.tensor([2.0, 3.0])
@@ -1892,7 +1474,9 @@ MATMUL1_LESSON = prose(
     A **layer** is one step of a model, holding weights it learns. The most
     common one, called Linear, computes several weighted sums of each input
     row, one per output. It then adds a **bias** to each output, a separate
-    number it learns. A later chapter builds it as `nn.Linear`.
+    number it learns. PyTorch stores its weights with one row per output, so
+    the layer computes `x @ weight.T + bias`. A later chapter builds it as
+    `nn.Linear`.
     """,
 )
 
@@ -1901,51 +1485,65 @@ MATMUL1_SOURCE = source_file(
     # matmul1.py
 
     import torch
-    from torch import Tensor
 
+    v = torch.tensor([2.0, 3.0])
+    w = torch.tensor([10.0, 100.0])
 
-    # TODO: Return one weighted sum per row of grid. Multiply each entry of a row
-    #   by its weight in weights, then add up the results.
-    #   weighted_sums(torch.tensor([[1.0, 2.0], [3.0, 4.0]]), torch.tensor([10.0, 1.0]))
-    #   returns tensor([12.0, 34.0])
-    def weighted_sums(
-        grid: Tensor,
-        weights: Tensor,
-    ) -> Tensor:
-        ...
+    # TODO: Try this before reading the lesson, with what you already know.
+    #   Multiply each entry of v by the matching entry of w, then add up the
+    #   results. The answer is 320.
+    weighted = ...
 
+    # The TODOs below use what the lesson shows.
 
-    # TODO: Return the dot product of every row of a with every row of b. a has
-    #   shape (n, size) and b has shape (m, size), and entry [i, j] of the result
-    #   is a[i] @ b[j].
-    #   dot_all_pairs(torch.tensor([[1.0, 0.0]]), torch.tensor([[2.0, 3.0], [4.0, 5.0]]))
-    #   returns tensor([[2.0, 4.0]])
-    def dot_all_pairs(
-        a: Tensor,
-        b: Tensor,
-    ) -> Tensor:
-        ...
+    # v @ w does the same in one step. It is called the dot product.
+    same = v @ w                                  # tensor(320.)
 
+    p = torch.tensor([1.0, 2.0, 3.0])
+    q = torch.tensor([4.0, 5.0, 6.0])
 
-    # TODO: Compute what PyTorch's Linear layer computes. For each row of x, the
-    #   output at position j is the row's dot product with row j of weight, plus
-    #   bias[j]. x has shape (rows, inputs), weight has shape (outputs, inputs)
-    #   and bias has shape (outputs,). The result has shape (rows, outputs).
-    #   linear(torch.tensor([[1.0, 2.0]]), torch.tensor([[1.0, 0.0], [1.0, 1.0]]),
-    #          torch.tensor([0.5, 0.0]))
-    #   returns tensor([[1.5, 3.0]])
-    def linear(
-        x: Tensor,
-        weight: Tensor,
-        bias: Tensor,
-    ) -> Tensor:
-        ...
+    # TODO: Take the dot product of p and q.
+    dot_pq = ...
 
+    m = torch.tensor([[1.0, 2.0],
+                      [3.0, 4.0]])
 
-    # What the check tests
-    #   weighted_sums on a (3, 2) grid, and on a (2, 2) grid where a wrong order still runs
-    #   dot_all_pairs on (2, 3) and (4, 3) rows, and on two (3, 3) grids where a wrong order still runs
-    #   linear matches PyTorch's own torch.nn.functional.linear, from 3 inputs to 2 outputs and to 3
+    # A matrix @ a flat tensor gives one dot product per row of the matrix.
+    row_sums = m @ torch.tensor([1.0, 1.0])       # [3., 7.]
+
+    # TODO: Take the dot product of every row of m with w.
+    m_times_w = ...
+
+    n = torch.tensor([[1.0, 0.0, 2.0],
+                      [0.0, 10.0, 1.0]])
+
+    # A matrix @ a matrix pairs every row on the left with every column on the
+    # right, so (2, 2) @ (2, 3) gives (2, 3).
+    product = m @ n                               # [[1., 20., 4.], [3., 40., 10.]]
+
+    # .T swaps rows and columns, so n.T has shape (3, 2).
+    n_turned = n.T
+
+    # TODO: This line should take the dot product of every row of n with every
+    #   row of n, but it crashes. Read the error in the Result tab, then fix it.
+    rows_with_rows = n @ n
+
+    x = torch.tensor([[1.0, 2.0]])
+    weight = torch.tensor([[1.0, 0.0],
+                           [1.0, 1.0],
+                           [0.0, 2.0]])
+    bias = torch.tensor([0.5, 0.0, -1.0])
+
+    # A Linear layer. weight has one row per output, so x @ weight.T gives one
+    # weighted sum per output, and bias adds one number to each.
+    out = x @ weight.T + bias                     # [[1.5, 3.0, 3.0]]
+
+    x2 = torch.tensor([[1.0, 0.0],
+                       [0.0, 1.0],
+                       [2.0, 2.0]])
+
+    # TODO: Run the same layer on x2, which has three rows.
+    out2 = ...
     ''',
 )
 
@@ -1954,88 +1552,82 @@ MATMUL1_SOLUTION = source_file(
     # matmul1.py, a solution for comparison
 
     import torch
-    from torch import Tensor
 
+    v = torch.tensor([2.0, 3.0])
+    w = torch.tensor([10.0, 100.0])
 
-    def weighted_sums(
-        grid: Tensor,
-        weights: Tensor,
-    ) -> Tensor:
-        return grid @ weights
+    # (v * w).sum() works too.
+    weighted = v @ w
 
+    same = v @ w
 
-    # b.T has shape (size, m), so (n, size) @ (size, m) gives (n, m).
-    def dot_all_pairs(
-        a: Tensor,
-        b: Tensor,
-    ) -> Tensor:
-        return a @ b.T
+    p = torch.tensor([1.0, 2.0, 3.0])
+    q = torch.tensor([4.0, 5.0, 6.0])
 
+    dot_pq = p @ q
 
-    # Each output is the dot product of a row of x with one row of weight.
-    def linear(
-        x: Tensor,
-        weight: Tensor,
-        bias: Tensor,
-    ) -> Tensor:
-        return x @ weight.T + bias
+    m = torch.tensor([[1.0, 2.0],
+                      [3.0, 4.0]])
+
+    row_sums = m @ torch.tensor([1.0, 1.0])
+
+    m_times_w = m @ w
+
+    n = torch.tensor([[1.0, 0.0, 2.0],
+                      [0.0, 10.0, 1.0]])
+
+    product = m @ n
+
+    n_turned = n.T
+
+    # n.T turns the rows of n into columns, so (2, 3) @ (3, 2) gives (2, 2).
+    rows_with_rows = n @ n.T
+
+    x = torch.tensor([[1.0, 2.0]])
+    weight = torch.tensor([[1.0, 0.0],
+                           [1.0, 1.0],
+                           [0.0, 2.0]])
+    bias = torch.tensor([0.5, 0.0, -1.0])
+
+    out = x @ weight.T + bias
+
+    x2 = torch.tensor([[1.0, 0.0],
+                       [0.0, 1.0],
+                       [2.0, 2.0]])
+
+    out2 = x2 @ weight.T + bias
     ''',
 )
 
 
 def check_matmul1(checker: Checker) -> None:
-    grids = (
-        (random_tensor((3, 2)), torch.tensor([10.0, -1.0])),
-        (random_tensor((2, 2)), torch.tensor([10.0, -1.0])),
+    n = torch.tensor([[1.0, 0.0, 2.0], [0.0, 10.0, 1.0]])
+    weight = torch.tensor([[1.0, 0.0], [1.0, 1.0], [0.0, 2.0]])
+    bias = torch.tensor([0.5, 0.0, -1.0])
+    x2 = torch.tensor([[1.0, 0.0], [0.0, 1.0], [2.0, 2.0]])
+
+    for name, description, expected in (
+        ("weighted", "is 320, 2 * 10 + 3 * 100", 320),
+        ("dot_pq", "is 32, 1 * 4 + 2 * 5 + 3 * 6", 32),
+    ):
+        checker.check_name(
+            name=name,
+            description=description,
+            run=lambda value, name=name, expected=expected: expect_value(
+                call=name,
+                actual=value,
+                expected=expected,
+            ),
+        )
+
+    check_named_tensors(
+        checker=checker,
+        wanted=(
+            ("m_times_w", "is [210., 430.], one dot product per row of m", torch.tensor([210.0, 430.0])),
+            ("rows_with_rows", "is every row of n dotted with every row of n", n @ n.T),
+            ("out2", "is the layer run on the three rows of x2", torch.nn.functional.linear(x2, weight, bias)),
+        ),
     )
-
-    for grid, weights in grids:
-        checker.test(
-            function="weighted_sums",
-            description=f"gives one weighted sum per row of a {shape_text(tuple(grid.shape))} grid",
-            run=lambda weighted_sums, grid=grid, weights=weights: expect_tensor(
-                call=f"weighted_sums on a random {shape_text(tuple(grid.shape))} grid with weights {value_text(weights)}",
-                actual=weighted_sums(grid, weights),
-                expected=(grid * weights).sum(dim=1),
-            ),
-        )
-
-    row_pairs = (
-        (random_tensor((2, 3)), random_tensor(shape=(4, 3), seed=1)),
-        (random_tensor((3, 3)), random_tensor(shape=(3, 3), seed=1)),
-    )
-
-    for a, b in row_pairs:
-        checker.test(
-            function="dot_all_pairs",
-            description=f"dots {a.shape[0]} rows with {b.shape[0]} rows",
-            run=lambda dot_all_pairs, a=a, b=b: expect_tensor(
-                call=f"dot_all_pairs on random {shape_text(tuple(a.shape))} and {shape_text(tuple(b.shape))} rows",
-                actual=dot_all_pairs(a, b),
-                expected=(a.unsqueeze(1) * b.unsqueeze(0)).sum(dim=2),
-            ),
-        )
-
-    x = random_tensor((4, 3))
-
-    for outputs in (2, 3):
-        weight = random_tensor(
-            shape=(outputs, 3),
-            seed=1,
-        )
-        bias = random_tensor(
-            shape=(outputs,),
-            seed=2,
-        )
-        checker.test(
-            function="linear",
-            description=f"matches PyTorch's own layer from 3 inputs to {outputs} outputs",
-            run=lambda linear, weight=weight, bias=bias: expect_tensor(
-                call=f"linear on a random (4, 3) x with weight of shape {shape_text(tuple(weight.shape))}",
-                actual=linear(x, weight, bias),
-                expected=torch.nn.functional.linear(x, weight, bias),
-            ),
-        )
 
 
 MATMUL1 = Exercise(
@@ -2046,12 +1638,12 @@ MATMUL1 = Exercise(
     source=MATMUL1_SOURCE,
     solution=MATMUL1_SOLUTION,
     hints={
-        "weighted_sums": "Each result is the dot product of one row with weights. @ between a matrix and a flat "
-        "tensor does that for every row.",
-        "dot_all_pairs": "@ pairs the rows on the left with the columns on the right. Turn the rows of b into "
-        "columns with .T first.",
-        "linear": "Each output is the dot product of a row of x with one row of weight. Multiply x by weight with "
-        "its dimensions swapped, then add the bias.",
+        "weighted": "Multiply v and w entry by entry, then add up the result, as math1 and reductions1 showed.",
+        "dot_pq": "Put @ between p and q, the way same does with v and w.",
+        "m_times_w": "Put m on the left of @ and w on the right.",
+        "rows_with_rows": "The error says the middle sizes don't match. Turn the rows of the right side into "
+        "columns with .T.",
+        "out2": "Use the line that sets out, with x2 in place of x.",
     },
     introduces=("weight", "weighted sum", "dot product", "matrix", "matrix multiplication", "layer", "bias"),
     check=check_matmul1,
@@ -2078,26 +1670,19 @@ QUIZZES = Chapter(
 
 QUIZ1_LESSON = prose(
     """
-    This quiz uses the tools from tensors1 to matmul1 together, and nothing
-    new.
+    This quiz has no examples and no new tools. Each TODO uses one move from
+    an earlier exercise, and works on the result of the TODO before it. If a
+    step is unclear, the exercise in the table shows it.
 
-    A model can sort sentences into classes, such as whether a review is
-    positive or negative. Text gets split into **tokens**, short pieces such as
-    words, and each token has an id number. The model gets each sentence as a
-    row of token ids, filled out with padding, and needs one row of numbers
-    per sentence. So it picks the
-    table row of every token, zeroes the rows at the padding, and averages the
-    rest. Each sentence's average then goes through a Linear layer that gives
-    one score per class. The class with the highest score is the answer.
-
-    | Step | Taught in |
+    | Step | Shown in |
     |---|---|
-    | pick a table row for every token id | tensors2 |
-    | mark the padding with a comparison | tensors3 |
-    | add a dimension of size 1 so each mark lines up with a token's whole row | tensors4 |
-    | add up along a dimension and divide by a count | tensors4 and tensors5 |
-    | run a Linear layer | matmul1 |
-    | pick the highest score in each row | tensors5 |
+    | turn a list of lists into a tensor | tensors1 |
+    | keep the first two columns | indexing1 |
+    | replace the negative entries with 0 | math1 |
+    | add a row to every row | broadcasting1 |
+    | add up each row | reductions1 |
+    | take one dot product per row | matmul1 |
+    | find the position of the largest entry | reductions1 |
     """,
 )
 
@@ -2105,44 +1690,38 @@ QUIZ1_SOURCE = source_file(
     '''
     # quiz1.py
     #
-    # This quiz uses the tools from tensors1 to matmul1 together, and nothing new.
+    # No examples and no new tools. Each TODO uses one move from an earlier
+    # exercise, and works on the result of the TODO before it.
 
     import torch
-    from torch import Tensor
 
+    data = [[2.0, -1.0, 3.0],
+            [0.0, 4.0, -2.0],
+            [1.0, 1.0, 1.0],
+            [5.0, -3.0, 0.0]]
 
-    # TODO: Each row of ids is a sentence of token ids, padded at the end with
-    #   pad_id. For each sentence, pick the table row of every id that is not
-    #   pad_id, and average those rows. ids has shape (sentences, length) and
-    #   table has shape (number of token ids, size). The result has shape
-    #   (sentences, size).
-    #   sentence_averages(torch.tensor([[1, 2, 0]]), table, 0) returns the
-    #   average of table[1] and table[2], with shape (1, size)
-    def sentence_averages(
-        ids: Tensor,
-        table: Tensor,
-        pad_id: int,
-    ) -> Tensor:
-        ...
+    # TODO: Turn data into a tensor called x.
+    x = ...
 
+    # TODO: Keep the first two columns of x.
+    first_two = ...
 
-    # TODO: Run the sentence averages through linear from matmul1, with weight of
-    #   shape (classes, size) and bias of shape (classes,). Return the position
-    #   of the highest score in each row, with shape (sentences,).
-    def predict(
-        ids: Tensor,
-        table: Tensor,
-        pad_id: int,
-        weight: Tensor,
-        bias: Tensor,
-    ) -> Tensor:
-        ...
+    # TODO: Replace the negative entries of first_two with 0.0.
+    no_negatives = ...
 
+    # TODO: Add [10.0, 20.0] to every row of no_negatives.
+    shifted = ...
 
-    # What the check tests
-    #   sentence_averages on 2 sentences with pad_id 0, worked out by hand
-    #   sentence_averages on 4 sentences with pad_id 9 and a random table
-    #   predict on those 4 sentences with a layer of 3 classes
+    # TODO: Add up each row of shifted.
+    row_totals = ...
+
+    weights = torch.tensor([1.0, 0.5, 2.0])
+
+    # TODO: Take the dot product of every row of x with weights.
+    scores = ...
+
+    # TODO: Find the position of the largest entry of scores.
+    best = ...
     ''',
 )
 
@@ -2151,121 +1730,50 @@ QUIZ1_SOLUTION = source_file(
     # quiz1.py, a solution for comparison
 
     import torch
-    from torch import Tensor
 
+    data = [[2.0, -1.0, 3.0],
+            [0.0, 4.0, -2.0],
+            [1.0, 1.0, 1.0],
+            [5.0, -3.0, 0.0]]
 
-    def sentence_averages(
-        ids: Tensor,
-        table: Tensor,
-        pad_id: int,
-    ) -> Tensor:
-        rows = table[ids]
+    x = torch.tensor(data)
 
-        # Shape (sentences, length, 1), so each mark lines up with a token's whole row.
-        real = (ids != pad_id).float().unsqueeze(2)
-        totals = (rows * real).sum(dim=1)
-        lengths = real.sum(dim=1)
+    first_two = x[:, 0:2]
 
-        return totals / lengths
+    no_negatives = torch.where(first_two < 0, 0.0, first_two)
 
+    shifted = no_negatives + torch.tensor([10.0, 20.0])
 
-    def predict(
-        ids: Tensor,
-        table: Tensor,
-        pad_id: int,
-        weight: Tensor,
-        bias: Tensor,
-    ) -> Tensor:
-        averages = sentence_averages(ids, table, pad_id)
-        class_scores = averages @ weight.T + bias
+    row_totals = shifted.sum(dim=1)
 
-        return class_scores.argmax(dim=1)
+    weights = torch.tensor([1.0, 0.5, 2.0])
+
+    scores = x @ weights
+
+    best = scores.argmax()
     ''',
 )
 
 
-def reference_sentence_averages(
-    ids: Tensor,
-    table: Tensor,
-    pad_id: int,
-) -> Tensor:
-    """The averages worked out one sentence at a time, apart from how the exercise does it."""
-    averages: list[Tensor] = []
-
-    for sentence in ids.tolist():
-        real_rows = [table[token] for token in sentence if token != pad_id]
-        averages.append(torch.stack(real_rows).mean(dim=0))
-
-    return torch.stack(averages)
-
-
 def check_quiz1(checker: Checker) -> None:
-    # Row 0 is not zero, so leaving the padding in changes the averages.
-    small_table = torch.tensor(
-        [
-            [9.0, 9.0],
-            [1.0, 2.0],
-            [3.0, 4.0],
-            [5.0, 6.0],
-            [7.0, 8.0],
-        ],
-    )
-    small_ids = torch.tensor([[1, 2, 0], [3, 0, 0]])
-
-    checker.test(
-        function="sentence_averages",
-        description="averages the real tokens of 2 sentences with padding id 0",
-        run=lambda sentence_averages: expect_tensor(
-            call=f"sentence_averages({value_text(small_ids)}, table, 0) for table {value_text(small_table)}",
-            actual=sentence_averages(small_ids, small_table, 0),
-            expected=torch.tensor([[2.0, 3.0], [5.0, 6.0]]),
+    check_named_tensors(
+        checker=checker,
+        wanted=(
+            ("x", "is data as a tensor", torch.tensor([[2.0, -1.0, 3.0], [0.0, 4.0, -2.0], [1.0, 1.0, 1.0], [5.0, -3.0, 0.0]])),
+            ("first_two", "is the first two columns of x", torch.tensor([[2.0, -1.0], [0.0, 4.0], [1.0, 1.0], [5.0, -3.0]])),
+            ("no_negatives", "is first_two with its negatives set to 0", torch.tensor([[2.0, 0.0], [0.0, 4.0], [1.0, 1.0], [5.0, 0.0]])),
+            ("shifted", "is no_negatives with [10, 20] added to every row", torch.tensor([[12.0, 20.0], [10.0, 24.0], [11.0, 21.0], [15.0, 20.0]])),
+            ("row_totals", "is [32., 34., 32., 35.], one total per row", torch.tensor([32.0, 34.0, 32.0, 35.0])),
+            ("scores", "is [7.5, -2., 3.5, 3.5], one dot product per row of x", torch.tensor([7.5, -2.0, 3.5, 3.5])),
         ),
     )
-
-    table = random_tensor(
-        shape=(10, 4),
-        seed=3,
-    )
-    ids = torch.tensor(
-        [
-            [1, 2, 3, 9, 9, 9],
-            [4, 9, 9, 9, 9, 9],
-            [5, 6, 7, 8, 0, 9],
-            [2, 2, 9, 9, 9, 9],
-        ],
-    )
-    averages = reference_sentence_averages(
-        ids=ids,
-        table=table,
-        pad_id=9,
-    )
-
-    checker.test(
-        function="sentence_averages",
-        description="averages the real tokens of 4 sentences with padding id 9",
-        run=lambda sentence_averages: expect_tensor(
-            call=f"sentence_averages({value_text(ids)}, table, 9) for a random (10, 4) table",
-            actual=sentence_averages(ids, table, 9),
-            expected=averages,
-        ),
-    )
-
-    weight = random_tensor(
-        shape=(3, 4),
-        seed=4,
-    )
-    bias = random_tensor(
-        shape=(3,),
-        seed=5,
-    )
-
-    checker.test(
-        function="predict",
-        description="picks the highest scoring of 3 classes for each of 4 sentences",
-        run=lambda predict: expect_tensor(
-            call="predict on those 4 sentences with a random layer of 3 classes",
-            actual=predict(ids, table, 9, weight, bias),
-            expected=torch.nn.functional.linear(averages, weight, bias).argmax(dim=1),
+    checker.check_name(
+        name="best",
+        description="is 0, the position of the largest score",
+        run=lambda best: expect_value(
+            call="best",
+            actual=best,
+            expected=0,
         ),
     )
 
@@ -2273,17 +1781,20 @@ def check_quiz1(checker: Checker) -> None:
 QUIZ1 = Exercise(
     name="quiz1",
     chapter=QUIZZES,
-    title="Sorting sentences into classes",
+    title="Putting the moves together",
     lesson=QUIZ1_LESSON,
     source=QUIZ1_SOURCE,
     solution=QUIZ1_SOLUTION,
     hints={
-        "sentence_averages": "table[ids] gives one row per token, with shape (sentences, length, size). Then follow "
-        "the steps in the lesson's table.",
-        "predict": "Run the averages through a layer the way linear does in matmul1, then take the argmax of each "
-        "row.",
+        "x": "torch.tensor turns a list of lists into a tensor, as in tensors1.",
+        "first_two": "Take every row and a slice of the columns, as last_two_columns does in indexing1.",
+        "no_negatives": "torch.where with a comparison below 0, as no_negatives does in math1.",
+        "shifted": "Add a tensor of the two numbers. Its shape (2,) lines up with the rows, as in broadcasting1.",
+        "row_totals": "Sum along the dimension the columns run along, as row_totals does in reductions1.",
+        "scores": "Put x on the left of @, as m_times_w does in matmul1.",
+        "best": "argmax with no dim gives the position of the largest entry.",
     },
-    introduces=("token",),
+    introduces=(),
     check=check_quiz1,
 )
 
@@ -2301,10 +1812,9 @@ CHAPTERS: list[Chapter] = [
 EXERCISES: list[Exercise] = [
     TENSORS1,
     INDEXING1,
-    TENSORS2,
-    TENSORS3,
-    TENSORS4,
-    TENSORS5,
+    MATH1,
+    BROADCASTING1,
+    REDUCTIONS1,
     MATMUL1,
     QUIZ1,
 ]
