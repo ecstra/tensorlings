@@ -25,7 +25,7 @@ tensors1 and indexing1 now use explain then try, fix the error and try first, ch
 | 1 | Write math1, broadcasting1 and reductions1 in place of the old tensors2 to tensors5 | | owner | done |
 | 2 | Rewrite matmul1 in the same format | | owner | done |
 | 3 | Write quiz1 as a short chain of earlier moves with no examples | | owner | done |
-| 4 | Update the wrong answers for the new exercises | | owner | pending |
+| 4 | Update the wrong answers for the new exercises | | owner | done |
 | 5 | Run the dev check, the lesson lint, the wrong answers, the screen driver and a beginner review | | owner | pending |
 | 6 | Put the new files in the owner's exercises folder | | owner | pending |
 

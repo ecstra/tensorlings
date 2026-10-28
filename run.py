@@ -154,7 +154,8 @@ PLAIN_ERRORS: tuple[tuple[str, str], ...] = (
     (
         r"The size of tensor a \((\d+)\) must match the size of tensor b \((\d+)\)",
         "These two shapes cannot be broadcast together. Compared from the right, a size {0} meets a size {1}. "
-        "Two sizes only fit when they are equal or one of them is 1.",
+        "Two sizes only fit when they are equal or one of them is 1. If each row should get its own number, "
+        "give the numbers shape (rows, 1).",
     ),
     (
         r"must have the same dtype",
@@ -167,7 +168,8 @@ PLAIN_ERRORS: tuple[tuple[str, str], ...] = (
     ),
     (
         r"mat1 and mat2 shapes cannot be multiplied \((\d+)x(\d+) and (\d+)x(\d+)\)",
-        "For @, the size at the end of the first shape must equal the size at the start of the second. Here {1} meets {2}.",
+        "For @, the size at the end of the first shape must equal the size at the start of the second. Here the "
+        "shapes are ({0}, {1}) and ({2}, {3}), so {1} meets {2}.",
     ),
     (
         r"size mismatch, got input \((\d+)\), mat \((\d+)x(\d+)\), vec \((\d+)\)",
@@ -904,8 +906,9 @@ INDEXING1_LESSON = prose(
     in one step, and the TODOs after it use them.
 
     Give one position per dimension, separated by commas. Positions start at
-    0, and negative positions count from the end. Leave out the later
-    positions to take those dimensions whole.
+    0, and negative positions count from the end. Give fewer positions than
+    the tensor has dimensions, and the rest come whole, so `x[0]` is all of
+    row 0.
 
     ```python
     x = torch.tensor([[1, 2, 3],
@@ -1025,7 +1028,7 @@ MATH1_LESSON = prose(
     """
     Math between two tensors of the same shape works entry by entry. This is
     **elementwise** math. `+`, `-`, `*`, `/` and `**`, which raises to a power,
-    all work this way. A plain number works with every entry of a tensor.
+    all work this way. Math with a plain number applies it to every entry.
 
     ```python
     a = torch.tensor([1.0, 2.0, 3.0])
@@ -1035,12 +1038,11 @@ MATH1_LESSON = prose(
     ```
 
     Comparisons work entry by entry too. Each one gives a tensor of `True` and
-    `False`, one per entry, and `.float()` turns those into 1s and 0s.
+    `False`, one per entry.
 
     ```python
     c = torch.tensor([-2.0, 0.5, -1.0, 4.0])
-    c > 1              # tensor([False, False, False,  True])
-    (c > 1).float()    # tensor([0., 0., 0., 1.])
+    c > 1    # tensor([False, False, False,  True])
     ```
 
     `torch.where(condition, x, y)` takes each entry from `x` where the
@@ -1068,7 +1070,7 @@ MATH1_SOURCE = source_file(
     # TODO: Multiply a and b entry by entry.
     multiplied = ...
 
-    # A plain number works with every entry, so a * 2 is [2., 4., 6.].
+    # Math with a plain number applies it to every entry, so a * 2 is [2., 4., 6.].
     doubled = a * 2
 
     # TODO: Square every entry of a. ** raises to a power, as in plain Python.
@@ -1079,7 +1081,8 @@ MATH1_SOURCE = source_file(
     # A comparison gives True or False for every entry.
     above_one = c > 1                         # [False, False, False, True]
 
-    # TODO: Mark the entries of c that are below 0.
+    # TODO: Get True for each entry of c below 0 and False for the rest, the way
+    #   above_one does for entries above 1.
     negative = ...
 
     # torch.where(condition, x, y) takes each entry from x where the condition is
@@ -1155,8 +1158,9 @@ BROADCASTING1_LESSON = prose(
     """
     Elementwise math also works between tensors of different shapes. PyTorch
     lines the shapes up from the right. Two sizes fit when they are equal or
-    when one of them is 1, and a missing size counts as 1. A size of 1 is then
-    reused to match the other. This is **broadcasting**.
+    when one of them is 1. A missing size counts as 1, so `(3,)` acts like
+    `(1, 3)`. A size of 1 is then reused to match the other. This is
+    **broadcasting**.
 
     ```python
     m = torch.tensor([[1.0, 2.0, 3.0],
@@ -1172,8 +1176,8 @@ BROADCASTING1_LESSON = prose(
     ```
 
     To give each row its own number, the numbers need shape `(rows, 1)`.
-    `.unsqueeze(1)` adds a dimension of size 1 at position 1, so a tensor of
-    shape `(2,)` becomes `(2, 1)`.
+    `.unsqueeze(1)` adds a new dimension of size 1 as dimension 1, the second
+    one, so a tensor of shape `(2,)` becomes `(2, 1)`.
 
     ```python
     r = torch.tensor([1.0, 10.0])
@@ -1401,7 +1405,7 @@ REDUCTIONS1 = Exercise(
     solution=REDUCTIONS1_SOLUTION,
     hints={
         "total": "Loop over the rows of grid and add up each row's numbers with Python's sum, then add those up.",
-        "row_totals": "Rows run along dimension 1. Use the line for column_totals with the other dimension.",
+        "row_totals": "dim=1 is the dimension of size 3. Adding along it leaves one total per row.",
         "column_means": ".mean takes dim the same way .sum does.",
         "best_in_column": "Use argmax as best_in_row does, along the other dimension.",
         "fractions": "Divide grid by totals. Their shapes, (2, 3) and (2, 1), line up row by row.",
@@ -1456,8 +1460,8 @@ MATMUL1_LESSON = prose(
 
     With a matrix on each side, `@` takes the dot product of every row on the
     left with every column on the right. This is **matrix multiplication**.
-    `(n, k) @ (k, m)` gives `(n, m)`, and the two middle sizes, both `k`, must
-    match.
+    `(rows, k) @ (k, columns)` gives `(rows, columns)`, and the two middle
+    sizes, both `k`, must match.
 
     ```python
     a = torch.tensor([[1.0, 2.0],
@@ -1474,9 +1478,13 @@ MATMUL1_LESSON = prose(
     A **layer** is one step of a model, holding weights it learns. The most
     common one, called Linear, computes several weighted sums of each input
     row, one per output. It then adds a **bias** to each output, a separate
-    number it learns. PyTorch stores its weights with one row per output, so
-    the layer computes `x @ weight.T + bias`. A later chapter builds it as
-    `nn.Linear`.
+    number it learns. Each row of `x` is one input, so an `x` with three rows
+    gets one row of outputs for each of them.
+
+    PyTorch stores the weights with one row per output. `@` pairs rows on the
+    left with columns on the right. So the weight rows get turned into columns
+    with `.T` first, and the layer computes `x @ weight.T + bias`. A later
+    chapter builds it as `nn.Linear`.
     """,
 )
 
@@ -1505,28 +1513,28 @@ MATMUL1_SOURCE = source_file(
     # TODO: Take the dot product of p and q.
     dot_pq = ...
 
-    m = torch.tensor([[1.0, 2.0],
+    a = torch.tensor([[1.0, 2.0],
                       [3.0, 4.0]])
 
     # A matrix @ a flat tensor gives one dot product per row of the matrix.
-    row_sums = m @ torch.tensor([1.0, 1.0])       # [3., 7.]
+    row_sums = a @ torch.tensor([1.0, 1.0])       # [3., 7.]
 
-    # TODO: Take the dot product of every row of m with w.
-    m_times_w = ...
+    # TODO: Take the dot product of every row of a with w.
+    a_times_w = ...
 
-    n = torch.tensor([[1.0, 0.0, 2.0],
+    b = torch.tensor([[1.0, 0.0, 2.0],
                       [0.0, 10.0, 1.0]])
 
     # A matrix @ a matrix pairs every row on the left with every column on the
     # right, so (2, 2) @ (2, 3) gives (2, 3).
-    product = m @ n                               # [[1., 20., 4.], [3., 40., 10.]]
+    product = a @ b                               # [[1., 20., 4.], [3., 40., 10.]]
 
-    # .T swaps rows and columns, so n.T has shape (3, 2).
-    n_turned = n.T
+    # .T swaps rows and columns, so b.T has shape (3, 2).
+    b_turned = b.T
 
-    # TODO: This line should take the dot product of every row of n with every
-    #   row of n, but it crashes. Read the error in the Result tab, then fix it.
-    rows_with_rows = n @ n
+    # TODO: This line should take the dot product of every row of b with every
+    #   row of b, but it crashes. Read the error in the Result tab, then fix it.
+    rows_with_rows = b @ b
 
     x = torch.tensor([[1.0, 2.0]])
     weight = torch.tensor([[1.0, 0.0],
@@ -1534,15 +1542,17 @@ MATMUL1_SOURCE = source_file(
                            [0.0, 2.0]])
     bias = torch.tensor([0.5, 0.0, -1.0])
 
-    # A Linear layer. weight has one row per output, so x @ weight.T gives one
-    # weighted sum per output, and bias adds one number to each.
+    # A Linear layer. x holds one input, a row of 2 numbers. weight has one row
+    # per output, so x @ weight.T gives one weighted sum per output, and bias
+    # adds one number to each.
     out = x @ weight.T + bias                     # [[1.5, 3.0, 3.0]]
 
+    # Each row of x2 is one input, three inputs in all.
     x2 = torch.tensor([[1.0, 0.0],
                        [0.0, 1.0],
                        [2.0, 2.0]])
 
-    # TODO: Run the same layer on x2, which has three rows.
+    # TODO: Run the same layer on x2, giving one row of outputs per input.
     out2 = ...
     ''',
 )
@@ -1566,22 +1576,22 @@ MATMUL1_SOLUTION = source_file(
 
     dot_pq = p @ q
 
-    m = torch.tensor([[1.0, 2.0],
+    a = torch.tensor([[1.0, 2.0],
                       [3.0, 4.0]])
 
-    row_sums = m @ torch.tensor([1.0, 1.0])
+    row_sums = a @ torch.tensor([1.0, 1.0])
 
-    m_times_w = m @ w
+    a_times_w = a @ w
 
-    n = torch.tensor([[1.0, 0.0, 2.0],
+    b = torch.tensor([[1.0, 0.0, 2.0],
                       [0.0, 10.0, 1.0]])
 
-    product = m @ n
+    product = a @ b
 
-    n_turned = n.T
+    b_turned = b.T
 
-    # n.T turns the rows of n into columns, so (2, 3) @ (3, 2) gives (2, 2).
-    rows_with_rows = n @ n.T
+    # b.T turns the rows of b into columns, so (2, 3) @ (3, 2) gives (2, 2).
+    rows_with_rows = b @ b.T
 
     x = torch.tensor([[1.0, 2.0]])
     weight = torch.tensor([[1.0, 0.0],
@@ -1601,7 +1611,7 @@ MATMUL1_SOLUTION = source_file(
 
 
 def check_matmul1(checker: Checker) -> None:
-    n = torch.tensor([[1.0, 0.0, 2.0], [0.0, 10.0, 1.0]])
+    b = torch.tensor([[1.0, 0.0, 2.0], [0.0, 10.0, 1.0]])
     weight = torch.tensor([[1.0, 0.0], [1.0, 1.0], [0.0, 2.0]])
     bias = torch.tensor([0.5, 0.0, -1.0])
     x2 = torch.tensor([[1.0, 0.0], [0.0, 1.0], [2.0, 2.0]])
@@ -1623,8 +1633,8 @@ def check_matmul1(checker: Checker) -> None:
     check_named_tensors(
         checker=checker,
         wanted=(
-            ("m_times_w", "is [210., 430.], one dot product per row of m", torch.tensor([210.0, 430.0])),
-            ("rows_with_rows", "is every row of n dotted with every row of n", n @ n.T),
+            ("a_times_w", "is [210., 430.], one dot product per row of a", torch.tensor([210.0, 430.0])),
+            ("rows_with_rows", "is every row of b dotted with every row of b", b @ b.T),
             ("out2", "is the layer run on the three rows of x2", torch.nn.functional.linear(x2, weight, bias)),
         ),
     )
@@ -1640,7 +1650,7 @@ MATMUL1 = Exercise(
     hints={
         "weighted": "Multiply v and w entry by entry, then add up the result, as math1 and reductions1 showed.",
         "dot_pq": "Put @ between p and q, the way same does with v and w.",
-        "m_times_w": "Put m on the left of @ and w on the right.",
+        "a_times_w": "Put a on the left of @ and w on the right.",
         "rows_with_rows": "The error says the middle sizes don't match. Turn the rows of the right side into "
         "columns with .T.",
         "out2": "Use the line that sets out, with x2 in place of x.",
@@ -1671,8 +1681,8 @@ QUIZZES = Chapter(
 QUIZ1_LESSON = prose(
     """
     This quiz has no examples and no new tools. Each TODO uses one move from
-    an earlier exercise, and works on the result of the TODO before it. If a
-    step is unclear, the exercise in the table shows it.
+    an earlier exercise, and most work on the result of the TODO before them.
+    If a step is unclear, the exercise in the table shows it.
 
     | Step | Shown in |
     |---|---|
@@ -1691,7 +1701,7 @@ QUIZ1_SOURCE = source_file(
     # quiz1.py
     #
     # No examples and no new tools. Each TODO uses one move from an earlier
-    # exercise, and works on the result of the TODO before it.
+    # exercise, and most work on the result of the TODO before them.
 
     import torch
 
@@ -1717,7 +1727,7 @@ QUIZ1_SOURCE = source_file(
 
     weights = torch.tensor([1.0, 0.5, 2.0])
 
-    # TODO: Take the dot product of every row of x with weights.
+    # TODO: Go back to x. Take the dot product of every row of x with weights.
     scores = ...
 
     # TODO: Find the position of the largest entry of scores.
@@ -1789,9 +1799,10 @@ QUIZ1 = Exercise(
         "x": "torch.tensor turns a list of lists into a tensor, as in tensors1.",
         "first_two": "Take every row and a slice of the columns, as last_two_columns does in indexing1.",
         "no_negatives": "torch.where with a comparison below 0, as no_negatives does in math1.",
-        "shifted": "Add a tensor of the two numbers. Its shape (2,) lines up with the rows, as in broadcasting1.",
-        "row_totals": "Sum along the dimension the columns run along, as row_totals does in reductions1.",
-        "scores": "Put x on the left of @, as m_times_w does in matmul1.",
+        "shifted": "Add a tensor of the two numbers. Its shape (2,) lines up with the columns from the right, so "
+        "it is added to every row, as plus_row does in broadcasting1.",
+        "row_totals": "Sum with dim=1, as row_totals does in reductions1.",
+        "scores": "Put x on the left of @, as a_times_w does in matmul1.",
         "best": "argmax with no dim gives the position of the largest entry.",
     },
     introduces=(),
