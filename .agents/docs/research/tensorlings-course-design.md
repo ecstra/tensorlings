@@ -100,8 +100,9 @@ Each rule gets exercises where the wrong combination fails and the right one wor
 
 From [the research](tensorlings-research.md#research-on-writing-that-sounds-human).
 
-- Open with a situation, never a definition. Show code and its output first, then give the name.
-- One new idea per paragraph. Talk to "you". Vary what each paragraph does.
+- Write for someone who can program and knows no deep learning. Skip what a programmer knows, like tuples, ints and floats, and explain every deep learning term in plain words where it first appears.
+- No story examples and no comparisons. The owner rejected shops, apples and "picture a grid". Examples are plain tensors, tasks are plain operations like making a grid or dropping a column, and a short paragraph says where models use the idea.
+- Show code and its output first, then give the name. One new idea per paragraph.
 - No bold labels on paragraphs, no clauses bolted onto the end of a sentence, no tidy closing summary.
 - Every term explained where it first appears, never relying on a later lesson.
 - Give the why as a case the learner will meet, inside the lesson's flow.
