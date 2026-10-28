@@ -85,6 +85,7 @@ Each rule gets exercises where the wrong combination fails and the right one wor
 - The owner tried several tops before this one. Two bare lines felt cramped, a dot between the parts looked bad, and spaced words with no labels meant nothing. Rustlings keeps progress and the file at the bottom, and the owner wanted them on one line at the top. So every piece on the screen has a label or sits in a titled panel.
 - The hint has its own panel between the lesson and the result, because it is help and not a result.
 - Keys are `n` next, `h` to show or hide the hint, `l` list, `x` reset, `q` quit, `r` run again, and the arrows to scroll.
+- On a narrow terminal the key bar wraps onto a second line, breaking only between keys, so no key is ever cut off. See `key_bar` in `run.py`.
 - The list screen works like rustlings, with DONE and PENDING, the current exercise marked, and keys to move, continue at, reset, search and filter.
 - Commands are `init`, `run`, `hint`, `reset`, `check-all`, `--manual-run` and `dev check`.
 - The result panel puts the most important thing first, because a tall result is cut off at the bottom. The done message comes first, then the tests. Only the first failing test shows its details, the way a compiler shows its first error. Functions that still return nothing share one note instead of one message each. See `result_body` in `run.py`.

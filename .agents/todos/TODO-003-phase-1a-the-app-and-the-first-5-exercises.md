@@ -31,6 +31,7 @@ born: 2026-10-27
 | 11 | Move progress and the file under the result with labels, like rustlings | | owner | done |
 | 12 | Put Exercise and Progress on one line at the top | | owner | done |
 | 13 | Make the list's selected row one even highlight | | owner | done |
+| 14 | Wrap the key bar so every key shows on a narrow terminal | | owner | done |
 
 ## Done when
 

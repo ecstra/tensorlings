@@ -1789,18 +1789,37 @@ def check_all(progress: Progress) -> list[Exercise]:
 
 def key_bar(
     keys: list[tuple[str, str]],
+    width: int,
     message: str = "",
-) -> Text:
-    bar = Text(no_wrap=True, overflow="ellipsis")
+) -> list[Text]:
+    """The message and keys as lines that fit the width, breaking only between keys, so no key is ever cut off."""
+    pieces: list[Text] = []
 
     if message:
-        bar.append(f"{message}   ", style="bold yellow")
+        pieces.append(Text(message, style="bold yellow"))
 
     for key, label in keys:
-        bar.append(f" {key} ", style=f"bold black on {ACCENT}")
-        bar.append(f" {label}   ")
+        piece = Text()
+        piece.append(f" {key} ", style=f"bold black on {ACCENT}")
+        piece.append(f" {label}")
+        pieces.append(piece)
 
-    return bar
+    gap = "   "
+    lines: list[Text] = [Text(no_wrap=True, overflow="ellipsis")]
+
+    for piece in pieces:
+        line = lines[-1]
+
+        if line.plain:
+            if line.cell_len + len(gap) + piece.cell_len > width:
+                line = Text(no_wrap=True, overflow="ellipsis")
+                lines.append(line)
+            else:
+                line.append(gap)
+
+        line.append_text(piece)
+
+    return lines
 
 
 NOT_STARTED = "returned None"
@@ -2001,7 +2020,12 @@ def render_watch(
     hint_lines = len(console.render_lines(hint, console.options.update_width(width - 4), pad=False))
     hint_height = min(hint_lines + 2, max(4, height * 25 // 100)) if show_hint else 0
 
-    lesson_height = max(3, height - STATUS_HEIGHT - 1 - hint_height - result_height - 2)
+    bar_lines = key_bar(
+        keys=keys,
+        width=width,
+        message=message,
+    )
+    lesson_height = max(3, height - STATUS_HEIGHT - len(bar_lines) - hint_height - result_height - 2)
     lesson_lines = without_double_blanks(
         console.render_lines(
             Markdown(exercise.lesson, code_theme=CODE_THEME),
@@ -2081,11 +2105,8 @@ def render_watch(
     )
     sections.append(
         Layout(
-            key_bar(
-                keys=keys,
-                message=message,
-            ),
-            size=1,
+            Group(*bar_lines),
+            size=len(bar_lines),
         ),
     )
 
@@ -2123,8 +2144,28 @@ def render_list(
     rows: list[Exercise],
     progress: Progress,
 ) -> RenderableType:
-    _, height = console.size
-    room = max(3, height - 7)
+    width, height = console.size
+    done_label = "done" if view.show != "done" else "done (on)"
+    pending_label = "pending" if view.show != "pending" else "pending (on)"
+
+    if view.searching:
+        footer = [Text(f" search  {view.query}▏", style="magenta")]
+    else:
+        footer = key_bar(
+            keys=[
+                ("↑ ↓", "move"),
+                ("c", "continue here"),
+                ("r", "reset"),
+                ("s", "search"),
+                ("d", done_label),
+                ("p", pending_label),
+                ("q", "back"),
+            ],
+            width=width,
+            message=view.message,
+        )
+
+    room = max(3, height - 6 - len(footer))
     first_row = min(max(0, view.selected - room + 1), max(0, len(rows) - room))
     table = Table(
         expand=True,
@@ -2157,25 +2198,6 @@ def render_list(
             style="bright_white on grey27" if index == view.selected else None,
         )
 
-    done_label = "done" if view.show != "done" else "done (on)"
-    pending_label = "pending" if view.show != "pending" else "pending (on)"
-
-    if view.searching:
-        footer = Text(f" search  {view.query}▏", style="magenta")
-    else:
-        footer = key_bar(
-            keys=[
-                ("↑ ↓", "move"),
-                ("c", "continue here"),
-                ("r", "reset"),
-                ("s", "search"),
-                ("d", done_label),
-                ("p", pending_label),
-                ("q", "back"),
-            ],
-            message=view.message,
-        )
-
     layout = Layout()
     layout.split_column(
         Layout(
@@ -2189,7 +2211,10 @@ def render_list(
             ),
             ratio=1,
         ),
-        Layout(footer, size=1),
+        Layout(
+            Group(*footer),
+            size=len(footer),
+        ),
     )
 
     return layout
@@ -2199,7 +2224,13 @@ def render_page(
     title: str,
     text: str,
     keys: list[tuple[str, str]],
+    width: int,
 ) -> RenderableType:
+    bar_lines = key_bar(
+        keys=keys,
+        width=width,
+    )
+
     layout = Layout()
     layout.split_column(
         Layout(
@@ -2212,7 +2243,10 @@ def render_page(
             ),
             ratio=1,
         ),
-        Layout(key_bar(keys=keys), size=1),
+        Layout(
+            Group(*bar_lines),
+            size=len(bar_lines),
+        ),
     )
 
     return layout
@@ -2455,6 +2489,7 @@ class App:
                     title=title,
                     text=text,
                     keys=keys,
+                    width=self.console.size.width,
                 ),
             )
             key = self.wait_for_key(watched=None)
@@ -2564,6 +2599,7 @@ class App:
                 title="Checking every exercise",
                 text="Checking every exercise once more before the finish line...",
                 keys=[],
+                width=self.console.size.width,
             ),
         )
         failing = check_all(self.progress)
