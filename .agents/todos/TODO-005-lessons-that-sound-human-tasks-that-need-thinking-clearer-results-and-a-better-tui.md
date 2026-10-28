@@ -21,9 +21,9 @@ born: 2026-10-28
 | 1 | Research a better TUI and how to write lessons and tasks | | owner | done |
 | 2 | Analyze the six lessons, their tasks and the result box | | owner | done |
 | 3 | Settle the TUI choice with the owner | | owner | done |
-| 4 | Rewrite the lessons so they read like a person and the tasks need thinking | | owner | pending |
-| 5 | Show every test in the result, grouped by function | | owner | pending |
-| 6 | Verify with the dev check, the wrong answers, the screen driver and a beginner review | | owner | pending |
+| 4 | Rewrite the lessons so they read like a person and the tasks need thinking | | owner | done |
+| 5 | Show every test in the result, grouped by function | | owner | done |
+| 6 | Verify with the dev check, the wrong answers, the screen driver and a beginner review | | owner | done |
 | 7 | Rebuild the app on Textual, with the hint levels | | owner | pending |
 
 ## Done when

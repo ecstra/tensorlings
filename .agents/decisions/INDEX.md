@@ -12,6 +12,7 @@ Every decision taken, newest first.
 Filed per [spec/decisions.md](../spec/decisions.md).
 Built by the brain tool from the folder it lists.
 
+- [DEC-007](DEC-007-lesson-hint-and-result-are-tabs.md), the main screen shows the lesson, the hints and the result as full height tabs, and a save switches to the result
 - [DEC-006](DEC-006-a-task-never-repeats-its-lesson.md), the lesson shows one case and the task changes something about it, and the lint fails a lesson that holds a solution line
 - [DEC-005](DEC-005-hints-open-in-three-levels-one-per-new-run.md), each exercise has three hints, where to look, the idea, then the answer, and the next opens only after the learner runs the checks again
 - [DEC-004](DEC-004-the-app-is-built-on-textual.md), tensorlings draws its full-screen app with Textual instead of a hand built rich layout

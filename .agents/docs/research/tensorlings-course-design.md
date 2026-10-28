@@ -81,17 +81,18 @@ Each rule gets exercises where the wrong combination fails and the right one wor
 ## The app
 
 - `run.py` draws a full-screen app with Textual, per [DEC-004](../../decisions/DEC-004-the-app-is-built-on-textual.md). See `TensorlingsApp` and `WatchScreen` in `run.py`.
-- From the top the screen shows one labeled line with the exercise file and the progress, a lesson box titled with the exercise's title, a hint box that opens on `h`, a result box, and Textual's footer of keys.
-- Every box scrolls on its own. `tab` moves between them, the focused one has a heavier border, and the arrow keys and the mouse wheel scroll it.
+- From the top the screen shows one labeled line with the exercise file and the progress, three tabs, Lesson, Hint and Result, and Textual's footer of keys.
+- Each tab gets the whole screen and scrolls with the arrow keys and the mouse wheel. `1`, `2` and `3` switch tabs and `tab` cycles them. The owner picked tabs over stacked boxes, which left each box too small. The Result tab's label shows how many functions pass, so the state shows from any tab.
+- After each save the app switches to the Result tab by itself, as rustlings shows output on save. Opening an exercise shows the lesson.
 - On a narrow terminal the progress bar shrinks, then goes, so the file path stays whole. See `status_line` in `run.py`.
 - The owner tried several tops before this one. Two bare lines felt cramped, a dot between the parts looked bad, and spaced words with no labels meant nothing. So every piece on the screen has a label or sits in a titled box.
-- The result shows one line per function that passes, and under each failing function its tests, with the first failure explained the way a compiler shows its first error. It grows with the functions and not with the tests, and passing functions stay in view, since the owner could not find a function that already worked when only failures were listed. A function that returns nothing says "not written yet". See `result_view` in `run.py`.
-- The hint box shows the hints opened so far. `h` shows it, opens the next level once the checks have run again since the last one, and otherwise hides it. Three bindings share `h` so the footer says which of these `h` does now.
+- The result is an aligned table with one row per function, saying passes, not written yet, or how many of its checks fail. Under it, each failing function's first failing check is explained the way a compiler shows its first error. It grows with the functions and not with the checks, and passing functions stay in view, since the owner could not find a function that already worked when only failures were listed. See `result_view` in `run.py`.
+- The Hint tab shows the hints opened so far. `2`, or `h`, opens the first one, and opens the next once the checks have run again since the last. Two bindings share those keys so the footer says "next hint" when one is ready.
 - What the learner's code prints is caught and shown in a magenta box under the results, since printing straight to the screen would break the drawing.
 - Common PyTorch errors get a plain words explanation above PyTorch's own message, from the table `PLAIN_ERRORS` in `run.py`. A new error that confuses learners gets a row there.
 - Checks run in a thread worker so the screen never freezes, one at a time under `CHECK_LOCK`, and only the latest check of a burst of saves is shown. The app polls the file's time twice a second.
 - The list screen works like rustlings, with DONE and PENDING, the current exercise marked, and keys to continue at, reset, search and filter. Resetting the open file asks first in a small box.
-- The mouse is captured, so the learner selects text by dragging and copies with `ctrl+c`. Copying also goes through `pbcopy`, since macOS Terminal ignores Textual's own copy.
+- The mouse is captured, so the learner selects text by dragging, and the app copies it when the mouse lets go, as Claude Code does. Cmd+C never reaches a terminal app on a Mac, since the terminal keeps it. Copying also goes through `pbcopy`, since macOS Terminal ignores Textual's own copy.
 - Commands are `init`, `run`, `hint`, `reset`, `check-all`, `--manual-run` and `dev check`.
 
 ## Writing rules

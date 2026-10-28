@@ -45,7 +45,7 @@ try:
     from textual.binding import Binding
     from textual.containers import Vertical, VerticalScroll
     from textual.screen import ModalScreen, Screen
-    from textual.widgets import DataTable, Footer, Input, Static
+    from textual.widgets import DataTable, Footer, Input, Static, TabbedContent, TabPane
     from textual.widgets import Markdown as MarkdownWidget
 except ModuleNotFoundError as missing:
     print(f"tensorlings needs the {missing.name} package. Install the pinned packages first.\n")
@@ -1593,10 +1593,10 @@ WELCOME = prose(
 
     **Keys**
 
-    - `tab` moves between the lesson, the hint and the result. The arrow keys and the mouse wheel scroll.
-    - `h` shows a hint. Each exercise has three, and the next one opens after you save again.
-    - `l` lists every exercise, `x` resets the file, and `q` quits.
-    - Drag over text to select it, then press `ctrl+c` to copy it.
+    - `1`, `2` and `3` show the lesson, the hints and the result. After each save the result shows by itself.
+    - Each exercise has three hints. `2` opens the first, and the next one opens after you save again.
+    - The arrow keys and the mouse wheel scroll. `l` lists every exercise, `x` resets the file, and `q` quits.
+    - Drag over text to select it. It's copied when you let go.
     """,
 )
 
@@ -1966,25 +1966,17 @@ def indented(
     )
 
 
-def test_line(
-    mark: str,
-    color: str,
-    description: Text | str,
-    left: int = 0,
-) -> Padding:
-    """One line of the result, its text wrapping under itself rather than under the mark."""
-    line = Table.grid(expand=True)
-    line.add_column(width=2)
-    line.add_column(ratio=1)
-    line.add_row(
-        Text(mark, style=f"bold {color}"),
-        description,
-    )
+def results_by_function(outcome: Outcome) -> dict[str, list[TestResult]]:
+    functions: dict[str, list[TestResult]] = {}
 
-    return Padding(
-        line,
-        pad=(0, 0, 0, left),
-    )
+    for result in outcome.results:
+        functions.setdefault(result.function, []).append(result)
+
+    return functions
+
+
+def passing_functions(outcome: Outcome) -> int:
+    return sum(all(result.passed for result in results) for results in results_by_function(outcome).values())
 
 
 PRINTED_LINES_SHOWN = 200
@@ -1995,16 +1987,17 @@ def result_view(
     outcome: Outcome | None,
     check_again: str,
 ) -> RenderableType:
-    """The result, one line per function that passes and the details under each one that fails.
+    """The result as a table with one row per function, then what went wrong in each failing one.
 
-    It grows with the functions and not with the tests, and the most important
-    part comes first, since the learner reads it from the top."""
+    The table grows with the functions and not with the checks, and it comes
+    before the details, so the learner sees where every function stands first."""
     if outcome is None:
         return Text("Checking your code...", style="dim")
 
     if outcome.problem is not None and not outcome.results:
         return Group(
             Text("✗ Your file can't be checked yet", style="bold red"),
+            Text(""),
             indented(text=outcome.problem, left=2),
         )
 
@@ -2016,66 +2009,55 @@ def result_view(
         parts.append(Text("Press n for the next exercise.", style="bold"))
         parts.append(Text(""))
 
-    functions: dict[str, list[TestResult]] = {}
-
-    for result in outcome.results:
-        functions.setdefault(result.function, []).append(result)
+    functions = results_by_function(outcome)
+    table = Table.grid(padding=(0, 3))
+    table.add_column(no_wrap=True)
+    table.add_column(no_wrap=True)
+    table.add_column()
+    details: list[RenderableType] = []
 
     for function, results in functions.items():
         failing = [result for result in results if not result.passed]
 
         if not failing:
-            parts.append(
-                test_line(
-                    mark="✓",
-                    color="green",
-                    description=Text(function),
-                ),
+            table.add_row(
+                Text("✓", style="bold green"),
+                Text(function, style="bold"),
+                Text("passes", style="green"),
             )
             continue
 
         if all(NOT_STARTED in result.detail for result in failing):
-            parts.append(
-                test_line(
-                    mark="✗",
-                    color="red",
-                    description=Text.assemble(function, ("   not written yet", "dim")),
-                ),
+            table.add_row(
+                Text("✗", style="bold red"),
+                Text(function, style="bold"),
+                Text("not written yet", style="dim"),
             )
             continue
 
-        parts.append(
-            test_line(
-                mark="✗",
-                color="red",
-                description=Text(function),
-            ),
+        status = "fails" if len(results) == 1 else f"{len(failing)} of {len(results)} checks fail"
+        table.add_row(
+            Text("✗", style="bold red"),
+            Text(function, style="bold"),
+            Text(status, style="red"),
         )
-        explained_one = False
 
-        for result in results:
-            parts.append(
-                test_line(
-                    mark="✓" if result.passed else "✗",
-                    color="green" if result.passed else "red",
-                    description=Text(result.description, style="" if not result.passed else "dim"),
-                    left=4,
-                ),
-            )
+        # Like a compiler, explain only the first failing check of each function, so the rest stays readable.
+        first_failure = failing[0]
+        details.append(Text.assemble((function, "bold red"), "  ", first_failure.description))
+        details.append(indented(text=first_failure.detail, style="yellow", left=4))
+        details.append(Text(""))
 
-            # Like a compiler, explain only the first failure of each function, so the others stay in view.
-            if not result.passed and not explained_one:
-                parts.append(indented(text=result.detail, style="yellow", left=8))
-                explained_one = True
+    parts.append(table)
+    parts.append(Text(""))
+    parts.extend(details)
 
     if outcome.problem is not None:
-        parts.append(Text(""))
         parts.append(indented(text=outcome.problem, style="red", left=0))
+        parts.append(Text(""))
 
     if not outcome.passed:
-        passing_count = sum(all(result.passed for result in results) for results in functions.values())
-        parts.append(Text(""))
-        parts.append(Text(f"{passing_count} of {len(functions)} functions pass. {check_again}", style="dim"))
+        parts.append(Text(f"{passing_functions(outcome)} of {len(functions)} functions pass. {check_again}", style="dim"))
 
     if not outcome.printed.strip():
         return Group(*parts)
@@ -2158,14 +2140,18 @@ def hint_view(
     next_ready: bool,
     run_again: str,
 ) -> RenderableType:
+    if hints_open == 0:
+        return Text("No hint is open yet. Press 2 to open the first one.", style="dim")
+
     parts: list[RenderableType] = []
 
     for label, hint in zip(HINT_LABELS, exercise.hints[:hints_open]):
         parts.append(Text(label, style="bold yellow"))
         parts.append(indented(text=hint, left=2))
+        parts.append(Text(""))
 
     if hints_open < len(exercise.hints):
-        note = "Press h for the next hint." if next_ready else f"The next hint opens after you {run_again}."
+        note = "Press 2 for the next hint." if next_ready else f"The next hint opens after you {run_again}."
         parts.append(Text(note, style="dim"))
 
     return Group(*parts)
@@ -2180,64 +2166,29 @@ APP_CSS = """
     height: 2;
 }
 
+#tabs {
+    height: 1fr;
+}
+
+#tabs ContentSwitcher {
+    height: 1fr;
+}
+
+#tabs TabPane {
+    height: 1fr;
+    padding: 0;
+}
+
 .pane {
-    padding: 0 1;
-    border-title-align: left;
-    border-subtitle-align: right;
-    border-title-style: bold;
+    height: 1fr;
+    padding: 1 2;
     scrollbar-size-vertical: 1;
 }
 
-#lesson {
-    height: 1fr;
-    min-height: 5;
-    border: round $primary;
-}
-
-#lesson:focus {
-    border: heavy $primary;
-}
-
-#hint {
-    display: none;
-    height: auto;
-    max-height: 40%;
-    border: round $warning;
-}
-
-#hint.-open {
-    display: block;
-}
-
-#hint:focus {
-    border: heavy $warning;
-}
-
-#result {
-    height: auto;
-    min-height: 3;
-    max-height: 45%;
-    border: round $error;
-}
-
-#result:focus {
-    border: heavy $error;
-}
-
-#result.-passed {
-    border: round $success;
-}
-
-#result.-passed:focus {
-    border: heavy $success;
-}
-
-#result.-checking {
-    border: round $warning;
-}
-
-#result.-checking:focus {
-    border: heavy $warning;
+#lesson-title {
+    text-style: bold;
+    color: $accent;
+    margin-bottom: 1;
 }
 
 #exercises {
@@ -2272,6 +2223,7 @@ ConfirmScreen {
     height: 1fr;
     padding: 0 2;
     border: round $primary;
+    border-title-align: left;
 }
 """
 
@@ -2516,18 +2468,21 @@ class ListScreen(Screen[str | None]):
 class WatchScreen(Screen[None]):
     """The lesson, the hint and the result of the current exercise, rechecked on every save."""
 
-    # Three bindings share h, and check_action leaves exactly one of them on, so its label says what h does now.
+    # Two bindings share 2 and h, and check_action leaves one of them on, so the footer says whether a new hint is ready.
     BINDINGS = [
         Binding("n", "next_exercise", "next"),
         Binding("r", "check_now", "run"),
-        Binding("h", "show_hint", "hint"),
-        Binding("h", "next_hint", "next hint"),
-        Binding("h", "hide_hint", "hide hint"),
-        Binding("tab", "app.focus_next", "next box"),
+        Binding("1", "show_tab('lesson')", "lesson"),
+        Binding("2,h", "show_hints", "hint"),
+        Binding("2,h", "next_hint", "next hint"),
+        Binding("3", "show_tab('result')", "result"),
+        Binding("tab", "cycle_tab", "next tab", show=False),
         Binding("l", "open_list", "list"),
         Binding("x", "reset_exercise", "reset"),
         Binding("q", "app.quit", "quit"),
     ]
+
+    TABS = ("lesson", "hint", "result")
 
     def __init__(
         self,
@@ -2542,7 +2497,7 @@ class WatchScreen(Screen[None]):
         self.runs = 0
         self.hints_open = 0
         self.runs_at_last_hint = 0
-        self.hint_shown = False
+        self.show_result_when_checked = False
         self.watched_time = 0.0
         self.check_again = "Press r to check again." if manual else "Save the file to check again."
         self.run_again = "press r again" if manual else "save again"
@@ -2558,21 +2513,42 @@ class WatchScreen(Screen[None]):
     def compose(self) -> ComposeResult:
         yield Static(id="status")
 
-        with VerticalScroll(id="lesson", classes="pane"):
-            yield MarkdownWidget(id="lesson-text")
+        with TabbedContent(id="tabs"):
+            with TabPane("Lesson", id="lesson-tab"):
+                with VerticalScroll(id="lesson", classes="pane"):
+                    yield Static(id="lesson-title")
+                    yield MarkdownWidget(id="lesson-text")
 
-        with VerticalScroll(id="hint", classes="pane"):
-            yield Static(id="hint-text")
+            with TabPane("Hint", id="hint-tab"):
+                with VerticalScroll(id="hint", classes="pane"):
+                    yield Static(id="hint-text")
 
-        with VerticalScroll(id="result", classes="pane"):
-            yield Static(id="result-text")
+            with TabPane("Result", id="result-tab"):
+                with VerticalScroll(id="result", classes="pane"):
+                    yield Static(id="result-text")
 
         yield Footer(show_command_palette=False)
 
     def on_mount(self) -> None:
-        self.query_one("#result").border_title = "Result"
         self.open_exercise(self.exercise)
         self.set_interval(0.5, self.poll_file)
+
+    def on_tabbed_content_tab_activated(
+        self,
+        event: TabbedContent.TabActivated,
+    ) -> None:
+        # Focus the scrolling part of the tab, so the arrow keys scroll it straight away.
+        event.pane.query_one(VerticalScroll).focus()
+
+    def action_show_tab(
+        self,
+        name: str,
+    ) -> None:
+        self.query_one(TabbedContent).active = f"{name}-tab"
+
+    def action_cycle_tab(self) -> None:
+        current = self.query_one(TabbedContent).active.removesuffix("-tab")
+        self.action_show_tab(self.TABS[(self.TABS.index(current) + 1) % len(self.TABS)])
 
     def on_resize(self) -> None:
         self.show_status()
@@ -2586,14 +2562,13 @@ class WatchScreen(Screen[None]):
         self.runs = 0
         self.hints_open = 0
         self.runs_at_last_hint = 0
-        self.hint_shown = False
+        self.show_result_when_checked = False
         self.watched_time = modified_time(exercise.path)
 
-        lesson = self.query_one("#lesson", VerticalScroll)
-        lesson.border_title = exercise.title
+        self.query_one("#lesson-title", Static).update(exercise.title)
         self.query_one("#lesson-text", MarkdownWidget).update(exercise.lesson)
-        lesson.scroll_home(animate=False)
-        lesson.focus()
+        self.query_one("#lesson", VerticalScroll).scroll_home(animate=False)
+        self.action_show_tab("lesson")
 
         self.show_hint()
         self.show_status()
@@ -2648,6 +2623,11 @@ class WatchScreen(Screen[None]):
         self.show_hint()
         self.refresh_bindings()
 
+        # After a save the learner wants the outcome, as rustlings shows it. Opening an exercise shows the lesson.
+        if self.show_result_when_checked:
+            self.show_result_when_checked = False
+            self.action_show_tab("result")
+
     def poll_file(self) -> None:
         """Textual has no file watcher, so compare the file's time twice a second."""
         if self.manual:
@@ -2659,6 +2639,7 @@ class WatchScreen(Screen[None]):
             return
 
         self.watched_time = changed_time
+        self.show_result_when_checked = True
         self.check()
 
     def show_status(self) -> None:
@@ -2670,10 +2651,22 @@ class WatchScreen(Screen[None]):
             ),
         )
 
+    def result_label(self) -> str:
+        if self.outcome is None:
+            return "Result  [dim]checking[/]"
+
+        if self.outcome.passed:
+            return "Result  [green]✓ done[/]"
+
+        if not self.outcome.results:
+            return "Result  [red]✗[/]"
+
+        total = len(results_by_function(self.outcome))
+
+        return f"Result  [red]✗[/] {passing_functions(self.outcome)} of {total}"
+
     def show_result(self) -> None:
-        pane = self.query_one("#result", VerticalScroll)
-        pane.set_class(self.outcome is None, "-checking")
-        pane.set_class(self.passed, "-passed")
+        self.query_one(TabbedContent).get_tab("result-tab").label = self.result_label()
         self.query_one("#result-text", Static).update(
             result_view(
                 exercise=self.exercise,
@@ -2686,9 +2679,8 @@ class WatchScreen(Screen[None]):
         return 0 < self.hints_open < len(self.exercise.hints) and self.runs > self.runs_at_last_hint
 
     def show_hint(self) -> None:
-        pane = self.query_one("#hint", VerticalScroll)
-        pane.set_class(self.hint_shown, "-open")
-        pane.border_title = f"Hint {self.hints_open} of {len(self.exercise.hints)}"
+        label = "Hint" if self.hints_open == 0 else f"Hint {self.hints_open} of {len(self.exercise.hints)}"
+        self.query_one(TabbedContent).get_tab("hint-tab").label = label
         self.query_one("#hint-text", Static).update(
             hint_view(
                 exercise=self.exercise,
@@ -2701,8 +2693,8 @@ class WatchScreen(Screen[None]):
     def open_hint_level(self) -> None:
         self.hints_open += 1
         self.runs_at_last_hint = self.runs
-        self.hint_shown = True
         self.show_hint()
+        self.action_show_tab("hint")
         self.query_one("#hint", VerticalScroll).scroll_end(animate=False)
         self.refresh_bindings()
 
@@ -2712,19 +2704,16 @@ class WatchScreen(Screen[None]):
         parameters: tuple[object, ...],
     ) -> bool | None:
         if action == "next_exercise":
-            return True if self.passed else None
+            return self.passed
 
         if action == "check_now":
             return self.manual
 
-        if action == "show_hint":
-            return not self.hint_shown
+        if action == "show_hints":
+            return not self.next_hint_ready()
 
         if action == "next_hint":
-            return self.hint_shown and self.next_hint_ready()
-
-        if action == "hide_hint":
-            return self.hint_shown and not self.next_hint_ready()
+            return self.next_hint_ready()
 
         return True
 
@@ -2781,24 +2770,18 @@ class WatchScreen(Screen[None]):
         self.app.exit()
 
     def action_check_now(self) -> None:
+        self.show_result_when_checked = True
         self.check()
 
-    def action_show_hint(self) -> None:
-        if self.hints_open == 0 or self.next_hint_ready():
+    def action_show_hints(self) -> None:
+        if self.hints_open == 0:
             self.open_hint_level()
             return
 
-        self.hint_shown = True
-        self.show_hint()
-        self.refresh_bindings()
+        self.action_show_tab("hint")
 
     def action_next_hint(self) -> None:
         self.open_hint_level()
-
-    def action_hide_hint(self) -> None:
-        self.hint_shown = False
-        self.show_hint()
-        self.refresh_bindings()
 
     def action_open_list(self) -> None:
         self.app.push_screen(
@@ -2877,6 +2860,19 @@ class TensorlingsApp(App[None]):
     ) -> None:
         self.progress.welcomed = True
         save_progress(self.progress)
+
+    def on_text_selected(self) -> None:
+        """Copy a selection when the mouse lets go, as Claude Code does. Cmd+C never reaches a terminal app on a Mac."""
+        text = self.screen.get_selected_text()
+
+        if not text:
+            return
+
+        self.copy_to_clipboard(text)
+        self.notify(
+            "Copied",
+            timeout=1.5,
+        )
 
     def copy_to_clipboard(
         self,
