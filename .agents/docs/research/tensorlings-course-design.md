@@ -76,9 +76,7 @@ Each rule gets exercises where the wrong combination fails and the right one wor
 - Every exercise is code to write or fix. There are no prediction only exercises.
 - The checker runs the file one top level statement at a time, so a line that crashes on purpose hides nothing after it. A crash fails only the names its statement sets, and a crash no check reports fails the file. See `load_module` in `run.py`.
 - Each check is a list of tests, and every test belongs to one name the file sets, through `Checker.check_name`, or one function, through `Checker.test`. A failing test says in plain words what came back and what was expected. A passing name shows its value and shape in the result, in place of print lines.
-- Each name or function an exercise checks has one hint, per [DEC-010](../../decisions/DEC-010-one-hint-per-function.md).
-- An exercise with `try_first` keeps its lesson locked until the file differs from how it started. See `Exercise.lesson_open` in `run.py`.
-- A test that runs past `TIME_LIMIT_SECONDS` fails with a note about loops that never end, so a learner's endless loop can't stall the app. See `run_with_time_limit` in `run.py`.
+- Each name or function an exercise checks has one hint, per [DEC-010](../../decisions/DEC-010-one-hint-per-function.md).- A test that runs past `TIME_LIMIT_SECONDS` fails with a note about loops that never end, so a learner's endless loop can't stall the app. See `run_with_time_limit` in `run.py`.
 - A wrong tensor with more than `SHOWN_ENTRIES` entries is described by the entries that differ, so a big tensor never prints whole.
 - After a pass the reference solution is written to `solutions/<chapter>/<name>.py`.
 
@@ -119,7 +117,7 @@ From [the research](tensorlings-research.md#research-on-tasks-that-make-the-lear
 - Each exercise teaches one topic of its section, as rustlings does.
 - Explain then try. A short working example sits right above each TODO, and the TODO repeats that move on new numbers or changes one thing. A task never asks for several new moves at once. See `TENSORS1` in `run.py`.
 - Fix the error. A line crashes on purpose where the error teaches the idea, such as a list of lists with uneven rows.
-- Try first. A topic opens with a task the learner attempts with plain Python before the lesson unlocks, and the lesson then shows the tensor way. See `INDEXING1` in `run.py`.
+- Try first. A topic opens with a task the learner attempts with plain Python before reading the lesson, and the lesson then shows the tensor way. Nothing is locked, since the owner did not want the lesson unlocked by a save. See `INDEXING1` in `run.py`.
 - tensors1 and indexing1 use these methods as a trial. The other exercises still use functions written from a spec until the owner's verdict.
 - A quiz closes a group of chapters and combines their tools with nothing new. `quiz1` closes the tensor and matrix multiplication chapters.
 - The lesson teaches every tool its tasks need, on its own small example. A task never needs a function or argument that no lesson showed.

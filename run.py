@@ -134,6 +134,11 @@ def run_with_time_limit(run: Callable[[], object]) -> None:
 # PyTorch's own wording for common mistakes, each with the same message in plain words.
 PLAIN_ERRORS: tuple[tuple[str, str], ...] = (
     (
+        r"object is not subscriptable",
+        "Square brackets pick parts of something that holds values, like a tensor or a list. Here they come right "
+        "after something that holds nothing to pick, such as a function like torch.tensor.",
+    ),
+    (
         r"expected sequence of length (\d+) at dim \d+ \(got (\d+)\)",
         "Every row of a tensor needs the same length. One row here has {1} numbers, but the rows before it have {0}.",
     ),
@@ -618,9 +623,6 @@ class Exercise:
     hints: dict[str, str]
     introduces: tuple[str, ...]
     check: Callable[[Checker], None]
-    # The learner tries the first TODO before the lesson opens, which helps them
-    # learn the lesson's way once they see it (Sinha and Kapur 2021).
-    try_first: bool = False
 
     @property
     def path(self) -> Path:
@@ -629,31 +631,6 @@ class Exercise:
     @property
     def solution_path(self) -> Path:
         return SOLUTIONS_DIR / self.chapter.folder / f"{self.name}.py"
-
-    @property
-    def lesson_open(self) -> bool:
-        """A try first lesson opens once the file differs from how it started."""
-        if not self.try_first:
-            return True
-
-        try:
-            return self.path.read_text() != self.source
-        except OSError:
-            return True
-
-
-TRY_FIRST = prose(
-    """
-    Try the first TODO before you read anything, with what you already know.
-    It's fine if it doesn't work.
-
-    The lesson opens here as soon as you save a change to the file.
-    """,
-)
-
-
-def lesson_text(exercise: Exercise) -> str:
-    return exercise.lesson if exercise.lesson_open else TRY_FIRST
 
 
 # Two checks never run the learner's code at once. Each one swaps out
@@ -920,8 +897,11 @@ TENSORS1 = Exercise(
 
 INDEXING1_LESSON = prose(
     """
-    If you looped over the rows for the first TODO, that works. Square
-    brackets on a tensor do it in one step, and the TODOs after it use them.
+    Try the first TODO before you read on, with what you know from Python
+    lists.
+
+    If you looped over the rows, that works. Square brackets on a tensor do it
+    in one step, and the TODOs after it use them.
 
     Give one position per dimension, separated by commas. Positions start at
     0, and negative positions count from the end. Leave out the later
@@ -959,9 +939,8 @@ INDEXING1_SOURCE = source_file(
                          [4, 5, 6],
                          [7, 8, 9]])
 
-    # TODO: Try this before the lesson, with what you know from Python lists.
-    #   Get the first column of grid, [1, 4, 7], as a tensor. The lesson tab
-    #   opens once you save a change.
+    # TODO: Try this before reading the lesson, with what you know from Python
+    #   lists. Get the first column of grid, [1, 4, 7], as a tensor.
     first_column = ...
 
     # The TODOs below use the square brackets the lesson shows.
@@ -1052,7 +1031,6 @@ INDEXING1 = Exercise(
     },
     introduces=("index", "slice"),
     check=check_indexing1,
-    try_first=True,
 )
 
 TENSORS2_LESSON = prose(
@@ -3288,7 +3266,6 @@ class WatchScreen(Screen[None]):
         self.latest_check = 0
         self.show_result_when_checked = False
         self.watched_time = 0.0
-        self.lesson_shown_open = True
         self.check_again = "Press r to check again." if manual else "Save the file to check again."
 
     @property
@@ -3354,7 +3331,8 @@ class WatchScreen(Screen[None]):
         self.show_result_when_checked = False
         self.watched_time = modified_time(exercise.path)
 
-        self.show_lesson()
+        self.query_one("#lesson-title", Static).update(exercise.title)
+        self.query_one("#lesson-text", MarkdownWidget).update(exercise.lesson)
         self.query_one("#lesson", VerticalScroll).scroll_home(animate=False)
         self.action_show_tab("lesson")
 
@@ -3410,13 +3388,6 @@ class WatchScreen(Screen[None]):
         self.show_hint()
         self.refresh_bindings()
 
-        # A try first lesson opens on the first saved change, and closes again after a reset.
-        if exercise.lesson_open != self.lesson_shown_open:
-            self.show_lesson()
-
-            if exercise.lesson_open:
-                self.notify("The lesson is open now. Press 1 to read it.")
-
         # After a save the learner wants the outcome, as rustlings shows it. Opening an exercise shows the lesson.
         if self.show_result_when_checked:
             self.show_result_when_checked = False
@@ -3468,12 +3439,6 @@ class WatchScreen(Screen[None]):
                 check_again=self.check_again,
             ),
         )
-
-    def show_lesson(self) -> None:
-        exercise = self.exercise
-        self.lesson_shown_open = exercise.lesson_open
-        self.query_one("#lesson-title", Static).update(exercise.title)
-        self.query_one("#lesson-text", MarkdownWidget).update(lesson_text(exercise))
 
     def show_hint(self) -> None:
         self.query_one("#hint-text", Static).update(
