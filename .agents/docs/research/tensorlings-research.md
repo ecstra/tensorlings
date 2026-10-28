@@ -2,7 +2,7 @@
 name: tensorlings-research
 kind: doc
 description: what expert courses agree a deep learning expert must know, the teaching research, and the research on designing modules, behind tensorlings
-updated: 2026-10-27
+updated: 2026-10-28
 links: []
 ---
 

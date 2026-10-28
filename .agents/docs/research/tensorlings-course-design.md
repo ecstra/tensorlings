@@ -2,7 +2,7 @@
 name: tensorlings-course-design
 kind: doc
 description: the tensorlings curriculum, how each block is taught, the combination rules, the design method, the exercise format, the app and the writing rules
-updated: 2026-10-27
+updated: 2026-10-28
 links: []
 ---
 
@@ -74,41 +74,53 @@ Each rule gets exercises where the wrong combination fails and the right one wor
 - One file per exercise, `exercises/<chapter>/<name>.py`, like `exercises/01_tensors/tensors1.py`.
 - The file holds the code, a `TODO` at every place to change, and a closing comment that lists what the check tests.
 - Every exercise is code to write or fix. There are no prediction only exercises.
-- Each check is a list of named tests. A failing test says in plain words what came back and what was expected.
+- Each check is a list of tests, and every test belongs to one function. A failing test says in plain words what came back and what was expected. A missing function fails only its own tests.
+- Each exercise has three hints, where to look, the idea, then the answer, per [DEC-005](../../decisions/DEC-005-hints-open-in-three-levels-one-per-new-run.md).
 - After a pass the reference solution is written to `solutions/<chapter>/<name>.py`.
 
 ## The app
 
-- `run.py` draws a full-screen app with the `rich` package in the terminal's alternate screen, so it redraws in place and never scrolls.
-- From the top the screen shows one labeled line with the exercise file and the progress, a lesson panel titled with the exercise's title that scrolls with the arrow keys, a hint panel that `h` opens and closes, a result panel with each test, and a key bar.
+- `run.py` draws a full-screen app with Textual, per [DEC-004](../../decisions/DEC-004-the-app-is-built-on-textual.md). See `TensorlingsApp` and `WatchScreen` in `run.py`.
+- From the top the screen shows one labeled line with the exercise file and the progress, a lesson box titled with the exercise's title, a hint box that opens on `h`, a result box, and Textual's footer of keys.
+- Every box scrolls on its own. `tab` moves between them, the focused one has a heavier border, and the arrow keys and the mouse wheel scroll it.
 - On a narrow terminal the progress bar shrinks, then goes, so the file path stays whole. See `status_line` in `run.py`.
-- The owner tried several tops before this one. Two bare lines felt cramped, a dot between the parts looked bad, and spaced words with no labels meant nothing. Rustlings keeps progress and the file at the bottom, and the owner wanted them on one line at the top. So every piece on the screen has a label or sits in a titled panel.
-- The hint has its own panel between the lesson and the result, because it is help and not a result. It takes its room before the result and the lesson, since it is the one panel that does not scroll.
-- Keys are `n` next, `h` to show or hide the hint, `tab` the full result, `l` list, `x` reset, `q` quit, `r` run again, and the arrows to scroll.
-- On a narrow terminal the key bar wraps onto a second line, breaking only between keys, so no key is ever cut off. See `key_bar` in `run.py`.
-- The list screen works like rustlings, with DONE and PENDING, the current exercise marked, and keys to move, continue at, reset, search and filter.
-- Commands are `init`, `run`, `hint`, `reset`, `check-all`, `--manual-run` and `dev check`.
-- The result panel beside the lesson is a short form, so it grows with the failures and not with the number of tests. It lists only the failing tests, explains only the first the way a compiler shows its first error, and counts the lines the code printed. Functions that still return nothing share one note instead of one message each. See `result_body` in `run.py`.
-- `tab` opens the full result on its own screen, which scrolls with the arrow keys and shows every test, every failure's details and what the code printed. When the short form does not fit, its border says to press tab. The screen never tells the learner to make the window taller, since they often cannot.
+- The owner tried several tops before this one. Two bare lines felt cramped, a dot between the parts looked bad, and spaced words with no labels meant nothing. So every piece on the screen has a label or sits in a titled box.
+- The result shows one line per function that passes, and under each failing function its tests, with the first failure explained the way a compiler shows its first error. It grows with the functions and not with the tests, and passing functions stay in view, since the owner could not find a function that already worked when only failures were listed. A function that returns nothing says "not written yet". See `result_view` in `run.py`.
+- The hint box shows the hints opened so far. `h` shows it, opens the next level once the checks have run again since the last one, and otherwise hides it. Three bindings share `h` so the footer says which of these `h` does now.
+- What the learner's code prints is caught and shown in a magenta box under the results, since printing straight to the screen would break the drawing.
 - Common PyTorch errors get a plain words explanation above PyTorch's own message, from the table `PLAIN_ERRORS` in `run.py`. A new error that confuses learners gets a row there.
-- Anything the learner's code prints is caught and shown on the full result screen, since printing straight to the screen would break the drawing. It sits in a magenta box of its own, so it never reads as part of the test results.
-- Arrow keys are read one escape sequence at a time in `KeyReader.read_escape_sequence`, so a held arrow key scrolls instead of reading as escape.
+- Checks run in a thread worker so the screen never freezes, one at a time under `CHECK_LOCK`, and only the latest check of a burst of saves is shown. The app polls the file's time twice a second.
+- The list screen works like rustlings, with DONE and PENDING, the current exercise marked, and keys to continue at, reset, search and filter. Resetting the open file asks first in a small box.
+- The mouse is captured, so the learner selects text by dragging and copies with `ctrl+c`. Copying also goes through `pbcopy`, since macOS Terminal ignores Textual's own copy.
+- Commands are `init`, `run`, `hint`, `reset`, `check-all`, `--manual-run` and `dev check`.
 
 ## Writing rules
 
-- Plain English, mostly under 20 words per sentence, one idea per sentence.
+From [the research](tensorlings-research.md#research-on-writing-that-sounds-human).
+
+- Open with a situation, never a definition. Show code and its output first, then give the name.
+- One new idea per paragraph. Talk to "you". Vary what each paragraph does.
+- No bold labels on paragraphs, no clauses bolted onto the end of a sentence, no tidy closing summary.
 - Every term explained where it first appears, never relying on a later lesson.
-- Every lesson opens with a concrete example using real numbers, then names the general idea.
-- One idea per exercise, and a lesson fits on one screen.
-- Every lesson says in one sentence why the thing exists.
+- Give the why as a case the learner will meet, inside the lesson's flow.
+- Sentences mostly under 20 words. Read it aloud, and rewrite what you would not say to a friend.
+
+## Tasks
+
+From [the research](tensorlings-research.md#research-on-tasks-that-make-the-learner-think) and [DEC-006](../../decisions/DEC-006-a-task-never-repeats-its-lesson.md).
+
+- The lesson uses one example, and each task changes something it held fixed, such as the dimension, the shape, the operation, or a combination with an earlier exercise.
+- No line of a solution appears in the lesson or in the first two hints.
+- The TODO says the goal in plain words and leaves the syntax to the learner.
+- The tests include the case that catches the likely mistake, such as a square input where rows and columns mix up.
 
 ## Verification
 
 - `run.py dev check` runs every exercise twice. The starting file must fail and the solution must pass.
-- A lesson lint in the dev check flags sentences over 25 words, filler words, dashes and semicolons, a missing "Why it exists" or "Your task" paragraph, a lesson taller than 48 lines at width 96, and any term from `JARGON` in `run.py` used before an exercise lists it in `introduces`. A new technical term gets added to `JARGON` the first time a lesson needs it.
+- A lesson lint in the dev check flags sentences over 25 words, filler words, dashes and semicolons, a paragraph that opens with a bold label, a lesson taller than 60 lines at width 96, any term from `JARGON` in `run.py` used before an exercise lists it in `introduces`, and any solution body that shows up in the lesson or the first two hints. Variable names are ignored in that last check, so renaming does not hide a copy. A new technical term gets added to `JARGON` the first time a lesson needs it.
 - A separate reviewer agent reads every lesson as a complete beginner before the owner sees it.
 - `dev/wrong_answers.py` runs common wrong answers through the checks. Every one must fail with a message a beginner can act on, and the script exits with 1 if one passes. New exercises add their likely mistakes to its `CASES`.
-- `dev/drive_screen.py` drives the app in a pseudo terminal on a scratch copy of the course and prints each screen through the `pyte` terminal emulator. It runs before each hand over, at a normal size and at 80 by 24. Its docstring has the command.
+- `dev/screens.py` drives the app headless with Textual's Pilot on a scratch copy of the course and saves SVG screenshots, which `qlmanage` turns into PNGs to look at. It runs before each hand over, at a normal size and at 80 by 24. Its docstring has the command.
 
 ## Limits on this machine
 

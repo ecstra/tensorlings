@@ -11,37 +11,42 @@ lessons, the checks and the solutions. You never need to read it.
 
 from __future__ import annotations
 
+import ast
 import contextlib
 import importlib.util
 import io
 import json
 import os
 import re
-import select
+import shutil
+import subprocess
 import sys
 import tempfile
-import termios
 import textwrap
+import threading
 import time
 import traceback
-import tty
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
 
 try:
     import torch
-    from rich.console import Console, ConsoleOptions, Group, RenderableType, RenderResult
-    from rich.layout import Layout
-    from rich.live import Live
+    from rich.console import Console, Group, RenderableType
     from rich.markdown import Markdown
     from rich.padding import Padding
     from rich.panel import Panel
     from rich.progress_bar import ProgressBar
-    from rich.segment import Segment
     from rich.table import Table
     from rich.text import Text
+    from textual import work
+    from textual.app import App, ComposeResult
+    from textual.binding import Binding
+    from textual.containers import Vertical, VerticalScroll
+    from textual.screen import ModalScreen, Screen
+    from textual.widgets import DataTable, Footer, Input, Static
+    from textual.widgets import Markdown as MarkdownWidget
 except ModuleNotFoundError as missing:
     print(f"tensorlings needs the {missing.name} package. Install the pinned packages first.\n")
     print("    uv pip install --python .venv/bin/python -r requirements.txt\n")
@@ -135,6 +140,15 @@ PLAIN_ERRORS: tuple[tuple[str, str], ...] = (
         r"too many indices for tensor of dimension (\d+)",
         "The code picks along more dimensions than the tensor has. It has {0}.",
     ),
+    (
+        r"tuple index out of range",
+        "The code asks a shape for a size it does not have. A shape holds one size per dimension, "
+        "so a tensor with fewer dimensions has a shorter shape.",
+    ),
+    (
+        r"len\(\) of a 0-d tensor",
+        "len() needs a tensor with at least one dimension, and this one has none.",
+    ),
 )
 
 
@@ -204,6 +218,7 @@ def load_module(
 
 @dataclass(frozen=True)
 class TestResult:
+    function: str
     description: str
     passed: bool
     detail: str = ""
@@ -221,30 +236,32 @@ class Checker:
         self.path = path
         self.results: list[TestResult] = []
 
-    def function(
-        self,
-        name: str,
-    ) -> Callable[..., object]:
-        found = getattr(self.module, name, None)
-
-        if not callable(found):
-            raise Problem(
-                f"{self.path.name} has no function called {name}. Check the name in its def line. "
-                "Pressing x resets the whole file and erases your code.",
-            )
-
-        return found
-
     def test(
         self,
+        function: str,
         description: str,
-        run: Callable[[], None],
+        run: Callable[[Callable[..., object]], None],
     ) -> None:
+        """Run one test of one function. A missing function fails only its own tests."""
+        found = getattr(self.module, function, None)
+
+        if not callable(found):
+            self.results.append(
+                TestResult(
+                    function=function,
+                    description=description,
+                    passed=False,
+                    detail=f"{self.path.name} has no function called {function}. Check the name in its def line.",
+                ),
+            )
+            return
+
         try:
-            run()
+            run(found)
         except Mismatch as mismatch:
             self.results.append(
                 TestResult(
+                    function=function,
                     description=description,
                     passed=False,
                     detail=str(mismatch),
@@ -254,6 +271,7 @@ class Checker:
         except Exception as error:
             self.results.append(
                 TestResult(
+                    function=function,
                     description=description,
                     passed=False,
                     detail=describe_crash(
@@ -266,6 +284,7 @@ class Checker:
 
         self.results.append(
             TestResult(
+                function=function,
                 description=description,
                 passed=True,
             ),
@@ -287,12 +306,15 @@ def value_text(value: object) -> str:
     return repr(value)
 
 
+NOT_STARTED = "returned None"
+
+
 def reject_missing_return(
     call: str,
     actual: object,
 ) -> None:
     if actual is None:
-        raise Mismatch(f"{call} returned None, which usually means the function has no return statement yet.")
+        raise Mismatch(f"{call} {NOT_STARTED}, which usually means the function has no return statement yet.")
 
 
 def expect_tensor(
@@ -376,7 +398,8 @@ class Exercise:
     lesson: str
     source: str
     solution: str
-    hint: str
+    # Where to look, the idea, then the answer. Each opens after one more run.
+    hints: tuple[str, str, str]
     introduces: tuple[str, ...]
     check: Callable[[Checker], None]
 
@@ -389,13 +412,18 @@ class Exercise:
         return SOLUTIONS_DIR / self.chapter.folder / f"{self.name}.py"
 
 
+# Two checks never run the learner's code at once. Each one swaps out
+# sys.stdout to catch what the code prints, and overlapping swaps would mix up.
+CHECK_LOCK = threading.Lock()
+
+
 def attempt(
     exercise: Exercise,
     path: Path,
 ) -> Outcome:
     printed = io.StringIO()
 
-    with contextlib.redirect_stdout(printed), contextlib.redirect_stderr(printed):
+    with CHECK_LOCK, contextlib.redirect_stdout(printed), contextlib.redirect_stderr(printed):
         try:
             module = load_module(
                 path=path,
@@ -455,49 +483,59 @@ TENSORS = Chapter(
 
 TENSORS1_LESSON = prose(
     """
-    A **model** is a program that takes numbers in and gives numbers out. A
-    program that reads a photo and names what is in it is a model. So is one
-    that guesses a price, or one that writes the next word of a sentence. A
-    model learns by adjusting its own numbers until its outputs are right. That
-    process is called **training**.
-
-    Every number a model reads, stores or produces lives in a **tensor**. A
-    tensor is a grid of numbers, and each number in it is called an entry. Here
-    is a tensor with 2 rows and 3 columns.
+    Say you write down the temperature three times a day, in the morning, at
+    noon and at night. After two days you have six numbers. Here they are in
+    PyTorch.
 
     ```python
     import torch
 
-    grid = torch.tensor([[1, 2, 3],
-                         [4, 5, 6]])
+    temps = torch.tensor([[14, 22, 17],
+                          [12, 25, 19]])
     ```
 
-    Each direction you can move along in a tensor is a **dimension**. This grid
-    has two. Dimension 0 counts the rows, and dimension 1 counts the columns.
-    The **shape** lists the size of each dimension, so this grid has shape
-    `(2, 3)`, 2 rows and 3 columns.
+    You made a **tensor**. Picture it as a grid. Each inner list became a row,
+    one per day, and each row holds that day's three readings. Every number in
+    the grid is called an entry.
 
-    A tensor can have any number of dimensions.
+    Now ask PyTorch how big it is.
 
-    | Tensor | Shape |
+    ```python
+    temps.shape    # torch.Size([2, 3])
+    ```
+
+    That's the **shape**, 2 rows by 3 columns. Each direction you can walk
+    through a tensor is a **dimension**, and `temps` has two of them. Dimension
+    0 runs down the rows. Dimension 1 runs across the columns.
+
+    A shape works like a Python tuple, so you can pick sizes out of it.
+    `temps.shape[1]` is 3, the number of readings per day.
+
+    Tensors aren't stuck at two dimensions. Here's the same kind of data at
+    other sizes.
+
+    | What you have | Shape |
     |---|---|
-    | one number, `torch.tensor(7)` | `()`, no dimensions at all |
-    | a list of 3 numbers, `torch.tensor([1, 2, 3])` | `(3,)` |
-    | the grid above | `(2, 3)` |
-    | 10 grids like it, stacked | `(10, 2, 3)` |
+    | one reading, `torch.tensor(14)` | `()` |
+    | one day, `torch.tensor([14, 22, 17])` | `(3,)` |
+    | two days, `temps` | `(2, 3)` |
+    | a week of days for 10 cities | `(10, 7, 3)` |
 
-    `grid.shape` gives the shape. It prints as `torch.Size([2, 3])` and behaves
-    like the tuple `(2, 3)`, and `tuple(grid.shape)` turns it into a plain
-    tuple. `grid.numel()` counts every entry, 6 here. The checks also use
-    `torch.zeros(4, 5)`, which makes a tensor of shape `(4, 5)` full of zeros.
+    One reading has no dimensions at all, so its shape is empty. To count the
+    entries in any tensor, multiply the sizes in its shape. `temps` holds
+    2 × 3 = 6 entries.
 
-    **Why it exists.** A tensor does math on all of its entries at once, fast
-    enough for models with millions of numbers. A nested Python list cannot. A
-    model's inputs, its own numbers and its outputs are all tensors. Most bugs
-    in model code are shapes that do not match, so reading shapes is the first
-    skill to learn.
+    The tests also use `torch.zeros(4, 5)`. It makes a tensor of shape `(4, 5)`
+    full of zeros, handy when only the shape matters.
 
-    **Your task.** Finish the three functions in `tensors1.py`.
+    Why start here? A **model**, like a photo tagger or a chatbot, is a program
+    that turns numbers into other numbers. It gets good through **training**,
+    where it keeps nudging its own numbers until its answers come out right.
+    Every one of those numbers lives in a tensor. Most bugs in model code are
+    shapes that don't fit together, so you'll read shapes for the rest of the
+    course.
+
+    Open `tensors1.py` and fill in the four functions.
     """,
 )
 
@@ -509,30 +547,37 @@ TENSORS1_SOURCE = source_file(
     from torch import Tensor
 
 
-    # TODO: Return a tensor that holds this grid, 2 rows and 3 columns.
+    # TODO: Return a tensor that holds the numbers 1 to 6 in 3 rows of 2.
     #
-    #     1  2  3
-    #     4  5  6
+    #     1  2
+    #     3  4
+    #     5  6
     #
     def make_grid() -> Tensor:
         ...
 
 
-    # TODO: Return the shape of the tensor you are given, as a tuple.
-    def shape_of(values: Tensor) -> tuple[int, ...]:
+    # TODO: Return how many rows the tensor has, the size of its dimension 0.
+    def count_rows(values: Tensor) -> int:
         ...
 
 
-    # TODO: Return how many numbers the tensor holds in total.
+    # TODO: Return how many dimensions the tensor has.
+    def count_dimensions(values: Tensor) -> int:
+        ...
+
+
+    # TODO: Return how many entries the tensor holds in total.
+    #   It has to work for any number of dimensions, even none.
     def count_entries(values: Tensor) -> int:
         ...
 
 
     # What the check tests
-    #   make_grid() holds 1 2 3 in its first row and 4 5 6 in its second
-    #   shape_of(torch.zeros(4, 5)) is (4, 5)
-    #   shape_of(torch.zeros(7)) is (7,)
-    #   count_entries(torch.zeros(4, 5)) is 20
+    #   make_grid() holds 1 2 above 3 4 above 5 6
+    #   count_rows is 4 for torch.zeros(4, 5) and 7 for torch.zeros(7)
+    #   count_dimensions is 2, 1, 0 and 3 for tensors of shape (4, 5), (7,), () and (2, 3, 4)
+    #   count_entries is 20, 7, 1 and 24 for the same four tensors
     ''',
 )
 
@@ -540,60 +585,88 @@ TENSORS1_SOLUTION = source_file(
     '''
     # tensors1.py, a solution for comparison
 
+    import math
+
     import torch
     from torch import Tensor
 
 
     def make_grid() -> Tensor:
-        return torch.tensor([[1, 2, 3], [4, 5, 6]])
+        return torch.tensor([[1, 2], [3, 4], [5, 6]])
 
 
-    def shape_of(values: Tensor) -> tuple[int, ...]:
-        return tuple(values.shape)
+    def count_rows(values: Tensor) -> int:
+        return values.shape[0]
 
 
+    # values.dim() gives the same number.
+    def count_dimensions(values: Tensor) -> int:
+        return len(values.shape)
+
+
+    # values.numel() gives the same number. An empty shape multiplies out to 1.
     def count_entries(values: Tensor) -> int:
-        return values.numel()
+        return math.prod(values.shape)
     ''',
+)
+
+SAMPLE_TENSORS: tuple[tuple[str, Tensor], ...] = (
+    ("torch.zeros(4, 5)", torch.zeros(4, 5)),
+    ("torch.zeros(7)", torch.zeros(7)),
+    ("torch.tensor(5.0)", torch.tensor(5.0)),
+    ("torch.zeros(2, 3, 4)", torch.zeros(2, 3, 4)),
 )
 
 
 def check_tensors1(checker: Checker) -> None:
-    make_grid = checker.function("make_grid")
-    shape_of = checker.function("shape_of")
-    count_entries = checker.function("count_entries")
-
     checker.test(
-        description="make_grid() holds 1 2 3 above 4 5 6",
-        run=lambda: expect_tensor(
+        function="make_grid",
+        description="holds 1 2 above 3 4 above 5 6",
+        run=lambda make_grid: expect_tensor(
             call="make_grid()",
             actual=make_grid(),
-            expected=torch.tensor([[1, 2, 3], [4, 5, 6]]),
+            expected=torch.tensor([[1, 2], [3, 4], [5, 6]]),
         ),
     )
     checker.test(
-        description="shape_of(torch.zeros(4, 5)) is (4, 5)",
-        run=lambda: expect_value(
-            call="shape_of(torch.zeros(4, 5))",
-            actual=shape_of(torch.zeros(4, 5)),
-            expected=(4, 5),
+        function="count_rows",
+        description="is 4 for torch.zeros(4, 5) and 7 for torch.zeros(7)",
+        run=lambda count_rows: (
+            expect_value(
+                call="count_rows(torch.zeros(4, 5))",
+                actual=count_rows(torch.zeros(4, 5)),
+                expected=4,
+            ),
+            expect_value(
+                call="count_rows(torch.zeros(7))",
+                actual=count_rows(torch.zeros(7)),
+                expected=7,
+            ),
         ),
     )
     checker.test(
-        description="shape_of(torch.zeros(7)) is (7,)",
-        run=lambda: expect_value(
-            call="shape_of(torch.zeros(7))",
-            actual=shape_of(torch.zeros(7)),
-            expected=(7,),
-        ),
+        function="count_dimensions",
+        description="is 2, 1, 0 and 3 for shapes (4, 5), (7,), () and (2, 3, 4)",
+        run=lambda count_dimensions: [
+            expect_value(
+                call=f"count_dimensions({call})",
+                actual=count_dimensions(values),
+                expected=values.dim(),
+            )
+            for call, values in SAMPLE_TENSORS
+        ],
     )
     checker.test(
-        description="count_entries(torch.zeros(4, 5)) is 20",
-        run=lambda: expect_value(
-            call="count_entries(torch.zeros(4, 5))",
-            actual=count_entries(torch.zeros(4, 5)),
-            expected=20,
-        ),
+        function="count_entries",
+        description="is 20, 7, 1 and 24 for the same four tensors",
+        run=lambda count_entries: [
+            expect_value(
+                call=f"count_entries({call})",
+                actual=count_entries(values),
+                expected=values.numel(),
+            )
+            for call, values in SAMPLE_TENSORS
+        ],
     )
 
 
@@ -604,61 +677,65 @@ TENSORS1 = Exercise(
     lesson=TENSORS1_LESSON,
     source=TENSORS1_SOURCE,
     solution=TENSORS1_SOLUTION,
-    hint=(
-        "torch.tensor() turns a nested Python list into a tensor, with one inner list per row. "
-        "values.shape gives the shape, and tuple(values.shape) turns it into a plain tuple. "
-        "values.numel() counts the entries."
+    hints=(
+        "Three functions are about the shape. Look again at what temps.shape gave you and at the table of shapes.",
+        "make_grid needs three inner lists of two numbers each. A shape is a tuple with one size per dimension. "
+        "Its first item is the row count and its length is the number of dimensions. For the entries, multiply "
+        "every size in the shape. math.prod multiplies a whole tuple, and an empty tuple gives 1.",
+        "torch.tensor([[1, 2], [3, 4], [5, 6]]), values.shape[0], len(values.shape), and math.prod(values.shape) "
+        "with import math at the top. values.numel() also counts the entries.",
     ),
-    introduces=("model", "training", "tensor", "shape", "dimension"),
+    introduces=("tensor", "shape", "dimension", "model", "training"),
     check=check_tensors1,
 )
 
 TENSORS2_LESSON = prose(
     """
-    Models often need one part of a tensor. A model that writes text only needs
-    its output at the last word. Training feeds a model 32 rows of data at a
-    time, out of thousands.
-
-    Take this grid of shape `(3, 4)`.
+    Here are four days of temperatures, three readings a day.
 
     ```python
-    grid = torch.tensor([[ 1,  2,  3,  4],
-                         [ 5,  6,  7,  8],
-                         [ 9, 10, 11, 12]])
+    temps = torch.tensor([[14, 22, 17],
+                          [12, 25, 19],
+                          [15, 21, 16],
+                          [11, 24, 18]])   # shape (4, 3)
     ```
 
-    An **index** picks one position along a dimension. Counting starts at 0,
-    and negative numbers count back from the end. Inside the brackets you give
-    one index per dimension, separated by commas. The first picks the row and
-    the second picks the column. A bare `:` means every position along that
-    dimension.
+    Square brackets pick parts out. Inside them you give a position for each
+    dimension, rows first, separated by a comma. Positions count from 0, and a
+    negative position counts back from the end.
 
-    | Code | Result | What it picks |
+    | Code | You get | Which part |
     |---|---|---|
-    | `grid[0]` | `tensor([1, 2, 3, 4])` | row 0 |
-    | `grid[-1]` | `tensor([9, 10, 11, 12])` | the last row |
-    | `grid[1, 2]` | `tensor(7)` | row 1, column 2 |
-    | `grid[:, 0]` | `tensor([1, 5, 9])` | column 0 of every row |
+    | `temps[0]` | `tensor([14, 22, 17])` | day 0 |
+    | `temps[-1]` | `tensor([11, 24, 18])` | the last day |
+    | `temps[1, 2]` | `tensor(19)` | day 1, the night reading |
+    | `temps[:, 0]` | `tensor([14, 12, 15, 11])` | every morning |
 
-    A **slice** picks a range, written `start:stop`. It includes `start` and
-    stops one short of `stop`. Leaving out `start` means from the beginning,
-    and leaving out `stop` means to the end.
+    A bare `:` means all of that dimension, so `temps[:, 0]` reads as every
+    day, reading 0. Picking one position like this is called indexing, and the
+    position is an **index**.
 
-    | Code | What it picks | Shape |
+    To take a range, write `start:stop`. You get `start` and everything after
+    it, up to but not including `stop`. Leave out either end and the range
+    runs to the edge. Negative positions work here too. A range like this is
+    called a **slice**.
+
+    | Code | You get | Shape |
     |---|---|---|
-    | `grid[0:2]` | rows 0 and 1 | `(2, 4)` |
-    | `grid[:, 1:3]` | columns 1 and 2 of every row | `(3, 2)` |
-    | `grid[:2, :2]` | the top left 2 by 2 corner | `(2, 2)` |
+    | `temps[1:3]` | days 1 and 2 | `(2, 3)` |
+    | `temps[:2]` | the first two days | `(2, 3)` |
+    | `temps[:-1]` | every day but the last | `(3, 3)` |
 
-    An index removes its dimension, and a slice keeps it. `grid[0]` has shape
-    `(4,)`, while `grid[0:1]` has shape `(1, 4)`. `grid[1, 2]` removes both
-    dimensions, which leaves shape `()`.
+    Keep an eye on the shapes. `temps[0]` has shape `(3,)`, because an index
+    makes its dimension disappear. `temps[0:1]` holds the same day with shape
+    `(1, 3)`, because a slice keeps its dimension even when it holds one item.
+    That difference matters in the next two exercises.
 
-    **Why it exists.** Picking out parts is how a model selects the data it
-    works on, in one line with no loop. The output at the last word is
-    `output[-1]`, and a group of 32 rows is `data[0:32]`.
+    You'll do this all the time. A model that writes text only cares about its
+    output for the last word. Training feeds a model a handful of rows at a
+    time, never the whole dataset at once.
 
-    **Your task.** Finish the three functions in `tensors2.py`.
+    The functions in `tensors2.py` work on sentences instead of days.
     """,
 )
 
@@ -669,29 +746,34 @@ TENSORS2_SOURCE = source_file(
     import torch
     from torch import Tensor
 
+    # Every function here gets a batch of sentences. Each row is one sentence
+    # and each column is one word position, with every word stored as a number.
+    #
+    #     sentences = torch.tensor([[11, 12, 13, 14, 15],
+    #                               [21, 22, 23, 24, 25],
+    #                               [31, 32, 33, 34, 35]])
 
-    # TODO: Return the first row of the grid.
-    def first_row(grid: Tensor) -> Tensor:
+
+    # TODO: Return the last word of every sentence.
+    def last_words(sentences: Tensor) -> Tensor:
         ...
 
 
-    # TODO: Return the last column of the grid, one number from every row.
-    def last_column(grid: Tensor) -> Tensor:
+    # TODO: Return every sentence without its first word.
+    def drop_first_word(sentences: Tensor) -> Tensor:
         ...
 
 
-    # TODO: Return the top left corner of the grid, size rows by size columns.
-    def top_left_corner(
-        grid: Tensor,
-        size: int,
-    ) -> Tensor:
+    # TODO: Return the grid without its outer edge.
+    #   That means no first or last row, and no first or last column.
+    def inner_part(grid: Tensor) -> Tensor:
         ...
 
 
-    # What the check tests, on the 3 by 4 grid from the lesson and on one other grid
-    #   first_row(grid) is [1, 2, 3, 4]
-    #   last_column(grid) is [4, 8, 12]
-    #   top_left_corner(grid, 2) is [[1, 2], [5, 6]]
+    # What the check tests, on the sentences above and on a 4 by 6 grid
+    #   last_words(sentences) is [15, 25, 35]
+    #   drop_first_word(sentences) has shape (3, 4) and starts with [12, 13, 14, 15]
+    #   inner_part(sentences) is [[22, 23, 24]]
     ''',
 )
 
@@ -703,74 +785,47 @@ TENSORS2_SOLUTION = source_file(
     from torch import Tensor
 
 
-    def first_row(grid: Tensor) -> Tensor:
-        return grid[0]
+    def last_words(sentences: Tensor) -> Tensor:
+        return sentences[:, -1]
 
 
-    def last_column(grid: Tensor) -> Tensor:
-        return grid[:, -1]
+    def drop_first_word(sentences: Tensor) -> Tensor:
+        return sentences[:, 1:]
 
 
-    def top_left_corner(
-        grid: Tensor,
-        size: int,
-    ) -> Tensor:
-        return grid[:size, :size]
+    def inner_part(grid: Tensor) -> Tensor:
+        return grid[1:-1, 1:-1]
     ''',
 )
 
 
 def check_tensors2(checker: Checker) -> None:
-    first_row = checker.function("first_row")
-    last_column = checker.function("last_column")
-    top_left_corner = checker.function("top_left_corner")
-    grid = torch.arange(1, 13).reshape(3, 4)
-    other = torch.arange(10, 35).reshape(5, 5)
+    sentences = torch.tensor([[11, 12, 13, 14, 15], [21, 22, 23, 24, 25], [31, 32, 33, 34, 35]])
+    grid = torch.arange(1, 25).reshape(4, 6)
 
-    checker.test(
-        description="first_row(grid) is [1, 2, 3, 4]",
-        run=lambda: expect_tensor(
-            call="first_row(grid)",
-            actual=first_row(grid),
-            expected=grid[0],
-        ),
-    )
-    checker.test(
-        description="last_column(grid) is [4, 8, 12]",
-        run=lambda: expect_tensor(
-            call="last_column(grid)",
-            actual=last_column(grid),
-            expected=grid[:, -1],
-        ),
-    )
-    checker.test(
-        description="top_left_corner(grid, 2) is [[1, 2], [5, 6]]",
-        run=lambda: expect_tensor(
-            call="top_left_corner(grid, 2)",
-            actual=top_left_corner(grid, 2),
-            expected=grid[:2, :2],
-        ),
-    )
-    checker.test(
-        description="the same three functions work on a 5 by 5 grid",
-        run=lambda: (
-            expect_tensor(
-                call="On the 5 by 5 grid, first_row",
-                actual=first_row(other),
-                expected=other[0],
+    for function, solve in (
+        ("last_words", lambda values: values[:, -1]),
+        ("drop_first_word", lambda values: values[:, 1:]),
+        ("inner_part", lambda values: values[1:-1, 1:-1]),
+    ):
+        checker.test(
+            function=function,
+            description="is right for the sentences in the file",
+            run=lambda learner, solve=solve, function=function: expect_tensor(
+                call=f"{function}(sentences)",
+                actual=learner(sentences),
+                expected=solve(sentences),
             ),
-            expect_tensor(
-                call="On the 5 by 5 grid, last_column",
-                actual=last_column(other),
-                expected=other[:, -1],
+        )
+        checker.test(
+            function=function,
+            description="is right for a 4 by 6 grid too",
+            run=lambda learner, solve=solve, function=function: expect_tensor(
+                call=f"{function} on the 4 by 6 grid torch.arange(1, 25).reshape(4, 6)",
+                actual=learner(grid),
+                expected=solve(grid),
             ),
-            expect_tensor(
-                call="On the 5 by 5 grid, top_left_corner with size 3",
-                actual=top_left_corner(other, 3),
-                expected=other[:3, :3],
-            ),
-        ),
-    )
+        )
 
 
 TENSORS2 = Exercise(
@@ -780,9 +835,12 @@ TENSORS2 = Exercise(
     lesson=TENSORS2_LESSON,
     source=TENSORS2_SOURCE,
     solution=TENSORS2_SOLUTION,
-    hint=(
-        "grid[0] is the first row. grid[:, -1] takes the last entry of every row. "
-        "grid[:size, :size] takes the first size rows and the first size columns."
+    hints=(
+        "Each function picks along both dimensions. Look at how temps[:, 0] took a column and how temps[:-1] "
+        "dropped the last day.",
+        "Give one entry per dimension inside the brackets, rows first. A bare : keeps every row. A range works on "
+        "columns too, and a negative stop leaves out the end.",
+        "sentences[:, -1], sentences[:, 1:] and grid[1:-1, 1:-1].",
     ),
     introduces=("index", "slice"),
     check=check_tensors2,
@@ -790,55 +848,69 @@ TENSORS2 = Exercise(
 
 TENSORS3_LESSON = prose(
     """
-    Math on tensors works entry by entry. Adding two tensors of the same shape
-    adds each pair of matching entries. This is called **elementwise** math.
+    Two shops sell the same three items. Here are their prices.
 
     ```python
-    a = torch.tensor([1, 2, 3])
-    b = torch.tensor([10, 20, 30])
-    a + b    # tensor([11, 22, 33])
-    a * b    # tensor([10, 40, 90])
+    prices = torch.tensor([[3, 5, 2],
+                           [4, 6, 1]])   # shape (2, 3), one row per shop
     ```
 
-    Models work on many examples at once. A group of examples handled together
-    is called a **batch**, usually one example per row. Here is a batch of 2
-    students who each took 3 tests, and a bonus for each test.
+    Add tax to every price at once, with no loop.
 
     ```python
-    scores = torch.tensor([[50, 60, 70],
-                           [80, 90, 40]])   # shape (2, 3)
-    bonus = torch.tensor([5, 0, 10])         # shape (3,)
+    tax = torch.tensor([[1, 1, 0],
+                        [1, 2, 0]])
 
-    scores + bonus
-    # tensor([[55, 60, 80],
-    #         [85, 90, 50]])
+    prices + tax    # tensor([[4, 6, 2], [5, 8, 1]])
     ```
 
-    The shapes differ, yet the bonus was added to every row. PyTorch stretched
-    the smaller tensor to fit, without copying it. This is called
-    **broadcasting**.
+    Each entry got added to the entry in the same spot. `-`, `*` and `/` work
+    the same way. Math that pairs up entries like this is called
+    **elementwise**.
 
-    To check whether two shapes fit, line them up from the right. A size
-    missing from the shorter shape counts as 1. Two sizes fit when they are
-    equal, or when one of them is 1, and a size of 1 is stretched to match.
+    Now a delivery fee for each item, the same in both shops.
+
+    ```python
+    fees = torch.tensor([1, 0, 2])   # shape (3,)
+
+    prices + fees    # tensor([[4, 5, 4], [5, 6, 3]])
+    ```
+
+    The shapes don't match, and it worked anyway. PyTorch stretched `fees`
+    over both rows without copying it. That's **broadcasting**.
+
+    Here's how PyTorch decides whether two shapes fit. Line them up from the
+    right. Two sizes fit when they're equal or when one of them is 1, and a 1
+    gets stretched to match. If one shape is shorter, its missing sizes count
+    as 1.
 
     ```text
-    scores   (2, 3)
-    bonus       (3,)     3 meets 3, and the missing size counts as 1
+    prices   (2, 3)
+    fees        (3,)    3 meets 3, and the missing size counts as 1
     ```
 
-    A single number has shape `()`, so every size counts as missing and it fits
-    any shape. `scores + 5` adds 5 to every entry.
+    A plain number has no dimensions at all, so `prices * 2` fits too.
 
-    A slice keeps its dimension, so `scores[:, 0:1]` has shape `(2, 1)`, the
-    first test of each student. Lined up with `(2, 3)`, its 1 is stretched
-    across all 3 columns. The index `scores[:, 0]` holds the same numbers with
-    shape `(2,)`, and then 2 meets 3, so it does not fit.
+    What about a charge per shop, 10 at the first and 20 at the second? Written
+    as `torch.tensor([10, 20])` it has shape `(2,)`. Its 2 meets the 3, and
+    PyTorch stops with an error. Give it a size 1 at the end and it fits.
 
-    **Why it exists.** A model often adds the same numbers to every example in a
-    batch. Broadcasting does that in one line, with no loop.
+    ```python
+    per_shop = torch.tensor([[10],
+                             [20]])     # shape (2, 1)
 
-    **Your task.** Finish the two functions in `tensors3.py`.
+    prices + per_shop    # tensor([[13, 15, 12], [24, 26, 21]])
+    ```
+
+    `(2, 1)` meets `(2, 3)`. The 2s match, and the 1 stretches across the
+    items.
+
+    Models lean on this constantly. They work on a **batch**, many examples at
+    once with one per row. Anything that applies to every example gets added to
+    every row in a single line.
+
+    `tensors3.py` has students and their test scores in place of shops and
+    prices.
     """,
 )
 
@@ -849,26 +921,32 @@ TENSORS3_SOURCE = source_file(
     import torch
     from torch import Tensor
 
+    # scores has one row per student and one column per test, like this.
+    #
+    #     scores = torch.tensor([[45, 60, 40],
+    #                            [50, 100, 80]])
 
-    # TODO: Add the bonus for each test to every student's scores.
-    #   scores has one row per student and one column per test.
-    #   bonus has one number per test.
-    def add_bonus(
+
+    # TODO: Turn the scores into percentages.
+    #   Each test has its own top mark, and top_marks holds one per test.
+    #   A score of 45 on a test marked out of 50 is 90 percent.
+    def as_percent(
         scores: Tensor,
-        bonus: Tensor,
+        top_marks: Tensor,
     ) -> Tensor:
         ...
 
 
     # TODO: Subtract each student's first test score from all of that student's scores.
-    #   For a student who scored 50 60 70, the answer is 0 10 20.
+    #   A student who scored 50 60 70 gets 0 10 20.
     def gain_since_first_test(scores: Tensor) -> Tensor:
         ...
 
 
     # What the check tests
-    #   add_bonus on 2 students and on 4 students
-    #   gain_since_first_test on 2 students and on 3 students with 3 tests
+    #   as_percent of the scores above, with top marks 50, 100 and 80
+    #   as_percent of 4 students
+    #   gain_since_first_test of 2 students, then of 3 students with 3 tests
     ''',
 )
 
@@ -880,13 +958,14 @@ TENSORS3_SOLUTION = source_file(
     from torch import Tensor
 
 
-    def add_bonus(
+    def as_percent(
         scores: Tensor,
-        bonus: Tensor,
+        top_marks: Tensor,
     ) -> Tensor:
-        return scores + bonus
+        return scores / top_marks * 100
 
 
+    # A slice keeps its dimension, so scores[:, 0:1] has shape (n, 1) and stretches across the tests.
     def gain_since_first_test(scores: Tensor) -> Tensor:
         return scores - scores[:, 0:1]
     ''',
@@ -894,40 +973,43 @@ TENSORS3_SOLUTION = source_file(
 
 
 def check_tensors3(checker: Checker) -> None:
-    add_bonus = checker.function("add_bonus")
-    gain_since_first_test = checker.function("gain_since_first_test")
-    two_students = torch.tensor([[50, 60, 70], [80, 90, 40]])
-    four_students = torch.tensor([[50, 60, 70], [80, 90, 40], [10, 20, 30], [70, 70, 70]])
+    two_students = torch.tensor([[45, 60, 40], [50, 100, 80]])
+    four_students = torch.tensor([[45, 60, 40], [50, 100, 80], [10, 50, 20], [25, 75, 60]])
+    top_marks = torch.tensor([50, 100, 80])
+    gains = torch.tensor([[50, 60, 70], [80, 90, 40]])
     three_by_three = torch.tensor([[1, 2, 3], [40, 50, 60], [700, 800, 900]])
-    bonus = torch.tensor([5, 0, 10])
 
     checker.test(
-        description="add_bonus adds the bonus to both students",
-        run=lambda: expect_tensor(
-            call="add_bonus with 2 students",
-            actual=add_bonus(two_students, bonus),
-            expected=two_students + bonus,
+        function="as_percent",
+        description="gives [[90, 60, 50], [100, 100, 100]] for the scores in the file",
+        run=lambda as_percent: expect_tensor(
+            call="as_percent(scores, torch.tensor([50, 100, 80]))",
+            actual=as_percent(two_students, top_marks),
+            expected=two_students / top_marks * 100,
         ),
     )
     checker.test(
-        description="add_bonus works for 4 students too",
-        run=lambda: expect_tensor(
-            call="add_bonus with 4 students",
-            actual=add_bonus(four_students, bonus),
-            expected=four_students + bonus,
+        function="as_percent",
+        description="works for 4 students",
+        run=lambda as_percent: expect_tensor(
+            call="as_percent with 4 students",
+            actual=as_percent(four_students, top_marks),
+            expected=four_students / top_marks * 100,
         ),
     )
     checker.test(
-        description="gain_since_first_test gives [[0, 10, 20], [0, 10, -40]]",
-        run=lambda: expect_tensor(
+        function="gain_since_first_test",
+        description="gives [[0, 10, 20], [0, 10, -40]] for scores [[50, 60, 70], [80, 90, 40]]",
+        run=lambda gain_since_first_test: expect_tensor(
             call="gain_since_first_test with 2 students",
-            actual=gain_since_first_test(two_students),
-            expected=two_students - two_students[:, 0:1],
+            actual=gain_since_first_test(gains),
+            expected=gains - gains[:, 0:1],
         ),
     )
     checker.test(
-        description="gain_since_first_test subtracts per student when there are 3 students and 3 tests",
-        run=lambda: expect_tensor(
+        function="gain_since_first_test",
+        description="subtracts per student with 3 students and 3 tests",
+        run=lambda gain_since_first_test: expect_tensor(
             call="gain_since_first_test with 3 students and 3 tests",
             actual=gain_since_first_test(three_by_three),
             expected=three_by_three - three_by_three[:, 0:1],
@@ -942,53 +1024,55 @@ TENSORS3 = Exercise(
     lesson=TENSORS3_LESSON,
     source=TENSORS3_SOURCE,
     solution=TENSORS3_SOLUTION,
-    hint=(
-        "add_bonus is one line, scores + bonus. For gain_since_first_test, scores[:, 0:1] is each student's first "
-        "score with shape (n, 1). Subtract it from scores and the 1 is stretched across every test. scores[:, 0] "
-        "has shape (n,) instead, which lines up with the tests rather than the students."
+    hints=(
+        "as_percent takes two steps from the lesson. For gain_since_first_test, think about which shape each "
+        "student's first score needs so it lines up with that student's row.",
+        "Divide by the top marks, then multiply by 100. For the gain, the first scores need shape (n, 1), like "
+        "per_shop. From the last exercise, a slice keeps its dimension and an index drops it.",
+        "scores / top_marks * 100, and scores - scores[:, 0:1].",
     ),
-    introduces=("elementwise", "batch", "broadcasting"),
+    introduces=("elementwise", "broadcasting", "batch"),
     check=check_tensors3,
 )
 
 TENSORS4_LESSON = prose(
     """
-    Broadcasting lines shapes up from the right, so a tensor with one number per
-    row usually does not fit. Say each student gets their own factor.
+    In the last exercise, the charge per shop only fit once it had shape
+    `(2, 1)`. You typed it that way by hand. Usually you can't, because the
+    numbers come out of some other calculation as a flat tensor.
 
     ```python
-    scores = torch.tensor([[50, 60, 70],
-                           [80, 90, 40]])   # shape (2, 3)
-    factors = torch.tensor([2, 10])          # shape (2,)
+    per_shop = torch.tensor([10, 20])   # shape (2,), and you need (2, 1)
     ```
+
+    Putting `None` inside the brackets adds a new dimension of size 1, right
+    where you put it. A `:` keeps a dimension that's already there.
+
+    ```python
+    per_shop[:, None]    # tensor([[10], [20]]), shape (2, 1)
+    per_shop[None, :]    # tensor([[10, 20]]),   shape (1, 2)
+    ```
+
+    Same two numbers, standing up or lying down. Standing up, they line up with
+    rows. Lying down, they line up with columns.
+
+    There's one trap. When a tensor has as many rows as columns, a flat tensor
+    fits without any `None`.
 
     ```text
-    scores    (2, 3)
-    factors      (2,)     2 meets 3, so they do not fit
+    square   (3, 3)
+    flat        (3,)    fits, and lines up with the columns
     ```
 
-    The fix is to give `factors` a second dimension of size 1. In
-    `factors[:, None]`, the `:` keeps every factor along dimension 0, and the
-    `None` in second place adds a new dimension 1 of size 1.
+    You meant one number per row. PyTorch used one per column, and nothing
+    complains. The only sign is that the numbers come out wrong. So when you
+    mean rows, add the `None` even if the code already runs without it.
 
-    ```python
-    factors[:, None]             # tensor([[ 2], [10]]), shape (2, 1)
-    scores * factors[:, None]    # tensor([[100, 120, 140], [800, 900, 400]])
-    ```
+    Training uses this to weigh some examples more than others, with one number
+    for each row of a batch.
 
-    Now `(2, 3)` meets `(2, 1)`. The 1 is stretched across the columns, so
-    every score in a row is multiplied by that row's factor.
-
-    Watch out when there are as many rows as columns. With scores of shape
-    `(3, 3)` and factors of shape `(3,)`, the shapes fit without `None`. Each
-    factor then quietly scales a column instead of a row. No error appears,
-    only wrong numbers, so add the dimension anyway.
-
-    **Why it exists.** A model often scales each example by its own amount, such
-    as making some examples count more during training. A dimension of size 1
-    is how one number per row lines up with the rows.
-
-    **Your task.** Finish the function in `tensors4.py`.
+    In `tensors4.py` you'll stretch along rows and along columns in the same
+    line.
     """,
 )
 
@@ -1000,20 +1084,36 @@ TENSORS4_SOURCE = source_file(
     from torch import Tensor
 
 
-    # TODO: Multiply every score in a row by that row's factor.
+    # TODO: Return a times table. Row i, column j holds rows[i] times columns[j].
+    #   times_table(torch.tensor([1, 2, 3]), torch.tensor([1, 2, 3, 4])) gives
+    #
+    #     1  2  3   4
+    #     2  4  6   8
+    #     3  6  9  12
+    #
+    def times_table(
+        rows: Tensor,
+        columns: Tensor,
+    ) -> Tensor:
+        ...
+
+
+    # TODO: Add each student's own bonus to all of their scores, and add each
+    #   test's bonus to every student's score on that test.
     #   scores has one row per student and one column per test.
-    #   factors has one number per student.
-    def scale_each_row(
+    #   student_bonus has one number per student, test_bonus one per test.
+    def add_both_bonuses(
         scores: Tensor,
-        factors: Tensor,
+        student_bonus: Tensor,
+        test_bonus: Tensor,
     ) -> Tensor:
         ...
 
 
     # What the check tests
-    #   scale_each_row on the 2 students from the lesson
-    #   scale_each_row on 4 students, where the shapes only fit after adding a dimension
-    #   scale_each_row on 3 students and 3 tests, where a wrong answer still has the right shape
+    #   times_table for the 3 by 4 table above, and for 2 rows by 5 columns
+    #   add_both_bonuses for 2 students and 3 tests
+    #   add_both_bonuses for 3 students and 3 tests, where rows and columns are easy to mix up
     ''',
 )
 
@@ -1025,43 +1125,62 @@ TENSORS4_SOLUTION = source_file(
     from torch import Tensor
 
 
-    def scale_each_row(
-        scores: Tensor,
-        factors: Tensor,
+    # (n, 1) times (m,) stretches both ways into (n, m).
+    def times_table(
+        rows: Tensor,
+        columns: Tensor,
     ) -> Tensor:
-        return scores * factors[:, None]
+        return rows[:, None] * columns
+
+
+    def add_both_bonuses(
+        scores: Tensor,
+        student_bonus: Tensor,
+        test_bonus: Tensor,
+    ) -> Tensor:
+        return scores + student_bonus[:, None] + test_bonus
     ''',
 )
 
 
 def check_tensors4(checker: Checker) -> None:
-    scale_each_row = checker.function("scale_each_row")
-    two_students = torch.tensor([[50, 60, 70], [80, 90, 40]])
-    four_students = torch.tensor([[50, 60, 70], [80, 90, 40], [10, 20, 30], [70, 70, 70]])
-    three_by_three = torch.tensor([[1, 2, 3], [4, 5, 6], [7, 8, 9]])
+    scores = torch.tensor([[50, 60, 70], [80, 90, 40]])
+    square_scores = torch.tensor([[1, 2, 3], [4, 5, 6], [7, 8, 9]])
 
     checker.test(
-        description="scale_each_row gives [[100, 120, 140], [800, 900, 400]] for the lesson's students",
-        run=lambda: expect_tensor(
-            call="scale_each_row with factors [2, 10]",
-            actual=scale_each_row(two_students, torch.tensor([2, 10])),
-            expected=two_students * torch.tensor([2, 10])[:, None],
+        function="times_table",
+        description="gives the 3 by 4 table in the file",
+        run=lambda times_table: expect_tensor(
+            call="times_table(torch.tensor([1, 2, 3]), torch.tensor([1, 2, 3, 4]))",
+            actual=times_table(torch.tensor([1, 2, 3]), torch.tensor([1, 2, 3, 4])),
+            expected=torch.tensor([1, 2, 3])[:, None] * torch.tensor([1, 2, 3, 4]),
         ),
     )
     checker.test(
-        description="scale_each_row multiplies each of 4 rows by its own factor",
-        run=lambda: expect_tensor(
-            call="scale_each_row with 4 students and factors [1, 2, 0, 10]",
-            actual=scale_each_row(four_students, torch.tensor([1, 2, 0, 10])),
-            expected=four_students * torch.tensor([1, 2, 0, 10])[:, None],
+        function="times_table",
+        description="gives a 2 by 5 table for 2 rows and 5 columns",
+        run=lambda times_table: expect_tensor(
+            call="times_table(torch.tensor([10, 20]), torch.tensor([1, 2, 3, 4, 5]))",
+            actual=times_table(torch.tensor([10, 20]), torch.tensor([1, 2, 3, 4, 5])),
+            expected=torch.tensor([10, 20])[:, None] * torch.tensor([1, 2, 3, 4, 5]),
         ),
     )
     checker.test(
-        description="scale_each_row scales rows, not columns, on 3 students with 3 tests",
-        run=lambda: expect_tensor(
-            call="scale_each_row with 3 students, 3 tests and factors [1, 10, 100]",
-            actual=scale_each_row(three_by_three, torch.tensor([1, 10, 100])),
-            expected=three_by_three * torch.tensor([1, 10, 100])[:, None],
+        function="add_both_bonuses",
+        description="adds both bonuses for 2 students and 3 tests",
+        run=lambda add_both_bonuses: expect_tensor(
+            call="add_both_bonuses with student bonus [1, 2] and test bonus [10, 20, 30]",
+            actual=add_both_bonuses(scores, torch.tensor([1, 2]), torch.tensor([10, 20, 30])),
+            expected=scores + torch.tensor([1, 2])[:, None] + torch.tensor([10, 20, 30]),
+        ),
+    )
+    checker.test(
+        function="add_both_bonuses",
+        description="keeps rows and columns apart for 3 students and 3 tests",
+        run=lambda add_both_bonuses: expect_tensor(
+            call="add_both_bonuses with student bonus [100, 200, 300] and test bonus [10, 20, 30]",
+            actual=add_both_bonuses(square_scores, torch.tensor([100, 200, 300]), torch.tensor([10, 20, 30])),
+            expected=square_scores + torch.tensor([100, 200, 300])[:, None] + torch.tensor([10, 20, 30]),
         ),
     )
 
@@ -1073,9 +1192,12 @@ TENSORS4 = Exercise(
     lesson=TENSORS4_LESSON,
     source=TENSORS4_SOURCE,
     solution=TENSORS4_SOLUTION,
-    hint=(
-        "factors has shape (n,) and scores has shape (n, 3). factors[:, None] has shape (n, 1), which lines up "
-        "with the rows. Return scores * factors[:, None]."
+    hints=(
+        "Both functions mix something that goes with rows and something that goes with columns. Look at what None "
+        "did to per_shop.",
+        "A tensor standing up, shape (n, 1), lines up with rows. One lying flat, shape (m,), lines up with columns. "
+        "Combine the two and each size 1 stretches, so you get (n, m).",
+        "rows[:, None] * columns, and scores + student_bonus[:, None] + test_bonus.",
     ),
     introduces=(),
     check=check_tensors4,
@@ -1083,45 +1205,53 @@ TENSORS4 = Exercise(
 
 TENSORS5_LESSON = prose(
     """
-    A **reduction** combines many entries into fewer, for example a sum or an
-    average. You choose which dimension to combine with `dim`.
+    Back to four days of temperatures.
 
     ```python
-    scores = torch.tensor([[50, 60, 70],
-                           [80, 90, 40]])   # 2 students, 3 tests
-
-    scores.sum()         # tensor(390), everything
-    scores.sum(dim=1)    # tensor([180, 210]), one total per student
-    scores.sum(dim=0)    # tensor([130, 150, 110]), one total per test
+    temps = torch.tensor([[14, 22, 17],
+                          [12, 25, 19],
+                          [15, 21, 16],
+                          [11, 24, 18]])   # 4 days, 3 readings a day
     ```
 
-    The dimension you name is the one that disappears. `dim=1` adds across the
-    columns, so each row becomes one number.
-
-    A tensor holds either whole numbers or decimal numbers, never a mix.
-    `torch.tensor([50, 60])` holds whole numbers, and `.mean()` refuses those
-    with an error. `.float()` gives a copy with decimal numbers, so
-    `scores.float().mean(dim=0)` gives one average per test.
-
-    Sometimes each row has to be divided by its own total. `scores.sum(dim=1)`
-    has shape `(2,)`, which does not line up with `(2, 3)`. With
-    `keepdim=True`, the summed dimension stays as size 1 instead of
-    disappearing, so the totals have shape `(2, 1)` and line up with each row.
-    That is the same shape `scores.sum(dim=1)[:, None]` gives, in one step.
+    `temps.sum()` adds up all twelve numbers into `tensor(214)`. Usually that
+    squashes too much. Say you want one total per day. Tell `sum` which
+    dimension to add along.
 
     ```python
-    totals = scores.sum(dim=1, keepdim=True)   # shape (2, 1)
-    scores / totals                             # each row now adds up to 1
+    temps.sum(dim=1)    # tensor([53, 56, 52, 53]), shape (4,)
     ```
 
-    Division with `/` always gives decimal numbers, so it needs no `.float()`.
+    Each day's three readings got added together. The shape went from `(4, 3)`
+    to `(4,)`, and that's the whole rule. The dimension you name is the one
+    that disappears.
 
-    **Why it exists.** Training measures how wrong a model is by averaging its
-    errors over a batch, which is a reduction. A model choosing between several
-    answers gives each one a share, and the shares must add up to 1. That takes
-    a row total, which is a reduction, followed by a division.
+    Averages work the same way with `.mean()`, with one catch. A tensor holds
+    either whole numbers or decimal numbers, never both. `temps` holds whole
+    numbers, and `temps.mean()` stops with an error, since an average is rarely
+    whole. Turn the numbers into decimals first.
 
-    **Your task.** Finish the three functions in `tensors5.py`.
+    ```python
+    temps.float().mean()    # tensor(17.8333)
+    ```
+
+    Sometimes the totals need to keep their place so they still line up with
+    the grid. `keepdim=True` leaves the summed dimension in as size 1 instead
+    of dropping it.
+
+    ```python
+    temps.sum(dim=0, keepdim=True)    # tensor([[52, 92, 70]]), shape (1, 3)
+    ```
+
+    That's a total per reading, lying down so it lines up with the columns. The
+    last exercise showed why that matters.
+
+    Squeezing a tensor down like this is called a **reduction**. Training runs
+    one on every step. It measures how wrong the model is on each example in a
+    batch, then averages those into one number to improve on.
+
+    Back to students in `tensors5.py`. This time you add up along the other
+    dimension too.
     """,
 )
 
@@ -1132,25 +1262,27 @@ TENSORS5_SOURCE = source_file(
     import torch
     from torch import Tensor
 
+    # scores has one row per student and one column per test.
 
-    # TODO: Return one total per row.
-    def total_per_row(scores: Tensor) -> Tensor:
+
+    # TODO: Return one total per test, adding up every student's score on it.
+    def total_per_test(scores: Tensor) -> Tensor:
         ...
 
 
-    # TODO: Return the average of each column, as decimal numbers.
-    def average_per_column(scores: Tensor) -> Tensor:
+    # TODO: Return each student's average score, as decimal numbers.
+    def average_per_student(scores: Tensor) -> Tensor:
         ...
 
 
-    # TODO: Divide every row by its own total, so each row adds up to 1.
+    # TODO: Divide every score by its student's total, so each row adds up to 1.
     def share_of_row(scores: Tensor) -> Tensor:
         ...
 
 
-    # What the check tests, on the scores from the lesson and on a 3 by 4 grid
-    #   total_per_row gives [180, 210]
-    #   average_per_column gives [65.0, 75.0, 55.0]
+    # What the check tests, on 2 students with 3 tests and on 3 students with 4 tests
+    #   total_per_test of [[50, 60, 70], [80, 90, 40]] is [130, 150, 110]
+    #   average_per_student of the same scores is [60.0, 70.0]
     #   share_of_row gives rows that each add up to 1
     ''',
 )
@@ -1163,14 +1295,15 @@ TENSORS5_SOLUTION = source_file(
     from torch import Tensor
 
 
-    def total_per_row(scores: Tensor) -> Tensor:
-        return scores.sum(dim=1)
+    def total_per_test(scores: Tensor) -> Tensor:
+        return scores.sum(dim=0)
 
 
-    def average_per_column(scores: Tensor) -> Tensor:
-        return scores.float().mean(dim=0)
+    def average_per_student(scores: Tensor) -> Tensor:
+        return scores.float().mean(dim=1)
 
 
+    # keepdim=True leaves the totals standing up, shape (n, 1), so they line up with the rows.
     def share_of_row(scores: Tensor) -> Tensor:
         return scores / scores.sum(dim=1, keepdim=True)
     ''',
@@ -1178,57 +1311,32 @@ TENSORS5_SOLUTION = source_file(
 
 
 def check_tensors5(checker: Checker) -> None:
-    total_per_row = checker.function("total_per_row")
-    average_per_column = checker.function("average_per_column")
-    share_of_row = checker.function("share_of_row")
     scores = torch.tensor([[50, 60, 70], [80, 90, 40]])
-    grid = torch.arange(1, 13).reshape(3, 4)
+    bigger = torch.tensor([[1, 2, 3, 4], [10, 0, 10, 0], [5, 5, 5, 5]])
 
-    checker.test(
-        description="total_per_row gives one total per student",
-        run=lambda: (
-            expect_tensor(
-                call="total_per_row on the lesson's scores",
-                actual=total_per_row(scores),
-                expected=scores.sum(dim=1),
+    for function, solve in (
+        ("total_per_test", lambda values: values.sum(dim=0)),
+        ("average_per_student", lambda values: values.float().mean(dim=1)),
+        ("share_of_row", lambda values: values / values.sum(dim=1, keepdim=True)),
+    ):
+        checker.test(
+            function=function,
+            description="is right for 2 students with 3 tests",
+            run=lambda learner, solve=solve, function=function: expect_tensor(
+                call=f"{function}(torch.tensor([[50, 60, 70], [80, 90, 40]]))",
+                actual=learner(scores),
+                expected=solve(scores),
             ),
-            expect_tensor(
-                call="total_per_row on a 3 by 4 grid",
-                actual=total_per_row(grid),
-                expected=grid.sum(dim=1),
+        )
+        checker.test(
+            function=function,
+            description="is right for 3 students with 4 tests",
+            run=lambda learner, solve=solve, function=function: expect_tensor(
+                call=f"{function} with 3 students and 4 tests",
+                actual=learner(bigger),
+                expected=solve(bigger),
             ),
-        ),
-    )
-    checker.test(
-        description="average_per_column gives one average per test",
-        run=lambda: (
-            expect_tensor(
-                call="average_per_column on the lesson's scores",
-                actual=average_per_column(scores),
-                expected=scores.float().mean(dim=0),
-            ),
-            expect_tensor(
-                call="average_per_column on a 3 by 4 grid",
-                actual=average_per_column(grid),
-                expected=grid.float().mean(dim=0),
-            ),
-        ),
-    )
-    checker.test(
-        description="share_of_row makes every row add up to 1",
-        run=lambda: (
-            expect_tensor(
-                call="share_of_row on the lesson's scores",
-                actual=share_of_row(scores),
-                expected=scores / scores.sum(dim=1, keepdim=True),
-            ),
-            expect_tensor(
-                call="share_of_row on a 3 by 4 grid",
-                actual=share_of_row(grid),
-                expected=grid / grid.sum(dim=1, keepdim=True),
-            ),
-        ),
-    )
+        )
 
 
 TENSORS5 = Exercise(
@@ -1238,9 +1346,11 @@ TENSORS5 = Exercise(
     lesson=TENSORS5_LESSON,
     source=TENSORS5_SOURCE,
     solution=TENSORS5_SOLUTION,
-    hint=(
-        "scores.sum(dim=1) gives one total per row. scores.float().mean(dim=0) gives one average per column. "
-        "For share_of_row, divide scores by scores.sum(dim=1, keepdim=True)."
+    hints=(
+        "Each function adds up or averages along one dimension. For each one, ask which dimension should disappear.",
+        "Per test means the students go away, so that's dimension 0. Per student means dimension 1. Averages need "
+        ".float() first. To divide by row totals, the totals have to stand up, like in the last exercise.",
+        "scores.sum(dim=0), scores.float().mean(dim=1), and scores / scores.sum(dim=1, keepdim=True).",
     ),
     introduces=("reduction",),
     check=check_tensors5,
@@ -1272,43 +1382,38 @@ MATMUL = Chapter(
 
 MATMUL1_LESSON = prose(
     """
-    Say you guess the monthly rent of a flat from its size and its number of
-    rooms. Your rule is 10 per square metre plus 100 per room.
+    You want to guess the monthly rent of a flat from its size and its number
+    of rooms. Your rule of thumb is 10 per square metre plus 100 per room.
 
     ```text
-    size = 50 square metres, rooms = 2
+    size 50, rooms 2
 
     rent = 10 × 50 + 100 × 2
          = 500 + 200
          = 700
     ```
 
-    The 10 and the 100 are **weights**. They say how much each input counts.
-    Multiplying each input by its weight and adding the results gives a
-    **weighted sum**.
+    The 10 and the 100 say how much each input counts. They're called
+    **weights**. Multiply each input by its weight, add everything up, and you
+    have a **weighted sum**.
 
-    With the inputs in one tensor and the weights in another, a weighted sum is
-    an elementwise multiply followed by a sum. The `.0` on each number makes it
-    a decimal number, which is what models work with.
+    In PyTorch that's an elementwise multiply followed by a sum.
 
     ```python
-    inputs = torch.tensor([50.0, 2.0])
+    flat = torch.tensor([50.0, 2.0])
     weights = torch.tensor([10.0, 100.0])
 
-    (inputs * weights).sum()    # tensor(700.)
+    (flat * weights).sum()    # tensor(700.)
     ```
 
-    This operation is called the **dot product**, and PyTorch writes it with
-    the symbol `@`. `inputs @ weights` also gives 700. Unlike `*`, the `@`
-    symbol needs both tensors to hold the same kind of number, so do not mix
-    whole and decimal numbers.
+    The `.0` makes these decimal numbers. Models compute with decimals.
 
-    `@` also works on many flats at once, one flat per row. `flats @ weights`
-    with shapes `(3, 2)` and `(2,)` gives shape `(3,)`, one rent per flat. Each
-    row gets its own dot product with the same weights, so the last size of
-    `flats` must equal the size of `weights`. A grid of numbers like `flats` is
-    also called a **matrix**, and doing many dot products this way is **matrix
-    multiplication**.
+    Pairing things up and adding them is so common that it has its own name,
+    the **dot product**, and its own sign, `@`. `flat @ weights` gives the same
+    700. One rule comes with `@`. Both sides must hold the same kind of number,
+    so don't mix whole numbers with decimals.
+
+    Now price three flats at once, one per row.
 
     ```python
     flats = torch.tensor([[50.0, 2.0],
@@ -1318,13 +1423,17 @@ MATMUL1_LESSON = prose(
     flats @ weights    # tensor([ 700., 1100.,  400.])
     ```
 
-    **Why it exists.** A weighted sum is the basic way a model combines several
-    inputs into one number, and the weights are the numbers training adjusts.
-    Most building blocks in deep learning are matrix multiplications
-    underneath, so the rest of the course is built on this one operation.
+    Each row got its own dot product with the same weights. Read the shapes.
+    `(3, 2) @ (2,)` gives `(3,)`. The 2s have to match, since each row needs
+    one weight per input, and the 3 rows come out as 3 rents.
 
-    **Your task.** Finish the two functions in `matmul1.py`. Write the first with
-    `*` and `.sum()`, and the second with `@`.
+    A grid like `flats` is called a **matrix**. Doing many dot products in one
+    go like this is **matrix multiplication**, and most of deep learning runs
+    on it. A model's weights are numbers like these, and training is the
+    search for good ones.
+
+    `matmul1.py` swaps rent for school grades. The last function wants several
+    rules at once, so work out the shapes before you write any code.
     """,
 )
 
@@ -1336,30 +1445,36 @@ MATMUL1_SOURCE = source_file(
     from torch import Tensor
 
 
-    # TODO: Return the weighted sum of the inputs, using * and .sum().
-    #   inputs and weights both have shape (n,).
-    def weighted_sum(
-        inputs: Tensor,
-        weights: Tensor,
-    ) -> Tensor:
+    # TODO: Return one student's final grade.
+    #   marks holds three marks, homework first, then the midterm, then the final exam.
+    #   Homework counts 20 percent, the midterm 30 percent and the final exam 50 percent.
+    #   Marks of 80, 70 and 90 give 0.2 × 80 + 0.3 × 70 + 0.5 × 90 = 82.
+    def final_grade(marks: Tensor) -> Tensor:
         ...
 
 
-    # TODO: Return one rent per flat, using @.
-    #   flats has one row per flat and one column per input.
-    #   weights has one weight per input.
-    def rents(
+    # TODO: Return every student's final grade, using @.
+    #   marks has one row per student, with the same three marks as above.
+    def class_grades(marks: Tensor) -> Tensor:
+        ...
+
+
+    # TODO: Price every flat under several rent rules at once, using @.
+    #   flats has one row per flat, its size and then its number of rooms.
+    #   rules has one column per rule. Each column holds a price per square
+    #   metre on top and a price per room below it.
+    #   Return one row per flat and one column per rule.
+    def rents_under_rules(
         flats: Tensor,
-        weights: Tensor,
+        rules: Tensor,
     ) -> Tensor:
         ...
 
 
     # What the check tests
-    #   weighted_sum([50, 2], [10, 100]) is 700
-    #   weighted_sum works for 4 inputs too
-    #   rents gives [700, 1100, 400] for the three flats in the lesson
-    #   rents works for flats with 3 inputs each
+    #   final_grade of marks 80, 70 and 90 is 82, and of 100, 50 and 0 is 35
+    #   class_grades of three students
+    #   rents_under_rules of the three flats from the lesson under two rules, a (3, 2) result
     ''',
 )
 
@@ -1371,60 +1486,74 @@ MATMUL1_SOLUTION = source_file(
     from torch import Tensor
 
 
-    def weighted_sum(
-        inputs: Tensor,
-        weights: Tensor,
-    ) -> Tensor:
-        return (inputs * weights).sum()
+    def final_grade(marks: Tensor) -> Tensor:
+        return (marks * torch.tensor([0.2, 0.3, 0.5])).sum()
 
 
-    def rents(
+    def class_grades(marks: Tensor) -> Tensor:
+        return marks @ torch.tensor([0.2, 0.3, 0.5])
+
+
+    # (flats, 2) @ (2, rules) gives (flats, rules), one dot product per row and column.
+    def rents_under_rules(
         flats: Tensor,
-        weights: Tensor,
+        rules: Tensor,
     ) -> Tensor:
-        return flats @ weights
+        return flats @ rules
     ''',
 )
 
 
 def check_matmul1(checker: Checker) -> None:
-    weighted_sum = checker.function("weighted_sum")
-    rents = checker.function("rents")
+    grade_weights = torch.tensor([0.2, 0.3, 0.5])
+    class_marks = torch.tensor([[80.0, 70.0, 90.0], [100.0, 50.0, 0.0], [60.0, 60.0, 60.0]])
     flats = torch.tensor([[50.0, 2.0], [80.0, 3.0], [30.0, 1.0]])
-    weights = torch.tensor([10.0, 100.0])
-    bigger_flats = torch.tensor([[50.0, 2.0, 1.0], [80.0, 3.0, 0.0]])
-    bigger_weights = torch.tensor([10.0, 100.0, 250.0])
+    two_rules = torch.tensor([[10.0, 12.0], [100.0, 50.0]])
+    three_rules = torch.tensor([[10.0, 12.0, 8.0], [100.0, 50.0, 200.0]])
 
     checker.test(
-        description="weighted_sum([50, 2], [10, 100]) is 700",
-        run=lambda: expect_tensor(
-            call="weighted_sum(inputs, weights)",
-            actual=weighted_sum(torch.tensor([50.0, 2.0]), weights),
-            expected=torch.tensor(700.0),
+        function="final_grade",
+        description="is 82 for marks 80, 70 and 90",
+        run=lambda final_grade: expect_value(
+            call="final_grade(torch.tensor([80.0, 70.0, 90.0]))",
+            actual=round(float(final_grade(torch.tensor([80.0, 70.0, 90.0]))), 4),
+            expected=82.0,
         ),
     )
     checker.test(
-        description="weighted_sum works for 4 inputs",
-        run=lambda: expect_tensor(
-            call="weighted_sum(torch.tensor([1., 2., 3., 4.]), torch.tensor([4., 3., 2., 1.]))",
-            actual=weighted_sum(torch.tensor([1.0, 2.0, 3.0, 4.0]), torch.tensor([4.0, 3.0, 2.0, 1.0])),
-            expected=torch.tensor(20.0),
+        function="final_grade",
+        description="is 35 for marks 100, 50 and 0",
+        run=lambda final_grade: expect_value(
+            call="final_grade(torch.tensor([100.0, 50.0, 0.0]))",
+            actual=round(float(final_grade(torch.tensor([100.0, 50.0, 0.0]))), 4),
+            expected=35.0,
         ),
     )
     checker.test(
-        description="rents gives [700, 1100, 400] for the flats in the lesson",
-        run=lambda: expect_tensor(
-            call="rents(flats, weights)",
-            actual=rents(flats, weights),
-            expected=flats @ weights,
+        function="class_grades",
+        description="gives [82, 35, 60] for three students",
+        run=lambda class_grades: expect_tensor(
+            call="class_grades of three students",
+            actual=class_grades(class_marks),
+            expected=class_marks @ grade_weights,
         ),
     )
     checker.test(
-        description="rents works for flats with 3 inputs each",
-        run=lambda: expect_tensor(
-            call="rents with 3 inputs per flat",
-            actual=rents(bigger_flats, bigger_weights),
-            expected=bigger_flats @ bigger_weights,
+        function="rents_under_rules",
+        description="gives a (3, 2) table for three flats under two rules",
+        run=lambda rents_under_rules: expect_tensor(
+            call="rents_under_rules(flats, torch.tensor([[10.0, 12.0], [100.0, 50.0]]))",
+            actual=rents_under_rules(flats, two_rules),
+            expected=flats @ two_rules,
+        ),
+    )
+    checker.test(
+        function="rents_under_rules",
+        description="works for three rules too",
+        run=lambda rents_under_rules: expect_tensor(
+            call="rents_under_rules with three rules",
+            actual=rents_under_rules(flats, three_rules),
+            expected=flats @ three_rules,
         ),
     )
 
@@ -1436,9 +1565,13 @@ MATMUL1 = Exercise(
     lesson=MATMUL1_LESSON,
     source=MATMUL1_SOURCE,
     solution=MATMUL1_SOLUTION,
-    hint=(
-        "weighted_sum is (inputs * weights).sum(). rents is flats @ weights, "
-        "which runs one dot product per row of flats."
+    hints=(
+        "final_grade is a weighted sum where you pick the weights from the TODO. For the last function, write down "
+        "the shapes of flats and rules before any code.",
+        "The weights are 0.2, 0.3 and 0.5, in a tensor of decimals. @ pairs each row on the left with what is on "
+        "the right. When the right side has several columns, each column is its own set of weights, so (3, 2) @ "
+        "(2, 2) gives (3, 2).",
+        "(marks * torch.tensor([0.2, 0.3, 0.5])).sum(), marks @ torch.tensor([0.2, 0.3, 0.5]), and flats @ rules.",
     ),
     introduces=("weight", "weighted sum", "dot product", "matrix", "matrix multiplication"),
     check=check_matmul1,
@@ -1487,18 +1620,16 @@ WELCOME = prose(
     **How it works**
 
     - Each exercise is one Python file in the `exercises` folder.
-    - This screen shows the lesson. Your editor shows the file. Keep them side by side.
-    - Find the `TODO` in the file, write the code and save. The app reruns the tests and shows which ones pass.
-    - When every test passes, press `n` for the next exercise.
+    - This screen shows the lesson. Keep your editor open beside it.
+    - Fill in the code under each `TODO` and save. The app checks your code every time you save.
+    - When every function passes, press `n` for the next exercise.
 
     **Keys**
 
-    - `h` shows or hides a hint
-    - `tab` shows the whole result on its own screen, with everything your code printed
-    - `l` lists every exercise
-    - `x` resets the file to how it started
-    - `↑` and `↓` scroll the lesson
-    - `q` quits
+    - `tab` moves between the lesson, the hint and the result. The arrow keys and the mouse wheel scroll.
+    - `h` shows a hint. Each exercise has three, and the next one opens after you save again.
+    - `l` lists every exercise, `x` resets the file, and `q` quits.
+    - Drag over text to select it, then press `ctrl+c` to copy it.
     """,
 )
 
@@ -1580,8 +1711,17 @@ FILLER: tuple[str, ...] = (
 )
 
 LONGEST_SENTENCE = 25
-TALLEST_LESSON = 48
+TALLEST_LESSON = 60
 LESSON_WIDTH = 96
+
+# A paragraph that opens with a bold label, like "**Why it exists.**", reads as a filled in template.
+BOLD_LABEL = re.compile(r"^\*\*[^*\n]+[.:]\*\*", re.MULTILINE)
+
+# A solution shorter than this many code tokens is too generic to count as copied, like "x @ y".
+SHORTEST_ANSWER = 6
+
+CODE_TOKEN = re.compile(r"[A-Za-z_]\w*|\d+(?:\.\d*)?|\S")
+KEPT_NAMES = {"torch", "None", "True", "False"}
 
 
 def prose_sentences(text: str) -> list[str]:
@@ -1622,6 +1762,53 @@ def mentions(
     return re.search(rf"\b{re.escape(term)}(s|es)?\b", text, flags=re.IGNORECASE) is not None
 
 
+def code_tokens(code: str) -> list[str]:
+    """Code as tokens, with every plain name turned into X, so a copy with renamed variables still matches."""
+    tokens: list[str] = []
+
+    for line in code.splitlines():
+        for token in CODE_TOKEN.findall(line.split("#")[0]):
+            is_plain_name = (token[0].isalpha() or token[0] == "_") and token not in KEPT_NAMES
+            after_dot = bool(tokens) and tokens[-1] == "."
+            tokens.append("X" if is_plain_name and not after_dot else token)
+
+    return tokens
+
+
+def solution_bodies(solution: str) -> dict[str, list[str]]:
+    """Each solution function's body as code tokens, with the return keyword left out."""
+    bodies: dict[str, list[str]] = {}
+
+    for node in ast.parse(solution).body:
+        if not isinstance(node, ast.FunctionDef):
+            continue
+
+        tokens: list[str] = []
+
+        for statement in node.body:
+            if isinstance(statement, ast.Return) and statement.value is not None:
+                statement = statement.value
+
+            tokens.extend(code_tokens(ast.get_source_segment(solution, statement)))
+
+        bodies[node.name] = tokens
+
+    return bodies
+
+
+def shown_code(text: str) -> str:
+    """Every code block and inline code span of a text, as tokens, with a bar between the pieces."""
+    pieces = re.findall(r"```.*?```|`[^`\n]+`", text, flags=re.DOTALL)
+    tokens: list[str] = []
+
+    for piece in pieces:
+        code = piece.strip("`").removeprefix("python").removeprefix("text")
+        tokens.extend(code_tokens(code))
+        tokens.append("|")
+
+    return " " + " ".join(tokens) + " "
+
+
 def lint_exercise(
     exercise: Exercise,
     introduced_before: set[str],
@@ -1629,7 +1816,7 @@ def lint_exercise(
 ) -> list[str]:
     findings: list[str] = []
     known = introduced_before | set(exercise.introduces)
-    sentences = prose_sentences(exercise.lesson) + prose_sentences(exercise.hint)
+    sentences = prose_sentences(exercise.lesson) + [sentence for hint in exercise.hints for sentence in prose_sentences(hint)]
     readable = " ".join(sentences)
 
     for mark in ("—", "–", ";"):
@@ -1650,9 +1837,15 @@ def lint_exercise(
         if term not in known and mentions(readable, term):
             findings.append(f"uses '{term}' before a lesson introduces it")
 
-    for section in ("**Why it exists.**", "**Your task.**"):
-        if section not in exercise.lesson:
-            findings.append(f"has no {section} paragraph")
+    for label in BOLD_LABEL.findall(exercise.lesson):
+        findings.append(f"opens a paragraph with the bold label {label}")
+
+    # The lesson and the first two hints must leave the work to the learner. The third hint is the answer.
+    shown = shown_code(exercise.lesson) + " | " + " ".join(code_tokens(" ".join(exercise.hints[:2]))) + " "
+
+    for function, body in solution_bodies(exercise.solution).items():
+        if len(body) >= SHORTEST_ANSWER and f" {' '.join(body)} " in shown:
+            findings.append(f"shows the answer to {function} before the third hint")
 
     height = len(
         console.render_lines(
@@ -1783,47 +1976,16 @@ def check_all(progress: Progress) -> list[Exercise]:
     return failing
 
 
+def modified_time(path: Path) -> float:
+    try:
+        return path.stat().st_mtime
+    except FileNotFoundError:
+        return 0.0
+
+
 # ---------------------------------------------------------------------------
-# Drawing
+# What the app and the run command draw
 # ---------------------------------------------------------------------------
-
-
-def key_bar(
-    keys: list[tuple[str, str]],
-    width: int,
-    message: str = "",
-) -> list[Text]:
-    """The message and keys as lines that fit the width, breaking only between keys, so no key is ever cut off."""
-    pieces: list[Text] = []
-
-    if message:
-        pieces.append(Text(message, style="bold yellow"))
-
-    for key, label in keys:
-        piece = Text()
-        piece.append(f" {key} ", style=f"bold black on {ACCENT}")
-        piece.append(f" {label}")
-        pieces.append(piece)
-
-    gap = "   "
-    lines: list[Text] = [Text(no_wrap=True, overflow="ellipsis")]
-
-    for piece in pieces:
-        line = lines[-1]
-
-        if line.plain:
-            if line.cell_len + len(gap) + piece.cell_len > width:
-                line = Text(no_wrap=True, overflow="ellipsis")
-                lines.append(line)
-            else:
-                line.append(gap)
-
-        line.append_text(piece)
-
-    return lines
-
-
-NOT_STARTED = "returned None"
 
 
 def indented(
@@ -1840,110 +2002,118 @@ def indented(
 def test_line(
     mark: str,
     color: str,
-    description: str,
-) -> Table:
-    """One test, its description wrapping under itself rather than under the mark."""
+    description: Text | str,
+    left: int = 0,
+) -> Padding:
+    """One line of the result, its text wrapping under itself rather than under the mark."""
     line = Table.grid(expand=True)
     line.add_column(width=2)
     line.add_column(ratio=1)
     line.add_row(
         Text(mark, style=f"bold {color}"),
-        Text(description),
+        description,
     )
 
-    return line
+    return Padding(
+        line,
+        pad=(0, 0, 0, left),
+    )
 
 
 PRINTED_LINES_SHOWN = 200
 
 
-def result_body(
+def result_view(
     exercise: Exercise,
     outcome: Outcome | None,
     check_again: str,
-    full: bool,
 ) -> RenderableType:
-    """The result, most important first, since a tall result is cut off at the bottom.
+    """The result, one line per function that passes and the details under each one that fails.
 
-    The short form sits beside the lesson, so it grows with the failures and not
-    with the number of tests. It lists only the failing tests, explains only the
-    first, and counts what the code printed. The full form shows everything."""
-    parts: list[RenderableType] = []
-
+    It grows with the functions and not with the tests, and the most important
+    part comes first, since the learner reads it from the top."""
     if outcome is None:
-        parts.append(Text("Checking your code...", style="dim"))
-        return Group(*parts)
+        return Text("Checking your code...", style="dim")
 
     if outcome.problem is not None and not outcome.results:
-        parts.append(Text("✗ Your file cannot be checked yet", style="bold red"))
-        parts.append(indented(text=outcome.problem, left=2))
-        return Group(*parts)
+        return Group(
+            Text("✗ Your file can't be checked yet", style="bold red"),
+            indented(text=outcome.problem, left=2),
+        )
+
+    parts: list[RenderableType] = []
 
     if outcome.passed:
-        parts.append(Text("✓ Exercise done. Every test passes.", style="bold green"))
+        parts.append(Text("✓ Exercise done. Every function passes.", style="bold green"))
         parts.append(Text.assemble("A solution to compare with is in ", (relative(exercise.solution_path), ACCENT), "."))
         parts.append(Text("Press n for the next exercise.", style="bold"))
+        parts.append(Text(""))
 
-        if full:
-            parts.append(Text(""))
-
-    not_started = 0
-    explained_one = False
+    functions: dict[str, list[TestResult]] = {}
 
     for result in outcome.results:
-        if result.passed:
-            if full:
-                parts.append(
-                    test_line(
-                        mark="✓",
-                        color="green",
-                        description=result.description,
-                    ),
-                )
+        functions.setdefault(result.function, []).append(result)
 
+    for function, results in functions.items():
+        failing = [result for result in results if not result.passed]
+
+        if not failing:
+            parts.append(
+                test_line(
+                    mark="✓",
+                    color="green",
+                    description=Text(function),
+                ),
+            )
+            continue
+
+        if all(NOT_STARTED in result.detail for result in failing):
+            parts.append(
+                test_line(
+                    mark="✗",
+                    color="red",
+                    description=Text.assemble(function, ("   not written yet", "dim")),
+                ),
+            )
             continue
 
         parts.append(
             test_line(
                 mark="✗",
                 color="red",
-                description=result.description,
+                description=Text(function),
             ),
         )
+        explained_one = False
 
-        if NOT_STARTED in result.detail:
-            not_started += 1
-            continue
+        for result in results:
+            parts.append(
+                test_line(
+                    mark="✓" if result.passed else "✗",
+                    color="green" if result.passed else "red",
+                    description=Text(result.description, style="" if not result.passed else "dim"),
+                    left=4,
+                ),
+            )
 
-        # Like a compiler, the short form explains only the first failure, so it is never cut off.
-        if full or not explained_one:
-            parts.append(indented(text=result.detail, style="yellow"))
-            explained_one = True
+            # Like a compiler, explain only the first failure of each function, so the others stay in view.
+            if not result.passed and not explained_one:
+                parts.append(indented(text=result.detail, style="yellow", left=8))
+                explained_one = True
 
     if outcome.problem is not None:
         parts.append(Text(""))
         parts.append(indented(text=outcome.problem, style="red", left=0))
 
     if not outcome.passed:
-        passed_count = sum(result.passed for result in outcome.results)
+        passing_count = sum(all(result.passed for result in results) for results in functions.values())
         parts.append(Text(""))
-
-        if not_started:
-            parts.append(Text("A function marked ✗ with no message has no return statement yet. Write the code under its TODO."))
-
-        parts.append(Text(f"{passed_count} of {len(outcome.results)} tests pass. {check_again}", style="dim"))
+        parts.append(Text(f"{passing_count} of {len(functions)} functions pass. {check_again}", style="dim"))
 
     if not outcome.printed.strip():
         return Group(*parts)
 
     printed_lines = outcome.printed.rstrip().splitlines()
-
-    if not full:
-        line_count = len(printed_lines)
-        lines_word = "line" if line_count == 1 else "lines"
-        parts.append(Text(f"Your code printed {line_count} {lines_word}. Press tab to see what it printed.", style="dim"))
-        return Group(*parts)
-
     shown_lines = printed_lines[-PRINTED_LINES_SHOWN:]
 
     if len(shown_lines) == len(printed_lines):
@@ -1951,7 +2121,7 @@ def result_body(
     else:
         printed_heading = f"The last {len(shown_lines)} of the {len(printed_lines)} lines your code printed"
 
-    # A box of its own, so the learner's output never reads as part of the test results.
+    # A box of its own, so the learner's output never reads as part of the results.
     parts.append(Text(""))
     parts.append(
         Panel(
@@ -1963,55 +2133,6 @@ def result_body(
     )
 
     return Group(*parts)
-
-
-@dataclass
-class Scroll:
-    offset: int = 0
-    limit: int = 0
-
-
-class ScrollView:
-    """Shows a window of pre-rendered lines, as tall as the space it is given."""
-
-    def __init__(
-        self,
-        lines: list[list[Segment]],
-        offset: int,
-    ) -> None:
-        self.lines = lines
-        self.offset = offset
-
-    def __rich_console__(
-        self,
-        console: Console,
-        options: ConsoleOptions,
-    ) -> RenderResult:
-        height = options.height or len(self.lines)
-
-        for line in self.lines[self.offset : self.offset + height]:
-            yield from line
-            yield Segment.line()
-
-
-def without_double_blanks(lines: list[list[Segment]]) -> list[list[Segment]]:
-    """Rich puts two blank lines around code blocks and tables. One is enough on a small screen."""
-    kept: list[list[Segment]] = []
-    previous_blank = False
-
-    for line in lines:
-        blank = not "".join(segment.text for segment in line).strip()
-
-        if blank and previous_blank:
-            continue
-
-        kept.append(line)
-        previous_blank = blank
-
-    return kept
-
-
-STATUS_HEIGHT = 2
 
 
 def status_line(
@@ -2061,589 +2182,433 @@ def status_line(
     )
 
 
-def fit_scroll(
-    scroll: Scroll,
-    line_count: int,
-    view_height: int,
-) -> str:
-    """Keep the scroll inside the text and say which way there is more to read."""
-    scroll.limit = max(0, line_count - view_height)
-    scroll.offset = min(max(scroll.offset, 0), scroll.limit)
-
-    if scroll.limit == 0:
-        return ""
-
-    if scroll.offset < scroll.limit:
-        return "↓ more below, scroll with ↑ ↓"
-
-    return "↑ more above"
+HINT_LABELS = ("Where to look", "The idea", "The answer")
 
 
-def result_border(outcome: Outcome | None) -> str:
-    if outcome is None:
-        return "yellow"
-
-    if outcome.passed:
-        return "green"
-
-    return "red"
-
-
-def render_watch(
-    console: Console,
+def hint_view(
     exercise: Exercise,
-    progress: Progress,
-    outcome: Outcome | None,
-    show_hint: bool,
-    check_again: str,
-    scroll: Scroll,
-    keys: list[tuple[str, str]],
-    message: str,
+    hints_open: int,
+    next_ready: bool,
+    run_again: str,
 ) -> RenderableType:
-    width, height = console.size
-    body = result_body(
-        exercise=exercise,
-        outcome=outcome,
-        check_again=check_again,
-        full=False,
-    )
-    result_lines = len(console.render_lines(body, console.options.update_width(width - 4), pad=False))
+    parts: list[RenderableType] = []
 
-    bar_lines = key_bar(
-        keys=keys,
-        width=width,
-        message=message,
-    )
-    room = height - STATUS_HEIGHT - len(bar_lines)
+    for label, hint in zip(HINT_LABELS, exercise.hints[:hints_open]):
+        parts.append(Text(label, style="bold yellow"))
+        parts.append(indented(text=hint, left=2))
 
-    # The lesson and the result scroll, the result on its own screen, and the
-    # hint does not, so the hint takes its room first. The lesson keeps at least
-    # 3 lines and the result at least 4 rows.
-    hint = Text(exercise.hint, overflow="fold")
-    hint_lines = len(console.render_lines(hint, console.options.update_width(width - 4), pad=False))
-    hint_height = min(hint_lines + 2, max(3, room - 5 - 4)) if show_hint else 0
-    result_height = min(result_lines + 2, max(6, height * 40 // 100), max(4, room - 5 - hint_height))
+    if hints_open < len(exercise.hints):
+        note = "Press h for the next hint." if next_ready else f"The next hint opens after you {run_again}."
+        parts.append(Text(note, style="dim"))
 
-    lesson_height = max(3, room - hint_height - result_height - 2)
-    lesson_lines = without_double_blanks(
-        console.render_lines(
-            Markdown(exercise.lesson, code_theme=CODE_THEME),
-            console.options.update_width(width - 4),
-            pad=False,
-        ),
-    )
-    lesson_note = fit_scroll(
-        scroll=scroll,
-        line_count=len(lesson_lines),
-        view_height=lesson_height,
-    )
-
-    sections: list[Layout] = [
-        Layout(
-            status_line(
-                exercise=exercise,
-                progress=progress,
-                width=width,
-            ),
-            size=STATUS_HEIGHT,
-        ),
-        Layout(
-            Panel(
-                ScrollView(
-                    lines=lesson_lines,
-                    offset=scroll.offset,
-                ),
-                title=exercise.title,
-                title_align="left",
-                subtitle=lesson_note,
-                subtitle_align="right",
-                border_style=ACCENT,
-            ),
-            ratio=1,
-        ),
-    ]
-
-    if show_hint:
-        sections.append(
-            Layout(
-                Panel(
-                    hint,
-                    title="Hint",
-                    title_align="left",
-                    subtitle="↓ more below" if hint_lines + 2 > hint_height else "",
-                    subtitle_align="right",
-                    border_style="yellow",
-                ),
-                size=hint_height,
-            ),
-        )
-
-    sections.append(
-        Layout(
-            Panel(
-                body,
-                title="Result",
-                title_align="left",
-                subtitle="more below, press tab to see all" if result_lines + 2 > result_height else "",
-                subtitle_align="right",
-                border_style=result_border(outcome),
-            ),
-            size=result_height,
-        ),
-    )
-    sections.append(
-        Layout(
-            Group(*bar_lines),
-            size=len(bar_lines),
-        ),
-    )
-
-    layout = Layout()
-    layout.split_column(*sections)
-
-    return layout
-
-
-def render_result_screen(
-    console: Console,
-    exercise: Exercise,
-    progress: Progress,
-    outcome: Outcome | None,
-    check_again: str,
-    scroll: Scroll,
-    keys: list[tuple[str, str]],
-    message: str,
-) -> RenderableType:
-    width, height = console.size
-    result_lines = without_double_blanks(
-        console.render_lines(
-            result_body(
-                exercise=exercise,
-                outcome=outcome,
-                check_again=check_again,
-                full=True,
-            ),
-            console.options.update_width(width - 4),
-            pad=False,
-        ),
-    )
-    bar_lines = key_bar(
-        keys=keys,
-        width=width,
-        message=message,
-    )
-    result_note = fit_scroll(
-        scroll=scroll,
-        line_count=len(result_lines),
-        view_height=max(3, height - STATUS_HEIGHT - len(bar_lines) - 2),
-    )
-
-    layout = Layout()
-    layout.split_column(
-        Layout(
-            status_line(
-                exercise=exercise,
-                progress=progress,
-                width=width,
-            ),
-            size=STATUS_HEIGHT,
-        ),
-        Layout(
-            Panel(
-                ScrollView(
-                    lines=result_lines,
-                    offset=scroll.offset,
-                ),
-                title="Result",
-                title_align="left",
-                subtitle=result_note,
-                subtitle_align="right",
-                border_style=result_border(outcome),
-            ),
-            ratio=1,
-        ),
-        Layout(
-            Group(*bar_lines),
-            size=len(bar_lines),
-        ),
-    )
-
-    return layout
-
-
-@dataclass
-class ListView:
-    selected: int
-    show: str | None = None
-    query: str = ""
-    searching: bool = False
-    message: str = ""
-
-
-def visible_exercises(
-    view: ListView,
-    progress: Progress,
-) -> list[Exercise]:
-    if view.show == "done":
-        return [exercise for exercise in EXERCISES if exercise.name in progress.done]
-
-    if view.show == "pending":
-        return [exercise for exercise in EXERCISES if exercise.name not in progress.done]
-
-    return list(EXERCISES)
-
-
-def render_list(
-    console: Console,
-    view: ListView,
-    rows: list[Exercise],
-    progress: Progress,
-) -> RenderableType:
-    width, height = console.size
-    done_label = "done" if view.show != "done" else "done (on)"
-    pending_label = "pending" if view.show != "pending" else "pending (on)"
-
-    if view.searching:
-        footer = [Text(f" search  {view.query}▏", style="magenta")]
-    else:
-        footer = key_bar(
-            keys=[
-                ("↑ ↓", "move"),
-                ("c", "continue here"),
-                ("r", "reset"),
-                ("s", "search"),
-                ("d", done_label),
-                ("p", pending_label),
-                ("q", "back"),
-            ],
-            width=width,
-            message=view.message,
-        )
-
-    room = max(3, height - 6 - len(footer))
-    first_row = min(max(0, view.selected - room + 1), max(0, len(rows) - room))
-    table = Table(
-        expand=True,
-        box=None,
-        show_edge=False,
-        padding=(0, 1),
-        header_style="bold",
-    )
-    table.add_column("", width=2)
-    table.add_column("State", width=8)
-    table.add_column("Name", width=14)
-    table.add_column("Title", ratio=1, no_wrap=True)
-    table.add_column("File", ratio=1, no_wrap=True)
-
-    for index, exercise in enumerate(rows[first_row : first_row + room], start=first_row):
-        is_done = exercise.name in progress.done
-        name = Text(exercise.name)
-
-        if view.query:
-            name.highlight_words([view.query], style="magenta")
-
-        table.add_row(
-            Text("▶", style="bold red") if exercise.name == progress.current else Text(""),
-            Text("DONE", style="green") if is_done else Text("PENDING", style="yellow"),
-            name,
-            exercise.title,
-            Text(relative(exercise.path), style="dim"),
-            # A background, never reverse video, which turns each colored
-            # cell into a block of its own color and breaks up the bar.
-            style="bright_white on grey27" if index == view.selected else None,
-        )
-
-    layout = Layout()
-    layout.split_column(
-        Layout(
-            Panel(
-                table,
-                title="Exercises",
-                title_align="left",
-                subtitle=f"{len(progress.done)} of {len(EXERCISES)} done",
-                subtitle_align="right",
-                border_style=ACCENT,
-            ),
-            ratio=1,
-        ),
-        Layout(
-            Group(*footer),
-            size=len(footer),
-        ),
-    )
-
-    return layout
-
-
-def render_page(
-    title: str,
-    text: str,
-    keys: list[tuple[str, str]],
-    width: int,
-) -> RenderableType:
-    bar_lines = key_bar(
-        keys=keys,
-        width=width,
-    )
-
-    layout = Layout()
-    layout.split_column(
-        Layout(
-            Panel(
-                Markdown(text, code_theme=CODE_THEME),
-                title=title,
-                title_align="left",
-                border_style=ACCENT,
-                padding=(0, 2),
-            ),
-            ratio=1,
-        ),
-        Layout(
-            Group(*bar_lines),
-            size=len(bar_lines),
-        ),
-    )
-
-    return layout
-
-
-# ---------------------------------------------------------------------------
-# Keys
-# ---------------------------------------------------------------------------
-
-ESCAPE_SEQUENCES = {
-    b"[A": "up",
-    b"[B": "down",
-    b"[5~": "page_up",
-    b"[6~": "page_down",
-    b"[H": "home",
-    b"[F": "end",
-    b"OH": "home",
-    b"OF": "end",
-}
-
-
-class KeyReader:
-    """Reads single key presses without Enter while the app runs."""
-
-    def __init__(self) -> None:
-        self.enabled = sys.stdin.isatty()
-        self.saved_settings: list | None = None
-
-    def __enter__(self) -> KeyReader:
-        if self.enabled:
-            self.saved_settings = termios.tcgetattr(sys.stdin.fileno())
-            tty.setcbreak(sys.stdin.fileno())
-
-        return self
-
-    def __exit__(self, *_: object) -> None:
-        if self.saved_settings is None:
-            return
-
-        termios.tcsetattr(
-            sys.stdin.fileno(),
-            termios.TCSADRAIN,
-            self.saved_settings,
-        )
-
-    def ready(
-        self,
-        timeout: float,
-    ) -> bool:
-        readable, _, _ = select.select(
-            [sys.stdin],
-            [],
-            [],
-            timeout,
-        )
-        return bool(readable)
-
-    def read(
-        self,
-        timeout: float,
-    ) -> str | None:
-        if not self.enabled:
-            time.sleep(timeout)
-            return None
-
-        if not self.ready(timeout):
-            return None
-
-        first = os.read(sys.stdin.fileno(), 1)
-
-        if first == b"\x1b":
-            return self.read_escape_sequence()
-
-        if first in (b"\r", b"\n"):
-            return "enter"
-
-        if first == b"\t":
-            return "tab"
-
-        if first in (b"\x7f", b"\x08"):
-            return "backspace"
-
-        return first.decode(errors="ignore")
-
-    def read_escape_sequence(self) -> str:
-        """An arrow or paging key after ESC. Reads only up to the sequence's final byte,
-        so a held arrow key, which sends sequences back to back, is read one at a time."""
-        if not self.ready(0.03):
-            return "escape"
-
-        introducer = os.read(sys.stdin.fileno(), 1)
-
-        if introducer not in (b"[", b"O"):
-            return "escape"
-
-        sequence = introducer
-
-        while self.ready(0.03):
-            byte = os.read(sys.stdin.fileno(), 1)
-            sequence += byte
-
-            if 0x40 <= byte[0] <= 0x7E:
-                break
-
-        return ESCAPE_SEQUENCES.get(sequence, "escape")
-
-
-SCROLL_STEPS = {
-    "up": -1,
-    "k": -1,
-    "down": 1,
-    "j": 1,
-    " ": 1,
-    "page_up": -10,
-    "page_down": 10,
-}
-
-
-def modified_time(path: Path) -> float:
-    try:
-        return path.stat().st_mtime
-    except FileNotFoundError:
-        return 0.0
+    return Group(*parts)
 
 
 # ---------------------------------------------------------------------------
 # The app
 # ---------------------------------------------------------------------------
 
+APP_CSS = """
+#status {
+    height: 2;
+}
 
-@dataclass
-class App:
-    progress: Progress
-    manual: bool
-    console: Console = field(default_factory=terminal_console)
-    keys: KeyReader = field(default_factory=KeyReader)
-    outcome: Outcome | None = None
-    show_hint: bool = False
-    scroll: Scroll = field(default_factory=Scroll)
-    full_result: bool = False
-    result_scroll: Scroll = field(default_factory=Scroll)
-    message: str = ""
-    live: Live | None = None
+.pane {
+    padding: 0 1;
+    border-title-align: left;
+    border-subtitle-align: right;
+    border-title-style: bold;
+    scrollbar-size-vertical: 1;
+}
+
+#lesson {
+    height: 1fr;
+    min-height: 5;
+    border: round $primary;
+}
+
+#lesson:focus {
+    border: heavy $primary;
+}
+
+#hint {
+    display: none;
+    height: auto;
+    max-height: 40%;
+    border: round $warning;
+}
+
+#hint.-open {
+    display: block;
+}
+
+#hint:focus {
+    border: heavy $warning;
+}
+
+#result {
+    height: auto;
+    min-height: 3;
+    max-height: 45%;
+    border: round $error;
+}
+
+#result:focus {
+    border: heavy $error;
+}
+
+#result.-passed {
+    border: round $success;
+}
+
+#result.-passed:focus {
+    border: heavy $success;
+}
+
+#result.-checking {
+    border: round $warning;
+}
+
+#result.-checking:focus {
+    border: heavy $warning;
+}
+
+#exercises {
+    height: 1fr;
+    border: round $primary;
+    border-title-align: left;
+    border-subtitle-align: right;
+}
+
+#search {
+    display: none;
+}
+
+#search.-open {
+    display: block;
+}
+
+ConfirmScreen {
+    align: center middle;
+}
+
+#confirm {
+    width: 70;
+    max-width: 90%;
+    height: auto;
+    padding: 1 2;
+    border: round $warning;
+    background: $surface;
+}
+
+.page {
+    height: 1fr;
+    padding: 0 2;
+    border: round $primary;
+}
+"""
+
+
+class PageScreen(Screen[str]):
+    """A page of Markdown in one box, closed by the keys its subclass binds."""
+
+    def __init__(
+        self,
+        title: str,
+        text: str,
+    ) -> None:
+        super().__init__()
+        self.page_title = title
+        self.text = text
+
+    def compose(self) -> ComposeResult:
+        with VerticalScroll(classes="pane page"):
+            yield MarkdownWidget(self.text)
+
+        yield Footer(show_command_palette=False)
+
+    def on_mount(self) -> None:
+        page = self.query_one(VerticalScroll)
+        page.border_title = self.page_title
+        page.focus()
+
+    def action_close(
+        self,
+        choice: str,
+    ) -> None:
+        self.dismiss(choice)
+
+
+class WelcomeScreen(PageScreen):
+    BINDINGS = [
+        Binding("enter", "close('start')", "start"),
+    ]
+
+
+class FinishScreen(PageScreen):
+    BINDINGS = [
+        Binding("l", "close('list')", "list"),
+        Binding("q", "close('quit')", "quit"),
+    ]
+
+
+class ConfirmScreen(ModalScreen[bool]):
+    BINDINGS = [
+        Binding("y", "answer(True)", "yes, reset"),
+        Binding("n,escape", "answer(False)", "no, keep my changes"),
+    ]
+
+    def __init__(
+        self,
+        question: str,
+    ) -> None:
+        super().__init__()
+        self.question = question
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="confirm"):
+            yield Static(self.question)
+
+        yield Footer(show_command_palette=False)
+
+    def action_answer(
+        self,
+        yes: bool,
+    ) -> None:
+        self.dismiss(yes)
+
+
+class ListScreen(Screen[str | None]):
+    """Every exercise, like rustlings' list. Dismisses with the exercise to continue at, or None."""
+
+    BINDINGS = [
+        Binding("c", "continue_here", "continue here"),
+        Binding("r", "reset_selected", "reset"),
+        Binding("s", "search", "search"),
+        Binding("d", "toggle_filter('done')", "done"),
+        Binding("p", "toggle_filter('pending')", "pending"),
+        Binding("q,escape", "back", "back"),
+    ]
+
+    def __init__(
+        self,
+        progress: Progress,
+    ) -> None:
+        super().__init__()
+        self.progress = progress
+        self.only: str | None = None
+        self.search_text = ""
+
+    def compose(self) -> ComposeResult:
+        yield DataTable(
+            id="exercises",
+            cursor_type="row",
+        )
+        yield Input(
+            id="search",
+            placeholder="part of a name, enter to keep it, escape to clear it",
+        )
+        yield Footer(show_command_palette=False)
+
+    def on_mount(self) -> None:
+        table = self.query_one(DataTable)
+        table.border_title = "Exercises"
+        table.add_columns("", "State", "Name", "Title")
+        self.fill_rows(select=self.progress.current)
+        table.focus()
+
+    def shown_exercises(self) -> list[Exercise]:
+        shown: list[Exercise] = []
+
+        for exercise in EXERCISES:
+            is_done = exercise.name in self.progress.done
+
+            if self.only == "done" and not is_done:
+                continue
+
+            if self.only == "pending" and is_done:
+                continue
+
+            if self.search_text and self.search_text not in exercise.name:
+                continue
+
+            shown.append(exercise)
+
+        return shown
+
+    def selected_name(self) -> str | None:
+        table = self.query_one(DataTable)
+
+        if table.row_count == 0:
+            return None
+
+        row_key, _ = table.coordinate_to_cell_key(table.cursor_coordinate)
+
+        return row_key.value
+
+    def fill_rows(
+        self,
+        select: str | None,
+    ) -> None:
+        table = self.query_one(DataTable)
+        table.clear()
+        shown = self.shown_exercises()
+
+        for exercise in shown:
+            is_done = exercise.name in self.progress.done
+            table.add_row(
+                Text("▶", style="bold red") if exercise.name == self.progress.current else Text(""),
+                Text("DONE", style="green") if is_done else Text("PENDING", style="yellow"),
+                exercise.name,
+                exercise.title,
+                key=exercise.name,
+            )
+
+        filters = []
+
+        if self.only is not None:
+            filters.append(f"only {self.only}")
+
+        if self.search_text:
+            filters.append(f"names with '{self.search_text}'")
+
+        done_text = f"{len(self.progress.done)} of {len(EXERCISES)} done"
+        table.border_subtitle = done_text if not filters else f"{', '.join(filters)}   {done_text}"
+        names = [exercise.name for exercise in shown]
+
+        if select in names:
+            table.move_cursor(row=names.index(select))
+
+    def on_data_table_row_selected(
+        self,
+        event: DataTable.RowSelected,
+    ) -> None:
+        self.dismiss(event.row_key.value)
+
+    def action_continue_here(self) -> None:
+        name = self.selected_name()
+
+        if name is None:
+            self.notify("Nothing is selected.")
+            return
+
+        self.dismiss(name)
+
+    def action_reset_selected(self) -> None:
+        name = self.selected_name()
+
+        if name is None:
+            self.notify("Nothing is selected.")
+            return
+
+        reset_exercise(
+            exercise=exercise_named(name),
+            progress=self.progress,
+        )
+        self.notify(f"{name} is back to how it started.")
+        self.fill_rows(select=name)
+
+    def action_toggle_filter(
+        self,
+        which: str,
+    ) -> None:
+        self.only = None if self.only == which else which
+        self.fill_rows(select=self.selected_name())
+
+    def action_search(self) -> None:
+        search = self.query_one(Input)
+        search.add_class("-open")
+        search.value = self.search_text
+        search.focus()
+
+    def on_input_changed(
+        self,
+        event: Input.Changed,
+    ) -> None:
+        self.search_text = event.value
+        self.fill_rows(select=self.selected_name())
+
+    def on_input_submitted(self) -> None:
+        self.close_search()
+
+    def close_search(self) -> None:
+        self.query_one(Input).remove_class("-open")
+        self.query_one(DataTable).focus()
+
+    def action_back(self) -> None:
+        search = self.query_one(Input)
+
+        if search.has_focus:
+            search.value = ""
+            self.close_search()
+            return
+
+        self.dismiss(None)
+
+
+class WatchScreen(Screen[None]):
+    """The lesson, the hint and the result of the current exercise, rechecked on every save."""
+
+    # Three bindings share h, and check_action leaves exactly one of them on, so its label says what h does now.
+    BINDINGS = [
+        Binding("n", "next_exercise", "next"),
+        Binding("r", "check_now", "run"),
+        Binding("h", "show_hint", "hint"),
+        Binding("h", "next_hint", "next hint"),
+        Binding("h", "hide_hint", "hide hint"),
+        Binding("tab", "app.focus_next", "next box"),
+        Binding("l", "open_list", "list"),
+        Binding("x", "reset_exercise", "reset"),
+        Binding("q", "app.quit", "quit"),
+    ]
+
+    def __init__(
+        self,
+        progress: Progress,
+        manual: bool,
+    ) -> None:
+        super().__init__()
+        self.progress = progress
+        self.manual = manual
+        self.outcome: Outcome | None = None
+        self.latest_check = 0
+        self.runs = 0
+        self.hints_open = 0
+        self.runs_at_last_hint = 0
+        self.hint_shown = False
+        self.watched_time = 0.0
+        self.check_again = "Press r to check again." if manual else "Save the file to check again."
+        self.run_again = "press r again" if manual else "save again"
 
     @property
     def exercise(self) -> Exercise:
         return exercise_named(self.progress.current)
 
-    def draw(
-        self,
-        renderable: RenderableType,
-    ) -> None:
-        self.live.update(
-            renderable,
-            refresh=True,
-        )
+    @property
+    def passed(self) -> bool:
+        return self.outcome is not None and self.outcome.passed
 
-    def watch_keys(self) -> list[tuple[str, str]]:
-        keys: list[tuple[str, str]] = []
+    def compose(self) -> ComposeResult:
+        yield Static(id="status")
 
-        if self.outcome is not None and self.outcome.passed:
-            keys.append(("n", "next"))
+        with VerticalScroll(id="lesson", classes="pane"):
+            yield MarkdownWidget(id="lesson-text")
 
-        if self.manual:
-            keys.append(("r", "run"))
+        with VerticalScroll(id="hint", classes="pane"):
+            yield Static(id="hint-text")
 
-        if self.full_result:
-            keys.extend(
-                [
-                    ("↑ ↓", "scroll"),
-                    ("tab", "back to the lesson"),
-                ],
-            )
-            return keys
+        with VerticalScroll(id="result", classes="pane"):
+            yield Static(id="result-text")
 
-        keys.append(("h", "hide hint" if self.show_hint else "hint"))
+        yield Footer(show_command_palette=False)
 
-        if self.outcome is not None:
-            keys.append(("tab", "full result"))
+    def on_mount(self) -> None:
+        self.query_one("#result").border_title = "Result"
+        self.open_exercise(self.exercise)
+        self.set_interval(0.5, self.poll_file)
 
-        keys.extend(
-            [
-                ("l", "list"),
-                ("x", "reset"),
-                ("↑ ↓", "scroll"),
-                ("q", "quit"),
-            ],
-        )
-
-        return keys
-
-    def draw_watch(
-        self,
-        keys: list[tuple[str, str]] | None = None,
-        message: str | None = None,
-    ) -> None:
-        keys = keys if keys is not None else self.watch_keys()
-        message = message if message is not None else self.message
-        check_again = "Press r to check again." if self.manual else "Save the file to check again."
-
-        if self.full_result:
-            self.draw(
-                render_result_screen(
-                    console=self.console,
-                    exercise=self.exercise,
-                    progress=self.progress,
-                    outcome=self.outcome,
-                    check_again=check_again,
-                    scroll=self.result_scroll,
-                    keys=keys,
-                    message=message,
-                ),
-            )
-            return
-
-        self.draw(
-            render_watch(
-                console=self.console,
-                exercise=self.exercise,
-                progress=self.progress,
-                outcome=self.outcome,
-                show_hint=self.show_hint,
-                check_again=check_again,
-                scroll=self.scroll,
-                keys=keys,
-                message=message,
-            ),
-        )
-
-    def check(self) -> None:
-        self.outcome = None
-        self.draw_watch()
-        outcome = attempt(
-            exercise=self.exercise,
-            path=self.exercise.path,
-        )
-        record_outcome(
-            exercise=self.exercise,
-            outcome=outcome,
-            progress=self.progress,
-        )
-        self.outcome = outcome
+    def on_resize(self) -> None:
+        self.show_status()
 
     def open_exercise(
         self,
@@ -2651,271 +2616,318 @@ class App:
     ) -> None:
         self.progress.current = exercise.name
         save_progress(self.progress)
-        self.show_hint = False
-        self.scroll = Scroll()
-        self.full_result = False
-        self.result_scroll = Scroll()
-        self.message = ""
+        self.runs = 0
+        self.hints_open = 0
+        self.runs_at_last_hint = 0
+        self.hint_shown = False
+        self.watched_time = modified_time(exercise.path)
+
+        lesson = self.query_one("#lesson", VerticalScroll)
+        lesson.border_title = exercise.title
+        self.query_one("#lesson-text", MarkdownWidget).update(exercise.lesson)
+        lesson.scroll_home(animate=False)
+        lesson.focus()
+
+        self.show_hint()
+        self.show_status()
         self.check()
 
-    def wait_for_key(
-        self,
-        watched: Path | None,
-    ) -> str:
-        """The next key press, or "changed" when the watched file is saved or the window resized."""
-        stamp = modified_time(watched) if watched else 0.0
-        size = self.console.size
-
-        while True:
-            key = self.keys.read(timeout=0.25)
-
-            if key is not None:
-                return key
-
-            if watched is not None and modified_time(watched) != stamp:
-                # Editors often write a file in two steps. Let the save finish.
-                time.sleep(0.15)
-                return "changed"
-
-            if self.console.size != size:
-                return "resized"
-
-    def show_page(
-        self,
-        title: str,
-        text: str,
-        keys: list[tuple[str, str]],
-        accepted: set[str],
-    ) -> str:
-        while True:
-            self.draw(
-                render_page(
-                    title=title,
-                    text=text,
-                    keys=keys,
-                    width=self.console.size.width,
-                ),
-            )
-            key = self.wait_for_key(watched=None)
-
-            if key in accepted:
-                return key
-
-    def confirm_reset(self) -> bool:
-        while True:
-            self.draw_watch(
-                keys=[
-                    ("y", "yes, reset"),
-                    ("n", "no, keep my changes"),
-                ],
-                message=f"Put {self.exercise.path.name} back to how it started? Your changes will be lost.",
-            )
-            key = self.wait_for_key(watched=None)
-
-            if key in ("y", "n", "escape"):
-                return key == "y"
-
-    def run_list(self) -> bool:
-        """The exercise list. True when the learner picked an exercise to continue at."""
-        names = [exercise.name for exercise in EXERCISES]
-        view = ListView(selected=names.index(self.progress.current))
-
-        while True:
-            rows = visible_exercises(
-                view=view,
-                progress=self.progress,
-            )
-            view.selected = min(max(view.selected, 0), max(len(rows) - 1, 0))
-            self.draw(
-                render_list(
-                    console=self.console,
-                    view=view,
-                    rows=rows,
-                    progress=self.progress,
-                ),
-            )
-            key = self.wait_for_key(watched=None)
-
-            if view.searching:
-                if key in ("enter", "escape"):
-                    view.searching = False
-
-                    if key == "escape":
-                        view.query = ""
-
-                    continue
-
-                if key == "backspace":
-                    view.query = view.query[:-1]
-                elif len(key) == 1 and key.isprintable():
-                    view.query += key
-
-                matches = [index for index, exercise in enumerate(rows) if view.query and view.query in exercise.name]
-
-                if matches:
-                    view.selected = matches[0]
-
-                continue
-
-            view.message = ""
-
-            if key in ("j", "down"):
-                view.selected += 1
-            elif key in ("k", "up"):
-                view.selected -= 1
-            elif key in ("g", "home"):
-                view.selected = 0
-            elif key in ("G", "end"):
-                view.selected = len(rows) - 1
-            elif key in ("c", "enter"):
-                if not rows:
-                    view.message = "Nothing selected."
-                    continue
-
-                self.open_exercise(rows[view.selected])
-                return True
-            elif key == "r":
-                if not rows:
-                    view.message = "Nothing selected."
-                    continue
-
-                chosen = rows[view.selected]
-                reset_exercise(
-                    exercise=chosen,
-                    progress=self.progress,
-                )
-                view.message = f"{chosen.name} has been reset."
-            elif key == "d":
-                view.show = None if view.show == "done" else "done"
-            elif key == "p":
-                view.show = None if view.show == "pending" else "pending"
-            elif key == "s":
-                view.searching = True
-                view.query = ""
-            elif key in ("q", "escape"):
-                return False
-
-    def finish(self) -> bool:
-        """Check every exercise once more, as rustlings does at the end. True when the learner quits."""
+    def check(self) -> None:
         self.outcome = None
-        self.draw(
-            render_page(
-                title="Checking every exercise",
-                text="Checking every exercise once more before the finish line...",
-                keys=[],
-                width=self.console.size.width,
+        self.latest_check += 1
+        self.show_result()
+        self.refresh_bindings()
+        self.check_in_background(
+            exercise=self.exercise,
+            number=self.latest_check,
+        )
+
+    @work(thread=True, group="check")
+    def check_in_background(
+        self,
+        exercise: Exercise,
+        number: int,
+    ) -> None:
+        outcome = attempt(
+            exercise=exercise,
+            path=exercise.path,
+        )
+        self.app.call_from_thread(
+            self.finish_check,
+            exercise,
+            number,
+            outcome,
+        )
+
+    def finish_check(
+        self,
+        exercise: Exercise,
+        number: int,
+        outcome: Outcome,
+    ) -> None:
+        # A save during a check starts another one. Only the latest gets shown.
+        if number != self.latest_check:
+            return
+
+        record_outcome(
+            exercise=exercise,
+            outcome=outcome,
+            progress=self.progress,
+        )
+        self.outcome = outcome
+        self.runs += 1
+        self.show_result()
+        self.show_status()
+        self.show_hint()
+        self.refresh_bindings()
+
+    def poll_file(self) -> None:
+        """Textual has no file watcher, so compare the file's time twice a second."""
+        if self.manual:
+            return
+
+        changed_time = modified_time(self.exercise.path)
+
+        if changed_time == self.watched_time:
+            return
+
+        self.watched_time = changed_time
+        self.check()
+
+    def show_status(self) -> None:
+        self.query_one("#status", Static).update(
+            status_line(
+                exercise=self.exercise,
+                progress=self.progress,
+                width=self.size.width,
             ),
         )
-        failing = check_all(self.progress)
 
+    def show_result(self) -> None:
+        pane = self.query_one("#result", VerticalScroll)
+        pane.set_class(self.outcome is None, "-checking")
+        pane.set_class(self.passed, "-passed")
+        self.query_one("#result-text", Static).update(
+            result_view(
+                exercise=self.exercise,
+                outcome=self.outcome,
+                check_again=self.check_again,
+            ),
+        )
+
+    def next_hint_ready(self) -> bool:
+        return 0 < self.hints_open < len(self.exercise.hints) and self.runs > self.runs_at_last_hint
+
+    def show_hint(self) -> None:
+        pane = self.query_one("#hint", VerticalScroll)
+        pane.set_class(self.hint_shown, "-open")
+        pane.border_title = f"Hint {self.hints_open} of {len(self.exercise.hints)}"
+        self.query_one("#hint-text", Static).update(
+            hint_view(
+                exercise=self.exercise,
+                hints_open=self.hints_open,
+                next_ready=self.next_hint_ready(),
+                run_again=self.run_again,
+            ),
+        )
+
+    def open_hint_level(self) -> None:
+        self.hints_open += 1
+        self.runs_at_last_hint = self.runs
+        self.hint_shown = True
+        self.show_hint()
+        self.query_one("#hint", VerticalScroll).scroll_end(animate=False)
+        self.refresh_bindings()
+
+    def check_action(
+        self,
+        action: str,
+        parameters: tuple[object, ...],
+    ) -> bool | None:
+        if action == "next_exercise":
+            return True if self.passed else None
+
+        if action == "check_now":
+            return self.manual
+
+        if action == "show_hint":
+            return not self.hint_shown
+
+        if action == "next_hint":
+            return self.hint_shown and self.next_hint_ready()
+
+        if action == "hide_hint":
+            return self.hint_shown and not self.next_hint_ready()
+
+        return True
+
+    def action_next_exercise(self) -> None:
+        if not self.passed:
+            return
+
+        upcoming = next_pending(self.progress)
+
+        if upcoming is not None:
+            self.open_exercise(upcoming)
+            return
+
+        self.outcome = None
+        self.show_result()
+        self.notify("Checking every exercise once more before the finish line.")
+        self.check_everything()
+
+    @work(thread=True, group="check")
+    def check_everything(self) -> None:
+        failing = check_all(self.progress)
+        self.app.call_from_thread(self.finish_course, failing)
+
+    def finish_course(
+        self,
+        failing: list[Exercise],
+    ) -> None:
         if failing:
             names = ", ".join(exercise.name for exercise in failing)
             self.open_exercise(failing[0])
-            self.message = f"These no longer pass, so you are back at the first one. {names}"
-            return False
+            self.notify(
+                f"These no longer pass, so you're back at the first one. {names}",
+                severity="warning",
+                timeout=10,
+            )
+            return
 
-        key = self.show_page(
-            title="You made it to the finish line",
-            text=FINISH,
-            keys=[
-                ("l", "list"),
-                ("q", "quit"),
-            ],
-            accepted={"l", "q"},
+        self.app.push_screen(
+            FinishScreen(
+                title="You made it to the finish line",
+                text=FINISH,
+            ),
+            callback=self.after_finish,
         )
 
-        if key == "q":
-            return True
-
-        self.run_list()
-        return False
-
-    def handle_watch_key(
+    def after_finish(
         self,
-        key: str,
-    ) -> str | None:
-        """Act on one key in the main screen. Returns "quit" to leave the app."""
-        self.message = ""
-        passed = self.outcome is not None and self.outcome.passed
+        choice: str | None,
+    ) -> None:
+        if choice == "list":
+            self.action_open_list()
+            return
 
-        if key in ("changed", "resized"):
-            if key == "changed" and not self.manual:
-                self.check()
+        self.app.exit()
 
-            return None
+    def action_check_now(self) -> None:
+        self.check()
 
-        if key == "r" and self.manual:
-            self.check()
-        elif key == "n" and passed:
-            upcoming = next_pending(self.progress)
+    def action_show_hint(self) -> None:
+        if self.hints_open == 0 or self.next_hint_ready():
+            self.open_hint_level()
+            return
 
-            if upcoming is not None:
-                self.open_exercise(upcoming)
-            elif self.finish():
-                return "quit"
-        elif key == "n":
-            if self.show_hint or self.full_result:
-                self.message = "Pass every test first."
-            else:
-                self.message = "Pass every test first. Press h for a hint."
-        elif key in SCROLL_STEPS:
-            scroll = self.result_scroll if self.full_result else self.scroll
-            scroll.offset += SCROLL_STEPS[key]
-        elif self.full_result:
-            if key in ("tab", "q", "escape"):
-                self.full_result = False
-        elif key == "tab" and self.outcome is not None:
-            self.full_result = True
-            self.result_scroll = Scroll()
-        elif key == "h":
-            self.show_hint = not self.show_hint
-        elif key == "l":
-            self.run_list()
-        elif key == "x":
-            if self.confirm_reset():
-                reset_exercise(
-                    exercise=self.exercise,
-                    progress=self.progress,
-                )
-                self.check()
-                self.message = f"{self.exercise.path.name} is back to how it started."
-        elif key == "q":
-            return "quit"
+        self.hint_shown = True
+        self.show_hint()
+        self.refresh_bindings()
 
-        return None
+    def action_next_hint(self) -> None:
+        self.open_hint_level()
 
-    def run(self) -> int:
-        with self.keys, Live(
-            console=self.console,
-            screen=True,
-            auto_refresh=False,
-            redirect_stdout=False,
-            redirect_stderr=False,
-        ) as live:
-            self.live = live
+    def action_hide_hint(self) -> None:
+        self.hint_shown = False
+        self.show_hint()
+        self.refresh_bindings()
 
-            if not self.progress.welcomed:
-                self.show_page(
-                    title="Welcome to tensorlings",
-                    text=WELCOME,
-                    keys=[("enter", "start")],
-                    accepted={"enter"},
-                )
-                self.progress.welcomed = True
-                save_progress(self.progress)
+    def action_open_list(self) -> None:
+        self.app.push_screen(
+            ListScreen(progress=self.progress),
+            callback=self.picked_from_list,
+        )
 
-            self.check()
+    def picked_from_list(
+        self,
+        name: str | None,
+    ) -> None:
+        if name is None:
+            self.show_status()
+            return
 
-            while True:
-                self.draw_watch()
-                key = self.wait_for_key(watched=None if self.manual else self.exercise.path)
+        self.open_exercise(exercise_named(name))
 
-                if self.handle_watch_key(key) == "quit":
-                    break
+    def action_reset_exercise(self) -> None:
+        self.app.push_screen(
+            ConfirmScreen(question=f"Put {self.exercise.path.name} back to how it started? Your changes will be lost."),
+            callback=self.reset_answered,
+        )
 
-        self.console.print(f"See you next time. Run [bold]{START_COMMAND}[/bold] to continue where you left off.")
+    def reset_answered(
+        self,
+        yes: bool | None,
+    ) -> None:
+        if not yes:
+            return
 
-        return 0
+        reset_exercise(
+            exercise=self.exercise,
+            progress=self.progress,
+        )
+        self.watched_time = modified_time(self.exercise.path)
+        self.check()
+        self.notify(f"{self.exercise.path.name} is back to how it started.")
+
+
+class TensorlingsApp(App[None]):
+    CSS = APP_CSS
+    TITLE = "tensorlings"
+    ENABLE_COMMAND_PALETTE = False
+
+    def __init__(
+        self,
+        progress: Progress,
+        manual: bool,
+    ) -> None:
+        super().__init__()
+        self.progress = progress
+        self.manual = manual
+
+    def on_mount(self) -> None:
+        self.push_screen(
+            WatchScreen(
+                progress=self.progress,
+                manual=self.manual,
+            ),
+        )
+
+        if self.progress.welcomed:
+            return
+
+        self.push_screen(
+            WelcomeScreen(
+                title="Welcome to tensorlings",
+                text=WELCOME,
+            ),
+            callback=self.welcomed,
+        )
+
+    def welcomed(
+        self,
+        choice: str | None,
+    ) -> None:
+        self.progress.welcomed = True
+        save_progress(self.progress)
+
+    def copy_to_clipboard(
+        self,
+        text: str,
+    ) -> None:
+        super().copy_to_clipboard(text)
+
+        # macOS Terminal ignores the escape code Textual copies with, so hand the text to pbcopy too.
+        pbcopy = shutil.which("pbcopy")
+
+        if pbcopy is None:
+            return
+
+        subprocess.run(
+            [pbcopy],
+            input=text.encode(),
+            check=False,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -2930,7 +2942,7 @@ USAGE = prose(
     {START_COMMAND}                    start the course
     {START_COMMAND} --manual-run       start the course, checking only when you press r
     {START_COMMAND} run [name]         check one exercise and print the result
-    {START_COMMAND} hint [name]        print the hint for an exercise
+    {START_COMMAND} hint [name]        print the three hints for an exercise
     {START_COMMAND} reset name         reset an exercise file to how it started
     {START_COMMAND} check-all          check every exercise and update your progress
     {START_COMMAND} dev check          maintainer check of every exercise and lesson
@@ -2986,11 +2998,10 @@ def run_once(
     )
     console.print(
         Panel(
-            result_body(
+            result_view(
                 exercise=exercise,
                 outcome=outcome,
                 check_again="Run this command again after you change the file.",
-                full=True,
             ),
             title=exercise.title,
             title_align="left",
@@ -3050,7 +3061,10 @@ def dev_check(
             if not solution.passed or verbose:
                 console.print(
                     textwrap.indent(
-                        "\n".join(f"{'pass' if result.passed else 'FAIL'}  {result.description}  {result.detail}" for result in solution.results)
+                        "\n".join(
+                            f"{'pass' if result.passed else 'FAIL'}  {result.function}, {result.description}  {result.detail}"
+                            for result in solution.results
+                        )
                         + (f"\n{solution.problem}" if solution.problem else ""),
                         "      ",
                     ),
@@ -3059,7 +3073,11 @@ def dev_check(
             if verbose:
                 console.print(
                     textwrap.indent(
-                        "\n".join(f"stub {'pass' if result.passed else 'FAIL'}  {result.description}\n{textwrap.indent(result.detail, '      ')}" for result in stub.results)
+                        "\n".join(
+                            f"stub {'pass' if result.passed else 'FAIL'}  {result.function}, {result.description}\n"
+                            f"{textwrap.indent(result.detail, '      ')}"
+                            for result in stub.results
+                        )
                         + (f"\nstub problem: {stub.problem}" if stub.problem else ""),
                         "      ",
                     ),
@@ -3104,10 +3122,13 @@ def main(arguments: list[str]) -> int:
             print(f"The app needs a terminal. Use `{START_COMMAND} run` to check one exercise without it.")
             return 1
 
-        return App(
+        TensorlingsApp(
             progress=progress,
             manual="--manual-run" in flags,
         ).run()
+        print(f"See you next time. Run {START_COMMAND} to continue where you left off.")
+
+        return 0
 
     if command == "check-all":
         failing = check_all(progress)
@@ -3130,7 +3151,9 @@ def main(arguments: list[str]) -> int:
             return 1
 
         if command == "hint":
-            print(exercise.hint)
+            for label, hint in zip(HINT_LABELS, exercise.hints):
+                print(f"{label}\n{textwrap.indent(textwrap.fill(hint, width=76), '  ')}\n")
+
             return 0
 
         if command == "reset":
