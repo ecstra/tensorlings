@@ -2,7 +2,7 @@
 name: TODO-003-phase-1a-the-app-and-the-first-5-exercises
 kind: todo
 description: the full-screen tensorlings app and exercises tensors1 to tensors4 and matmul1, for the owner to judge
-updated: 2026-10-27
+updated: 2026-10-28
 links: []
 status: open
 by: owner
@@ -30,6 +30,7 @@ born: 2026-10-27
 | 10 | Drop the dot separators from the header and panel titles | | owner | done |
 | 11 | Move progress and the file under the result with labels, like rustlings | | owner | done |
 | 12 | Put Exercise and Progress on one line at the top | | owner | done |
+| 13 | Make the list's selected row one even highlight | | owner | done |
 
 ## Done when
 

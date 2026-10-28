@@ -2152,7 +2152,9 @@ def render_list(
             name,
             exercise.title,
             Text(relative(exercise.path), style="dim"),
-            style="reverse" if index == view.selected else None,
+            # A background, never reverse video, which turns each colored
+            # cell into a block of its own color and breaks up the bar.
+            style="bright_white on grey27" if index == view.selected else None,
         )
 
     done_label = "done" if view.show != "done" else "done (on)"
