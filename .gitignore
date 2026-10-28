@@ -37,5 +37,8 @@ __pycache__/
 exercises/
 solutions/
 
+# The learner's answers to the first version of the tasks, kept when the tasks were rewritten.
+exercises-old/
+
 # The virtual environment is rebuilt from requirements.txt on each machine.
 .venv/
