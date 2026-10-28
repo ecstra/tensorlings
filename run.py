@@ -162,7 +162,8 @@ PLAIN_ERRORS: tuple[tuple[str, str], ...] = (
     ),
     (
         r"index (-?\d+) is out of bounds for dimension (\d+) with size (\d+)",
-        "Position {0} does not exist along dimension {1}, which only has {2} entries. Counting starts at 0.",
+        # PyTorch numbers the dimension within the index, not the tensor, so the message leaves it out.
+        "Position {0} does not exist, since the dimension it picks from only has {2} entries. Counting starts at 0.",
     ),
     (
         r"too many indices for tensor of dimension (\d+)",
@@ -546,6 +547,9 @@ def expect_floats(
         call=call,
         actual=actual,
     )
+
+    if isinstance(actual, (list, tuple)):
+        raise Mismatch(f"{call} returned a Python {type(actual).__name__}. Turn it into a tensor with torch.tensor(...).")
 
     if not isinstance(actual, Tensor):
         raise Mismatch(f"{call} returned a {type(actual).__name__}. It should return a tensor.")
@@ -944,7 +948,7 @@ def check_tensors2(checker: Checker) -> None:
         function="split_labels",
         description="gives every column but the last as the inputs",
         run=lambda split_labels: expect_tensor(
-            call="the inputs from split_labels(table)",
+            call="the first tensor split_labels(table) returns",
             actual=part_of_pair(
                 call="split_labels(table)",
                 actual=split_labels(table),
@@ -957,7 +961,7 @@ def check_tensors2(checker: Checker) -> None:
         function="split_labels",
         description="gives the last column as the labels, one per example",
         run=lambda split_labels: expect_tensor(
-            call="the labels from split_labels(table)",
+            call="the second tensor split_labels(table) returns",
             actual=part_of_pair(
                 call="split_labels(table)",
                 actual=split_labels(table),
