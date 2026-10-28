@@ -35,6 +35,7 @@ born: 2026-10-27
 | 15 | Show only failing tests beside the lesson and count what the code printed | | owner | done |
 | 16 | Open the full result on its own scrollable screen with tab | | owner | done |
 | 17 | Put what the code printed in a box of its own | | owner | done |
+| 18 | the owner's second round on lessons, tasks, results and the TUI | TODO-005 | owner | pending |
 
 ## Done when
 

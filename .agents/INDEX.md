@@ -2,7 +2,7 @@
 name: agent-index
 kind: doc
 description: the spine of the agent directory, what exists and where
-updated: 2026-10-27
+updated: 2026-10-28
 links: [README.md, spec/conventions.md, house-rules.md]
 ---
 
@@ -37,9 +37,9 @@ rather than this one.
 ## The trackers
 
 - [plans/INDEX.md](plans/INDEX.md), the plans: 1 open
-- [todos/INDEX.md](todos/INDEX.md), the work tracker: 3 done, 1 open
+- [todos/INDEX.md](todos/INDEX.md), the work tracker: 3 done, 2 open
 - [bugs/INDEX.md](bugs/INDEX.md), the defect tracker: empty
-- [decisions/INDEX.md](decisions/INDEX.md), the decision record: 3 standing
+- [decisions/INDEX.md](decisions/INDEX.md), the decision record: 5 standing, 1 superseded
 - [reviews/INDEX.md](reviews/INDEX.md), code review ledgers: empty
 
 ## Memory and handovers

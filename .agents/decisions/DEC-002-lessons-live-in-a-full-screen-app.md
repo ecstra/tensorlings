@@ -2,11 +2,12 @@
 name: DEC-002-lessons-live-in-a-full-screen-app
 kind: decision
 description: tensorlings shows each lesson in a full-screen rich app and keeps the exercise files to code and TODOs
-updated: 2026-10-27
+updated: 2026-10-28
 links: []
 date: 2026-10-27
 area: course
-status: standing
+status: superseded
+superseded-by: DEC-004
 ---
 
 ## Decision

@@ -69,3 +69,28 @@ Other corrections to that chat, checked against sources.
 - Text that assumed knowledge the owner had forgotten, such as why a Linear layer exists at all.
 - A watch screen that scrolled instead of redrawing in place.
 - A scope too narrow for the owner's goal, only architectures and only one framing of them.
+
+## What failed with the owner in phase 1a
+
+- Lessons that read as machine written and were hard to follow. They opened with definitions, put bold labels like "Why it exists." on paragraphs, chained "which is a ..." clauses, and gave every paragraph the same job in the same order.
+- Lessons that held the answer. In all six exercises the solution line was nearly a copy of a line in the lesson, so the task was retyping.
+- A result box that listed only the failing tests, so the learner could not find the function that already worked.
+
+## Research on writing that sounds human
+
+- Signs of machine writing ([Wikipedia's guide](https://en.wikipedia.org/wiki/Wikipedia:Signs_of_AI_writing), [Julia Evans on confusing explanations](https://jvns.ca/blog/confusing-explanations/)): opening on a definition, bold labels on paragraphs, clauses bolted onto the end of a sentence, grouping in threes, tidy upbeat closers, overexplaining, and swapping synonyms for one thing. Instruction tuned models use participle clauses and nominalizations far more than people do ([Reinhart et al. 2025](https://arxiv.org/html/2410.16107v2)). Expert readers spot predictable text with no person or surprise in it ([Russell et al. 2025](https://arxiv.org/abs/2501.15654)).
+- How good teachers write. Karpathy shows a number moving before he names the derivative, and opens his training recipe on real failures ([micrograd lecture](https://www.youtube.com/watch?v=VMj-3S1tku0), [recipe](https://karpathy.github.io/2019/04/25/recipe/)). fast.ai plays the whole game first ([fastbook](https://github.com/fastai/fastbook/blob/master/01_intro.ipynb)). The Rust Book compiles broken code on purpose and lets the error bring in the next idea ([chapter 2](https://doc.rust-lang.org/book/ch02-00-guessing-game-tutorial.html)).
+- What the course takes from this. Open with a situation, show code and its output before the name, one new idea per paragraph, talk to "you", no bold labels, and give the why as a case the learner will meet.
+
+## Research on tasks that make the learner think
+
+- Worked examples help beginners and stop helping as skill grows, so later examples should leave more blank ([worked example effect](https://en.wikipedia.org/wiki/Worked-example_effect)). Trying a problem before instruction helps with concepts ([Sinha and Kapur 2021](https://doi.org/10.3102/00346543211019105)). Producing an answer sticks better than reading one, and retyping a shown answer feels fluent but teaches little (Bjork and Bjork 2011).
+- A feature is only noticed when it varies while the rest stays still ([variation theory](https://kb.edu.hku.hk/approaches_variation_theory/)). So the lesson shows one case and the task changes one thing, another dimension, another shape or another operation.
+- Rustlings states the goal in words and leaves the syntax to the book or a hint ([hints](https://github.com/rust-lang/rustlings/blob/main/rustlings-macros/info.toml)). Hints should climb from where to look, to the idea, to the answer, and learners who can click freely skip to the answer ([Cody et al. 2021](https://ar5iv.labs.arxiv.org/html/2102.05741)).
+- Asking for a prediction before running code helps in general ([PRIMM](https://static.raspberrypi.org/files/curriculum/quickreads/11-Pedagogy_Summary_PRIMM_V4_2023.pdf)), but the owner rejected prediction exercises, so lessons do not ask for them.
+
+## Research on the app's library
+
+- Claude Code draws its screen with Ink, React for the terminal. What makes it pleasant is a fixed bottom bar with dim key hints, tool output folded to one line until opened, mouse wheel scrolling, and few colors ([fullscreen](https://code.claude.com/docs/en/fullscreen), [Ink](https://github.com/vadimdemedes/ink)).
+- In Python, Textual has scrolling panes that take focus, the mouse wheel, collapsible sections, Markdown with highlighted code, a footer built from key bindings, thread workers for blocking work, and headless tests with SVG screenshots ([docs](https://textual.textualize.io/)). prompt_toolkit and urwid give layout parts with no Markdown or footer.
+- Textual's costs. The mouse is captured, so copying needs the app's own drag selection or holding Fn in Terminal and Shift in VS Code. Copy goes through OSC 52, which macOS Terminal ignores, so the app also calls `pbcopy`. Textual has no file watcher, and its own reloader polls file times. The company behind it closed in 2025 and Textual continues as open source.
