@@ -44,5 +44,5 @@ rather than this one.
 
 ## Memory and handovers
 
-- [memory/INDEX.md](memory/INDEX.md), project facts: 2 facts
+- [memory/INDEX.md](memory/INDEX.md), project facts: 3 facts
 - handover/, 4 handovers, newest [tensorlings-waiting-for-the-owner-s-verdict-on-phase-1a](handover/tensorlings-waiting-for-the-owner-s-verdict-on-phase-1a.md)
