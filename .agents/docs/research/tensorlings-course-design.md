@@ -20,9 +20,9 @@ About 300 small exercises in 13 parts. Each part ends with a project.
 
 | Part | Content |
 |---|---|
-| 1 Foundations | tensors, shapes, indexing, broadcasting, reductions, matrix multiply, derivatives, the chain rule, a scalar autograd engine by hand, backprop through tensors by hand |
+| 1 Foundations | tensors, shapes, indexing, broadcasting, reductions and matrix multiply, all taught by building Karpathy's makemore bigram model, then derivatives, the chain rule, a scalar autograd engine by hand, backprop through tensors by hand |
 | 2 Learning | linear and softmax regression, losses as probability, gradient descent, minibatches, train, validation and test splits, overfitting, weight decay |
-| 3 Building blocks | Linear, the common activations and why each, embeddings, MLPs, initialization, dropout, normalization, residuals. Project, a name generator |
+| 3 Building blocks | Linear, the common activations and why each, embeddings, MLPs, initialization, dropout, normalization, residuals. Project, an MLP name generator that beats the bigram model |
 | 4 Optimization | SGD, momentum, RMSProp, Adam, AdamW, schedules, warmup, gradient clipping, the debugging recipe |
 | 5 Convolutional nets | convolution derived from Linear, channels, stride, dilation, pooling, LeNet to ResNet, upsampling, U-Net, augmentation, transfer learning. Project, a small image classifier |
 | 6 Sequences | RNN, backprop through time, LSTM, GRU, bidirectional models, encoder and decoder, beam search, causal and dilated convolution, state space models |
@@ -75,7 +75,9 @@ Each rule gets exercises where the wrong combination fails and the right one wor
 - The file holds the code, a `TODO` at every place to change, and a closing comment that lists what the check tests.
 - Every exercise is code to write or fix. There are no prediction only exercises.
 - Each check is a list of tests, and every test belongs to one function. A failing test says in plain words what came back and what was expected. A missing function fails only its own tests.
-- Each exercise has three hints, where to look, the idea, then the answer, per [DEC-005](../../decisions/DEC-005-hints-open-in-three-levels-one-per-new-run.md).
+- Each function in an exercise has one hint, per [DEC-010](../../decisions/DEC-010-one-hint-per-function.md).
+- A test that runs past `TIME_LIMIT_SECONDS` fails with a note about loops that never end, so a learner's endless loop can't stall the app. See `run_with_time_limit` in `run.py`.
+- A wrong tensor with more than `SHOWN_ENTRIES` entries is described by the entries that differ, so a 27 by 27 table never prints whole.
 - After a pass the reference solution is written to `solutions/<chapter>/<name>.py`.
 
 ## The app
@@ -87,7 +89,7 @@ Each rule gets exercises where the wrong combination fails and the right one wor
 - On a narrow terminal the progress bar shrinks, then goes, so the file path stays whole. See `status_line` in `run.py`.
 - The owner tried several tops before this one. Two bare lines felt cramped, a dot between the parts looked bad, and spaced words with no labels meant nothing. So every piece on the screen has a label or sits in a titled box.
 - The result is an aligned table with one row per function, saying passes, not written yet, or how many of its checks fail. Under it, each failing function's first failing check is explained the way a compiler shows its first error. It grows with the functions and not with the checks, and passing functions stay in view, since the owner could not find a function that already worked when only failures were listed. See `result_view` in `run.py`.
-- The Hint tab shows the hints opened so far. `2`, or `h`, opens the first one, and opens the next once the checks have run again since the last. Two bindings share those keys so the footer says "next hint" when one is ready.
+- The Hint tab shows the hint for each function that doesn't pass yet. `2` or `h` opens it, and nothing is locked.
 - What the learner's code prints is caught and shown in a magenta box under the results, since printing straight to the screen would break the drawing.
 - Common PyTorch errors get a plain words explanation above PyTorch's own message, from the table `PLAIN_ERRORS` in `run.py`. A new error that confuses learners gets a row there.
 - Checks run in a thread worker so the screen never freezes, one at a time under `CHECK_LOCK`, and only the latest check of a burst of saves is shown. The app polls the file's time twice a second.
@@ -110,17 +112,19 @@ From [the research](tensorlings-research.md#research-on-writing-that-sounds-huma
 
 ## Tasks
 
-From [the research](tensorlings-research.md#research-on-tasks-that-make-the-learner-think) and [DEC-006](../../decisions/DEC-006-a-task-never-repeats-its-lesson.md).
+From [the research](tensorlings-research.md#research-on-tasks-that-make-the-learner-think) and [DEC-011](../../decisions/DEC-011-lessons-teach-every-tool-and-tasks-build-a-model.md).
 
-- The lesson uses one example, and each task changes something it held fixed, such as the dimension, the shape, the operation, or a combination with an earlier exercise.
-- No line of a solution appears in the lesson or in the first two hints.
-- The TODO says the goal in plain words and leaves the syntax to the learner.
-- The tests include the case that catches the likely mistake, such as a square input where rows and columns mix up.
+- Exercises build a real model step by step, as Zero to Hero does, so every operation has a reason. The first six build Karpathy's makemore bigram model and end with it rewritten as a layer. Tasks are never standalone puzzles.
+- The lesson teaches every tool its tasks need, on its own small example, and the task applies the tools to the model. A task never needs a function or argument that no lesson showed.
+- No line of a solution appears in the lesson or the hints as the task writes it.
+- The file gives the scaffolding, like loops and helper functions from earlier exercises, and leaves the tensor work as `TODO`s, as rustlings does.
+- The TODO says the goal in plain words.
+- The tests include the case that catches the likely mistake, such as a square table where rows and columns mix up.
 
 ## Verification
 
 - `run.py dev check` runs every exercise twice. The starting file must fail and the solution must pass.
-- A lesson lint in the dev check flags sentences over 25 words, filler words, dashes and semicolons, a paragraph that opens with a bold label, a lesson taller than 60 lines at width 96, any term from `JARGON` in `run.py` used before an exercise lists it in `introduces`, and any solution body that shows up in the lesson or the first two hints. Variable names are ignored in that last check, so renaming does not hide a copy. A new technical term gets added to `JARGON` the first time a lesson needs it.
+- A lesson lint in the dev check flags sentences over 25 words, filler words, dashes and semicolons, a paragraph that opens with a bold label, a lesson taller than 60 lines at width 96, any term from `JARGON` in `run.py` used before an exercise lists it in `introduces`, and any solution body that shows up word for word in the lesson or the hints. A new technical term gets added to `JARGON` the first time a lesson needs it.
 - A separate reviewer agent reads every lesson as a complete beginner before the owner sees it.
 - `dev/wrong_answers.py` runs common wrong answers through the checks. Every one must fail with a message a beginner can act on, and the script exits with 1 if one passes. New exercises add their likely mistakes to its `CASES`.
 - `dev/screens.py` drives the app headless with Textual's Pilot on a scratch copy of the course and saves SVG screenshots, which `qlmanage` turns into PNGs to look at. It runs before each hand over, at a normal size and at 80 by 24. Its docstring has the command.

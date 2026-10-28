@@ -75,6 +75,8 @@ Other corrections to that chat, checked against sources.
 - Lessons that read as machine written and were hard to follow. They opened with definitions, put bold labels like "Why it exists." on paragraphs, chained "which is a ..." clauses, and gave every paragraph the same job in the same order.
 - Lessons that held the answer. In all six exercises the solution line was nearly a copy of a line in the lesson, so the task was retyping.
 - A result box that listed only the failing tests, so the learner could not find the function that already worked.
+- After the fix for copied answers, lessons that left out tools the tasks needed, such as `.numel()`, and tasks that were puzzles with no purpose, such as a times table. The owner called them leetcode and asked for rustlings or Zero to Hero style, which led to building the makemore bigram model through the exercises.
+- Story examples, such as a shop selling apples and pears, and vague comparisons.
 
 ## Research on writing that sounds human
 

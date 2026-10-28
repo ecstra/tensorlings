@@ -104,6 +104,34 @@ class Mismatch(Exception):
     """One test got a different result than it should. The message says how."""
 
 
+class TookTooLong(Exception):
+    """The learner's code ran past the time limit, usually a loop that never ends."""
+
+
+# Long enough for any correct answer, short enough that a loop that never ends doesn't stall the app.
+TIME_LIMIT_SECONDS = 5
+
+
+def run_with_time_limit(run: Callable[[], object]) -> None:
+    """Run code with a time limit. Checks run in a thread, where signals can't interrupt them,
+    so a trace function raises TookTooLong inside the learner's code once time is up."""
+    deadline = time.monotonic() + TIME_LIMIT_SECONDS
+
+    def stop_when_late(frame: object, event: str, argument: object) -> object:
+        if time.monotonic() > deadline:
+            raise TookTooLong()
+
+        return stop_when_late
+
+    previous = sys.gettrace()
+    sys.settrace(stop_when_late)
+
+    try:
+        run()
+    finally:
+        sys.settrace(previous)
+
+
 # PyTorch's own wording for common mistakes, each with the same message in plain words.
 PLAIN_ERRORS: tuple[tuple[str, str], ...] = (
     (
@@ -203,7 +231,9 @@ def load_module(
     module = importlib.util.module_from_spec(spec)
 
     try:
-        spec.loader.exec_module(module)
+        run_with_time_limit(lambda: spec.loader.exec_module(module))
+    except TookTooLong:
+        raise Problem(f"{path.name} was still running after {TIME_LIMIT_SECONDS} seconds while loading. Look for a loop that never ends.") from None
     except SyntaxError as error:
         raise Problem(f'Python cannot read line {error.lineno} of {path.name}. Its message is "{error.msg}".') from None
     except Exception as error:
@@ -257,7 +287,17 @@ class Checker:
             return
 
         try:
-            run(found)
+            run_with_time_limit(lambda: run(found))
+        except TookTooLong:
+            self.results.append(
+                TestResult(
+                    function=function,
+                    description=description,
+                    passed=False,
+                    detail=f"{function} was still running after {TIME_LIMIT_SECONDS} seconds. Look for a loop that never ends.",
+                ),
+            )
+            return
         except Mismatch as mismatch:
             self.results.append(
                 TestResult(
@@ -269,15 +309,21 @@ class Checker:
             )
             return
         except Exception as error:
+            # A TODO left as ... makes code like LETTERS[...] fail, which means the function is not finished.
+            if "ellipsis" in str(error):
+                detail = f"{function} still has a ... where a TODO goes, so it is {NOT_STARTED}."
+            else:
+                detail = describe_crash(
+                    error=error,
+                    path=self.path,
+                )
+
             self.results.append(
                 TestResult(
                     function=function,
                     description=description,
                     passed=False,
-                    detail=describe_crash(
-                        error=error,
-                        path=self.path,
-                    ),
+                    detail=detail,
                 ),
             )
             return
@@ -306,7 +352,29 @@ def value_text(value: object) -> str:
     return repr(value)
 
 
-NOT_STARTED = "returned None"
+NOT_STARTED = "not written yet"
+
+# A tensor with more entries than this is described by its differences, since printing it whole buries them.
+SHOWN_ENTRIES = 12
+
+
+def number_text(value: float | int) -> str:
+    return str(value) if isinstance(value, int) else f"{value:.4g}"
+
+
+def differences_text(
+    actual: Tensor,
+    expected: Tensor,
+) -> str:
+    different = ~torch.isclose(actual.double(), expected.double(), atol=1e-6)
+    positions = different.nonzero().tolist()
+    lines = [f"{len(positions)} of {expected.numel()} entries differ. The first ones are"]
+
+    for position in positions[:5]:
+        index = tuple(position)
+        lines.append(f"  at {list(index)}, got {number_text(actual[index].item())}, expected {number_text(expected[index].item())}")
+
+    return "\n".join(lines)
 
 
 def reject_missing_return(
@@ -314,7 +382,7 @@ def reject_missing_return(
     actual: object,
 ) -> None:
     if actual is None:
-        raise Mismatch(f"{call} {NOT_STARTED}, which usually means the function has no return statement yet.")
+        raise Mismatch(f"{call} returned None, which usually means it is {NOT_STARTED}.")
 
 
 def expect_tensor(
@@ -333,19 +401,27 @@ def expect_tensor(
     if not isinstance(actual, Tensor):
         raise Mismatch(f"{call} returned a {type(actual).__name__}. It should return a tensor.")
 
-    if tuple(actual.shape) != tuple(expected.shape):
-        raise Mismatch(
-            f"{call} has shape {shape_text(tuple(actual.shape))}, but it should have shape {shape_text(tuple(expected.shape))}.\n"
-            f"got       {value_text(actual)}\n"
-            f"expected  {value_text(expected)}",
-        )
+    small = actual.numel() <= SHOWN_ENTRIES and expected.numel() <= SHOWN_ENTRIES
 
-    if not torch.allclose(actual.double(), expected.double(), atol=1e-6):
+    if tuple(actual.shape) != tuple(expected.shape):
+        message = f"{call} has shape {shape_text(tuple(actual.shape))}, but it should have shape {shape_text(tuple(expected.shape))}."
+
+        if small:
+            message += f"\ngot       {value_text(actual)}\nexpected  {value_text(expected)}"
+
+        raise Mismatch(message)
+
+    if torch.allclose(actual.double(), expected.double(), atol=1e-6):
+        return
+
+    if small:
         raise Mismatch(
             f"{call} has the right shape but different numbers.\n"
             f"got       {value_text(actual)}\n"
             f"expected  {value_text(expected)}",
         )
+
+    raise Mismatch(f"{call} has the right shape but different numbers.\n" + differences_text(actual, expected))
 
 
 def expect_value(
@@ -398,8 +474,8 @@ class Exercise:
     lesson: str
     source: str
     solution: str
-    # Where to look, the idea, then the answer. Each opens after one more run.
-    hints: tuple[str, str, str]
+    # One hint per function, shown for the functions that don't pass yet.
+    hints: dict[str, str]
     introduces: tuple[str, ...]
     check: Callable[[Checker], None]
 
@@ -468,60 +544,110 @@ TENSORS = Chapter(
         """
         # Tensors
 
-        Every number a model reads, stores or produces lives in a tensor, a grid
-        of numbers with a fixed shape. This chapter covers making tensors,
-        reading their shape, picking out parts, doing math on whole tensors at
-        once, and adding up along a dimension.
+        Every number a model reads, stores or produces lives in a tensor. This
+        chapter teaches tensors by building the first model of Andrej Karpathy's
+        makemore series. It counts which letter follows which in a list of
+        names, turns the counts into probabilities and makes up new names.
 
         ## Further reading
 
+        - [Karpathy, building makemore](https://www.youtube.com/watch?v=PaCmpygFfXo)
         - [PyTorch, introduction to tensors](https://docs.pytorch.org/tutorials/beginner/basics/tensorqs_tutorial.html)
         - [Dive into Deep Learning, data manipulation](https://d2l.ai/chapter_preliminaries/ndarray.html)
         """,
     ),
 )
 
+# "." marks where a name starts and ends. Each other letter is its position in this string.
+LETTERS = ".abcdefghijklmnopqrstuvwxyz"
+
+# The names the checks build the model from. Every letter appears, so no row of counts is empty.
+TRAINING_NAMES: tuple[str, ...] = (
+    "emma", "olivia", "ava", "isabella", "sophia", "charlotte", "mia", "amelia", "harper", "evelyn",
+    "abigail", "emily", "elizabeth", "mila", "ella", "avery", "sofia", "camila", "aria", "scarlett",
+    "victoria", "madison", "luna", "grace", "chloe", "penelope", "layla", "riley", "zoey", "nora",
+    "lily", "eleanor", "hannah", "lillian", "addison", "aubrey", "ellie", "stella", "natalie", "zoe",
+    "liam", "noah", "oliver", "elijah", "william", "james", "benjamin", "lucas", "henry", "alexander",
+    "mason", "michael", "ethan", "daniel", "jacob", "logan", "jackson", "levi", "sebastian", "mateo",
+    "jack", "owen", "theodore", "aiden", "samuel", "joseph", "david", "wyatt", "matthew", "luke",
+    "quinn", "xavier", "felix", "jude", "kai", "rex", "yusuf", "uma", "quentin", "zane",
+)
+
+
+def letter_positions(name: str) -> list[int]:
+    return [LETTERS.index(letter) for letter in "." + name + "."]
+
+
+def letter_pair_counts(names: tuple[str, ...] | list[str]) -> Tensor:
+    """The reference count table the checks compare with, built the way the exercises build it."""
+    counts = torch.zeros((len(LETTERS), len(LETTERS)), dtype=torch.int64)
+
+    for name in names:
+        positions = letter_positions(name)
+
+        for first, second in zip(positions, positions[1:]):
+            counts[first, second] += 1
+
+    return counts
+
+
+def expect_integers(
+    call: str,
+    actual: object,
+) -> None:
+    reject_missing_return(
+        call=call,
+        actual=actual,
+    )
+
+    if not isinstance(actual, Tensor):
+        raise Mismatch(f"{call} returned a {type(actual).__name__}. It should return a tensor.")
+
+    if actual.dtype.is_floating_point:
+        raise Mismatch(f"{call} holds floats. Pass dtype=torch.int64 so it holds integers.")
+
+
 TENSORS1_LESSON = prose(
     """
-    `torch.tensor` builds a **tensor**, a grid of numbers, from nested lists.
-    Each inner list becomes a row.
+    Over these six exercises you build the first model from Andrej Karpathy's
+    makemore series. It reads a list of names, learns which letter tends to
+    follow which, and makes up new names. Every tensor operation here is one
+    that model needs. The last exercise rewrites it as the first piece of a
+    neural network, the kind of model the rest of the course builds.
+
+    A **model** is a program that turns input numbers into output numbers.
+    **Training** adjusts the model's own numbers until its outputs match the
+    examples it learns from. Those numbers live in tensors. A **tensor** is a
+    grid of numbers, and `torch.tensor` builds one from a list, or from nested
+    lists with one inner list per row.
 
     ```python
     import torch
 
+    torch.tensor([7, 8, 9]).shape    # torch.Size([3])
+
     x = torch.tensor([[1, 2, 3],
                       [4, 5, 6]])
-    x.shape    # torch.Size([2, 3])
+    x.shape                          # torch.Size([2, 3])
     ```
 
-    Each value in a tensor is an entry. The **shape** gives the size of each
-    **dimension**. `x` has 2 rows and 3 columns, so it has two dimensions.
-    Dimension 0 is the rows and dimension 1 is the columns. This course writes
-    shapes the short way, as `(2, 3)`. `torch.Size` is a subclass of `tuple`,
-    so tuple operations work on it.
+    The **shape** gives the size of each **dimension**. `x` has 2 rows and 3
+    columns, and the flat tensor before it has one dimension of size 3. This
+    course writes shapes the short way, as `(2, 3)` and `(3,)`.
 
-    A tensor can have any number of dimensions.
+    A tensor holds one type of number. `torch.tensor` keeps the type of what
+    you give it, so Python ints give a tensor of integers. `torch.zeros` makes a
+    tensor of the shape you give it, filled with zeros, and those are floats
+    unless you pass `dtype=torch.int64`.
 
-    | Tensor | Shape |
-    |---|---|
-    | `torch.tensor(7)` | `()` |
-    | `torch.tensor([1, 2, 3])` | `(3,)` |
-    | `x` | `(2, 3)` |
-    | 32 color images, 3 color channels, 64 by 64 pixels | `(32, 3, 64, 64)` |
+    ```python
+    torch.zeros((2, 4))                       # floats, shape (2, 4)
+    torch.zeros((2, 4), dtype=torch.int64)    # integers, shape (2, 4)
+    ```
 
-    A tensor with no dimensions holds one entry, and its shape is the empty
-    tuple. The number of entries is the product of the sizes in the shape, 6
-    for `x`.
-
-    The checks call your functions on tensors like `torch.zeros(4, 5)`, which
-    has shape `(4, 5)` and holds only zeros.
-
-    In deep learning, a **model** is a program that turns input numbers into
-    output numbers. Its input usually comes as a **batch**, a grid with one row
-    per example, such as one image or one sentence. Each column holds one number
-    describing the examples. The model's own numbers are tensors too, and
-    **training** adjusts them until the outputs are right. Shapes that don't match are one of
-    the most common bugs in model code, so shapes come first.
+    The model works on numbers, so each letter becomes its position in
+    `LETTERS`. The `"."` at position 0 marks where a name starts and ends, so
+    the name `"ab"` becomes `[0, 1, 2, 0]`.
     """,
 )
 
@@ -532,33 +658,25 @@ TENSORS1_SOURCE = source_file(
     import torch
     from torch import Tensor
 
+    # "." marks where a name starts and ends. Each other letter is its position in this string.
+    LETTERS = ".abcdefghijklmnopqrstuvwxyz"
 
-    # TODO: Return a grid of 3 rows and 2 columns holding the numbers 1 to 6, filled row by row.
-    def make_grid() -> Tensor:
+
+    # TODO: Turn a name into a tensor of letter positions, with "." added at both ends.
+    #   encode("ab") is tensor([0, 1, 2, 0]).
+    def encode(name: str) -> Tensor:
         ...
 
 
-    # TODO: Return the number of rows in the grid, the size of dimension 0.
-    def count_rows(grid: Tensor) -> int:
-        ...
-
-
-    # TODO: Return the number of dimensions of the tensor.
-    def count_dimensions(values: Tensor) -> int:
-        ...
-
-
-    # TODO: Return the number of entries in the tensor.
-    #   It has to work for any number of dimensions, including none, like torch.tensor(5.0).
-    def count_entries(values: Tensor) -> int:
+    # TODO: Return a table of zeros with one row and one column for every letter in
+    #   LETTERS, holding integers. The next exercise counts letter pairs into it.
+    def empty_counts() -> Tensor:
         ...
 
 
     # What the check tests
-    #   make_grid() is [[1, 2], [3, 4], [5, 6]]
-    #   count_rows is 4 for torch.zeros(4, 5) and 10 for torch.zeros(10, 3)
-    #   count_dimensions is 2, 1, 0 and 3 for shapes (4, 5), (7,), () and (2, 3, 4)
-    #   count_entries is 20, 7, 1 and 24 for the same four tensors
+    #   encode("ab") is [0, 1, 2, 0] and encode("emma") is [0, 5, 13, 13, 1, 0]
+    #   empty_counts() is a 27 by 27 table of integer zeros
     ''',
 )
 
@@ -566,234 +684,249 @@ TENSORS1_SOLUTION = source_file(
     '''
     # tensors1.py, a solution for comparison
 
-    import math
-
     import torch
     from torch import Tensor
 
-
-    def make_grid() -> Tensor:
-        return torch.tensor([[1, 2], [3, 4], [5, 6]])
+    LETTERS = ".abcdefghijklmnopqrstuvwxyz"
 
 
-    def count_rows(grid: Tensor) -> int:
-        return grid.shape[0]
+    def encode(name: str) -> Tensor:
+        return torch.tensor([LETTERS.index(letter) for letter in "." + name + "."])
 
 
-    # values.dim() gives the same number.
-    def count_dimensions(values: Tensor) -> int:
-        return len(values.shape)
-
-
-    # values.numel() gives the same number. An empty shape multiplies out to 1.
-    def count_entries(values: Tensor) -> int:
-        return math.prod(values.shape)
+    def empty_counts() -> Tensor:
+        return torch.zeros((len(LETTERS), len(LETTERS)), dtype=torch.int64)
     ''',
-)
-
-SAMPLE_TENSORS: tuple[tuple[str, Tensor], ...] = (
-    ("torch.zeros(4, 5)", torch.zeros(4, 5)),
-    ("torch.zeros(7)", torch.zeros(7)),
-    ("torch.tensor(5.0)", torch.tensor(5.0)),
-    ("torch.zeros(2, 3, 4)", torch.zeros(2, 3, 4)),
 )
 
 
 def check_tensors1(checker: Checker) -> None:
+    for name in ("ab", "emma"):
+        checker.test(
+            function="encode",
+            description=f'turns "{name}" into {letter_positions(name)}',
+            run=lambda encode, name=name: expect_tensor(
+                call=f'encode("{name}")',
+                actual=encode(name),
+                expected=torch.tensor(letter_positions(name)),
+            ),
+        )
+
     checker.test(
-        function="make_grid",
-        description="is [[1, 2], [3, 4], [5, 6]]",
-        run=lambda make_grid: expect_tensor(
-            call="make_grid()",
-            actual=make_grid(),
-            expected=torch.tensor([[1, 2], [3, 4], [5, 6]]),
+        function="empty_counts",
+        description="is a 27 by 27 table of zeros",
+        run=lambda empty_counts: expect_tensor(
+            call="empty_counts()",
+            actual=empty_counts(),
+            expected=torch.zeros((27, 27), dtype=torch.int64),
         ),
     )
     checker.test(
-        function="count_rows",
-        description="is 4 for torch.zeros(4, 5) and 10 for torch.zeros(10, 3)",
-        run=lambda count_rows: (
-            expect_value(
-                call="count_rows(torch.zeros(4, 5))",
-                actual=count_rows(torch.zeros(4, 5)),
-                expected=4,
-            ),
-            expect_value(
-                call="count_rows(torch.zeros(10, 3))",
-                actual=count_rows(torch.zeros(10, 3)),
-                expected=10,
-            ),
+        function="empty_counts",
+        description="holds integers",
+        run=lambda empty_counts: expect_integers(
+            call="empty_counts()",
+            actual=empty_counts(),
         ),
-    )
-    checker.test(
-        function="count_dimensions",
-        description="is 2, 1, 0 and 3 for shapes (4, 5), (7,), () and (2, 3, 4)",
-        run=lambda count_dimensions: [
-            expect_value(
-                call=f"count_dimensions({call})",
-                actual=count_dimensions(values),
-                expected=values.dim(),
-            )
-            for call, values in SAMPLE_TENSORS
-        ],
-    )
-    checker.test(
-        function="count_entries",
-        description="is 20, 7, 1 and 24 for the same four tensors",
-        run=lambda count_entries: [
-            expect_value(
-                call=f"count_entries({call})",
-                actual=count_entries(values),
-                expected=values.numel(),
-            )
-            for call, values in SAMPLE_TENSORS
-        ],
     )
 
 
 TENSORS1 = Exercise(
     name="tensors1",
     chapter=TENSORS,
-    title="What a tensor is",
+    title="Letters as numbers",
     lesson=TENSORS1_LESSON,
     source=TENSORS1_SOURCE,
     solution=TENSORS1_SOLUTION,
-    hints=(
-        "Every function after make_grid reads the shape, and a shape is a tuple of sizes.",
-        "make_grid needs three inner lists. Pick one size out of the shape with square brackets, and take its "
-        "length to count the dimensions. For the entries, multiply all the sizes. math.prod multiplies a tuple and gives 1 for an "
-        "empty one.",
-        "torch.tensor([[1, 2], [3, 4], [5, 6]]), grid.shape[0], len(values.shape), and math.prod(values.shape) "
-        "with import math. values.numel() also counts the entries.",
-    ),
-    introduces=("model", "batch", "tensor", "shape", "dimension", "training"),
+    hints={
+        "encode": 'LETTERS.index(letter) gives a letter\'s position. Collect the positions of every letter in "." + '
+        'name + "." in a list, then pass the list to torch.tensor.',
+        "empty_counts": "torch.zeros takes the shape as a tuple. len(LETTERS) is the size of each side, and "
+        "dtype=torch.int64 makes it hold integers.",
+    },
+    introduces=("model", "training", "tensor", "shape", "dimension"),
     check=check_tensors1,
 )
 
+LETTERS_AND_ENCODE = '''
+    # "." marks where a name starts and ends. Each other letter is its position in this string.
+    LETTERS = ".abcdefghijklmnopqrstuvwxyz"
+
+
+    # From tensors1.
+    def encode(name: str) -> Tensor:
+        return torch.tensor([LETTERS.index(letter) for letter in "." + name + "."])
+'''
+
 TENSORS2_LESSON = prose(
     """
-    ```python
-    x = torch.tensor([[ 1,  2,  3],
-                      [ 4,  5,  6],
-                      [ 7,  8,  9],
-                      [10, 11, 12]])   # shape (4, 3)
-    ```
+    Square brackets read parts of a tensor. Give one position per dimension,
+    separated by commas. Positions start at 0, negative positions count from the
+    end, and dimensions you leave out are taken whole.
 
-    Inside the brackets, give one position per dimension, separated by commas.
-    Dimensions you leave out are taken whole. Positions start at 0, and negative
-    positions count from the end. A single position is an **index**.
+    ```python
+    x = torch.tensor([[1, 2, 3],
+                      [4, 5, 6],
+                      [7, 8, 9]])
+    ```
 
     | Code | Result | Selects |
     |---|---|---|
     | `x[0]` | `tensor([1, 2, 3])` | row 0 |
-    | `x[-1]` | `tensor([10, 11, 12])` | the last row |
+    | `x[-1]` | `tensor([7, 8, 9])` | the last row |
     | `x[1, 2]` | `tensor(6)` | row 1, column 2 |
-    | `x[:, 0]` | `tensor([1, 4, 7, 10])` | column 0 |
+    | `x[:, 0]` | `tensor([1, 4, 7])` | column 0 |
 
-    A bare `:` selects the whole dimension. `start:stop` selects the positions
-    from `start` up to, but not including, `stop`. Either end can be left out,
-    and either can be negative. This is a **slice**.
+    A single position is an **index**, and a bare `:` takes the whole
+    dimension. `start:stop` takes a range and is called a **slice**, so `x[0:2]`
+    is rows 0 and 1. An index removes its dimension and a slice keeps it.
+    `x[0]` has shape `(3,)`, while `x[0:1]` has shape `(1, 3)`.
 
-    | Code | Selects | Shape |
-    |---|---|---|
-    | `x[1:3]` | rows 1 and 2 | `(2, 3)` |
-    | `x[:2]` | the first two rows | `(2, 3)` |
-    | `x[:-1]` | every row but the last | `(3, 3)` |
+    `.item()` turns a tensor with one entry into a plain Python number, so
+    `x[1, 2].item()` is `6`. A tensor with one entry also works as a position,
+    so `x[torch.tensor(1), 2]` is the same entry as `x[1, 2]`.
 
-    An index removes its dimension and a slice keeps it. `x[0]` has shape
-    `(3,)`, and `x[0:1]` holds the same values with shape `(1, 3)`. The next two
-    exercises depend on that difference.
+    The same brackets write. Assigning to an entry changes it in place, and `+=`
+    adds to it.
 
-    Models select like this all the time. A text model gives one row of output
-    per word of its input, and its guess for the next word is the last row,
-    `output[-1]`. Training feeds a model 32 rows of data at a time,
-    `data[i:i + 32]`.
+    ```python
+    x[1, 2] = 0     # x[1, 2] is now 0
+    x[0, 0] += 10   # x[0, 0] is now 11
+    ```
+
+    That is how the model learns from names. Its table has one row and one
+    column per letter. Take every pair of neighbouring letters in every name,
+    such as `"e"` then `"m"` in `"emma"`. The entry at that row and column goes
+    up by one. Row 0 counts the letters that start a name, since every name
+    starts with `"."`.
     """,
 )
 
 TENSORS2_SOURCE = source_file(
-    '''
+    """
     # tensors2.py
 
     import torch
     from torch import Tensor
+    """
+    + LETTERS_AND_ENCODE
+    + '''
 
-    # The check calls every function on this grid, and on a grid of 4 rows and 6 columns.
-    #
-    #     grid = torch.tensor([[11, 12, 13, 14, 15],
-    #                          [21, 22, 23, 24, 25],
-    #                          [31, 32, 33, 34, 35]])
+    # A few names to try your functions on. The check uses more.
+    NAMES = ["emma", "olivia", "ava", "isabella", "sophia"]
 
 
-    # TODO: Return the last two columns of the grid.
-    def last_two_columns(grid: Tensor) -> Tensor:
+    # TODO: Count every pair of neighbouring letters in the names.
+    #   counts[a, b] ends up as the number of times letter b follows letter a.
+    def count_pairs(names: list[str]) -> Tensor:
+        counts = torch.zeros((len(LETTERS), len(LETTERS)), dtype=torch.int64)
+
+        for name in names:
+            letters = encode(name)
+
+            for first, second in zip(letters, letters[1:]):
+                # TODO: add one to the entry for this pair
+                ...
+
+        return counts
+
+
+    # TODO: Return how many times each letter starts a name, one count per letter in LETTERS.
+    def first_letter_counts(counts: Tensor) -> Tensor:
         ...
 
 
-    # TODO: Return the grid without its first column.
-    def drop_first_column(grid: Tensor) -> Tensor:
-        ...
-
-
-    # TODO: Return the grid without its outer edge, no first or last row and no first or last column.
-    def inner_part(grid: Tensor) -> Tensor:
+    # TODO: Return how many times the second letter of the pair follows the first, as an int.
+    #   count_of(counts, "em") is how often "m" comes right after "e".
+    def count_of(
+        counts: Tensor,
+        pair: str,
+    ) -> int:
         ...
 
 
     # What the check tests
-    #   last_two_columns(grid) is [[14, 15], [24, 25], [34, 35]]
-    #   drop_first_column(grid) has shape (3, 4) and starts with [12, 13, 14, 15]
-    #   inner_part(grid) is [[22, 23, 24]]
+    #   count_pairs(["ab"]) counts the pairs ".a", "ab" and "b."
+    #   count_pairs on 84 names
+    #   first_letter_counts and count_of on the counts of those names
     ''',
 )
 
 TENSORS2_SOLUTION = source_file(
-    '''
+    """
     # tensors2.py, a solution for comparison
 
     import torch
     from torch import Tensor
+    """
+    + LETTERS_AND_ENCODE
+    + '''
+
+    def count_pairs(names: list[str]) -> Tensor:
+        counts = torch.zeros((len(LETTERS), len(LETTERS)), dtype=torch.int64)
+
+        for name in names:
+            letters = encode(name)
+
+            for first, second in zip(letters, letters[1:]):
+                counts[first, second] += 1
+
+        return counts
 
 
-    def last_two_columns(grid: Tensor) -> Tensor:
-        return grid[:, -2:]
+    # Every name starts with ".", which is position 0, so row 0 holds the first letters.
+    def first_letter_counts(counts: Tensor) -> Tensor:
+        return counts[0]
 
 
-    def drop_first_column(grid: Tensor) -> Tensor:
-        return grid[:, 1:]
-
-
-    def inner_part(grid: Tensor) -> Tensor:
-        return grid[1:-1, 1:-1]
+    def count_of(
+        counts: Tensor,
+        pair: str,
+    ) -> int:
+        return counts[LETTERS.index(pair[0]), LETTERS.index(pair[1])].item()
     ''',
 )
 
 
 def check_tensors2(checker: Checker) -> None:
-    grid = torch.tensor([[11, 12, 13, 14, 15], [21, 22, 23, 24, 25], [31, 32, 33, 34, 35]])
-    bigger_grid = torch.arange(1, 25).reshape(4, 6)
+    counts = letter_pair_counts(TRAINING_NAMES)
 
-    for function, solve in (
-        ("last_two_columns", lambda values: values[:, -2:]),
-        ("drop_first_column", lambda values: values[:, 1:]),
-        ("inner_part", lambda values: values[1:-1, 1:-1]),
-    ):
+    checker.test(
+        function="count_pairs",
+        description='counts ".a", "ab" and "b." for the name "ab"',
+        run=lambda count_pairs: expect_tensor(
+            call='count_pairs(["ab"])',
+            actual=count_pairs(["ab"]),
+            expected=letter_pair_counts(["ab"]),
+        ),
+    )
+    checker.test(
+        function="count_pairs",
+        description=f"counts every pair in {len(TRAINING_NAMES)} names",
+        run=lambda count_pairs: expect_tensor(
+            call=f"count_pairs on {len(TRAINING_NAMES)} names",
+            actual=count_pairs(list(TRAINING_NAMES)),
+            expected=counts,
+        ),
+    )
+    checker.test(
+        function="first_letter_counts",
+        description="gives row 0 of the counts",
+        run=lambda first_letter_counts: expect_tensor(
+            call="first_letter_counts(counts)",
+            actual=first_letter_counts(counts),
+            expected=counts[0],
+        ),
+    )
+
+    for pair in ("em", "a.", ".j"):
         checker.test(
-            function=function,
-            description="is right for the grid in the file",
-            run=lambda learner, solve=solve, function=function: expect_tensor(
-                call=f"{function}(grid)",
-                actual=learner(grid),
-                expected=solve(grid),
-            ),
-        )
-        checker.test(
-            function=function,
-            description="is right for a grid of 4 rows and 6 columns",
-            run=lambda learner, solve=solve, function=function: expect_tensor(
-                call=f"{function}(torch.arange(1, 25).reshape(4, 6))",
-                actual=learner(bigger_grid),
-                expected=solve(bigger_grid),
+            function="count_of",
+            description=f'gives the count for "{pair}"',
+            run=lambda count_of, pair=pair: expect_value(
+                call=f'count_of(counts, "{pair}")',
+                actual=count_of(counts, pair),
+                expected=counts[LETTERS.index(pair[0]), LETTERS.index(pair[1])].item(),
             ),
         )
 
@@ -801,172 +934,171 @@ def check_tensors2(checker: Checker) -> None:
 TENSORS2 = Exercise(
     name="tensors2",
     chapter=TENSORS,
-    title="Picking out parts of a tensor",
+    title="Counting letter pairs",
     lesson=TENSORS2_LESSON,
     source=TENSORS2_SOURCE,
     solution=TENSORS2_SOLUTION,
-    hints=(
-        "Each function selects along both dimensions. Compare x[:, 0], which takes one column, with x[:-1], which "
-        "drops the last row.",
-        "Rows come first, then columns. A bare : keeps every row. Slices work on columns too. A negative start "
-        "counts from the end, and a negative stop leaves the end out.",
-        "grid[:, -2:], grid[:, 1:] and grid[1:-1, 1:-1].",
-    ),
+    hints={
+        "count_pairs": "first and second are already the row and the column of the pair. Use += on that entry of "
+        "counts.",
+        "first_letter_counts": 'Every name starts with ".", which is position 0. The pairs that start a name are all '
+        "in one row.",
+        "count_of": "Turn each letter of pair into its position with LETTERS.index, read that entry of counts, and "
+        "turn it into an int with .item().",
+    },
     introduces=("index", "slice"),
     check=check_tensors2,
 )
 
 TENSORS3_LESSON = prose(
     """
-    Math between two tensors of the same shape works entry by entry. This is
-    called **elementwise** math, and `+`, `-`, `*` and `/` all work this way.
+    The `.sum()` method adds up entries. With no arguments it adds all of them.
+    With `dim` it adds along one dimension, and that dimension disappears from
+    the shape.
 
     ```python
     x = torch.tensor([[1, 2, 3],
                       [4, 5, 6]])
-    y = torch.tensor([[10, 20, 30],
-                      [40, 50, 60]])
-    x + y    # tensor([[11, 22, 33], [44, 55, 66]])
+    x.sum()         # tensor(21)
+    x.sum(dim=0)    # tensor([5, 7, 9]), one total per column
+    x.sum(dim=1)    # tensor([ 6, 15]), one total per row
     ```
 
-    The shapes don't have to be equal.
+    `keepdim=True` keeps the summed dimension with size 1, so
+    `x.sum(dim=1, keepdim=True)` is `tensor([[ 6], [15]])`, shape `(2, 1)`. The
+    next exercise needs that.
+
+    `.max()` gives the largest entry and `.argmax()` gives its position.
+    `.argmax()` also takes `dim`.
 
     ```python
-    row = torch.tensor([100, 200, 300])   # shape (3,)
-    x + row    # tensor([[101, 202, 303], [104, 205, 306]])
+    y = torch.tensor([3, 9, 4])
+    y.max()            # tensor(9)
+    y.argmax()         # tensor(1)
+    x.argmax(dim=1)    # tensor([2, 2]), the column of the largest entry in each row
     ```
 
-    `row` was added to every row of `x` without being copied. This is
-    **broadcasting**. PyTorch lines the two shapes up from the right. Two sizes
-    fit when they are equal or when one of them is 1, and a size of 1 is
-    stretched to match. A missing size counts as 1.
+    `.mean()` takes `dim` the way `.sum()` does, but it only works on floats, so
+    `x.float().mean()` is `tensor(3.5000)`.
 
-    ```text
-    x      (2, 3)
-    row       (3,)    3 meets 3, and the missing size counts as 1
-    ```
-
-    A plain number has no dimensions, so `x * 2` fits too.
-
-    A tensor with one number per row does not fit as it is.
-
-    ```text
-    x        (2, 3)
-    per_row     (2,)    2 meets 3, so PyTorch raises an error
-    ```
-
-    With a size of 1 at the end, it does.
-
-    ```python
-    per_row = torch.tensor([[1000],
-                            [2000]])   # shape (2, 1)
-    x + per_row    # tensor([[1001, 1002, 1003], [2004, 2005, 2006]])
-    ```
-
-    `(2, 1)` meets `(2, 3)`. The 2s match, and the 1 is stretched across the
-    columns.
-
-    Models do this constantly. A model adds the same numbers, one per column, to
-    every row of a batch with a single `+`.
+    Operations like these, which combine many entries into fewer, are called
+    **reductions**. In the table of counts, the sum of a row says how many pairs
+    start with that letter. The argmax of a row is the position of the letter
+    that most often comes next.
     """,
 )
 
 TENSORS3_SOURCE = source_file(
-    '''
+    """
     # tensors3.py
 
     import torch
     from torch import Tensor
+    """
+    + LETTERS_AND_ENCODE
+    + '''
 
-    # TODO: Rescale every column of the grid to the range 0 to 1.
-    #   low and high hold one number per column, the smallest and largest value that column can hold.
-    #   A value v becomes (v - low) / (high - low), using its own column's low and high.
-    def rescale(
-        grid: Tensor,
-        low: Tensor,
-        high: Tensor,
-    ) -> Tensor:
+    # Every function here gets counts, the table count_pairs made in tensors2.
+
+
+    # TODO: Return how many pairs start with each letter, one total per letter in LETTERS.
+    def pairs_starting_with(counts: Tensor) -> Tensor:
         ...
 
 
-    # TODO: Subtract each row's first value from every value in that row.
-    #   The row 50 60 70 becomes 0 10 20.
-    def subtract_first_column(grid: Tensor) -> Tensor:
+    # TODO: Return the letter that most often comes right after the given letter.
+    #   most_likely_next(counts, "q") is "u" for the names the check uses.
+    def most_likely_next(
+        counts: Tensor,
+        letter: str,
+    ) -> str:
         ...
 
 
-    # What the check tests
-    #   rescale of [[0, 5, 10], [10, 15, 20]] with low [0, 5, 10] and high [10, 25, 30]
-    #   rescale of a grid with 4 rows
-    #   subtract_first_column of a 2 by 3 grid, then of a 3 by 3 grid
+    # TODO: Return the total number of letter pairs counted, as an int.
+    def total_pairs(counts: Tensor) -> int:
+        ...
+
+
+    # What the check tests, on the counts of 84 names
+    #   pairs_starting_with gives one total per letter
+    #   most_likely_next for ".", "q", "e" and "l"
+    #   total_pairs gives the number of pairs in all the names
     ''',
 )
 
 TENSORS3_SOLUTION = source_file(
-    '''
+    """
     # tensors3.py, a solution for comparison
 
     import torch
     from torch import Tensor
+    """
+    + LETTERS_AND_ENCODE
+    + '''
+
+    # A pair that starts with a letter sits in that letter's row.
+    def pairs_starting_with(counts: Tensor) -> Tensor:
+        return counts.sum(dim=1)
 
 
-    def rescale(
-        grid: Tensor,
-        low: Tensor,
-        high: Tensor,
-    ) -> Tensor:
-        return (grid - low) / (high - low)
+    def most_likely_next(
+        counts: Tensor,
+        letter: str,
+    ) -> str:
+        return LETTERS[counts[LETTERS.index(letter)].argmax().item()]
 
 
-    # A slice keeps its dimension, so grid[:, 0:1] has shape (n, 1) and stretches across the columns.
-    def subtract_first_column(grid: Tensor) -> Tensor:
-        return grid - grid[:, 0:1]
+    def total_pairs(counts: Tensor) -> int:
+        return counts.sum().item()
     ''',
 )
 
 
 def check_tensors3(checker: Checker) -> None:
-    two_rows = torch.tensor([[0, 5, 10], [10, 15, 20]])
-    four_rows = torch.tensor([[0, 5, 10], [10, 15, 20], [5, 25, 30], [2, 10, 25]])
-    low = torch.tensor([0, 5, 10])
-    high = torch.tensor([10, 25, 30])
-    first_values = torch.tensor([[50, 60, 70], [80, 90, 40]])
-    three_by_three = torch.tensor([[1, 2, 3], [40, 50, 60], [700, 800, 900]])
+    counts = letter_pair_counts(TRAINING_NAMES)
+
+    # In a table of letter pairs the row sums equal the column sums, since every letter
+    # starts as many pairs as it ends. A random table tells the two apart.
+    random_counts = torch.randint(0, 10, (len(LETTERS), len(LETTERS)), generator=torch.Generator().manual_seed(0))
 
     checker.test(
-        function="rescale",
-        description="gives [[0, 0, 0], [1, 0.5, 0.5]] for the grid in the file",
-        run=lambda rescale: expect_tensor(
-            call="rescale(torch.tensor([[0, 5, 10], [10, 15, 20]]), low, high)",
-            actual=rescale(two_rows, low, high),
-            expected=(two_rows - low) / (high - low),
+        function="pairs_starting_with",
+        description="gives the sum of each row",
+        run=lambda pairs_starting_with: expect_tensor(
+            call="pairs_starting_with(counts)",
+            actual=pairs_starting_with(counts),
+            expected=counts.sum(dim=1),
         ),
     )
     checker.test(
-        function="rescale",
-        description="works for a grid with 4 rows",
-        run=lambda rescale: expect_tensor(
-            call="rescale of a grid with 4 rows",
-            actual=rescale(four_rows, low, high),
-            expected=(four_rows - low) / (high - low),
+        function="pairs_starting_with",
+        description="sums rows, not columns, on a table of random counts",
+        run=lambda pairs_starting_with: expect_tensor(
+            call="pairs_starting_with on a table of random counts",
+            actual=pairs_starting_with(random_counts),
+            expected=random_counts.sum(dim=1),
         ),
     )
+
+    for letter in (".", "q", "e", "l"):
+        checker.test(
+            function="most_likely_next",
+            description=f'gives the most likely letter after "{letter}"',
+            run=lambda most_likely_next, letter=letter: expect_value(
+                call=f'most_likely_next(counts, "{letter}")',
+                actual=most_likely_next(counts, letter),
+                expected=LETTERS[counts[LETTERS.index(letter)].argmax().item()],
+            ),
+        )
+
     checker.test(
-        function="subtract_first_column",
-        description="gives [[0, 10, 20], [0, 10, -40]] for [[50, 60, 70], [80, 90, 40]]",
-        run=lambda subtract_first_column: expect_tensor(
-            call="subtract_first_column(torch.tensor([[50, 60, 70], [80, 90, 40]]))",
-            actual=subtract_first_column(first_values),
-            expected=first_values - first_values[:, 0:1],
-        ),
-    )
-    checker.test(
-        function="subtract_first_column",
-        description="subtracts per row in a 3 by 3 grid",
-        run=lambda subtract_first_column: expect_tensor(
-            call="subtract_first_column(torch.tensor([[1, 2, 3], [40, 50, 60], [700, 800, 900]]))",
-            actual=subtract_first_column(three_by_three),
-            expected=three_by_three - three_by_three[:, 0:1],
+        function="total_pairs",
+        description=f"counts all {counts.sum().item()} pairs",
+        run=lambda total_pairs: expect_value(
+            call="total_pairs(counts)",
+            actual=total_pairs(counts),
+            expected=counts.sum().item(),
         ),
     )
 
@@ -974,161 +1106,159 @@ def check_tensors3(checker: Checker) -> None:
 TENSORS3 = Exercise(
     name="tensors3",
     chapter=TENSORS,
-    title="Math on whole tensors",
+    title="Adding up the counts",
     lesson=TENSORS3_LESSON,
     source=TENSORS3_SOURCE,
     solution=TENSORS3_SOLUTION,
-    hints=(
-        "rescale combines elementwise math with broadcasting. For subtract_first_column, work out the shape the "
-        "first column needs so it lines up with the rows.",
-        "low, high and high - low have one number per column, so they broadcast across the rows. The first column "
-        "needs shape (n, 1), like per_row. A slice keeps its dimension and an index drops it.",
-        "(grid - low) / (high - low), and grid - grid[:, 0:1].",
-    ),
-    introduces=("elementwise", "broadcasting"),
+    hints={
+        "pairs_starting_with": "A pair that starts with a letter sits in that letter's row. Add up each row, which "
+        "is a sum along dimension 1.",
+        "most_likely_next": "Pick the letter's row with LETTERS.index, find where its largest count is with argmax, "
+        "and turn that position back into a letter with LETTERS.",
+        "total_pairs": "sum with no arguments adds every entry, and .item() turns the result into an int.",
+    },
+    introduces=("reduction",),
     check=check_tensors3,
 )
 
 TENSORS4_LESSON = prose(
     """
-    In the last exercise, a slice like `grid[:, 0:1]` gave a column of shape
-    `(n, 1)` that lined up with the rows. Values often come as a flat tensor
-    instead, shape `(n,)`, with one number per row.
+    Math between tensors of the same shape works entry by entry. This is
+    **elementwise** math, and `+`, `-`, `*` and `/` all work this way. A plain
+    number works with a tensor of any shape.
 
     ```python
-    per_row = torch.tensor([10, 20])   # shape (2,), and it needs to be (2, 1)
+    x = torch.tensor([[1, 2],
+                      [3, 4]])
+    x + x     # tensor([[2, 4], [6, 8]])
+    x * 10    # tensor([[10, 20], [30, 40]])
     ```
 
-    `None` inside the brackets inserts a new dimension of size 1 at that
-    position. A `:` keeps a dimension that is already there.
-
-    ```python
-    per_row[:, None]    # tensor([[10], [20]]), shape (2, 1)
-    per_row[None, :]    # tensor([[10, 20]]),   shape (1, 2)
-    ```
-
-    Shape `(n, 1)` lines up with rows. Shapes `(1, n)` and `(n,)` line up with
-    columns. Broadcasting stretches a size of 1 on either side, so both tensors
-    in one operation can be stretched at once.
-
-    When a grid has as many rows as columns, a flat tensor fits without `None`.
+    The shapes don't have to be equal. PyTorch lines them up from the right, and
+    two sizes fit when they are equal or when one of them is 1. A size of 1 is
+    stretched to match, and a missing size counts as 1. This is
+    **broadcasting**.
 
     ```text
-    grid   (3, 3)
-    flat      (3,)    fits, and lines up with the columns
+    (2, 2) with (2,)      the (2,) is stretched down the rows, one value per column
+    (2, 2) with (2, 1)    the (2, 1) is stretched across the columns, one value per row
     ```
 
-    The code runs, there is no error, and the numbers are wrong. When you mean
-    one number per row, add the `None` even if the code runs without it.
+    ```python
+    x / torch.tensor([[1], [10]])    # tensor([[1.0000, 2.0000], [0.3000, 0.4000]])
+    ```
 
-    Training uses this to scale each row of a batch by its own number, for
-    example to make some rows count more than others.
+    Dividing with `/` always gives floats, even between integers.
+
+    A square tensor hides a trap. `x.sum(dim=1)` has shape `(2,)`, so
+    `x / x.sum(dim=1)` runs without an error. But `(2,)` lines up with the
+    columns, so each column is divided by one row's total. The numbers are
+    wrong and nothing says so. With `keepdim=True` the totals have shape
+    `(2, 1)` and line up with the rows. Karpathy hits this exact bug in his
+    makemore video.
+
+    Dividing each row of the counts by its own total turns them into
+    probabilities. Row `a` then holds the chance of each letter coming right
+    after `a`, and every row adds up to 1.
+
+    A count of zero becomes a probability of zero. The next exercise scores the
+    model with the log of each probability, and the log of 0 is minus infinity,
+    which breaks the score. Adding a small number to every count first keeps
+    every probability above zero. This is called smoothing.
     """,
 )
 
 TENSORS4_SOURCE = source_file(
-    '''
+    """
     # tensors4.py
 
     import torch
     from torch import Tensor
+    """
+    + LETTERS_AND_ENCODE
+    + '''
+
+    # Every function here gets counts, the table count_pairs made in tensors2.
 
 
-    # TODO: Return a times table. Row i, column j holds rows[i] times columns[j].
-    #   times_table(torch.tensor([1, 2, 3]), torch.tensor([1, 2, 3, 4])) gives
-    #
-    #     1  2  3   4
-    #     2  4  6   8
-    #     3  6  9  12
-    #
-    def times_table(
-        rows: Tensor,
-        columns: Tensor,
-    ) -> Tensor:
+    # TODO: Turn the counts into probabilities. Divide each row by its own total,
+    #   so probs[a, b] is the chance that letter b comes right after letter a.
+    def to_probabilities(counts: Tensor) -> Tensor:
         ...
 
 
-    # TODO: Add per_row[i] to every value in row i of the grid, and add
-    #   per_column[j] to every value in column j.
-    def add_row_and_column_values(
-        grid: Tensor,
-        per_row: Tensor,
-        per_column: Tensor,
+    # TODO: Add k to every count, then turn the result into probabilities.
+    def smoothed_probabilities(
+        counts: Tensor,
+        k: int,
     ) -> Tensor:
         ...
 
 
     # What the check tests
-    #   times_table for the 3 by 4 table above, and for 2 rows by 5 columns
-    #   add_row_and_column_values for a 2 by 3 grid
-    #   add_row_and_column_values for a 3 by 3 grid, where rows and columns are easy to mix up
+    #   to_probabilities of a 3 by 3 table, where a wrong shape still runs
+    #   to_probabilities of the counts of 84 names, with every row adding up to 1
+    #   smoothed_probabilities of those counts with k = 1
     ''',
 )
 
 TENSORS4_SOLUTION = source_file(
-    '''
+    """
     # tensors4.py, a solution for comparison
 
     import torch
     from torch import Tensor
+    """
+    + LETTERS_AND_ENCODE
+    + '''
+
+    # keepdim=True gives the row totals shape (27, 1), so they line up with the rows.
+    def to_probabilities(counts: Tensor) -> Tensor:
+        return counts / counts.sum(dim=1, keepdim=True)
 
 
-    # (n, 1) times (m,) stretches both ways into (n, m).
-    def times_table(
-        rows: Tensor,
-        columns: Tensor,
+    def smoothed_probabilities(
+        counts: Tensor,
+        k: int,
     ) -> Tensor:
-        return rows[:, None] * columns
-
-
-    def add_row_and_column_values(
-        grid: Tensor,
-        per_row: Tensor,
-        per_column: Tensor,
-    ) -> Tensor:
-        return grid + per_row[:, None] + per_column
+        return to_probabilities(counts + k)
     ''',
 )
 
 
+def row_probabilities(counts: Tensor) -> Tensor:
+    return counts / counts.sum(dim=1, keepdim=True)
+
+
 def check_tensors4(checker: Checker) -> None:
-    grid = torch.tensor([[50, 60, 70], [80, 90, 40]])
-    square_grid = torch.tensor([[1, 2, 3], [4, 5, 6], [7, 8, 9]])
+    small = torch.tensor([[1, 1, 2], [0, 3, 1], [5, 0, 5]])
+    counts = letter_pair_counts(TRAINING_NAMES)
 
     checker.test(
-        function="times_table",
-        description="gives the 3 by 4 table in the file",
-        run=lambda times_table: expect_tensor(
-            call="times_table(torch.tensor([1, 2, 3]), torch.tensor([1, 2, 3, 4]))",
-            actual=times_table(torch.tensor([1, 2, 3]), torch.tensor([1, 2, 3, 4])),
-            expected=torch.tensor([1, 2, 3])[:, None] * torch.tensor([1, 2, 3, 4]),
+        function="to_probabilities",
+        description="divides each row of a 3 by 3 table by its own total",
+        run=lambda to_probabilities: expect_tensor(
+            call="to_probabilities(torch.tensor([[1, 1, 2], [0, 3, 1], [5, 0, 5]]))",
+            actual=to_probabilities(small),
+            expected=row_probabilities(small),
         ),
     )
     checker.test(
-        function="times_table",
-        description="gives a 2 by 5 table for 2 rows and 5 columns",
-        run=lambda times_table: expect_tensor(
-            call="times_table(torch.tensor([10, 20]), torch.tensor([1, 2, 3, 4, 5]))",
-            actual=times_table(torch.tensor([10, 20]), torch.tensor([1, 2, 3, 4, 5])),
-            expected=torch.tensor([10, 20])[:, None] * torch.tensor([1, 2, 3, 4, 5]),
+        function="to_probabilities",
+        description=f"gives rows that add up to 1 for the counts of {len(TRAINING_NAMES)} names",
+        run=lambda to_probabilities: expect_tensor(
+            call="to_probabilities(counts)",
+            actual=to_probabilities(counts),
+            expected=row_probabilities(counts),
         ),
     )
     checker.test(
-        function="add_row_and_column_values",
-        description="adds both for a 2 by 3 grid",
-        run=lambda add_row_and_column_values: expect_tensor(
-            call="add_row_and_column_values with per_row [1, 2] and per_column [10, 20, 30]",
-            actual=add_row_and_column_values(grid, torch.tensor([1, 2]), torch.tensor([10, 20, 30])),
-            expected=grid + torch.tensor([1, 2])[:, None] + torch.tensor([10, 20, 30]),
-        ),
-    )
-    checker.test(
-        function="add_row_and_column_values",
-        description="keeps rows and columns apart in a 3 by 3 grid",
-        run=lambda add_row_and_column_values: expect_tensor(
-            call="add_row_and_column_values with per_row [100, 200, 300] and per_column [10, 20, 30]",
-            actual=add_row_and_column_values(square_grid, torch.tensor([100, 200, 300]), torch.tensor([10, 20, 30])),
-            expected=square_grid + torch.tensor([100, 200, 300])[:, None] + torch.tensor([10, 20, 30]),
+        function="smoothed_probabilities",
+        description="adds 1 to every count before dividing",
+        run=lambda smoothed_probabilities: expect_tensor(
+            call="smoothed_probabilities(counts, 1)",
+            actual=smoothed_probabilities(counts, 1),
+            expected=row_probabilities(counts + 1),
         ),
     )
 
@@ -1136,152 +1266,267 @@ def check_tensors4(checker: Checker) -> None:
 TENSORS4 = Exercise(
     name="tensors4",
     chapter=TENSORS,
-    title="Giving each row its own number",
+    title="Counts to probabilities",
     lesson=TENSORS4_LESSON,
     source=TENSORS4_SOURCE,
     solution=TENSORS4_SOLUTION,
-    hints=(
-        "Both functions combine one tensor that goes with the rows and one that goes with the columns. Look at "
-        "what None did to per_row.",
-        "Shape (n, 1) lines up with rows and shape (m,) lines up with columns. Combine the two and both sizes of 1 "
-        "are stretched, which gives (n, m).",
-        "rows[:, None] * columns, and grid + per_row[:, None] + per_column.",
-    ),
-    introduces=(),
+    hints={
+        "to_probabilities": "Each row's total is a sum along dimension 1. Keep that dimension so the totals have "
+        "shape (27, 1), then divide the counts by them.",
+        "smoothed_probabilities": "counts + k adds k to every entry. Then divide each row by its total, as "
+        "to_probabilities does. You can call it.",
+    },
+    introduces=("elementwise", "broadcasting"),
     check=check_tensors4,
 )
 
 TENSORS5_LESSON = prose(
     """
-    `sum` adds up entries. With no arguments it adds all of them. With `dim` it
-    adds along one dimension only.
+    A row of probabilities says how likely each next letter is.
+    `torch.multinomial` draws positions at random, each as often as its
+    probability says. A `torch.Generator` with a fixed seed makes the draws
+    repeatable, so the same seed gives the same draws every time.
 
     ```python
-    x = torch.tensor([[ 1,  2,  3],
-                      [ 4,  5,  6],
-                      [ 7,  8,  9],
-                      [10, 11, 12]])
-    x.sum()         # tensor(78)
-    x.sum(dim=1)    # tensor([ 6, 15, 24, 33]), shape (4,)
+    g = torch.Generator().manual_seed(0)
+    p = torch.tensor([0.5, 0.0, 0.5])
+    torch.multinomial(p, num_samples=8, replacement=True, generator=g)
+    # tensor([2, 2, 0, 2, 2, 2, 0, 0]), position 1 never comes up
     ```
 
-    `dim=1` adds along dimension 1, across the columns, so each row becomes one
-    number. The dimension you name is the one that disappears, and `(4, 3)`
-    becomes `(4,)`.
+    `replacement=True` lets the same position come up more than once. With
+    `num_samples=1` it draws a single position, and `.item()` turns that into an
+    int. To make up a name, start at position 0, the `"."`, and draw the next
+    position from row 0. Then draw from that letter's row, and keep going until
+    `"."` comes up again.
 
-    `mean` works the same way, but only on floats. A tensor holds either ints or
-    floats, never both, and `x` holds ints. Unlike `/`, which returns floats,
-    `mean` does not convert, so `x.mean()` raises an error. Convert first.
+    To score the model, look at the probability it gives each pair in real
+    names. The chance it gives a whole name is the product of the chances of
+    its pairs, and a good model gives real names high chances. A product of
+    many probabilities is too small to work with, so models add their logs
+    instead. `.log()` takes the natural log of every entry, and the log of a
+    probability is 0 or below. `-t` flips the sign of every entry of `t`.
+
+    Indexing with two tensors of positions picks one entry per pair of
+    positions. Python lists of positions work the same way, and `.tolist()`
+    turns a tensor into a Python list.
 
     ```python
-    x.float().mean()    # tensor(6.5000)
+    q = torch.tensor([[0.5, 0.5],
+                      [0.9, 0.1]])
+    rows = torch.tensor([0, 1, 1])
+    columns = torch.tensor([1, 0, 0])
+    q[rows, columns]          # tensor([0.5000, 0.9000, 0.9000])
+    q[rows, columns].log()    # tensor([-0.6931, -0.1054, -0.1054])
     ```
 
-    `keepdim=True` keeps the summed dimension as size 1 instead of removing it.
-    Summed along dimension 1 that way, the totals have shape `(4, 1)` and line
-    up with the rows of `x`.
-
-    An operation that combines entries along a dimension like this is a
-    **reduction**. Training runs one at every step. It measures the error on
-    each row of a batch, then averages those errors into one number.
+    The mean of the negative logs is the model's **loss**, one number saying
+    how wrong it is. Lower is better, and training means pushing it down. A
+    model that gave every letter the same chance would score `-log(1/27)`, about
+    3.30.
     """,
 )
 
 TENSORS5_SOURCE = source_file(
-    '''
+    """
     # tensors5.py
 
     import torch
     from torch import Tensor
+    """
+    + LETTERS_AND_ENCODE
+    + '''
 
-    # TODO: Return the sum of each column.
-    def column_sums(grid: Tensor) -> Tensor:
+    # Every function here gets probs, a table smoothed_probabilities made in tensors4.
+
+
+    # TODO: Make up a name by drawing one letter at a time from probs.
+    def sample_name(
+        probs: Tensor,
+        generator: torch.Generator,
+    ) -> str:
+        name = ""
+        position = 0
+
+        while True:
+            # TODO: draw the next position from the row for the current position, as an int
+            position = ...
+
+            if position == 0:
+                return name
+
+            name += LETTERS[position]
+
+
+    # TODO: Return the loss of probs on the names, the mean negative log probability of every pair.
+    def loss(
+        probs: Tensor,
+        names: list[str],
+    ) -> Tensor:
+        firsts = []
+        seconds = []
+
+        for name in names:
+            letters = encode(name)
+            firsts.extend(letters[:-1].tolist())
+            seconds.extend(letters[1:].tolist())
+
+        # TODO: pick the probability of every pair, then return the mean of their negative logs
         ...
 
 
-    # TODO: Return the mean of each row, as floats.
-    def row_means(grid: Tensor) -> Tensor:
-        ...
-
-
-    # TODO: Divide every value by the sum of its row, so each row adds up to 1.
-    def rows_to_fractions(grid: Tensor) -> Tensor:
-        ...
-
-
-    # What the check tests, on a 2 by 3 grid and on a 3 by 4 grid
-    #   column_sums of [[50, 60, 70], [80, 90, 40]] is [130, 150, 110]
-    #   row_means of the same grid is [60.0, 70.0]
-    #   rows_to_fractions gives rows that each add up to 1
+    # What the check tests
+    #   sample_name on a table where "a" is the only possible name
+    #   sample_name makes the same 5 names as the reference with seed 2147483647
+    #   loss is log(27), about 3.30, for a table where every letter is equally likely
+    #   loss of the smoothed probabilities of 84 names on those names
     ''',
 )
 
 TENSORS5_SOLUTION = source_file(
-    '''
+    """
     # tensors5.py, a solution for comparison
 
     import torch
     from torch import Tensor
+    """
+    + LETTERS_AND_ENCODE
+    + '''
+
+    def sample_name(
+        probs: Tensor,
+        generator: torch.Generator,
+    ) -> str:
+        name = ""
+        position = 0
+
+        while True:
+            position = torch.multinomial(probs[position], num_samples=1, generator=generator).item()
+
+            if position == 0:
+                return name
+
+            name += LETTERS[position]
 
 
-    def column_sums(grid: Tensor) -> Tensor:
-        return grid.sum(dim=0)
+    def loss(
+        probs: Tensor,
+        names: list[str],
+    ) -> Tensor:
+        firsts = []
+        seconds = []
 
+        for name in names:
+            letters = encode(name)
+            firsts.extend(letters[:-1].tolist())
+            seconds.extend(letters[1:].tolist())
 
-    def row_means(grid: Tensor) -> Tensor:
-        return grid.float().mean(dim=1)
-
-
-    # keepdim=True gives the row sums shape (n, 1), so they line up with the rows.
-    def rows_to_fractions(grid: Tensor) -> Tensor:
-        return grid / grid.sum(dim=1, keepdim=True)
+        return -probs[firsts, seconds].log().mean()
     ''',
 )
 
+# The seed Karpathy uses in makemore.
+SAMPLING_SEED = 2147483647
+
+
+def reference_names(
+    probs: Tensor,
+    count: int,
+) -> list[str]:
+    generator = torch.Generator().manual_seed(SAMPLING_SEED)
+    names: list[str] = []
+
+    for _ in range(count):
+        name = ""
+        position = 0
+
+        while True:
+            position = torch.multinomial(probs[position], num_samples=1, generator=generator).item()
+
+            if position == 0:
+                break
+
+            name += LETTERS[position]
+
+        names.append(name)
+
+    return names
+
+
+def reference_loss(
+    probs: Tensor,
+    names: tuple[str, ...],
+) -> Tensor:
+    pairs = [pair for name in names for pair in zip(letter_positions(name), letter_positions(name)[1:])]
+    firsts = [first for first, _ in pairs]
+    seconds = [second for _, second in pairs]
+
+    return -probs[firsts, seconds].log().mean()
+
 
 def check_tensors5(checker: Checker) -> None:
-    grid = torch.tensor([[50, 60, 70], [80, 90, 40]])
-    bigger_grid = torch.tensor([[1, 2, 3, 4], [10, 0, 10, 0], [5, 5, 5, 5]])
+    probs = row_probabilities(letter_pair_counts(TRAINING_NAMES) + 1)
+    only_a = torch.zeros((len(LETTERS), len(LETTERS)))
+    only_a[0, LETTERS.index("a")] = 1.0
+    only_a[LETTERS.index("a"), 0] = 1.0
+    even = torch.full((len(LETTERS), len(LETTERS)), 1 / len(LETTERS))
 
-    for function, solve in (
-        ("column_sums", lambda values: values.sum(dim=0)),
-        ("row_means", lambda values: values.float().mean(dim=1)),
-        ("rows_to_fractions", lambda values: values / values.sum(dim=1, keepdim=True)),
-    ):
-        checker.test(
-            function=function,
-            description="is right for a 2 by 3 grid",
-            run=lambda learner, solve=solve, function=function: expect_tensor(
-                call=f"{function}(torch.tensor([[50, 60, 70], [80, 90, 40]]))",
-                actual=learner(grid),
-                expected=solve(grid),
-            ),
-        )
-        checker.test(
-            function=function,
-            description="is right for a 3 by 4 grid",
-            run=lambda learner, solve=solve, function=function: expect_tensor(
-                call=f"{function}(torch.tensor([[1, 2, 3, 4], [10, 0, 10, 0], [5, 5, 5, 5]]))",
-                actual=learner(bigger_grid),
-                expected=solve(bigger_grid),
-            ),
-        )
+    def five_names(sample_name: Callable[..., object]) -> list[object]:
+        generator = torch.Generator().manual_seed(SAMPLING_SEED)
+        return [sample_name(probs, generator) for _ in range(5)]
+
+    checker.test(
+        function="sample_name",
+        description='makes "a" when it is the only possible name',
+        run=lambda sample_name: expect_value(
+            call="sample_name on a table that only allows the name a",
+            actual=sample_name(only_a, torch.Generator().manual_seed(0)),
+            expected="a",
+        ),
+    )
+    checker.test(
+        function="sample_name",
+        description="makes the same 5 names as the reference with the same seed",
+        run=lambda sample_name: expect_value(
+            call=f"five calls of sample_name with seed {SAMPLING_SEED}",
+            actual=five_names(sample_name),
+            expected=reference_names(probs, 5),
+        ),
+    )
+    checker.test(
+        function="loss",
+        description="is about 3.30 when every letter is equally likely",
+        run=lambda loss: expect_tensor(
+            call="loss on a table where every letter is equally likely",
+            actual=loss(even, list(TRAINING_NAMES)),
+            expected=reference_loss(even, TRAINING_NAMES),
+        ),
+    )
+    checker.test(
+        function="loss",
+        description=f"matches the reference on {len(TRAINING_NAMES)} names",
+        run=lambda loss: expect_tensor(
+            call=f"loss(probs, names) on {len(TRAINING_NAMES)} names",
+            actual=loss(probs, list(TRAINING_NAMES)),
+            expected=reference_loss(probs, TRAINING_NAMES),
+        ),
+    )
 
 
 TENSORS5 = Exercise(
     name="tensors5",
     chapter=TENSORS,
-    title="Adding up along a dimension",
+    title="Making up names",
     lesson=TENSORS5_LESSON,
     source=TENSORS5_SOURCE,
     solution=TENSORS5_SOLUTION,
-    hints=(
-        "Each function sums or averages along one dimension. For each one, decide which dimension should disappear.",
-        "One sum per column means the rows disappear, so that's dimension 0. One mean per row is dimension 1, and "
-        "mean needs .float() first. The row sums need shape (n, 1) to divide the rows, and keepdim=True gives that.",
-        "grid.sum(dim=0), grid.float().mean(dim=1), and grid / grid.sum(dim=1, keepdim=True).",
-    ),
-    introduces=("reduction",),
+    hints={
+        "sample_name": "probs[position] is the row for the current letter. torch.multinomial with num_samples=1 "
+        "and generator=generator draws one position, and .item() turns it into an int.",
+        "loss": "probs[firsts, seconds] picks one probability per pair. Take .log(), then .mean(), and put a minus "
+        "sign in front.",
+    },
+    introduces=("loss",),
     check=check_tensors5,
 )
 
@@ -1299,7 +1544,9 @@ MATMUL = Chapter(
 
         A weighted sum multiplies each input by how much it counts and adds the
         results. Matrix multiplication does many weighted sums in one call, and
-        it is the operation most of deep learning is built on.
+        it is the operation most of deep learning is built on. This chapter
+        rewrites the bigram model from the last chapter as a matrix
+        multiplication, which is the first layer of a neural network.
 
         ## Further reading
 
@@ -1312,158 +1559,169 @@ MATMUL = Chapter(
 MATMUL1_LESSON = prose(
     """
     A **weighted sum** multiplies each value by its own **weight** and adds the
-    results.
-
-    ```text
-    values    2,  3
-    weights  10, 100
-
-    weighted sum = 2 × 10 + 3 × 100 = 320
-    ```
-
-    With tensors that is an elementwise multiply followed by a sum. The `.0`
-    makes these floats.
+    results. With tensors that is an elementwise multiply and a sum, and the
+    **dot product**, written `@`, does both in one step.
 
     ```python
     values = torch.tensor([2.0, 3.0])
     weights = torch.tensor([10.0, 100.0])
     (values * weights).sum()    # tensor(320.)
+    values @ weights            # tensor(320.)
     ```
 
-    This operation is the **dot product**, and PyTorch writes it with `@`, so
-    `values @ weights` also gives 320. Both sides of `@` must have the same
-    type, so don't mix an int tensor with a float tensor.
-
-    With a grid on the left, `@` takes the dot product of every row with the
-    weights.
+    A tensor with two dimensions is also called a **matrix**. With a matrix on
+    each side, `@` takes the dot product of every row on the left with every
+    column on the right. This is **matrix multiplication**. `(n, k) @ (k, m)`
+    gives `(n, m)`, the inner sizes must match, and both sides must have the
+    same type.
 
     ```python
-    x = torch.tensor([[2.0, 3.0],
-                      [1.0, 0.0],
-                      [0.0, 1.0]])
-    x @ weights    # tensor([320.,  10., 100.])
+    a = torch.tensor([[1.0, 2.0],
+                      [3.0, 4.0]])
+    b = torch.tensor([[1.0, 0.0],
+                      [0.0, 10.0]])
+    a @ b    # tensor([[ 1., 20.], [ 3., 40.]])
     ```
 
-    A grid of numbers is a **matrix**. With a matrix on the right, `@` uses each
-    of its columns as a separate set of weights.
+    A one-hot row is all zeros except for a single 1. `torch.nn.functional`
+    holds the functions neural networks are built from, and its
+    `one_hot(positions, num_classes)` makes one such row per position. It
+    returns integers, so add `.float()` before multiplying it with floats.
 
     ```python
-    w = torch.tensor([[10.0, 1.0],
-                      [100.0, 2.0]])   # two sets of weights, one per column
-    x @ w    # tensor([[320.,   8.], [ 10.,   1.], [100.,   2.]])
+    import torch.nn.functional as F
+
+    F.one_hot(torch.tensor([2, 0]), num_classes=3).float()
+    # tensor([[0., 0., 1.],
+    #         [1., 0., 0.]])
     ```
 
-    `(3, 2) @ (2, 2)` gives `(3, 2)`. The inner sizes must match, since every row
-    needs one weight per value. The outer sizes give the result, one row per row
-    of `x` and one column per column of `w`. This is **matrix multiplication**.
-    `.T` swaps the rows and columns of a matrix, so a `(5, 3)` matrix becomes
-    `(3, 5)`.
+    Indexing a matrix with one tensor of positions picks whole rows, so
+    `a[torch.tensor([1, 0])]` is row 1 then row 0. A one-hot row times a matrix
+    picks out one row too, since every other row gets multiplied by 0. So
+    reading row `i` of the probability table is the same as multiplying the
+    one-hot row for `i` by the table.
 
-    Most of the computing in a model is matrix multiplication, and its weights
-    are the numbers training adjusts. PyTorch's `nn.Linear` stores its weights
-    as a matrix with one row per output. It also adds one extra number to each
-    output, called the **bias**.
+    That is the step from a table to a neural network. A **layer** holds a
+    matrix of weights and multiplies its input by it, and a neural network is a
+    model made of layers. The bigram model is one layer whose weights were set
+    by counting. In the next part the weights are
+    learned instead, by pushing the loss down, and the same layer becomes the
+    building block of larger models.
     """,
 )
 
 MATMUL1_SOURCE = source_file(
-    '''
+    """
     # matmul1.py
 
     import torch
+    import torch.nn.functional as F
     from torch import Tensor
+    """
+    + LETTERS_AND_ENCODE
+    + '''
 
-
-    # TODO: Return the weighted sum of the three values with the weights 0.5, -2.0 and 3.0.
-    #   The values 2, 1 and 4 give 0.5 × 2 - 2.0 × 1 + 3.0 × 4 = 11.
-    def weighted_sum(values: Tensor) -> Tensor:
+    # TODO: Return the one-hot rows for the positions, as floats, with one column
+    #   for every letter in LETTERS.
+    def one_hot(positions: Tensor) -> Tensor:
         ...
 
 
-    # TODO: Return a matrix with one row per row of x and one column per row of weight.
-    #   Entry i, j is the weighted sum of x[i] with the weights in weight[j], plus bias[j].
-    #   weight has one row per output, the way PyTorch's nn.Linear stores it.
-    def linear(
-        x: Tensor,
-        weight: Tensor,
-        bias: Tensor,
+    # TODO: Return the rows of table at the positions, using one_hot and @ instead
+    #   of indexing. look_up(positions, table) must equal table[positions].
+    def look_up(
+        positions: Tensor,
+        table: Tensor,
     ) -> Tensor:
         ...
 
 
     # What the check tests
-    #   weighted_sum of 2, 1 and 4 is 11, and of 0, 0 and 1 is 3
-    #   linear for 2 rows of 3 values and 2 outputs, a (2, 2) result
-    #   linear for 3 rows of 3 values and 3 outputs, where a missing step still runs
+    #   one_hot(torch.tensor([2, 0, 26])) has shape (3, 27) and holds floats
+    #   look_up gives the same rows as indexing, for a random 27 by 27 table
     ''',
 )
 
 MATMUL1_SOLUTION = source_file(
-    '''
+    """
     # matmul1.py, a solution for comparison
 
     import torch
+    import torch.nn.functional as F
     from torch import Tensor
+    """
+    + LETTERS_AND_ENCODE
+    + '''
+
+    def one_hot(positions: Tensor) -> Tensor:
+        return F.one_hot(positions, num_classes=len(LETTERS)).float()
 
 
-    def weighted_sum(values: Tensor) -> Tensor:
-        return (values * torch.tensor([0.5, -2.0, 3.0])).sum()
-
-
-    # weight.T has one column per output, so (rows, inputs) @ (inputs, outputs) gives (rows, outputs).
-    # This is what nn.Linear computes.
-    def linear(
-        x: Tensor,
-        weight: Tensor,
-        bias: Tensor,
+    # (n, 27) @ (27, 27) gives (n, 27), one row of table per position.
+    def look_up(
+        positions: Tensor,
+        table: Tensor,
     ) -> Tensor:
-        return x @ weight.T + bias
+        return one_hot(positions) @ table
     ''',
 )
 
 
+def expect_floats(
+    call: str,
+    actual: object,
+) -> None:
+    reject_missing_return(
+        call=call,
+        actual=actual,
+    )
+
+    if not isinstance(actual, Tensor):
+        raise Mismatch(f"{call} returned a {type(actual).__name__}. It should return a tensor.")
+
+    if not actual.dtype.is_floating_point:
+        raise Mismatch(f"{call} holds integers. Add .float() so it holds floats.")
+
+
 def check_matmul1(checker: Checker) -> None:
-    two_rows = torch.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
-    two_outputs = torch.tensor([[1.0, 0.0, 0.0], [0.5, 0.5, 0.5]])
-    two_biases = torch.tensor([10.0, -1.0])
-    three_rows = torch.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]])
-    three_outputs = torch.tensor([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [1.0, 1.0, 1.0]])
-    three_biases = torch.tensor([0.0, 100.0, -100.0])
+    positions = torch.tensor([2, 0, 26])
+    table = torch.rand((len(LETTERS), len(LETTERS)), generator=torch.Generator().manual_seed(0))
+    name_positions = torch.tensor(letter_positions("emma"))
 
     checker.test(
-        function="weighted_sum",
-        description="is 11 for the values 2, 1 and 4",
-        run=lambda weighted_sum: expect_tensor(
-            call="weighted_sum(torch.tensor([2.0, 1.0, 4.0]))",
-            actual=weighted_sum(torch.tensor([2.0, 1.0, 4.0])),
-            expected=torch.tensor(11.0),
+        function="one_hot",
+        description="gives one row per position, with a single 1 in each",
+        run=lambda one_hot: expect_tensor(
+            call="one_hot(torch.tensor([2, 0, 26]))",
+            actual=one_hot(positions),
+            expected=torch.nn.functional.one_hot(positions, num_classes=len(LETTERS)).float(),
         ),
     )
     checker.test(
-        function="weighted_sum",
-        description="is 3 for the values 0, 0 and 1",
-        run=lambda weighted_sum: expect_tensor(
-            call="weighted_sum(torch.tensor([0.0, 0.0, 1.0]))",
-            actual=weighted_sum(torch.tensor([0.0, 0.0, 1.0])),
-            expected=torch.tensor(3.0),
+        function="one_hot",
+        description="holds floats",
+        run=lambda one_hot: expect_floats(
+            call="one_hot(torch.tensor([2, 0, 26]))",
+            actual=one_hot(positions),
         ),
     )
     checker.test(
-        function="linear",
-        description="gives a (2, 2) result for 2 rows of 3 values and 2 outputs",
-        run=lambda linear: expect_tensor(
-            call="linear(x, weight, bias) with x of shape (2, 3) and weight of shape (2, 3)",
-            actual=linear(two_rows, two_outputs, two_biases),
-            expected=two_rows @ two_outputs.T + two_biases,
+        function="look_up",
+        description="gives the same rows as table[positions]",
+        run=lambda look_up: expect_tensor(
+            call="look_up(torch.tensor([2, 0, 26]), table)",
+            actual=look_up(positions, table),
+            expected=table[positions],
         ),
     )
     checker.test(
-        function="linear",
-        description="uses each row of weight as one output in a 3 by 3 case",
-        run=lambda linear: expect_tensor(
-            call="linear(x, weight, bias) with x and weight both of shape (3, 3)",
-            actual=linear(three_rows, three_outputs, three_biases),
-            expected=three_rows @ three_outputs.T + three_biases,
+        function="look_up",
+        description='gives the rows for the letters of "emma"',
+        run=lambda look_up: expect_tensor(
+            call='look_up(encode("emma"), table)',
+            actual=look_up(name_positions, table),
+            expected=table[name_positions],
         ),
     )
 
@@ -1471,18 +1729,15 @@ def check_matmul1(checker: Checker) -> None:
 MATMUL1 = Exercise(
     name="matmul1",
     chapter=MATMUL,
-    title="The dot product is a weighted sum",
+    title="A lookup is a matrix multiplication",
     lesson=MATMUL1_LESSON,
     source=MATMUL1_SOURCE,
     solution=MATMUL1_SOLUTION,
-    hints=(
-        "weighted_sum needs a tensor of the three weights from the TODO. For linear, write down the shapes of x "
-        "and weight before writing any code.",
-        "For @ the inner sizes must match. x is (rows, inputs) and weight is (outputs, inputs), so the rows of "
-        "weight have to become columns first. bias has one number per output, so it broadcasts across the rows.",
-        "(values * torch.tensor([0.5, -2.0, 3.0])).sum(), and x @ weight.T + bias.",
-    ),
-    introduces=("weight", "weighted sum", "dot product", "matrix", "matrix multiplication", "bias"),
+    hints={
+        "one_hot": "F.one_hot needs num_classes=len(LETTERS), and .float() turns the result into floats.",
+        "look_up": "one_hot(positions) has shape (n, 27) and table has shape (27, 27). Multiply them with @.",
+    },
+    introduces=("weight", "weighted sum", "dot product", "matrix", "matrix multiplication", "layer"),
     check=check_matmul1,
 )
 
@@ -1536,7 +1791,7 @@ WELCOME = prose(
     **Keys**
 
     - `1`, `2` and `3` show the lesson, the hints and the result. After each save the result shows by itself.
-    - Each exercise has three hints. `2` opens the first, and the next one opens after you save again.
+    - The hints tab has one hint for each function that doesn't pass yet. `h` opens it too.
     - The arrow keys and the mouse wheel scroll. `l` lists every exercise, `x` resets the file, and `q` quits.
     - To copy, hold `option` while you drag over the text, then press `cmd+c`. In macOS Terminal hold `fn` instead.
     """,
@@ -1630,7 +1885,6 @@ BOLD_LABEL = re.compile(r"^\*\*[^*\n]+[.:]\*\*", re.MULTILINE)
 SHORTEST_ANSWER = 6
 
 CODE_TOKEN = re.compile(r"[A-Za-z_]\w*|\d+(?:\.\d*)?|\S")
-KEPT_NAMES = {"torch", "None", "True", "False"}
 
 
 def prose_sentences(text: str) -> list[str]:
@@ -1672,14 +1926,11 @@ def mentions(
 
 
 def code_tokens(code: str) -> list[str]:
-    """Code as tokens, with every plain name turned into X, so a copy with renamed variables still matches."""
+    """Code as tokens, so spacing and comments don't hide a copy."""
     tokens: list[str] = []
 
     for line in code.splitlines():
-        for token in CODE_TOKEN.findall(line.split("#")[0]):
-            is_plain_name = (token[0].isalpha() or token[0] == "_") and token not in KEPT_NAMES
-            after_dot = bool(tokens) and tokens[-1] == "."
-            tokens.append("X" if is_plain_name and not after_dot else token)
+        tokens.extend(CODE_TOKEN.findall(line.split("#")[0]))
 
     return tokens
 
@@ -1725,7 +1976,10 @@ def lint_exercise(
 ) -> list[str]:
     findings: list[str] = []
     known = introduced_before | set(exercise.introduces)
-    sentences = prose_sentences(exercise.lesson) + [sentence for hint in exercise.hints for sentence in prose_sentences(hint)]
+    # Hints are plain text, so code in them like LETTERS.index is taken out before the prose checks.
+    sentences = prose_sentences(exercise.lesson) + [
+        sentence for hint in exercise.hints.values() for sentence in prose_sentences(re.sub(r"\w+\.\w+", "CODE", hint))
+    ]
     readable = " ".join(sentences)
 
     for mark in ("—", "–", ";"):
@@ -1749,12 +2003,15 @@ def lint_exercise(
     for label in BOLD_LABEL.findall(exercise.lesson):
         findings.append(f"opens a paragraph with the bold label {label}")
 
-    # The lesson and the first two hints must leave the work to the learner. The third hint is the answer.
-    shown = shown_code(exercise.lesson) + " | " + " ".join(code_tokens(" ".join(exercise.hints[:2]))) + " "
+    # The lesson teaches the tools on its own examples. It and the hints never show a task's line as written.
+    shown = shown_code(exercise.lesson) + " | " + " ".join(code_tokens(" ".join(exercise.hints.values()))) + " "
 
     for function, body in solution_bodies(exercise.solution).items():
+        if function not in exercise.hints:
+            continue
+
         if len(body) >= SHORTEST_ANSWER and f" {' '.join(body)} " in shown:
-            findings.append(f"shows the answer to {function} before the third hint")
+            findings.append(f"shows the answer to {function}")
 
     height = len(
         console.render_lines(
@@ -2073,28 +2330,30 @@ def status_line(
     )
 
 
-HINT_LABELS = ("Where to look", "The idea", "The answer")
-
-
 def hint_view(
     exercise: Exercise,
-    hints_open: int,
-    next_ready: bool,
-    run_again: str,
+    outcome: Outcome | None,
 ) -> RenderableType:
-    if hints_open == 0:
-        return Text("No hint is open yet. Press 2 to open the first one.", style="dim")
+    """The hint for each function that doesn't pass yet, so the learner reads only what they need."""
+    passing: set[str] = set()
+
+    if outcome is not None:
+        passing = {
+            function for function, results in results_by_function(outcome).items() if all(result.passed for result in results)
+        }
 
     parts: list[RenderableType] = []
 
-    for label, hint in zip(HINT_LABELS, exercise.hints[:hints_open]):
-        parts.append(Text(label, style="bold yellow"))
+    for function, hint in exercise.hints.items():
+        if function in passing:
+            continue
+
+        parts.append(Text(function, style="bold yellow"))
         parts.append(indented(text=hint, left=2))
         parts.append(Text(""))
 
-    if hints_open < len(exercise.hints):
-        note = "Press 2 for the next hint." if next_ready else f"The next hint opens after you {run_again}."
-        parts.append(Text(note, style="dim"))
+    if not parts:
+        return Text("Every function passes, so there is nothing left to hint at.", style="dim")
 
     return Group(*parts)
 
@@ -2410,13 +2669,11 @@ class ListScreen(Screen[str | None]):
 class WatchScreen(Screen[None]):
     """The lesson, the hint and the result of the current exercise, rechecked on every save."""
 
-    # Two bindings share 2 and h, and check_action leaves one of them on, so the footer says whether a new hint is ready.
     BINDINGS = [
         Binding("n", "next_exercise", "next"),
         Binding("r", "check_now", "run"),
         Binding("1", "show_tab('lesson')", "lesson"),
-        Binding("2,h", "show_hints", "hint"),
-        Binding("2,h", "next_hint", "next hint"),
+        Binding("2,h", "show_tab('hint')", "hint"),
         Binding("3", "show_tab('result')", "result"),
         Binding("tab", "cycle_tab", "next tab", show=False),
         Binding("l", "open_list", "list"),
@@ -2436,13 +2693,9 @@ class WatchScreen(Screen[None]):
         self.manual = manual
         self.outcome: Outcome | None = None
         self.latest_check = 0
-        self.runs = 0
-        self.hints_open = 0
-        self.runs_at_last_hint = 0
         self.show_result_when_checked = False
         self.watched_time = 0.0
         self.check_again = "Press r to check again." if manual else "Save the file to check again."
-        self.run_again = "press r again" if manual else "save again"
 
     @property
     def exercise(self) -> Exercise:
@@ -2504,9 +2757,6 @@ class WatchScreen(Screen[None]):
     ) -> None:
         self.progress.current = exercise.name
         save_progress(self.progress)
-        self.runs = 0
-        self.hints_open = 0
-        self.runs_at_last_hint = 0
         self.show_result_when_checked = False
         self.watched_time = modified_time(exercise.path)
 
@@ -2562,7 +2812,6 @@ class WatchScreen(Screen[None]):
             progress=self.progress,
         )
         self.outcome = outcome
-        self.runs += 1
         self.show_result()
         self.show_status()
         self.show_hint()
@@ -2620,28 +2869,13 @@ class WatchScreen(Screen[None]):
             ),
         )
 
-    def next_hint_ready(self) -> bool:
-        return 0 < self.hints_open < len(self.exercise.hints) and self.runs > self.runs_at_last_hint
-
     def show_hint(self) -> None:
-        label = "Hint" if self.hints_open == 0 else f"Hint {self.hints_open} of {len(self.exercise.hints)}"
-        self.query_one(TabbedContent).get_tab("hint-tab").label = label
         self.query_one("#hint-text", Static).update(
             hint_view(
                 exercise=self.exercise,
-                hints_open=self.hints_open,
-                next_ready=self.next_hint_ready(),
-                run_again=self.run_again,
+                outcome=self.outcome,
             ),
         )
-
-    def open_hint_level(self) -> None:
-        self.hints_open += 1
-        self.runs_at_last_hint = self.runs
-        self.show_hint()
-        self.action_show_tab("hint")
-        self.query_one("#hint", VerticalScroll).scroll_end(animate=False)
-        self.refresh_bindings()
 
     def check_action(
         self,
@@ -2653,12 +2887,6 @@ class WatchScreen(Screen[None]):
 
         if action == "check_now":
             return self.manual
-
-        if action == "show_hints":
-            return not self.next_hint_ready()
-
-        if action == "next_hint":
-            return self.next_hint_ready()
 
         return True
 
@@ -2717,16 +2945,6 @@ class WatchScreen(Screen[None]):
     def action_check_now(self) -> None:
         self.show_result_when_checked = True
         self.check()
-
-    def action_show_hints(self) -> None:
-        if self.hints_open == 0:
-            self.open_hint_level()
-            return
-
-        self.action_show_tab("hint")
-
-    def action_next_hint(self) -> None:
-        self.open_hint_level()
 
     def action_open_list(self) -> None:
         self.app.push_screen(
@@ -2837,7 +3055,7 @@ USAGE = prose(
     {START_COMMAND}                    start the course
     {START_COMMAND} --manual-run       start the course, checking only when you press r
     {START_COMMAND} run [name]         check one exercise and print the result
-    {START_COMMAND} hint [name]        print the three hints for an exercise
+    {START_COMMAND} hint [name]        print the hints for an exercise
     {START_COMMAND} reset name         reset an exercise file to how it started
     {START_COMMAND} check-all          check every exercise and update your progress
     {START_COMMAND} dev check          maintainer check of every exercise and lesson
@@ -3046,8 +3264,8 @@ def main(arguments: list[str]) -> int:
             return 1
 
         if command == "hint":
-            for label, hint in zip(HINT_LABELS, exercise.hints):
-                print(f"{label}\n{textwrap.indent(textwrap.fill(hint, width=76), '  ')}\n")
+            for function, hint in exercise.hints.items():
+                print(f"{function}\n{textwrap.indent(textwrap.fill(hint, width=76), '  ')}\n")
 
             return 0
 

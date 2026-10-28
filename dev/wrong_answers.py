@@ -14,123 +14,152 @@ from pathlib import Path
 from types import ModuleType
 
 REPO = Path(__file__).resolve().parent.parent
-HEAD = "import torch\nfrom torch import Tensor\n\n"
+HEAD = (
+    "import torch\n"
+    "import torch.nn.functional as F\n"
+    "from torch import Tensor\n\n"
+    'LETTERS = ".abcdefghijklmnopqrstuvwxyz"\n\n'
+    'def encode(name): return torch.tensor([LETTERS.index(c) for c in "." + name + "."])\n'
+)
 
 # Loading run.py would otherwise leave a __pycache__ folder at the repo root.
 sys.dont_write_bytecode = True
 
-TENSORS1_GRID = "def make_grid(): return torch.tensor([[1, 2], [3, 4], [5, 6]])\n"
-TENSORS1_REST = "def count_rows(v): return v.shape[0]\ndef count_dimensions(v): return len(v.shape)\ndef count_entries(v): return v.numel()\n"
-TENSORS2_LAST_TWO = "def last_two_columns(g): return g[:, -2:]\n"
-TENSORS3_RESCALE = "def rescale(g, low, high): return (g - low) / (high - low)\n"
-TENSORS5_FIRST_TWO = "def column_sums(g): return g.sum(dim=0)\ndef row_means(g): return g.float().mean(dim=1)\n"
-MATMUL1_WEIGHTED_SUM = "def weighted_sum(v): return (v * torch.tensor([0.5, -2.0, 3.0])).sum()\n"
+TENSORS1_REST = "def empty_counts(): return torch.zeros((27, 27), dtype=torch.int64)\n"
+TENSORS2_REST = (
+    "def first_letter_counts(c): return c[0]\n"
+    "def count_of(c, p): return c[LETTERS.index(p[0]), LETTERS.index(p[1])].item()\n"
+)
+COUNT_PAIRS = (
+    "def count_pairs(names):\n"
+    "    counts = torch.zeros((27, 27), dtype=torch.int64)\n"
+    "    for name in names:\n"
+    "        letters = encode(name)\n"
+    "        for first, second in zip(letters, letters[1:]):\n"
+    "            counts[{index}] += 1\n"
+    "    return counts\n"
+)
+TO_PROBABILITIES = "def to_probabilities(c): return c / c.sum(dim=1, keepdim=True)\n"
+SAMPLE_NAME = (
+    "def sample_name(probs, generator):\n"
+    "    name = ''\n"
+    "    position = 0\n"
+    "    while True:\n"
+    "        position = torch.multinomial(probs[{row}], num_samples=1, generator=generator).item()\n"
+    "        if position == 0:\n"
+    "            return name\n"
+    "        name += LETTERS[position]\n"
+)
+LOSS = (
+    "def loss(probs, names):\n"
+    "    firsts, seconds = [], []\n"
+    "    for name in names:\n"
+    "        letters = encode(name)\n"
+    "        firsts.extend(letters[:-1].tolist())\n"
+    "        seconds.extend(letters[1:].tolist())\n"
+    "    return {result}\n"
+)
+ONE_HOT = "def one_hot(p): return F.one_hot(p, num_classes=27).float()\n"
 
 # (exercise, what is wrong, the file a learner might write)
 CASES: list[tuple[str, str, str]] = [
     (
         "tensors1",
-        "a list instead of a tensor",
-        HEAD + "def make_grid(): return [[1, 2], [3, 4], [5, 6]]\n" + TENSORS1_REST,
+        "encode without the dots at the ends",
+        HEAD.replace('"." + name + "."', "name") + TENSORS1_REST,
     ),
     (
         "tensors1",
-        "2 rows of 3 instead of 3 rows of 2",
-        HEAD + "def make_grid(): return torch.tensor([[1, 2, 3], [4, 5, 6]])\n" + TENSORS1_REST,
+        "encode returns a list",
+        HEAD.replace("torch.tensor([LETTERS.index(c) for c in \".\" + name + \".\"])", '[LETTERS.index(c) for c in "." + name + "."]')
+        + TENSORS1_REST,
     ),
     (
         "tensors1",
-        "dimensions counted with len of the tensor",
+        "empty_counts holds floats",
+        HEAD + "def empty_counts(): return torch.zeros((27, 27))\n",
+    ),
+    (
+        "tensors1",
+        "empty_counts with the wrong size",
+        HEAD + "def empty_counts(): return torch.zeros((26, 26), dtype=torch.int64)\n",
+    ),
+    (
+        "tensors2",
+        "count_pairs with the row and column swapped",
+        HEAD + COUNT_PAIRS.replace("{index}", "second, first") + TENSORS2_REST,
+    ),
+    (
+        "tensors2",
+        "first_letter_counts takes a column",
         HEAD
-        + TENSORS1_GRID
-        + "def count_rows(v): return v.shape[0]\ndef count_dimensions(v): return len(v)\ndef count_entries(v): return v.numel()\n",
+        + COUNT_PAIRS.replace("{index}", "first, second")
+        + "def first_letter_counts(c): return c[:, 0]\n"
+        + "def count_of(c, p): return c[LETTERS.index(p[0]), LETTERS.index(p[1])].item()\n",
     ),
     (
-        "tensors1",
-        "entries as the first two sizes multiplied",
+        "tensors2",
+        "count_of with the letters swapped",
         HEAD
-        + TENSORS1_GRID
-        + "def count_rows(v): return v.shape[0]\ndef count_dimensions(v): return len(v.shape)\n"
-        + "def count_entries(v): return v.shape[0] * v.shape[1]\n",
-    ),
-    (
-        "tensors2",
-        "last two rows instead of last two columns",
-        HEAD + "def last_two_columns(g): return g[-2:]\ndef drop_first_column(g): return g[:, 1:]\ndef inner_part(g): return g[1:-1, 1:-1]\n",
-    ),
-    (
-        "tensors2",
-        "first row dropped instead of first column",
-        HEAD + TENSORS2_LAST_TWO + "def drop_first_column(g): return g[1:]\ndef inner_part(g): return g[1:-1, 1:-1]\n",
-    ),
-    (
-        "tensors2",
-        "edge taken off the rows only",
-        HEAD + TENSORS2_LAST_TWO + "def drop_first_column(g): return g[:, 1:]\ndef inner_part(g): return g[1:-1]\n",
+        + COUNT_PAIRS.replace("{index}", "first, second")
+        + "def first_letter_counts(c): return c[0]\n"
+        + "def count_of(c, p): return c[LETTERS.index(p[1]), LETTERS.index(p[0])].item()\n",
     ),
     (
         "tensors3",
-        "low left out of the divisor",
-        HEAD + "def rescale(g, low, high): return (g - low) / high\ndef subtract_first_column(g): return g - g[:, 0:1]\n",
+        "pairs_starting_with sums the columns",
+        HEAD
+        + "def pairs_starting_with(c): return c.sum(dim=0)\n"
+        + "def most_likely_next(c, l): return LETTERS[c[LETTERS.index(l)].argmax().item()]\n"
+        + "def total_pairs(c): return c.sum().item()\n",
     ),
     (
         "tensors3",
-        "first column by index, not by slice",
-        HEAD + TENSORS3_RESCALE + "def subtract_first_column(g): return g - g[:, 0]\n",
-    ),
-    (
-        "tensors3",
-        "misspelled function name",
-        HEAD + TENSORS3_RESCALE + "def subtract_first(g): return g - g[:, 0:1]\n",
+        "most_likely_next returns the position, not the letter",
+        HEAD
+        + "def pairs_starting_with(c): return c.sum(dim=1)\n"
+        + "def most_likely_next(c, l): return c[LETTERS.index(l)].argmax().item()\n"
+        + "def total_pairs(c): return c.sum().item()\n",
     ),
     (
         "tensors4",
-        "times table without a new dimension",
-        HEAD + "def times_table(r, c): return r * c\ndef add_row_and_column_values(g, r, c): return g + r[:, None] + c\n",
+        "row totals without keepdim",
+        HEAD + "def to_probabilities(c): return c / c.sum(dim=1)\ndef smoothed_probabilities(c, k): return to_probabilities(c + k)\n",
     ),
     (
         "tensors4",
-        "per_row without a new dimension",
-        HEAD + "def times_table(r, c): return r[:, None] * c\ndef add_row_and_column_values(g, r, c): return g + r + c\n",
+        "k added after dividing",
+        HEAD + TO_PROBABILITIES + "def smoothed_probabilities(c, k): return to_probabilities(c) + k\n",
     ),
     (
         "tensors5",
-        "column sums along the wrong dimension",
-        HEAD
-        + "def column_sums(g): return g.sum(dim=1)\ndef row_means(g): return g.float().mean(dim=1)\n"
-        + "def rows_to_fractions(g): return g / g.sum(dim=1, keepdim=True)\n",
+        "sample_name always draws from row 0",
+        HEAD + SAMPLE_NAME.replace("{row}", "0") + LOSS.replace("{result}", "-probs[firsts, seconds].log().mean()"),
     ),
     (
         "tensors5",
-        "mean on ints",
-        HEAD
-        + "def column_sums(g): return g.sum(dim=0)\ndef row_means(g): return g.mean(dim=1)\n"
-        + "def rows_to_fractions(g): return g / g.sum(dim=1, keepdim=True)\n",
+        "loss without the minus sign",
+        HEAD + SAMPLE_NAME.replace("{row}", "position") + LOSS.replace("{result}", "probs[firsts, seconds].log().mean()"),
     ),
     (
         "tensors5",
-        "fractions without keepdim",
-        HEAD + TENSORS5_FIRST_TWO + "def rows_to_fractions(g): return g / g.sum(dim=1)\n",
+        "loss as a sum instead of a mean",
+        HEAD + SAMPLE_NAME.replace("{row}", "position") + LOSS.replace("{result}", "-probs[firsts, seconds].log().sum()"),
     ),
     (
         "matmul1",
-        "a float returned instead of a tensor",
-        HEAD + "def weighted_sum(v): return float((v * torch.tensor([0.5, -2.0, 3.0])).sum())\ndef linear(x, w, b): return x @ w.T + b\n",
+        "one_hot without .float()",
+        HEAD + "def one_hot(p): return F.one_hot(p, num_classes=27)\ndef look_up(p, t): return one_hot(p) @ t\n",
     ),
     (
         "matmul1",
-        "weight left with outputs as rows",
-        HEAD + MATMUL1_WEIGHTED_SUM + "def linear(x, w, b): return x @ w + b\n",
-    ),
-    (
-        "matmul1",
-        "bias left out",
-        HEAD + MATMUL1_WEIGHTED_SUM + "def linear(x, w, b): return x @ w.T\n",
+        "look_up multiplies in the wrong order",
+        HEAD + ONE_HOT + "def look_up(p, t): return t @ one_hot(p).T\n",
     ),
     (
         "matmul1",
         "syntax error",
-        HEAD + "def weighted_sum(v) return (v * torch.tensor([0.5, -2.0, 3.0])).sum()\n",
+        HEAD + "def one_hot(p) return F.one_hot(p, num_classes=27).float()\n",
     ),
 ]
 
