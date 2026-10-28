@@ -19,55 +19,54 @@ HEAD = "import torch\nfrom torch import Tensor\n\n"
 # Loading run.py would otherwise leave a __pycache__ folder at the repo root.
 sys.dont_write_bytecode = True
 
+TENSORS1_SALES = "def make_sales(): return torch.tensor([[4, 2], [1, 5]])\n"
 TENSORS1_REST = "def count_rows(v): return v.shape[0]\ndef count_dimensions(v): return len(v.shape)\ndef count_entries(v): return v.numel()\n"
+TENSORS2_LAST_TWO = "def last_two_words(s): return s[:, -2:]\n"
 TENSORS3_PERCENT = "def as_percent(s, t): return s / t * 100\n"
 TENSORS5_FIRST_TWO = "def total_per_test(s): return s.sum(dim=0)\ndef average_per_student(s): return s.float().mean(dim=1)\n"
-MATMUL1_FIRST_TWO = (
-    "def final_grade(m): return (m * torch.tensor([0.2, 0.3, 0.5])).sum()\n"
-    "def class_grades(m): return m @ torch.tensor([0.2, 0.3, 0.5])\n"
-)
+MATMUL1_GRADE = "def final_grade(m): return (m * torch.tensor([0.2, 0.3, 0.5])).sum()\n"
 
 # (exercise, what is wrong, the file a learner might write)
 CASES: list[tuple[str, str, str]] = [
     (
         "tensors1",
         "a list instead of a tensor",
-        HEAD + "def make_grid(): return [[1, 2], [3, 4], [5, 6]]\n" + TENSORS1_REST,
+        HEAD + "def make_sales(): return [[4, 2], [1, 5]]\n" + TENSORS1_REST,
     ),
     (
         "tensors1",
-        "2 rows of 3 instead of 3 rows of 2",
-        HEAD + "def make_grid(): return torch.tensor([[1, 2, 3], [4, 5, 6]])\n" + TENSORS1_REST,
+        "one row per fruit instead of one per day",
+        HEAD + "def make_sales(): return torch.tensor([[4, 1], [2, 5]])\n" + TENSORS1_REST,
     ),
     (
         "tensors1",
         "dimensions counted with len of the tensor",
         HEAD
-        + "def make_grid(): return torch.tensor([[1, 2], [3, 4], [5, 6]])\n"
+        + TENSORS1_SALES
         + "def count_rows(v): return v.shape[0]\ndef count_dimensions(v): return len(v)\ndef count_entries(v): return v.numel()\n",
     ),
     (
         "tensors1",
         "entries as the first two sizes multiplied",
         HEAD
-        + "def make_grid(): return torch.tensor([[1, 2], [3, 4], [5, 6]])\n"
+        + TENSORS1_SALES
         + "def count_rows(v): return v.shape[0]\ndef count_dimensions(v): return len(v.shape)\n"
         + "def count_entries(v): return v.shape[0] * v.shape[1]\n",
     ),
     (
         "tensors2",
-        "last sentence instead of last words",
-        HEAD + "def last_words(s): return s[-1]\ndef drop_first_word(s): return s[:, 1:]\ndef inner_part(g): return g[1:-1, 1:-1]\n",
+        "last two sentences instead of last two words",
+        HEAD + "def last_two_words(s): return s[-2:]\ndef drop_first_word(s): return s[:, 1:]\ndef trim_edges(s): return s[1:-1, 1:-1]\n",
     ),
     (
         "tensors2",
         "first sentence dropped instead of first word",
-        HEAD + "def last_words(s): return s[:, -1]\ndef drop_first_word(s): return s[1:]\ndef inner_part(g): return g[1:-1, 1:-1]\n",
+        HEAD + TENSORS2_LAST_TWO + "def drop_first_word(s): return s[1:]\ndef trim_edges(s): return s[1:-1, 1:-1]\n",
     ),
     (
         "tensors2",
-        "edge taken off the rows only",
-        HEAD + "def last_words(s): return s[:, -1]\ndef drop_first_word(s): return s[:, 1:]\ndef inner_part(g): return g[1:-1]\n",
+        "edges trimmed off the sentences only",
+        HEAD + TENSORS2_LAST_TWO + "def drop_first_word(s): return s[:, 1:]\ndef trim_edges(s): return s[1:-1]\n",
     ),
     (
         "tensors3",
@@ -115,16 +114,18 @@ CASES: list[tuple[str, str, str]] = [
     ),
     (
         "matmul1",
-        "weights as whole numbers with @",
-        HEAD
-        + "def final_grade(m): return (m * torch.tensor([0.2, 0.3, 0.5])).sum()\n"
-        + "def class_grades(m): return m @ torch.tensor([20, 30, 50]) / 100\n"
-        + "def rents_under_rules(f, r): return f @ r\n",
+        "weights as percents instead of decimals",
+        HEAD + "def final_grade(m): return (m * torch.tensor([20.0, 30.0, 50.0])).sum()\ndef grades_under_schemes(m, s): return m @ s.T\n",
     ),
     (
         "matmul1",
-        "rules multiplied entry by entry",
-        HEAD + MATMUL1_FIRST_TWO + "def rents_under_rules(f, r): return f * r\n",
+        "schemes left as rows",
+        HEAD + MATMUL1_GRADE + "def grades_under_schemes(m, s): return m @ s\n",
+    ),
+    (
+        "matmul1",
+        "schemes multiplied entry by entry",
+        HEAD + MATMUL1_GRADE + "def grades_under_schemes(m, s): return m * s\n",
     ),
     (
         "matmul1",

@@ -494,25 +494,25 @@ TENSORS1_LESSON = prose(
                           [12, 25, 19]])
     ```
 
-    You made a **tensor**. Picture it as a grid. Each inner list became a row,
-    one per day, and each row holds that day's three readings. Every number in
-    the grid is called an entry.
+    You made a **tensor**. Picture a grid. Each inner list became a row, one per
+    day, and each row holds that day's three readings. Every number in the grid
+    is called an entry.
 
-    Now ask PyTorch how big it is.
+    Ask PyTorch how big it is.
 
     ```python
     temps.shape    # torch.Size([2, 3])
     ```
 
-    That's the **shape**, 2 rows by 3 columns. Each direction you can walk
-    through a tensor is a **dimension**, and `temps` has two of them. Dimension
-    0 runs down the rows. Dimension 1 runs across the columns.
+    That's the **shape**, 2 days by 3 readings. Each size in a shape is one
+    **dimension**, so `temps` has two. Dimension 0 counts the days, down the
+    rows. Dimension 1 counts the readings, across the columns. From here on
+    this course writes a shape the short way, like `(2, 3)`.
 
-    A shape works like a Python tuple, so you can pick sizes out of it.
-    `temps.shape[1]` is 3, the number of readings per day.
+    A shape works like a Python tuple. Anything you can do with a tuple, you can
+    do with a shape.
 
-    Tensors aren't stuck at two dimensions. Here's the same kind of data at
-    other sizes.
+    Tensors can have any number of dimensions, even none.
 
     | What you have | Shape |
     |---|---|
@@ -521,21 +521,18 @@ TENSORS1_LESSON = prose(
     | two days, `temps` | `(2, 3)` |
     | a week of days for 10 cities | `(10, 7, 3)` |
 
-    One reading has no dimensions at all, so its shape is empty. To count the
-    entries in any tensor, multiply the sizes in its shape. `temps` holds
-    2 × 3 = 6 entries.
+    One reading has no dimensions, so its shape is empty. To count the entries
+    in any tensor, multiply the sizes in its shape. `temps` holds 2 × 3 = 6.
 
-    The tests also use `torch.zeros(4, 5)`. It makes a tensor of shape `(4, 5)`
-    full of zeros, handy when only the shape matters.
+    When you save, the app runs your functions on tensors like
+    `torch.zeros(4, 5)`, a 4 by 5 grid of zeros. Zeros are fine there, since
+    only the shape matters.
 
-    Why start here? A **model**, like a photo tagger or a chatbot, is a program
-    that turns numbers into other numbers. It gets good through **training**,
-    where it keeps nudging its own numbers until its answers come out right.
-    Every one of those numbers lives in a tensor. Most bugs in model code are
-    shapes that don't fit together, so you'll read shapes for the rest of the
-    course.
-
-    Open `tensors1.py` and fill in the four functions.
+    So why start with grids of numbers? A **model**, like a photo tagger or a
+    chatbot, is a program that turns numbers into other numbers. It gets good
+    through **training**, which keeps nudging its own numbers until its answers
+    come out right. Every one of those numbers lives in a tensor, and a lot of
+    bugs in model code are shapes that don't fit together.
     """,
 )
 
@@ -547,18 +544,14 @@ TENSORS1_SOURCE = source_file(
     from torch import Tensor
 
 
-    # TODO: Return a tensor that holds the numbers 1 to 6 in 3 rows of 2.
-    #
-    #     1  2
-    #     3  4
-    #     5  6
-    #
-    def make_grid() -> Tensor:
+    # TODO: A shop sold 4 apples and 2 pears on Monday, then 1 apple and 5 pears
+    #   on Tuesday. Return the sales as a tensor with one row per day, apples first.
+    def make_sales() -> Tensor:
         ...
 
 
-    # TODO: Return how many rows the tensor has, the size of its dimension 0.
-    def count_rows(values: Tensor) -> int:
+    # TODO: Return how many rows the grid has, the size of its dimension 0.
+    def count_rows(grid: Tensor) -> int:
         ...
 
 
@@ -568,14 +561,14 @@ TENSORS1_SOURCE = source_file(
 
 
     # TODO: Return how many entries the tensor holds in total.
-    #   It has to work for any number of dimensions, even none.
+    #   It has to work for any tensor, even one with no dimensions, like torch.tensor(5.0).
     def count_entries(values: Tensor) -> int:
         ...
 
 
     # What the check tests
-    #   make_grid() holds 1 2 above 3 4 above 5 6
-    #   count_rows is 4 for torch.zeros(4, 5) and 7 for torch.zeros(7)
+    #   make_sales() holds 4 2 above 1 5
+    #   count_rows is 4 for torch.zeros(4, 5) and 10 for torch.zeros(10, 3)
     #   count_dimensions is 2, 1, 0 and 3 for tensors of shape (4, 5), (7,), () and (2, 3, 4)
     #   count_entries is 20, 7, 1 and 24 for the same four tensors
     ''',
@@ -591,12 +584,12 @@ TENSORS1_SOLUTION = source_file(
     from torch import Tensor
 
 
-    def make_grid() -> Tensor:
-        return torch.tensor([[1, 2], [3, 4], [5, 6]])
+    def make_sales() -> Tensor:
+        return torch.tensor([[4, 2], [1, 5]])
 
 
-    def count_rows(values: Tensor) -> int:
-        return values.shape[0]
+    def count_rows(grid: Tensor) -> int:
+        return grid.shape[0]
 
 
     # values.dim() gives the same number.
@@ -620,17 +613,17 @@ SAMPLE_TENSORS: tuple[tuple[str, Tensor], ...] = (
 
 def check_tensors1(checker: Checker) -> None:
     checker.test(
-        function="make_grid",
-        description="holds 1 2 above 3 4 above 5 6",
-        run=lambda make_grid: expect_tensor(
-            call="make_grid()",
-            actual=make_grid(),
-            expected=torch.tensor([[1, 2], [3, 4], [5, 6]]),
+        function="make_sales",
+        description="holds 4 2 for Monday above 1 5 for Tuesday",
+        run=lambda make_sales: expect_tensor(
+            call="make_sales()",
+            actual=make_sales(),
+            expected=torch.tensor([[4, 2], [1, 5]]),
         ),
     )
     checker.test(
         function="count_rows",
-        description="is 4 for torch.zeros(4, 5) and 7 for torch.zeros(7)",
+        description="is 4 for torch.zeros(4, 5) and 10 for torch.zeros(10, 3)",
         run=lambda count_rows: (
             expect_value(
                 call="count_rows(torch.zeros(4, 5))",
@@ -638,9 +631,9 @@ def check_tensors1(checker: Checker) -> None:
                 expected=4,
             ),
             expect_value(
-                call="count_rows(torch.zeros(7))",
-                actual=count_rows(torch.zeros(7)),
-                expected=7,
+                call="count_rows(torch.zeros(10, 3))",
+                actual=count_rows(torch.zeros(10, 3)),
+                expected=10,
             ),
         ),
     )
@@ -678,12 +671,13 @@ TENSORS1 = Exercise(
     source=TENSORS1_SOURCE,
     solution=TENSORS1_SOLUTION,
     hints=(
-        "Three functions are about the shape. Look again at what temps.shape gave you and at the table of shapes.",
-        "make_grid needs three inner lists of two numbers each. A shape is a tuple with one size per dimension. "
-        "Its first item is the row count and its length is the number of dimensions. For the entries, multiply "
-        "every size in the shape. math.prod multiplies a whole tuple, and an empty tuple gives 1.",
-        "torch.tensor([[1, 2], [3, 4], [5, 6]]), values.shape[0], len(values.shape), and math.prod(values.shape) "
-        "with import math at the top. values.numel() also counts the entries.",
+        "make_sales is about which numbers go in which row. The other three are about the shape. Look again at "
+        "what temps.shape gave you and at the table of shapes.",
+        "make_sales needs one inner list per day. A shape is a tuple with one size per dimension. Its first item "
+        "is the row count and its length is the number of dimensions. For the entries, multiply every size in "
+        "the shape. math.prod multiplies a whole tuple, and an empty tuple gives 1.",
+        "torch.tensor([[4, 2], [1, 5]]), grid.shape[0], len(values.shape), and math.prod(values.shape) with "
+        "import math at the top. values.numel() also counts the entries.",
     ),
     introduces=("tensor", "shape", "dimension", "model", "training"),
     check=check_tensors1,
@@ -691,7 +685,10 @@ TENSORS1 = Exercise(
 
 TENSORS2_LESSON = prose(
     """
-    Here are four days of temperatures, three readings a day.
+    When a model writes text, it picks the next word from its output at the
+    last position. During training it learns from a few rows of data at a time,
+    usually not the whole dataset. Both mean picking parts out of a tensor.
+    Here are four days of temperatures to practice on.
 
     ```python
     temps = torch.tensor([[14, 22, 17],
@@ -700,9 +697,9 @@ TENSORS2_LESSON = prose(
                           [11, 24, 18]])   # shape (4, 3)
     ```
 
-    Square brackets pick parts out. Inside them you give a position for each
-    dimension, rows first, separated by a comma. Positions count from 0, and a
-    negative position counts back from the end.
+    Square brackets pick parts out. Give a row, and if you want, a comma and a
+    column. Leave the column out and you get the whole row. Positions count
+    from 0, and a negative position counts back from the end.
 
     | Code | You get | Which part |
     |---|---|---|
@@ -711,14 +708,13 @@ TENSORS2_LESSON = prose(
     | `temps[1, 2]` | `tensor(19)` | day 1, the night reading |
     | `temps[:, 0]` | `tensor([14, 12, 15, 11])` | every morning |
 
-    A bare `:` means all of that dimension, so `temps[:, 0]` reads as every
-    day, reading 0. Picking one position like this is called indexing, and the
-    position is an **index**.
+    Each position you pick is an **index**. A bare `:` in place of an index
+    means all of that dimension, so `temps[:, 0]` reads as every day, reading 0.
 
     To take a range, write `start:stop`. You get `start` and everything after
     it, up to but not including `stop`. Leave out either end and the range
-    runs to the edge. Negative positions work here too. A range like this is
-    called a **slice**.
+    runs to the edge. Negative positions work here too. A range like this is a
+    **slice**.
 
     | Code | You get | Shape |
     |---|---|---|
@@ -729,13 +725,7 @@ TENSORS2_LESSON = prose(
     Keep an eye on the shapes. `temps[0]` has shape `(3,)`, because an index
     makes its dimension disappear. `temps[0:1]` holds the same day with shape
     `(1, 3)`, because a slice keeps its dimension even when it holds one item.
-    That difference matters in the next two exercises.
-
-    You'll do this all the time. A model that writes text only cares about its
-    output for the last word. Training feeds a model a handful of rows at a
-    time, never the whole dataset at once.
-
-    The functions in `tensors2.py` work on sentences instead of days.
+    That difference comes back in the next two exercises.
     """,
 )
 
@@ -746,7 +736,7 @@ TENSORS2_SOURCE = source_file(
     import torch
     from torch import Tensor
 
-    # Every function here gets a batch of sentences. Each row is one sentence
+    # Every function here gets a group of sentences. Each row is one sentence
     # and each column is one word position, with every word stored as a number.
     #
     #     sentences = torch.tensor([[11, 12, 13, 14, 15],
@@ -754,8 +744,8 @@ TENSORS2_SOURCE = source_file(
     #                               [31, 32, 33, 34, 35]])
 
 
-    # TODO: Return the last word of every sentence.
-    def last_words(sentences: Tensor) -> Tensor:
+    # TODO: Return the last two words of every sentence.
+    def last_two_words(sentences: Tensor) -> Tensor:
         ...
 
 
@@ -764,16 +754,16 @@ TENSORS2_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the grid without its outer edge.
-    #   That means no first or last row, and no first or last column.
-    def inner_part(grid: Tensor) -> Tensor:
+    # TODO: Drop the first and the last sentence, then drop the first and the
+    #   last word of every sentence that is left.
+    def trim_edges(sentences: Tensor) -> Tensor:
         ...
 
 
-    # What the check tests, on the sentences above and on a 4 by 6 grid
-    #   last_words(sentences) is [15, 25, 35]
+    # What the check tests, on the sentences above and on 4 sentences of 6 words
+    #   last_two_words(sentences) is [[14, 15], [24, 25], [34, 35]]
     #   drop_first_word(sentences) has shape (3, 4) and starts with [12, 13, 14, 15]
-    #   inner_part(sentences) is [[22, 23, 24]]
+    #   trim_edges(sentences) is [[22, 23, 24]]
     ''',
 )
 
@@ -785,28 +775,28 @@ TENSORS2_SOLUTION = source_file(
     from torch import Tensor
 
 
-    def last_words(sentences: Tensor) -> Tensor:
-        return sentences[:, -1]
+    def last_two_words(sentences: Tensor) -> Tensor:
+        return sentences[:, -2:]
 
 
     def drop_first_word(sentences: Tensor) -> Tensor:
         return sentences[:, 1:]
 
 
-    def inner_part(grid: Tensor) -> Tensor:
-        return grid[1:-1, 1:-1]
+    def trim_edges(sentences: Tensor) -> Tensor:
+        return sentences[1:-1, 1:-1]
     ''',
 )
 
 
 def check_tensors2(checker: Checker) -> None:
     sentences = torch.tensor([[11, 12, 13, 14, 15], [21, 22, 23, 24, 25], [31, 32, 33, 34, 35]])
-    grid = torch.arange(1, 25).reshape(4, 6)
+    more_sentences = torch.arange(1, 25).reshape(4, 6)
 
     for function, solve in (
-        ("last_words", lambda values: values[:, -1]),
+        ("last_two_words", lambda values: values[:, -2:]),
         ("drop_first_word", lambda values: values[:, 1:]),
-        ("inner_part", lambda values: values[1:-1, 1:-1]),
+        ("trim_edges", lambda values: values[1:-1, 1:-1]),
     ):
         checker.test(
             function=function,
@@ -819,11 +809,11 @@ def check_tensors2(checker: Checker) -> None:
         )
         checker.test(
             function=function,
-            description="is right for a 4 by 6 grid too",
+            description="is right for 4 sentences of 6 words too",
             run=lambda learner, solve=solve, function=function: expect_tensor(
-                call=f"{function} on the 4 by 6 grid torch.arange(1, 25).reshape(4, 6)",
-                actual=learner(grid),
-                expected=solve(grid),
+                call=f"{function} on 4 sentences of 6 words, torch.arange(1, 25).reshape(4, 6)",
+                actual=learner(more_sentences),
+                expected=solve(more_sentences),
             ),
         )
 
@@ -838,9 +828,9 @@ TENSORS2 = Exercise(
     hints=(
         "Each function picks along both dimensions. Look at how temps[:, 0] took a column and how temps[:-1] "
         "dropped the last day.",
-        "Give one entry per dimension inside the brackets, rows first. A bare : keeps every row. A range works on "
-        "columns too, and a negative stop leaves out the end.",
-        "sentences[:, -1], sentences[:, 1:] and grid[1:-1, 1:-1].",
+        "Rows come first inside the brackets, then columns. A bare : keeps every row. A slice works on columns "
+        "too. A negative start counts from the end, and a negative stop leaves out the end.",
+        "sentences[:, -2:], sentences[:, 1:] and sentences[1:-1, 1:-1].",
     ),
     introduces=("index", "slice"),
     check=check_tensors2,
@@ -855,34 +845,29 @@ TENSORS3_LESSON = prose(
                            [4, 6, 1]])   # shape (2, 3), one row per shop
     ```
 
-    Add tax to every price at once, with no loop.
+    You can add tax to every price at once, with no loop.
 
     ```python
     tax = torch.tensor([[1, 1, 0],
                         [1, 2, 0]])
-
     prices + tax    # tensor([[4, 6, 2], [5, 8, 1]])
     ```
 
-    Each entry got added to the entry in the same spot. `-`, `*` and `/` work
-    the same way. Math that pairs up entries like this is called
-    **elementwise**.
+    Each entry got added to the one in the same spot. This is called
+    **elementwise** math, and `-`, `*` and `/` work the same way.
 
     Now a delivery fee for each item, the same in both shops.
 
     ```python
     fees = torch.tensor([1, 0, 2])   # shape (3,)
-
     prices + fees    # tensor([[4, 5, 4], [5, 6, 3]])
     ```
 
-    The shapes don't match, and it worked anyway. PyTorch stretched `fees`
-    over both rows without copying it. That's **broadcasting**.
-
-    Here's how PyTorch decides whether two shapes fit. Line them up from the
-    right. Two sizes fit when they're equal or when one of them is 1, and a 1
-    gets stretched to match. If one shape is shorter, its missing sizes count
-    as 1.
+    The shapes don't match, and it worked anyway. PyTorch stretched `fees` over
+    both rows without copying it. That's **broadcasting**. To see whether two
+    shapes fit, line them up from the right. Two sizes fit when they're equal or
+    when one of them is 1, and a 1 stretches to match. A shorter shape counts
+    its missing sizes as 1.
 
     ```text
     prices   (2, 3)
@@ -891,9 +876,16 @@ TENSORS3_LESSON = prose(
 
     A plain number has no dimensions at all, so `prices * 2` fits too.
 
-    What about a charge per shop, 10 at the first and 20 at the second? Written
-    as `torch.tensor([10, 20])` it has shape `(2,)`. Its 2 meets the 3, and
-    PyTorch stops with an error. Give it a size 1 at the end and it fits.
+    Here's where it goes wrong. Say each shop adds its own charge, 10 at the
+    first and 20 at the second, written as `torch.tensor([10, 20])`.
+
+    ```text
+    prices   (2, 3)
+    charge      (2,)    2 meets 3, so PyTorch stops with an error
+    ```
+
+    The charge has one number per shop, so it should line up with the rows.
+    Give it a size 1 at the end and it does.
 
     ```python
     per_shop = torch.tensor([[10],
@@ -902,15 +894,11 @@ TENSORS3_LESSON = prose(
     prices + per_shop    # tensor([[13, 15, 12], [24, 26, 21]])
     ```
 
-    `(2, 1)` meets `(2, 3)`. The 2s match, and the 1 stretches across the
-    items.
+    `(2, 1)` meets `(2, 3)`. The 2s match, and the 1 stretches across the items.
 
-    Models lean on this constantly. They work on a **batch**, many examples at
-    once with one per row. Anything that applies to every example gets added to
-    every row in a single line.
-
-    `tensors3.py` has students and their test scores in place of shops and
-    prices.
+    Models work on a **batch**, many examples at once with one per row. Picture
+    a batch of 32 photos. With broadcasting, one line brightens all 32 by the
+    same amount, or each one by its own amount.
     """,
 )
 
@@ -1037,9 +1025,11 @@ TENSORS3 = Exercise(
 
 TENSORS4_LESSON = prose(
     """
-    In the last exercise, the charge per shop only fit once it had shape
-    `(2, 1)`. You typed it that way by hand. Usually you can't, because the
-    numbers come out of some other calculation as a flat tensor.
+    In the last exercise you got numbers of shape `(n, 1)` by slicing, and they
+    lined up with the rows. Slicing only works when the numbers already sit in
+    a grid. Often they arrive as a tensor with one dimension, a plain list.
+    Training does this a lot, with one number per example saying how much that
+    example counts.
 
     ```python
     per_shop = torch.tensor([10, 20])   # shape (2,), and you need (2, 1)
@@ -1054,25 +1044,22 @@ TENSORS4_LESSON = prose(
     ```
 
     Same two numbers, standing up or lying down. Standing up, they line up with
-    rows. Lying down, they line up with columns.
+    rows. Lying down, they line up with columns, and so does the plain list.
 
-    There's one trap. When a tensor has as many rows as columns, a flat tensor
+    Remember the rule from the last exercise. A size of 1 stretches, whichever
+    side it's on, so both tensors in one calculation can stretch at once.
+
+    There's one trap. When a grid has as many rows as columns, a plain list
     fits without any `None`.
 
     ```text
     square   (3, 3)
-    flat        (3,)    fits, and lines up with the columns
+    list        (3,)    fits, and lines up with the columns
     ```
 
     You meant one number per row. PyTorch used one per column, and nothing
     complains. The only sign is that the numbers come out wrong. So when you
     mean rows, add the `None` even if the code already runs without it.
-
-    Training uses this to weigh some examples more than others, with one number
-    for each row of a batch.
-
-    In `tensors4.py` you'll stretch along rows and along columns in the same
-    line.
     """,
 )
 
@@ -1205,7 +1192,10 @@ TENSORS4 = Exercise(
 
 TENSORS5_LESSON = prose(
     """
-    Back to four days of temperatures.
+    At every step of training, a model checks how wrong it is on each example in
+    a batch. Then it averages all of those errors into one number to improve on.
+    Turning many numbers into fewer is what this exercise is about. Back to four
+    days of temperatures.
 
     ```python
     temps = torch.tensor([[14, 22, 17],
@@ -1214,7 +1204,7 @@ TENSORS5_LESSON = prose(
                           [11, 24, 18]])   # 4 days, 3 readings a day
     ```
 
-    `temps.sum()` adds up all twelve numbers into `tensor(214)`. Usually that
+    `temps.sum()` adds up all twelve numbers into `tensor(214)`. Often that
     squashes too much. Say you want one total per day. Tell `sum` which
     dimension to add along.
 
@@ -1228,30 +1218,19 @@ TENSORS5_LESSON = prose(
 
     Averages work the same way with `.mean()`, with one catch. A tensor holds
     either whole numbers or decimal numbers, never both. `temps` holds whole
-    numbers, and `temps.mean()` stops with an error, since an average is rarely
-    whole. Turn the numbers into decimals first.
+    numbers, and `mean` only works on decimals. Unlike `/`, it won't convert
+    them for you, so `temps.mean()` stops with an error. Convert first.
 
     ```python
     temps.float().mean()    # tensor(17.8333)
     ```
 
-    Sometimes the totals need to keep their place so they still line up with
-    the grid. `keepdim=True` leaves the summed dimension in as size 1 instead
-    of dropping it.
+    One more option. `keepdim=True` keeps the summed dimension as size 1 instead
+    of dropping it. Add up each day's readings that way and the four totals come
+    out standing up, shape `(4, 1)`. They're ready to line up with the rows of
+    `temps`, and the last two exercises showed why that matters.
 
-    ```python
-    temps.sum(dim=0, keepdim=True)    # tensor([[52, 92, 70]]), shape (1, 3)
-    ```
-
-    That's a total per reading, lying down so it lines up with the columns. The
-    last exercise showed why that matters.
-
-    Squeezing a tensor down like this is called a **reduction**. Training runs
-    one on every step. It measures how wrong the model is on each example in a
-    batch, then averages those into one number to improve on.
-
-    Back to students in `tensors5.py`. This time you add up along the other
-    dimension too.
+    Adding up or averaging along a dimension is called a **reduction**.
     """,
 )
 
@@ -1349,7 +1328,7 @@ TENSORS5 = Exercise(
     hints=(
         "Each function adds up or averages along one dimension. For each one, ask which dimension should disappear.",
         "Per test means the students go away, so that's dimension 0. Per student means dimension 1. Averages need "
-        ".float() first. To divide by row totals, the totals have to stand up, like in the last exercise.",
+        ".float() first. To divide by row totals, the totals have to stand up, and keepdim=True does that.",
         "scores.sum(dim=0), scores.float().mean(dim=1), and scores / scores.sum(dim=1, keepdim=True).",
     ),
     introduces=("reduction",),
@@ -1393,11 +1372,10 @@ MATMUL1_LESSON = prose(
          = 700
     ```
 
-    The 10 and the 100 say how much each input counts. They're called
+    The 10 and the 100 say how much each input counts, and they're called
     **weights**. Multiply each input by its weight, add everything up, and you
-    have a **weighted sum**.
-
-    In PyTorch that's an elementwise multiply followed by a sum.
+    have a **weighted sum**. In PyTorch that's an elementwise multiply, then a
+    sum. The `.0` makes these decimal numbers, which models compute with.
 
     ```python
     flat = torch.tensor([50.0, 2.0])
@@ -1406,12 +1384,10 @@ MATMUL1_LESSON = prose(
     (flat * weights).sum()    # tensor(700.)
     ```
 
-    The `.0` makes these decimal numbers. Models compute with decimals.
-
-    Pairing things up and adding them is so common that it has its own name,
-    the **dot product**, and its own sign, `@`. `flat @ weights` gives the same
-    700. One rule comes with `@`. Both sides must hold the same kind of number,
-    so don't mix whole numbers with decimals.
+    Multiplying pairs and adding them up has a name, the **dot product**.
+    PyTorch writes it with `@`, so `flat @ weights` gives the same 700. Both
+    sides of `@` must hold the same kind of number, whole or decimal, never one
+    of each.
 
     Now price three flats at once, one per row.
 
@@ -1423,17 +1399,30 @@ MATMUL1_LESSON = prose(
     flats @ weights    # tensor([ 700., 1100.,  400.])
     ```
 
-    Each row got its own dot product with the same weights. Read the shapes.
-    `(3, 2) @ (2,)` gives `(3,)`. The 2s have to match, since each row needs
-    one weight per input, and the 3 rows come out as 3 rents.
+    Each row got its own dot product with the same weights. A grid of numbers
+    like `flats` is a **matrix**.
 
-    A grid like `flats` is called a **matrix**. Doing many dot products in one
-    go like this is **matrix multiplication**, and most of deep learning runs
-    on it. A model's weights are numbers like these, and training is the
-    search for good ones.
+    What if you can't choose between two rules of thumb? Put each rule in its
+    own column, and `@` gives every flat a rent under each rule.
 
-    `matmul1.py` swaps rent for school grades. The last function wants several
-    rules at once, so work out the shapes before you write any code.
+    ```python
+    rules = torch.tensor([[10.0, 12.0],
+                          [100.0, 50.0]])   # one column per rule
+
+    flats @ rules    # tensor([[700., 700.], [1100., 1110.], [400., 410.]])
+    ```
+
+    Read the shapes. `(3, 2) @ (2, 2)` gives `(3, 2)`. The inner sizes must
+    match, since each row of `flats` needs one weight per input. The outer
+    sizes are what you get, one row per flat and one column per rule. This is
+    **matrix multiplication**, and most of deep learning runs on it.
+
+    Data won't always arrive the way `@` wants it. `.T` swaps rows and columns,
+    so a tensor of shape `(5, 3)` becomes `(3, 5)` and its first row becomes its
+    first column.
+
+    A model's weights are numbers like these, and training is the search for
+    good ones.
     """,
 )
 
@@ -1453,28 +1442,21 @@ MATMUL1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return every student's final grade, using @.
+    # TODO: Grade every student under every grading scheme, using @.
     #   marks has one row per student, with the same three marks as above.
-    def class_grades(marks: Tensor) -> Tensor:
-        ...
-
-
-    # TODO: Price every flat under several rent rules at once, using @.
-    #   flats has one row per flat, its size and then its number of rooms.
-    #   rules has one column per rule. Each column holds a price per square
-    #   metre on top and a price per room below it.
-    #   Return one row per flat and one column per rule.
-    def rents_under_rules(
-        flats: Tensor,
-        rules: Tensor,
+    #   schemes has one row per scheme, each holding three weights like 0.2, 0.3 and 0.5.
+    #   Return one row per student and one column per scheme.
+    def grades_under_schemes(
+        marks: Tensor,
+        schemes: Tensor,
     ) -> Tensor:
         ...
 
 
     # What the check tests
     #   final_grade of marks 80, 70 and 90 is 82, and of 100, 50 and 0 is 35
-    #   class_grades of three students
-    #   rents_under_rules of the three flats from the lesson under two rules, a (3, 2) result
+    #   grades_under_schemes of 2 students under 2 schemes, a (2, 2) result
+    #   grades_under_schemes of 3 students under 3 schemes, where a wrong turn still runs
     ''',
 )
 
@@ -1490,26 +1472,21 @@ MATMUL1_SOLUTION = source_file(
         return (marks * torch.tensor([0.2, 0.3, 0.5])).sum()
 
 
-    def class_grades(marks: Tensor) -> Tensor:
-        return marks @ torch.tensor([0.2, 0.3, 0.5])
-
-
-    # (flats, 2) @ (2, rules) gives (flats, rules), one dot product per row and column.
-    def rents_under_rules(
-        flats: Tensor,
-        rules: Tensor,
+    # schemes.T has one column per scheme, so (students, 3) @ (3, schemes) gives (students, schemes).
+    def grades_under_schemes(
+        marks: Tensor,
+        schemes: Tensor,
     ) -> Tensor:
-        return flats @ rules
+        return marks @ schemes.T
     ''',
 )
 
 
 def check_matmul1(checker: Checker) -> None:
-    grade_weights = torch.tensor([0.2, 0.3, 0.5])
-    class_marks = torch.tensor([[80.0, 70.0, 90.0], [100.0, 50.0, 0.0], [60.0, 60.0, 60.0]])
-    flats = torch.tensor([[50.0, 2.0], [80.0, 3.0], [30.0, 1.0]])
-    two_rules = torch.tensor([[10.0, 12.0], [100.0, 50.0]])
-    three_rules = torch.tensor([[10.0, 12.0, 8.0], [100.0, 50.0, 200.0]])
+    two_students = torch.tensor([[80.0, 70.0, 90.0], [100.0, 50.0, 0.0]])
+    two_schemes = torch.tensor([[0.2, 0.3, 0.5], [0.5, 0.5, 0.0]])
+    three_students = torch.tensor([[80.0, 70.0, 90.0], [100.0, 50.0, 0.0], [60.0, 60.0, 60.0]])
+    three_schemes = torch.tensor([[0.2, 0.3, 0.5], [0.5, 0.5, 0.0], [0.0, 0.0, 1.0]])
 
     checker.test(
         function="final_grade",
@@ -1530,30 +1507,21 @@ def check_matmul1(checker: Checker) -> None:
         ),
     )
     checker.test(
-        function="class_grades",
-        description="gives [82, 35, 60] for three students",
-        run=lambda class_grades: expect_tensor(
-            call="class_grades of three students",
-            actual=class_grades(class_marks),
-            expected=class_marks @ grade_weights,
+        function="grades_under_schemes",
+        description="gives [[82, 75], [35, 75]] for 2 students under 2 schemes",
+        run=lambda grades_under_schemes: expect_tensor(
+            call="grades_under_schemes with schemes [[0.2, 0.3, 0.5], [0.5, 0.5, 0.0]]",
+            actual=grades_under_schemes(two_students, two_schemes),
+            expected=two_students @ two_schemes.T,
         ),
     )
     checker.test(
-        function="rents_under_rules",
-        description="gives a (3, 2) table for three flats under two rules",
-        run=lambda rents_under_rules: expect_tensor(
-            call="rents_under_rules(flats, torch.tensor([[10.0, 12.0], [100.0, 50.0]]))",
-            actual=rents_under_rules(flats, two_rules),
-            expected=flats @ two_rules,
-        ),
-    )
-    checker.test(
-        function="rents_under_rules",
-        description="works for three rules too",
-        run=lambda rents_under_rules: expect_tensor(
-            call="rents_under_rules with three rules",
-            actual=rents_under_rules(flats, three_rules),
-            expected=flats @ three_rules,
+        function="grades_under_schemes",
+        description="gives one column per scheme for 3 students under 3 schemes",
+        run=lambda grades_under_schemes: expect_tensor(
+            call="grades_under_schemes with 3 students and schemes [[0.2, 0.3, 0.5], [0.5, 0.5, 0.0], [0.0, 0.0, 1.0]]",
+            actual=grades_under_schemes(three_students, three_schemes),
+            expected=three_students @ three_schemes.T,
         ),
     )
 
@@ -1566,12 +1534,11 @@ MATMUL1 = Exercise(
     source=MATMUL1_SOURCE,
     solution=MATMUL1_SOLUTION,
     hints=(
-        "final_grade is a weighted sum where you pick the weights from the TODO. For the last function, write down "
-        "the shapes of flats and rules before any code.",
-        "The weights are 0.2, 0.3 and 0.5, in a tensor of decimals. @ pairs each row on the left with what is on "
-        "the right. When the right side has several columns, each column is its own set of weights, so (3, 2) @ "
-        "(2, 2) gives (3, 2).",
-        "(marks * torch.tensor([0.2, 0.3, 0.5])).sum(), marks @ torch.tensor([0.2, 0.3, 0.5]), and flats @ rules.",
+        "final_grade is a weighted sum where you pick the weights from the TODO. For grades_under_schemes, write "
+        "down the shape of marks and the shape of schemes before any code.",
+        "The weights are 0.2, 0.3 and 0.5, in a tensor of decimals. For @ the inner sizes must match. marks is "
+        "(students, 3) and schemes is (schemes, 3), so the schemes have to become columns first.",
+        "(marks * torch.tensor([0.2, 0.3, 0.5])).sum(), and marks @ schemes.T.",
     ),
     introduces=("weight", "weighted sum", "dot product", "matrix", "matrix multiplication"),
     check=check_matmul1,
