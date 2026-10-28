@@ -24,7 +24,7 @@ born: 2026-10-28
 | 4 | Rewrite the lessons so they read like a person and the tasks need thinking | | owner | done |
 | 5 | Show every test in the result, grouped by function | | owner | done |
 | 6 | Verify with the dev check, the wrong answers, the screen driver and a beginner review | | owner | done |
-| 7 | Rebuild the app on Textual, with the hint levels | | owner | pending |
+| 7 | Rebuild the app on Textual, with the hint levels | | owner | done |
 
 ## Done when
 
