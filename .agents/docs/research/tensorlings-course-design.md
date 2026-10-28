@@ -20,9 +20,9 @@ About 300 small exercises in 13 parts. Each part ends with a project.
 
 | Part | Content |
 |---|---|
-| 1 Foundations | tensors, shapes, indexing, broadcasting, reductions and matrix multiply, all taught by building Karpathy's makemore bigram model, then derivatives, the chain rule, a scalar autograd engine by hand, backprop through tensors by hand |
+| 1 Foundations | tensors, shapes, indexing, broadcasting, reductions, matrix multiply, derivatives, the chain rule, a scalar autograd engine by hand, backprop through tensors by hand |
 | 2 Learning | linear and softmax regression, losses as probability, gradient descent, minibatches, train, validation and test splits, overfitting, weight decay |
-| 3 Building blocks | Linear, the common activations and why each, embeddings, MLPs, initialization, dropout, normalization, residuals. Project, an MLP name generator that beats the bigram model |
+| 3 Building blocks | Linear, the common activations and why each, embeddings, MLPs, initialization, dropout, normalization, residuals. Project, a name generator |
 | 4 Optimization | SGD, momentum, RMSProp, Adam, AdamW, schedules, warmup, gradient clipping, the debugging recipe |
 | 5 Convolutional nets | convolution derived from Linear, channels, stride, dilation, pooling, LeNet to ResNet, upsampling, U-Net, augmentation, transfer learning. Project, a small image classifier |
 | 6 Sequences | RNN, backprop through time, LSTM, GRU, bidirectional models, encoder and decoder, beam search, causal and dilated convolution, state space models |
