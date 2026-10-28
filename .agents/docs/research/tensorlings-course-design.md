@@ -75,8 +75,10 @@ Each rule gets exercises where the wrong combination fails and the right one wor
 - The file holds the code and a `TODO` at every place to change, with no print lines and no tests.
 - Every exercise is code to write or fix. There are no prediction only exercises.
 - The checker runs the file one top level statement at a time, so a line that crashes on purpose hides nothing after it. A crash fails only the names its statement sets, and a crash no check reports fails the file. See `load_module` in `run.py`.
-- Each check is a list of tests, and every test belongs to one name the file sets, through `Checker.check_name`, or one function, through `Checker.test`. A failing test says in plain words what came back and what was expected.
-- Each name or function an exercise checks has one hint, per [DEC-010](../../decisions/DEC-010-one-hint-per-function.md).- A test that runs past `TIME_LIMIT_SECONDS` fails with a note about loops that never end, so a learner's endless loop can't stall the app. See `run_with_time_limit` in `run.py`.
+- Each check is a list of tests, and every test belongs to one name the file sets, through `Checker.check_name`, or one function, through `Checker.test`. A failing test says in plain words what came back and what was expected. A passing name shows its value and shape in the result, in place of print lines.
+- Each name or function an exercise checks has one hint, per [DEC-010](../../decisions/DEC-010-one-hint-per-function.md).
+- A check tests whatever its exercise produces, not only names. A function is called on several inputs, and a later exercise can build the learner's class and compare it with PyTorch's, or run their training loop and check that the loss goes down. A new kind of check gets added to `Checker` when an exercise first needs it.
+- A test that runs past `TIME_LIMIT_SECONDS` fails with a note about loops that never end, so a learner's endless loop can't stall the app. See `run_with_time_limit` in `run.py`.
 - A wrong tensor with more than `SHOWN_ENTRIES` entries is described by the entries that differ, so a big tensor never prints whole.
 - After a pass the reference solution is written to `solutions/<chapter>/<name>.py`.
 
@@ -84,11 +86,11 @@ Each rule gets exercises where the wrong combination fails and the right one wor
 
 - `run.py` draws a full-screen app with Textual, per [DEC-004](../../decisions/DEC-004-the-app-is-built-on-textual.md). See `TensorlingsApp` and `WatchScreen` in `run.py`.
 - From the top the screen shows one labeled line with the exercise file and the progress, three tabs, Lesson, Hint and Result, and Textual's footer of keys.
-- Each tab gets the whole screen and scrolls with the arrow keys and the mouse wheel. `1`, `2` and `3` switch tabs and `tab` cycles them. The owner picked tabs over stacked boxes, which left each box too small. The Result tab's label shows a cross or done, so the state shows from any tab.
+- Each tab gets the whole screen and scrolls with the arrow keys and the mouse wheel. `1`, `2` and `3` switch tabs and `tab` cycles them. The owner picked tabs over stacked boxes, which left each box too small. The Result tab's label shows how many rows pass, so the state shows from any tab.
 - After each save the app switches to the Result tab by itself, as rustlings shows output on save. Opening an exercise shows the lesson.
 - On a narrow terminal the progress bar shrinks, then goes, so the file path stays whole. See `status_line` in `run.py`.
 - The owner tried several tops before this one. Two bare lines felt cramped, a dot between the parts looked bad, and spaced words with no labels meant nothing. So every piece on the screen has a label or sits in a titled box.
-- The result shows only the first problem from the top of the file, a crash, a TODO still left as `...`, or the first wrong value, the way rustlings shows the first compiler or test error. Once everything passes it says "Exercise done" and where the solution is. The owner asked for this after checking that rustlings never reports variables or functions one by one, which replaced an earlier table of every function. See `result_view` in `run.py`.
+- The result is an aligned table with one row per thing the checks are about, a name or a function, saying what a passing name holds, passes, not written yet, or how many of its checks fail. Under it, each failing row's first failing check is explained the way a compiler shows its first error. It grows with the TODOs and not with the checks, and passing rows stay in view, since the owner could not find a function that already worked when only failures were listed. Showing only the first problem, as rustlings does, was tried and dropped as confusing. See `result_view` in `run.py`.
 - The Hint tab shows the hint for each function that doesn't pass yet. `2` or `h` opens it, and nothing is locked.
 - What the learner's code prints is caught and shown in a magenta box under the results, since printing straight to the screen would break the drawing.
 - Common PyTorch errors get a plain words explanation above PyTorch's own message, from the table `PLAIN_ERRORS` in `run.py`. A new error that confuses learners gets a row there.
