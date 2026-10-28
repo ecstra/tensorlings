@@ -1494,6 +1494,7 @@ WELCOME = prose(
     **Keys**
 
     - `h` shows or hides a hint
+    - `tab` shows the whole result on its own screen, with everything your code printed
     - `l` lists every exercise
     - `x` resets the file to how it started
     - `↑` and `↓` scroll the lesson
@@ -1836,12 +1837,37 @@ def indented(
     )
 
 
+def test_line(
+    mark: str,
+    color: str,
+    description: str,
+) -> Table:
+    """One test, its description wrapping under itself rather than under the mark."""
+    line = Table.grid(expand=True)
+    line.add_column(width=2)
+    line.add_column(ratio=1)
+    line.add_row(
+        Text(mark, style=f"bold {color}"),
+        Text(description),
+    )
+
+    return line
+
+
+PRINTED_LINES_SHOWN = 200
+
+
 def result_body(
     exercise: Exercise,
     outcome: Outcome | None,
     check_again: str,
+    full: bool,
 ) -> RenderableType:
-    """The result panel, most important first, since a tall result is cut off at the bottom."""
+    """The result, most important first, since a tall result is cut off at the bottom.
+
+    The short form sits beside the lesson, so it grows with the failures and not
+    with the number of tests. It lists only the failing tests, explains only the
+    first, and counts what the code printed. The full form shows everything."""
     parts: list[RenderableType] = []
 
     if outcome is None:
@@ -1857,24 +1883,40 @@ def result_body(
         parts.append(Text("✓ Exercise done. Every test passes.", style="bold green"))
         parts.append(Text.assemble("A solution to compare with is in ", (relative(exercise.solution_path), ACCENT), "."))
         parts.append(Text("Press n for the next exercise.", style="bold"))
-        parts.append(Text(""))
+
+        if full:
+            parts.append(Text(""))
 
     not_started = 0
     explained_one = False
 
     for result in outcome.results:
         if result.passed:
-            parts.append(Text.assemble(("✓ ", "bold green"), result.description))
+            if full:
+                parts.append(
+                    test_line(
+                        mark="✓",
+                        color="green",
+                        description=result.description,
+                    ),
+                )
+
             continue
 
-        parts.append(Text.assemble(("✗ ", "bold red"), result.description))
+        parts.append(
+            test_line(
+                mark="✗",
+                color="red",
+                description=result.description,
+            ),
+        )
 
         if NOT_STARTED in result.detail:
             not_started += 1
             continue
 
-        # Like a compiler, explain only the first failure in full, so it is never cut off.
-        if not explained_one:
+        # Like a compiler, the short form explains only the first failure, so it is never cut off.
+        if full or not explained_one:
             parts.append(indented(text=result.detail, style="yellow"))
             explained_one = True
 
@@ -1891,11 +1933,27 @@ def result_body(
 
         parts.append(Text(f"{passed_count} of {len(outcome.results)} tests pass. {check_again}", style="dim"))
 
-    if outcome.printed.strip():
-        printed_lines = outcome.printed.rstrip().splitlines()[-12:]
-        parts.append(Text(""))
-        parts.append(Text("What your code printed", style="bold"))
-        parts.append(indented(text="\n".join(printed_lines), style="dim", left=2))
+    if not outcome.printed.strip():
+        return Group(*parts)
+
+    printed_lines = outcome.printed.rstrip().splitlines()
+
+    if not full:
+        line_count = len(printed_lines)
+        lines_word = "line" if line_count == 1 else "lines"
+        parts.append(Text(f"Your code printed {line_count} {lines_word}. Press tab to see what it printed.", style="dim"))
+        return Group(*parts)
+
+    shown_lines = printed_lines[-PRINTED_LINES_SHOWN:]
+
+    if len(shown_lines) == len(printed_lines):
+        printed_heading = "What your code printed"
+    else:
+        printed_heading = f"The last {len(shown_lines)} of the {len(printed_lines)} lines your code printed"
+
+    parts.append(Text(""))
+    parts.append(Text(printed_heading, style="bold"))
+    parts.append(indented(text="\n".join(shown_lines), style="dim", left=2))
 
     return Group(*parts)
 
@@ -1996,6 +2054,34 @@ def status_line(
     )
 
 
+def fit_scroll(
+    scroll: Scroll,
+    line_count: int,
+    view_height: int,
+) -> str:
+    """Keep the scroll inside the text and say which way there is more to read."""
+    scroll.limit = max(0, line_count - view_height)
+    scroll.offset = min(max(scroll.offset, 0), scroll.limit)
+
+    if scroll.limit == 0:
+        return ""
+
+    if scroll.offset < scroll.limit:
+        return "↓ more below, scroll with ↑ ↓"
+
+    return "↑ more above"
+
+
+def result_border(outcome: Outcome | None) -> str:
+    if outcome is None:
+        return "yellow"
+
+    if outcome.passed:
+        return "green"
+
+    return "red"
+
+
 def render_watch(
     console: Console,
     exercise: Exercise,
@@ -2012,20 +2098,26 @@ def render_watch(
         exercise=exercise,
         outcome=outcome,
         check_again=check_again,
+        full=False,
     )
     result_lines = len(console.render_lines(body, console.options.update_width(width - 4), pad=False))
-    result_height = min(result_lines + 2, max(6, height * 40 // 100))
-
-    hint = Text(exercise.hint, overflow="fold")
-    hint_lines = len(console.render_lines(hint, console.options.update_width(width - 4), pad=False))
-    hint_height = min(hint_lines + 2, max(4, height * 25 // 100)) if show_hint else 0
 
     bar_lines = key_bar(
         keys=keys,
         width=width,
         message=message,
     )
-    lesson_height = max(3, height - STATUS_HEIGHT - len(bar_lines) - hint_height - result_height - 2)
+    room = height - STATUS_HEIGHT - len(bar_lines)
+
+    # The lesson and the result scroll, the result on its own screen, and the
+    # hint does not, so the hint takes its room first. The lesson keeps at least
+    # 3 lines and the result at least 4 rows.
+    hint = Text(exercise.hint, overflow="fold")
+    hint_lines = len(console.render_lines(hint, console.options.update_width(width - 4), pad=False))
+    hint_height = min(hint_lines + 2, max(3, room - 5 - 4)) if show_hint else 0
+    result_height = min(result_lines + 2, max(6, height * 40 // 100), max(4, room - 5 - hint_height))
+
+    lesson_height = max(3, room - hint_height - result_height - 2)
     lesson_lines = without_double_blanks(
         console.render_lines(
             Markdown(exercise.lesson, code_theme=CODE_THEME),
@@ -2033,22 +2125,11 @@ def render_watch(
             pad=False,
         ),
     )
-    scroll.limit = max(0, len(lesson_lines) - lesson_height)
-    scroll.offset = min(max(scroll.offset, 0), scroll.limit)
-
-    if scroll.limit == 0:
-        lesson_note = ""
-    elif scroll.offset < scroll.limit:
-        lesson_note = "↓ more below, scroll with ↑ ↓"
-    else:
-        lesson_note = "↑ more above"
-
-    if outcome is None:
-        result_style = "yellow"
-    elif outcome.passed:
-        result_style = "green"
-    else:
-        result_style = "red"
+    lesson_note = fit_scroll(
+        scroll=scroll,
+        line_count=len(lesson_lines),
+        view_height=lesson_height,
+    )
 
     sections: list[Layout] = [
         Layout(
@@ -2082,7 +2163,7 @@ def render_watch(
                     hint,
                     title="Hint",
                     title_align="left",
-                    subtitle="more below, make the window taller to see it" if hint_lines + 2 > hint_height else "",
+                    subtitle="↓ more below" if hint_lines + 2 > hint_height else "",
                     subtitle_align="right",
                     border_style="yellow",
                 ),
@@ -2096,9 +2177,9 @@ def render_watch(
                 body,
                 title="Result",
                 title_align="left",
-                subtitle="more below, make the window taller to see it" if result_lines + 2 > result_height else "",
+                subtitle="more below, press tab to see all" if result_lines + 2 > result_height else "",
                 subtitle_align="right",
-                border_style=result_style,
+                border_style=result_border(outcome),
             ),
             size=result_height,
         ),
@@ -2112,6 +2193,73 @@ def render_watch(
 
     layout = Layout()
     layout.split_column(*sections)
+
+    return layout
+
+
+def render_result_screen(
+    console: Console,
+    exercise: Exercise,
+    progress: Progress,
+    outcome: Outcome | None,
+    check_again: str,
+    scroll: Scroll,
+    keys: list[tuple[str, str]],
+    message: str,
+) -> RenderableType:
+    width, height = console.size
+    result_lines = without_double_blanks(
+        console.render_lines(
+            result_body(
+                exercise=exercise,
+                outcome=outcome,
+                check_again=check_again,
+                full=True,
+            ),
+            console.options.update_width(width - 4),
+            pad=False,
+        ),
+    )
+    bar_lines = key_bar(
+        keys=keys,
+        width=width,
+        message=message,
+    )
+    result_note = fit_scroll(
+        scroll=scroll,
+        line_count=len(result_lines),
+        view_height=max(3, height - STATUS_HEIGHT - len(bar_lines) - 2),
+    )
+
+    layout = Layout()
+    layout.split_column(
+        Layout(
+            status_line(
+                exercise=exercise,
+                progress=progress,
+                width=width,
+            ),
+            size=STATUS_HEIGHT,
+        ),
+        Layout(
+            Panel(
+                ScrollView(
+                    lines=result_lines,
+                    offset=scroll.offset,
+                ),
+                title="Result",
+                title_align="left",
+                subtitle=result_note,
+                subtitle_align="right",
+                border_style=result_border(outcome),
+            ),
+            ratio=1,
+        ),
+        Layout(
+            Group(*bar_lines),
+            size=len(bar_lines),
+        ),
+    )
 
     return layout
 
@@ -2323,6 +2471,9 @@ class KeyReader:
         if first in (b"\r", b"\n"):
             return "enter"
 
+        if first == b"\t":
+            return "tab"
+
         if first in (b"\x7f", b"\x08"):
             return "backspace"
 
@@ -2351,6 +2502,17 @@ class KeyReader:
         return ESCAPE_SEQUENCES.get(sequence, "escape")
 
 
+SCROLL_STEPS = {
+    "up": -1,
+    "k": -1,
+    "down": 1,
+    "j": 1,
+    " ": 1,
+    "page_up": -10,
+    "page_down": 10,
+}
+
+
 def modified_time(path: Path) -> float:
     try:
         return path.stat().st_mtime
@@ -2372,6 +2534,8 @@ class App:
     outcome: Outcome | None = None
     show_hint: bool = False
     scroll: Scroll = field(default_factory=Scroll)
+    full_result: bool = False
+    result_scroll: Scroll = field(default_factory=Scroll)
     message: str = ""
     live: Live | None = None
 
@@ -2397,7 +2561,19 @@ class App:
         if self.manual:
             keys.append(("r", "run"))
 
+        if self.full_result:
+            keys.extend(
+                [
+                    ("↑ ↓", "scroll"),
+                    ("tab", "back to the lesson"),
+                ],
+            )
+            return keys
+
         keys.append(("h", "hide hint" if self.show_hint else "hint"))
+
+        if self.outcome is not None:
+            keys.append(("tab", "full result"))
 
         keys.extend(
             [
@@ -2415,6 +2591,25 @@ class App:
         keys: list[tuple[str, str]] | None = None,
         message: str | None = None,
     ) -> None:
+        keys = keys if keys is not None else self.watch_keys()
+        message = message if message is not None else self.message
+        check_again = "Press r to check again." if self.manual else "Save the file to check again."
+
+        if self.full_result:
+            self.draw(
+                render_result_screen(
+                    console=self.console,
+                    exercise=self.exercise,
+                    progress=self.progress,
+                    outcome=self.outcome,
+                    check_again=check_again,
+                    scroll=self.result_scroll,
+                    keys=keys,
+                    message=message,
+                ),
+            )
+            return
+
         self.draw(
             render_watch(
                 console=self.console,
@@ -2422,10 +2617,10 @@ class App:
                 progress=self.progress,
                 outcome=self.outcome,
                 show_hint=self.show_hint,
-                check_again="Press r to check again." if self.manual else "Save the file to check again.",
+                check_again=check_again,
                 scroll=self.scroll,
-                keys=keys if keys is not None else self.watch_keys(),
-                message=message if message is not None else self.message,
+                keys=keys,
+                message=message,
             ),
         )
 
@@ -2451,6 +2646,8 @@ class App:
         save_progress(self.progress)
         self.show_hint = False
         self.scroll = Scroll()
+        self.full_result = False
+        self.result_scroll = Scroll()
         self.message = ""
         self.check()
 
@@ -2650,7 +2847,19 @@ class App:
             elif self.finish():
                 return "quit"
         elif key == "n":
-            self.message = "Pass every test first." if self.show_hint else "Pass every test first. Press h for a hint."
+            if self.show_hint or self.full_result:
+                self.message = "Pass every test first."
+            else:
+                self.message = "Pass every test first. Press h for a hint."
+        elif key in SCROLL_STEPS:
+            scroll = self.result_scroll if self.full_result else self.scroll
+            scroll.offset += SCROLL_STEPS[key]
+        elif self.full_result:
+            if key in ("tab", "q", "escape"):
+                self.full_result = False
+        elif key == "tab" and self.outcome is not None:
+            self.full_result = True
+            self.result_scroll = Scroll()
         elif key == "h":
             self.show_hint = not self.show_hint
         elif key == "l":
@@ -2663,14 +2872,6 @@ class App:
                 )
                 self.check()
                 self.message = f"{self.exercise.path.name} is back to how it started."
-        elif key in ("up", "k"):
-            self.scroll.offset -= 1
-        elif key in ("down", "j", " "):
-            self.scroll.offset += 1
-        elif key == "page_up":
-            self.scroll.offset -= 10
-        elif key == "page_down":
-            self.scroll.offset += 10
         elif key == "q":
             return "quit"
 
@@ -2782,6 +2983,7 @@ def run_once(
                 exercise=exercise,
                 outcome=outcome,
                 check_again="Run this command again after you change the file.",
+                full=True,
             ),
             title=exercise.title,
             title_align="left",

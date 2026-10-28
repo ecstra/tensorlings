@@ -11,7 +11,7 @@ Use a scratch copy, since the steps edit exercise files. Each STEP is
 "seconds:action", and the action is one of these.
 
     SNAP                  print the screen, with rows in reverse video marked R
-    ENTER, UP, DOWN       press that key
+    ENTER, UP, DOWN, TAB  press that key
     RESIZE:COLSxROWS      resize the terminal
     EDIT:path|old|new     replace text in a file under COURSE_DIR, \\n for a newline
     anything else         typed as keys
@@ -37,6 +37,7 @@ KEYS = {
     "ENTER": b"\r",
     "UP": b"\x1b[A",
     "DOWN": b"\x1b[B",
+    "TAB": b"\t",
 }
 
 
