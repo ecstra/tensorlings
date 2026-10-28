@@ -1951,9 +1951,16 @@ def result_body(
     else:
         printed_heading = f"The last {len(shown_lines)} of the {len(printed_lines)} lines your code printed"
 
+    # A box of its own, so the learner's output never reads as part of the test results.
     parts.append(Text(""))
-    parts.append(Text(printed_heading, style="bold"))
-    parts.append(indented(text="\n".join(shown_lines), style="dim", left=2))
+    parts.append(
+        Panel(
+            Text("\n".join(shown_lines), overflow="fold"),
+            title=printed_heading,
+            title_align="left",
+            border_style="magenta",
+        ),
+    )
 
     return Group(*parts)
 

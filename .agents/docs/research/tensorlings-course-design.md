@@ -91,7 +91,7 @@ Each rule gets exercises where the wrong combination fails and the right one wor
 - The result panel beside the lesson is a short form, so it grows with the failures and not with the number of tests. It lists only the failing tests, explains only the first the way a compiler shows its first error, and counts the lines the code printed. Functions that still return nothing share one note instead of one message each. See `result_body` in `run.py`.
 - `tab` opens the full result on its own screen, which scrolls with the arrow keys and shows every test, every failure's details and what the code printed. When the short form does not fit, its border says to press tab. The screen never tells the learner to make the window taller, since they often cannot.
 - Common PyTorch errors get a plain words explanation above PyTorch's own message, from the table `PLAIN_ERRORS` in `run.py`. A new error that confuses learners gets a row there.
-- Anything the learner's code prints is caught and shown on the full result screen, since printing straight to the screen would break the drawing.
+- Anything the learner's code prints is caught and shown on the full result screen, since printing straight to the screen would break the drawing. It sits in a magenta box of its own, so it never reads as part of the test results.
 - Arrow keys are read one escape sequence at a time in `KeyReader.read_escape_sequence`, so a held arrow key scrolls instead of reading as escape.
 
 ## Writing rules

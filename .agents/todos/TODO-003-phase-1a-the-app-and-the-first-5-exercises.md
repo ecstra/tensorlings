@@ -34,6 +34,7 @@ born: 2026-10-27
 | 14 | Wrap the key bar so every key shows on a narrow terminal | | owner | done |
 | 15 | Show only failing tests beside the lesson and count what the code printed | | owner | done |
 | 16 | Open the full result on its own scrollable screen with tab | | owner | done |
+| 17 | Put what the code printed in a box of its own | | owner | done |
 
 ## Done when
 
