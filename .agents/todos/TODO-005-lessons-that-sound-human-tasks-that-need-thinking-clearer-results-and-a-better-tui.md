@@ -28,6 +28,7 @@ born: 2026-10-28
 | 8 | Rewrite the examples as plain grids with no stories or comparisons | | owner | done |
 | 9 | Rebuild the six exercises around Karpathy's makemore bigram model | | owner | done |
 | 10 | Give each function one hint and drop the hint levels | | owner | done |
+| 11 | rework the six exercises as one topic each with a closing quiz | TODO-006 | agent | pending |
 
 ## Done when
 

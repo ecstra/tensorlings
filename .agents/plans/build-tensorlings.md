@@ -2,7 +2,7 @@
 name: build-tensorlings
 kind: plan
 description: a rustlings style course from tensors to designing new modules, built in phases the owner reviews
-updated: 2026-10-27
+updated: 2026-10-28
 links: []
 status: open
 by: owner
@@ -35,4 +35,4 @@ The curriculum, the app and the writing rules are in [the course design](../docs
 
 ## Done when
 
-All 13 parts exist in `run.py`, `run.py dev check` reports every exercise healthy, every lesson passes the lesson lint and a beginner reader review, and the owner has worked through the course.
+All 13 sections exist in `run.py`, `run.py dev check` reports every exercise healthy, every lesson passes the lesson lint and a beginner reader review, and the owner has worked through the course.

@@ -37,9 +37,9 @@ rather than this one.
 ## The trackers
 
 - [plans/INDEX.md](plans/INDEX.md), the plans: 1 open
-- [todos/INDEX.md](todos/INDEX.md), the work tracker: 3 done, 2 open
+- [todos/INDEX.md](todos/INDEX.md), the work tracker: 3 done, 3 open
 - [bugs/INDEX.md](bugs/INDEX.md), the defect tracker: empty
-- [decisions/INDEX.md](decisions/INDEX.md), the decision record: 7 standing, 4 superseded
+- [decisions/INDEX.md](decisions/INDEX.md), the decision record: 7 standing, 5 superseded
 - [reviews/INDEX.md](reviews/INDEX.md), code review ledgers: empty
 
 ## Memory and handovers

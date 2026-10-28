@@ -12,7 +12,8 @@ Every decision taken, newest first.
 Filed per [spec/decisions.md](../spec/decisions.md).
 Built by the brain tool from the folder it lists.
 
-- [DEC-011](DEC-011-lessons-teach-every-tool-and-tasks-build-a-model.md), each lesson shows every tool its tasks use, and the tasks build a real model step by step instead of standalone puzzles
+- [DEC-012](DEC-012-one-topic-per-exercise-with-real-model-operations-and-quizzes.md), each exercise teaches one section topic, every task is an operation real models run, and a quiz combines a group of chapters with nothing new
+- [DEC-011](DEC-011-lessons-teach-every-tool-and-tasks-build-a-model.md), each lesson shows every tool its tasks use, and the tasks build a real model step by step instead of standalone puzzles (superseded by DEC-012)
 - [DEC-010](DEC-010-one-hint-per-function.md), each function in an exercise has one hint, the Hint tab shows the ones for unfinished functions, and nothing is locked
 - [DEC-009](DEC-009-the-app-keeps-the-mouse-and-option-drag-copies.md), the app captures the mouse so tabs are clickable, and Option drag makes the terminal selection that cmd+c copies
 - [DEC-008](DEC-008-the-terminal-keeps-the-mouse.md), the app runs without capturing the mouse, so the terminal selects text and cmd+c copies it (superseded by DEC-009)

@@ -6,7 +6,8 @@ updated: 2026-10-28
 links: [decisions/DEC-006-a-task-never-repeats-its-lesson.md]
 date: 2026-10-28
 area: course
-status: standing
+status: superseded
+superseded-by: DEC-012
 ---
 
 ## Decision

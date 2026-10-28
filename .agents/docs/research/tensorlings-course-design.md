@@ -16,9 +16,9 @@ By the end the owner can explain any common layer four ways, what it computes, w
 
 ## The curriculum
 
-About 300 small exercises in 13 parts. Each part ends with a project.
+About 300 small exercises in 13 sections. Each section ends with a project that uses what it taught, and the capstones are the projects of Section 13. The table names the projects settled so far.
 
-| Part | Content |
+| Section | Content |
 |---|---|
 | 1 Foundations | tensors, shapes, indexing, broadcasting, reductions, matrix multiply, derivatives, the chain rule, a scalar autograd engine by hand, backprop through tensors by hand |
 | 2 Learning | linear and softmax regression, losses as probability, gradient descent, minibatches, train, validation and test splits, overfitting, weight decay |
@@ -71,13 +71,13 @@ Each rule gets exercises where the wrong combination fails and the right one wor
 
 ## Exercise format
 
-- One file per exercise, `exercises/<chapter>/<name>.py`, like `exercises/01_tensors/tensors1.py`.
+- One file per exercise, `exercises/<chapter>/<name>.py`, like `exercises/01_tensors/tensors1.py`. Quizzes go in `exercises/quizzes/`, as in rustlings.
 - The file holds the code, a `TODO` at every place to change, and a closing comment that lists what the check tests.
 - Every exercise is code to write or fix. There are no prediction only exercises.
 - Each check is a list of tests, and every test belongs to one function. A failing test says in plain words what came back and what was expected. A missing function fails only its own tests.
 - Each function in an exercise has one hint, per [DEC-010](../../decisions/DEC-010-one-hint-per-function.md).
 - A test that runs past `TIME_LIMIT_SECONDS` fails with a note about loops that never end, so a learner's endless loop can't stall the app. See `run_with_time_limit` in `run.py`.
-- A wrong tensor with more than `SHOWN_ENTRIES` entries is described by the entries that differ, so a 27 by 27 table never prints whole.
+- A wrong tensor with more than `SHOWN_ENTRIES` entries is described by the entries that differ, so a big tensor never prints whole.
 - After a pass the reference solution is written to `solutions/<chapter>/<name>.py`.
 
 ## The app
@@ -112,14 +112,16 @@ From [the research](tensorlings-research.md#research-on-writing-that-sounds-huma
 
 ## Tasks
 
-From [the research](tensorlings-research.md#research-on-tasks-that-make-the-learner-think) and [DEC-011](../../decisions/DEC-011-lessons-teach-every-tool-and-tasks-build-a-model.md).
+From [the research](tensorlings-research.md#research-on-tasks-that-make-the-learner-think) and [DEC-012](../../decisions/DEC-012-one-topic-per-exercise-with-real-model-operations-and-quizzes.md).
 
-- Exercises build a real model step by step, as Zero to Hero does, so every operation has a reason. The first six build Karpathy's makemore bigram model and end with it rewritten as a layer. Tasks are never standalone puzzles.
-- The lesson teaches every tool its tasks need, on its own small example, and the task applies the tools to the model. A task never needs a function or argument that no lesson showed.
+- Each exercise teaches one topic of its section, as rustlings does.
+- Every task is an operation real models run, like adding a bias to every row of a batch or picking rows of a table by token id. Tasks are never puzzles with no use, and they never teach another section's ideas.
+- A quiz closes a group of chapters and combines their tools with nothing new. `quiz1` closes the tensor and matrix multiplication chapters.
+- The lesson teaches every tool its tasks need, on its own small example. A task never needs a function or argument that no lesson showed.
 - No line of a solution appears in the lesson or the hints as the task writes it.
-- The file gives the scaffolding, like loops and helper functions from earlier exercises, and leaves the tensor work as `TODO`s, as rustlings does.
+- The file gives the scaffolding and leaves the tensor work as `TODO`s, as rustlings does.
 - The TODO says the goal in plain words.
-- The tests include the case that catches the likely mistake, such as a square table where rows and columns mix up.
+- The tests include the case that catches the likely mistake, such as a square batch where rows and columns mix up.
 
 ## Verification
 
