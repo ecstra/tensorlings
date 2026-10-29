@@ -25,8 +25,8 @@ Phase 2 of the plan build-tensorlings, Sections 3 and 4 as [the detailed curricu
 | 5 | Write the names project with its download | | agent | done |
 | 6 | Write 24_sgd, 25_adaptive and 26_schedules | | agent | done |
 | 7 | Write 27_clipping, 28_debugging and quiz6 | | agent | done |
-| 8 | Write the broken training project | | agent | pending |
-| 9 | Add the wrong answers for every new exercise | | agent | pending |
+| 8 | Write the broken training project | | agent | done |
+| 9 | Add the wrong answers for every new exercise | | agent | done |
 | 10 | Get beginner reader reviews and fix what they find | | agent | pending |
 | 11 | Run the dev check and the screen driver, then write the handover | | agent | pending |
 
