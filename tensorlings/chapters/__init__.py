@@ -38,6 +38,7 @@ from . import (
     residuals,
     schedules,
     sgd,
+    soft_design,
     softmax_regression,
     tensor_backprop,
     tensors,
@@ -83,6 +84,7 @@ CHAPTERS: list[Chapter] = [
     upsampling.UPSAMPLING,
     augmentation.AUGMENTATION,
     transfer.TRANSFER,
+    soft_design.SOFT_DESIGN,
 ]
 
 EXERCISES: list[Exercise] = [
@@ -223,4 +225,6 @@ EXERCISES: list[Exercise] = [
     transfer.TRANSFER1,
     transfer.TRANSFER2,
     transfer.QUIZ7,
+    soft_design.DERIVE1,
+    soft_design.DERIVE2,
 ]

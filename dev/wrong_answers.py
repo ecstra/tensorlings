@@ -520,6 +520,17 @@ CASES: list[tuple[str, str, str, str]] = [
     ("fft1", "fft_convolve wraps around", "product = torch.fft.rfft(signal, n=length) * torch.fft.rfft(kernel, n=length)", "product = torch.fft.rfft(signal) * torch.fft.rfft(kernel, n=len(signal))"),
     ("fft1", "conv1d_by_fft never flips", "fft_convolve(signal, kernel.flip(0))", "fft_convolve(signal, kernel)"),
     ("fft1", "conv1d_by_fft keeps the wrong part", "[k - 1 : len(signal)]", "[: len(signal) - k + 1]"),
+    ("derive1", "keep_last_marked keeps the first marked value", "            memory = value\n", "            memory = value\n            break\n"),
+    ("derive1", "gated_memory gates the memory in", "memory = gates[:, t] * values[:, t] + (1 - gates[:, t]) * memory", "memory = gates[:, t] * memory + (1 - gates[:, t]) * values[:, t]"),
+    ("derive1", "gated_memory starts from the first value", "memory = torch.zeros(len(values))", "memory = values[:, 0]"),
+    ("derive1", "GatedMemory uses the raw score as the gate", "gates = torch.sigmoid(self.gate(x)).squeeze(2)", "gates = self.gate(x).squeeze(2)"),
+    ("derive1", "GatedMemory uses a hard gate", "gates = torch.sigmoid(self.gate(x)).squeeze(2)", "gates = (self.gate(x) > 0).float().squeeze(2)"),
+    ("derive1", "GatedMemory remembers the marks", "return gated_memory(x[:, :, 0], gates)", "return gated_memory(x[:, :, 1], gates)"),
+    ("derive2", "exact_lookup returns the key", "return value", "return key"),
+    ("derive2", "match_weights softmaxes over the batch", ".squeeze(2), dim=1)", ".squeeze(2), dim=0)"),
+    ("derive2", "match_weights forgets the softmax", "return torch.softmax((key_rows @ query_rows.unsqueeze(2)).squeeze(2), dim=1)", "return (key_rows @ query_rows.unsqueeze(2)).squeeze(2)"),
+    ("derive2", "SoftLookup looks the query up among the keys", "self.queries(query))", "self.keys(query))"),
+    ("derive2", "SoftLookup averages the weighted values", "return (weights * values).sum(dim=1)", "return (weights * values).mean(dim=1)"),
     ("conv5", "pointwise reshapes the wrong way", "return (weight @ x.reshape(c, -1)).reshape(-1, h, w)", "return (weight @ x.reshape(-1, c).T).reshape(-1, h, w)"),
 ]
 
