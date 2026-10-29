@@ -2,7 +2,7 @@
 name: TODO-009-convert-the-rest-of-phase-1a-to-explain-then-try
 kind: todo
 description: rewrite the remaining exercises as math1, broadcasting1, reductions1 and matmul1 in the tensors1 and indexing1 format, with a quiz that combines them
-updated: 2026-10-28
+updated: 2026-10-29
 links: []
 status: open
 by: owner
@@ -28,6 +28,7 @@ tensors1 and indexing1 now use explain then try, fix the error and try first, ch
 | 4 | Update the wrong answers for the new exercises | | owner | done |
 | 5 | Run the dev check, the lesson lint, the wrong answers, the screen driver and a beginner review | | owner | done |
 | 6 | Put the new files in the owner's exercises folder | | owner | done |
+| 7 | functions for every computed task so answers cannot be typed in | TODO-010 | agent | pending |
 
 ## Done when
 

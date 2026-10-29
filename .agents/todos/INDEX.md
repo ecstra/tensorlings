@@ -2,7 +2,7 @@
 name: todos-index
 kind: doc
 description: the work tracker's index, open items first
-updated: 2026-10-28
+updated: 2026-10-29
 links: [INDEX.md, spec/todos.md]
 ---
 
@@ -21,6 +21,7 @@ Built by the brain tool from the folder it lists.
 - [TODO-005](TODO-005-lessons-that-sound-human-tasks-that-need-thinking-clearer-results-and-a-better-tui.md), the owner's second round on phase 1a, lesson language, answers given away, results, and the TUI
 - [TODO-006](TODO-006-six-exercises-one-topic-each-with-a-closing-quiz.md), rework phase 1a as one Section 1 topic per exercise, rustlings style, with real model operations as tasks, a closing quiz, and sections in place of parts
 - [TODO-009](TODO-009-convert-the-rest-of-phase-1a-to-explain-then-try.md), rewrite the remaining exercises as math1, broadcasting1, reductions1 and matmul1 in the tensors1 and indexing1 format, with a quiz that combines them
+- [TODO-010](TODO-010-functions-for-every-computed-task-so-answers-cannot-be-typed-in.md), turn the variable TODOs of indexing1 to quiz1 into functions the checker calls on inputs the file never shows
 
 ## Closed
 

@@ -117,11 +117,12 @@ From [the research](tensorlings-research.md#research-on-writing-that-sounds-huma
 From [the research](tensorlings-research.md#research-on-tasks-that-make-the-learner-think) and [DEC-013](../../decisions/DEC-013-exercises-explain-then-try-fix-an-error-or-try-first.md).
 
 - Each exercise teaches one topic of its section, as rustlings does.
-- Explain then try. A short working example sits right above each TODO, and the TODO repeats that move on new numbers or changes one thing. A task never asks for several new moves at once. See `TENSORS1` in `run.py`.
+- Explain then try. A short working example, a plain line with its result in a comment, sits right above each TODO, and the TODO repeats that move or changes one thing. A task never asks for several new moves at once. See `MATH1` in `run.py`.
+- A TODO that computes something from data is a function, so the checker can call it on inputs the file never shows and a typed in answer fails. It is empty when the move is one line, and partly written with one or two lines left as `...` when it has steps, as rustlings leaves a line to finish or fix. A TODO is a variable only when it builds one specific value, as in tensors1. See `check_on_inputs` in `run.py`.
 - Fix the error. A line crashes on purpose where the error teaches the idea, such as a list of lists with uneven rows.
 - Try first. A topic opens with a task the learner attempts with plain Python before reading the lesson, and the lesson then shows the tensor way. Nothing is locked, since the owner did not want the lesson unlocked by a save. See `INDEXING1` in `run.py`.
 - Phase 1a has one exercise per topic, tensors1, indexing1, math1, broadcasting1, reductions1 and matmul1, and the owner approved the format on tensors1 and indexing1. indexing1, reductions1 and matmul1 open with a try first TODO.
-- A quiz closes a group of chapters, as in rustlings. It has no examples and no new tools, and each TODO uses one earlier move, mostly on the result of the TODO before it, so an early mistake shows as the first failing row. `quiz1` closes the tensor and matrix multiplication chapters.
+- A quiz closes a group of chapters, as in rustlings. It has no examples and no new tools, and each of its functions combines two or three earlier moves, as a rustlings quiz combines earlier concepts. Some are empty and some are partly written. `quiz1` closes the tensor and matrix multiplication chapters.
 - The lesson teaches every tool its tasks need, on its own small example. A task never needs a function or argument that no lesson showed.
 - No line of a solution appears in the lesson or the hints as the task writes it.
 - The file gives the scaffolding and leaves the tensor work as `TODO`s, as rustlings does.
