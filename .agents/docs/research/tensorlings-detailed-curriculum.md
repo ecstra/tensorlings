@@ -135,7 +135,7 @@ The project is the name generator of the section table, as in Karpathy's makemor
 | | momentum2 | why, a long narrow valley where SGD zigzags and momentum runs along it |
 | 25_adaptive | rmsprop1 | RMSProp, each step divided by a running root mean square of the gradient, matched with `torch.optim.RMSprop` |
 | | adam1 | Adam from Algorithm 1 of its paper, matched with `torch.optim.Adam` |
-| | adam2 | why the bias correction, the tiny first steps without it |
+| | adam2 | why the bias correction, the oversized early steps without it |
 | | adamw1 | decoupled weight decay from the AdamW paper against L2 added to the gradient, matched with `torch.optim.AdamW` |
 | | adamw2 | when, which optimizer and learning rate range fits which model |
 | 26_schedules | schedule1 | step and cosine decay as functions of the step, matched with `torch.optim.lr_scheduler` |

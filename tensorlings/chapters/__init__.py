@@ -8,6 +8,7 @@ from __future__ import annotations
 from ..course import QUIZZES, Chapter, Exercise
 from . import (
     activations,
+    adaptive,
     autograd,
     chain_rule,
     derivatives,
@@ -59,6 +60,7 @@ CHAPTERS: list[Chapter] = [
     residuals.RESIDUALS,
     names.NAMES,
     sgd.SGD,
+    adaptive.ADAPTIVE,
 ]
 
 EXERCISES: list[Exercise] = [
@@ -154,4 +156,9 @@ EXERCISES: list[Exercise] = [
     sgd.SGD1,
     sgd.MOMENTUM1,
     sgd.MOMENTUM2,
+    adaptive.RMSPROP1,
+    adaptive.ADAM1,
+    adaptive.ADAM2,
+    adaptive.ADAMW1,
+    adaptive.ADAMW2,
 ]

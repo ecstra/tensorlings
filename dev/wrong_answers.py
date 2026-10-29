@@ -324,6 +324,23 @@ CASES: list[tuple[str, str, str, str]] = [
     ("momentum2", "valley with the steep side on x", "return point[0] ** 2 + 100 * point[1] ** 2", "return 100 * point[0] ** 2 + point[1] ** 2"),
     ("momentum2", "steps_to_reach never clears the gradients", "        optimizer.zero_grad()\n        loss.backward()", "        loss.backward()"),
     ("momentum2", "best_rate picks the most steps", "return rates[steps.index(min(steps))]", "return rates[steps.index(max(steps))]"),
+    ("rmsprop1", "square_average_update swaps the weights", "return alpha * square_average + (1 - alpha) * grad ** 2", "return (1 - alpha) * square_average + alpha * grad ** 2"),
+    ("rmsprop1", "MyRMSprop divides by the average itself", "/ (self.square_averages[position].sqrt() + self.eps)", "/ (self.square_averages[position] + self.eps)"),
+    ("rmsprop1", "first_step forgets the root", "return lr * grad.abs() / (average.sqrt() + eps)", "return lr * grad.abs() / (average + eps)"),
+    ("adam1", "MyAdam without the hats", "                m_hat = self.m[position] / (1 - self.beta1 ** self.t)\n                v_hat = self.v[position] / (1 - self.beta2 ** self.t)", "                m_hat = self.m[position]\n                v_hat = self.v[position]"),
+    ("adam1", "MyAdam without the root", "parameter -= self.lr * m_hat / (v_hat.sqrt() + self.eps)", "parameter -= self.lr * m_hat / (v_hat + self.eps)"),
+    ("adam1", "adam_first_step forgets the division", "return lr * grad / (grad.abs() + eps)", "return lr * grad"),
+    ("adam2", "uncorrected_ratio without the root", "return (1 - beta1 ** t) / math.sqrt(1 - beta2 ** t)", "return (1 - beta1 ** t) / (1 - beta2 ** t)"),
+    ("adam2", "peak_ratio counts from 0", "return ratios.index(largest) + 1, largest", "return ratios.index(largest), largest"),
+    ("adam2", "adam_step forgets the root", "step = lr * m_hat / (v_hat.sqrt() + 1e-8)", "step = lr * m_hat / (v_hat + 1e-8)"),
+    ("adamw1", "l2_gradient takes the decay away", "return grad + weight_decay * parameter", "return grad - weight_decay * parameter"),
+    ("adamw1", "decoupled_decay without the learning rate", "return parameter * (1 - lr * weight_decay)", "return parameter * (1 - weight_decay)"),
+    ("adamw1", "MyAdamW decays after the step", "        with torch.no_grad():\n            for parameter in self.parameters:\n                if parameter.grad is not None:\n                    parameter *= 1 - self.lr * self.weight_decay\n\n        super().step()", "        super().step()\n\n        with torch.no_grad():\n            for parameter in self.parameters:\n                if parameter.grad is not None:\n                    parameter *= 1 - self.lr * self.weight_decay"),
+    ("adamw1", "MyAdamW puts the decay in the gradient", "parameter *= 1 - self.lr * self.weight_decay", "parameter.grad += self.weight_decay * parameter"),
+    ("adamw2", "make_optimizer forgets the momentum", "return torch.optim.SGD(parameters, lr=lr, momentum=0.9)", "return torch.optim.SGD(parameters, lr=lr)"),
+    ("adamw2", "make_optimizer gives Adam for adamw", "return torch.optim.AdamW(parameters, lr=lr, weight_decay=0.01)", "return torch.optim.Adam(parameters, lr=lr, weight_decay=0.01)"),
+    ("adamw2", "decay_groups decays everything", "decayed = [parameter for parameter in model.parameters() if parameter.dim() >= 2]\n    kept = [parameter for parameter in model.parameters() if parameter.dim() < 2]", "decayed = list(model.parameters())\n    kept = []"),
+    ("adamw2", "best_setting picks the highest loss", "return min(results, key=results.get)", "return max(results, key=results.get)"),
 ]
 
 
