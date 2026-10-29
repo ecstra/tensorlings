@@ -132,7 +132,7 @@ RMSPROP1_SOURCE = source_file(
     from torch import Tensor
 
     grad = torch.tensor([0.001, 1000.0])
-    sizes = grad.abs()                               # how far apart gradients can be
+    sizes = grad.abs()                               # each gradient's size, without its sign
 
 
     # TODO: Return the new running average of the squared gradient, the old one
@@ -177,8 +177,8 @@ RMSPROP1_SOURCE = source_file(
                 parameter.grad = None
 
 
-    # TODO: Return the size of RMSProp's first step for each entry of grad, the
-    #   step taken from an average of 0.
+    # TODO: Return the size of RMSProp's first step for each entry of grad,
+    #   without its sign. That is the step taken from an average of 0.
     def first_step(
         grad: Tensor,
         lr: float,
@@ -390,8 +390,8 @@ ADAM1_SOURCE = source_file(
                 parameter.grad = None
 
 
-    # TODO: Return Adam's first step for each entry of grad, the amount taken
-    #   away from the parameter.
+    # TODO: Return Adam's first step for each entry of grad, with its sign.
+    #   That is the amount taken away from the parameter.
     def adam_first_step(
         grad: Tensor,
         lr: float,
@@ -750,8 +750,9 @@ ADAMW1_LESSON = prose(
     Weight decay in Section 2 added `strength * w ** 2` to the loss, so its
     gradient added `2 * strength * w`. With SGD, that pulls every weight
     toward 0 by the same fraction each step. PyTorch's
-    `torch.optim.Adam(params, weight_decay=0.01)` does the same, adding the
-    decay times the weight to the gradient, which is called L2.
+    `torch.optim.Adam(params, weight_decay=0.01)` does the same, adding
+    `weight_decay` times the weight to the gradient. So `weight_decay` plays
+    the part of `2 * strength`. This is called L2.
 
     Adam then divides the whole gradient by its root mean square, the decay
     included. A weight with large gradients gets almost no decay, and one with
@@ -759,17 +760,20 @@ ADAMW1_LESSON = prose(
     with SGD.
 
     Loshchilov and Hutter's **AdamW**, from 2019, takes the decay out of the
-    gradient. Each step first shrinks every weight by the fraction
-    `lr * weight_decay`, then takes Adam's step on the plain gradient.
+    gradient. In PyTorch's version, each step first shrinks every weight by
+    the fraction `lr * weight_decay`, then takes Adam's step on the plain
+    gradient.
 
     ```python
     torch.optim.Adam(params, lr=0.001, weight_decay=0.01)     # decay in the gradient, L2
     torch.optim.AdamW(params, lr=0.001, weight_decay=0.01)    # decay on the weight, decoupled
     ```
 
-    They found AdamW generalizes better. Its best decay also stays put when
-    the learning rate changes, so the two can be tuned one at a time. It is
-    the default for language models.
+    They found AdamW generalizes better. Their own version leaves Adam's
+    learning rate out of the shrink, so the best decay stays put when the
+    rate changes. With PyTorch's, the product `lr * weight_decay` is what
+    matters, so a new rate can call for a new decay. AdamW is the default for
+    language models.
 
     A class can build on another with `class MyAdamW(MyAdam):`, and
     `super().step()` runs the step of the class it builds on.
@@ -792,7 +796,7 @@ ADAMW1_SOURCE = source_file(
     shrunk = weight * (1 - 0.1 * 0.5)                # tensor([ 1.9000, -3.8000])
 
 
-    # TODO: Return the gradient Adam's L2 decay hands on, grad plus weight_decay
+    # TODO: Return the gradient Adam sees with L2 decay, grad plus weight_decay
     #   times parameter.
     def l2_gradient(
         grad: Tensor,
@@ -936,8 +940,8 @@ ADAMW1 = Exercise(
     hints={
         "l2_gradient": "grad plus weight_decay times parameter.",
         "decoupled_decay": "Multiply parameter by 1 minus lr times weight_decay.",
-        "MyAdamW.step": "Inside with torch.no_grad():, loop over self.parameters and, for each with a .grad, "
-        "multiply it in place with *= by 1 - self.lr * self.weight_decay. Then call super().step().",
+        "MyAdamW.step": "Inside a with torch.no_grad() block, loop over self.parameters. Multiply each one with a "
+        ".grad in place with *= by 1 - self.lr * self.weight_decay. Then call super().step().",
     },
     introduces=(),
     check=check_adamw1,
@@ -966,6 +970,9 @@ ADAMW2_LESSON = prose(
     the gradient, so its rate comes out 10 times smaller. Adam's steps are
     about the rate itself, whatever the gradient, so its rate is a distance in
     the weights' own units.
+
+    AdamW did no better than Adam here. Decay has little to do in 5000 steps
+    of a small model, and its gain shows on longer runs.
 
     - AdamW: the default for language models and most new work, at rates from 0.0001 to 0.001 and weight decay from 0.01 to 0.1.
     - SGD with momentum 0.9: image models like ResNet, at a rate of 0.1 that a schedule lowers, with weight decay near 0.0001.

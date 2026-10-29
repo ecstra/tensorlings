@@ -147,8 +147,8 @@ SGD1_SOURCE = source_file(
 
 
     # TODO: Finish step and zero_grad. step moves every parameter that has a
-    #   gradient against it, scaled by self.lr. zero_grad sets every gradient to
-    #   None.
+    #   gradient, against that gradient, scaled by self.lr. zero_grad sets every
+    #   gradient to None.
     class MySGD:
         def __init__(
             self,
@@ -165,9 +165,10 @@ SGD1_SOURCE = source_file(
             ...
 
 
-    # TODO: Return the last loss after steps steps of optimizer on the mean
-    #   squared error of model on x against y, clearing the gradients before
-    #   each backward.
+    # TODO: Run steps steps of optimizer on the mean squared error of model on
+    #   x against y, clearing the gradients before each backward. Return the
+    #   loss of the last step, the one computed before its optimizer.step().
+    #   Don't compute a new loss after the loop.
     def train(
         model: nn.Module,
         optimizer,
@@ -303,8 +304,8 @@ SGD1 = Exercise(
     source=SGD1_SOURCE,
     solution=SGD1_SOLUTION,
     hints={
-        "MySGD.step": "Inside with torch.no_grad():, loop over self.parameters, skip one whose .grad is None, and "
-        "take self.lr times its .grad away from it with -=.",
+        "MySGD.step": "Inside a with torch.no_grad() block, loop over self.parameters, skip one whose .grad is "
+        "None, and take self.lr times its .grad away from it with -=.",
         "MySGD.zero_grad": "Loop over self.parameters and set each one's .grad to None.",
         "train": "Follow the loop in the lesson, then return the last loss with .item().",
     },
@@ -575,8 +576,9 @@ MOMENTUM2_LESSON = prose(
     again.
 
     The gap grows with the valley. At 1000 times steeper, with the rates tried
-    more finely, SGD took 3110 steps and momentum 0.9 took 95. Real losses have such valleys in many
-    directions, so SGD with momentum 0.9 is the usual plain optimizer.
+    more finely, SGD took 3110 steps and momentum 0.9 took 95. Real losses
+    have such valleys in many directions, so SGD with momentum 0.9 is the
+    usual plain optimizer.
     """,
 )
 

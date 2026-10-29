@@ -193,7 +193,7 @@ NAMES1_SOURCE = source_file(
 
 
     # TODO: Return the vocabulary, "." first and then every character that shows
-    #   up in names, in order.
+    #   up in names, in sorted order.
     def vocabulary(names: list[str]) -> list[str]:
         ...
 
@@ -396,10 +396,10 @@ NAMES1 = Exercise(
 NAMES2_LESSON = prose(
     """
     A bigram sees one character. The language model of Bengio and colleagues,
-    from 2003, reads the last few. Each goes through an embedding, the
+    from 2003, reads the last few words. Each goes through an embedding, the
     embedding vectors are laid end to end, and an MLP scores every possible
-    next character. Karpathy builds it for names in makemore part 2, and adds
-    normalization in part 3.
+    next word. Karpathy applies it to the characters of names in makemore
+    part 2.
 
     With a context of 3, `emma` gives five examples, each three ids in and one
     out. A name starts with a context of `...`.
@@ -414,12 +414,14 @@ NAMES2_LESSON = prose(
 
     The model here starts with an embedding of size 10. A hidden Linear layer
     of 200 with LayerNorm and tanh follows, then a head scoring all 27
-    characters. tanh is what the paper used. The LayerNorm keeps the hidden spread steady, as
-    the normalization chapter showed.
+    characters. The paper used tanh. The LayerNorm keeps the hidden spread
+    steady, as the normalization chapter showed. Karpathy adds BatchNorm in
+    makemore part 3. LayerNorm does the same job without depending on the
+    batch, which helps when sampling one name at a time.
 
     The head starts small, its weights shrunk to a tenth and its bias at 0.
     The scores then start nearly equal, so the starting loss is near
-    `log(27)`, 3.30, as init3 asked.
+    `log(27)`, 3.30, as init3 showed.
 
     `window[1:] + [new]` drops a list's first item and adds a new one at the
     end. `*=` multiplies a tensor in place.
@@ -631,14 +633,16 @@ NAMES3_LESSON = prose(
     """
     Training is the minibatch loop of Section 2. Each step draws 32 random
     examples, and the learning rate drops from 0.1 to 0.01 for the last
-    quarter of the steps. Section 4 explains why dropping it helps.
+    quarter of the steps. Section 4 explains why dropping it helps. The
+    examples come from `torch.randint(0, len(X), (32,))`, 32 random positions
+    that can repeat, unlike the shuffled epochs of Section 2.
 
-    | Model | Steps | Validation loss | Time on a laptop |
-    |---|---|---|---|
-    | bigram | none, it counts | 2.465 | |
-    | MLP | 5,000 | 2.258 | 6 s |
-    | MLP | 10,000 | 2.217 | 10 s |
-    | MLP | 20,000 | 2.181 | 30 s |
+    | Model | Steps | Validation loss |
+    |---|---|---|
+    | bigram | none, it counts | 2.465 |
+    | MLP | 5,000 | 2.258 |
+    | MLP | 10,000 | 2.217 |
+    | MLP | 20,000 | 2.181 |
 
     Karpathy's runs of the same shape reach about 2.10 after 200,000 steps.
 
@@ -1010,8 +1014,8 @@ NAMES3 = Exercise(
     hints={
         "train_names": "The loss is F.cross_entropy of model(X[batch]) and Y[batch]. The rate is 0.1 while step is "
         "below steps * 3 // 4, and 0.01 after.",
-        "validation_loss": "Call model.eval(), then inside with torch.no_grad(): return F.cross_entropy of model(X) "
-        "and Y, as a plain number.",
+        "validation_loss": "Call model.eval(). Then, inside a with torch.no_grad() block, return F.cross_entropy "
+        "of model(X) and Y as a plain number.",
         "sample_name": "Pass torch.tensor([window]) to the model and take torch.softmax of the scores along dim=1.",
     },
     introduces=(),

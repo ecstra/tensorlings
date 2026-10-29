@@ -122,6 +122,9 @@ SCHEDULE1_LESSON = prose(
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=3, gamma=0.5)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=100, eta_min=0.0)
     ```
+
+    In `CosineAnnealingLR`, `T_max` is the cosine's `total` and `eta_min` is
+    its `minimum`.
     """,
 )
 
@@ -324,12 +327,15 @@ WARMUP1_LESSON = prose(
 
     At 0.003, warmup changed nothing. At 0.01 the runs without it fell faster
     for the first steps, then stuck near 2.8, worse than the bigram. With
-    warmup, all three reached 2.37. So warmup makes a larger rate safe, and
-    post norm models need it most, as Xiong and others found.
+    warmup, all three reached about 2.37. So warmup makes a larger rate safe,
+    and post norm models need it most, as Xiong and others found. Here 0.01
+    with warmup still lost to 0.003, with or without it. Warmup matters when
+    a larger rate is needed, as with big batches.
 
     Goyal and others warmed up for 5 epochs to train ResNet with huge batches.
-    nanoGPT warms up for a few hundred steps, then decays along a cosine to a
-    tenth of the base rate.
+    nanoGPT warms up for 2000 of its 600,000 steps by default, and for 100 in
+    its Shakespeare character config. Then it decays along a cosine to a tenth
+    of the base rate.
 
     Setting `group["lr"]` for each group in `optimizer.param_groups` changes
     the rate by hand, before `optimizer.step()`.
@@ -360,9 +366,9 @@ WARMUP1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return nanoGPT's rate at step. During the first warmup steps it is
-    #   warmup_rate. After that it falls along a cosine from base at step warmup
-    #   to minimum at step total.
+    # TODO: Return the rate at step of a schedule shaped like nanoGPT's. During
+    #   the first warmup steps it is warmup_rate. After that it falls along a
+    #   cosine from base at step warmup to minimum at step total.
     def warmup_cosine(
         base: float,
         step: int,
@@ -577,8 +583,10 @@ SCHEDULE2_LESSON = prose(
     """
     A range test, from Leslie Smith's 2015 paper on cyclical rates, finds a
     good rate in one short run. Start with a tiny rate and raise it a little
-    every step, by the same factor each time, while recording the loss. The
-    loss falls slowly, then fast, then bottoms out and blows up.
+    every step, while recording the loss. The loss falls slowly, then fast,
+    then bottoms out and blows up. Smith raised the rate by the same amount
+    each step. This test follows the fast.ai learning rate finder, which
+    raises it by the same factor each step.
 
     Here the names model ran 300 steps of Adam, with the rate climbing from
     0.00001 to 1, on minibatches of 256.
@@ -623,9 +631,10 @@ SCHEDULE2_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the losses smoothed by a running average with beta, each
-    #   divided by 1 - beta ** k at the k-th loss, counted from 1, as Adam's
-    #   hats do. The average starts at 0.
+    # TODO: Return the losses smoothed by a running average with beta, which
+    #   starts at 0. Keep the running average itself uncorrected. At the k-th
+    #   loss, counted from 1, append that average divided by 1 - beta ** k, as
+    #   Adam's hats do.
     def smooth(
         losses: list[float],
         beta: float,
