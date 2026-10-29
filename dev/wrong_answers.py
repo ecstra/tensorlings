@@ -460,6 +460,16 @@ CASES: list[tuple[str, str, str, str]] = [
     ("pooling1", "global_average over the channels", "return x.mean(dim=(2, 3))", "return x.mean(dim=1)"),
     ("pooling2", "PooledDetector averages", "return self.head(responses.amax(dim=(2, 3))).squeeze(1)", "return self.head(responses.mean(dim=(2, 3))).squeeze(1)"),
     ("pooling2", "FlatDetector without the ReLU", "        responses = torch.relu(self.conv(x.unsqueeze(1)))\n\n        return self.head(responses.flatten(1)).squeeze(1)", "        responses = self.conv(x.unsqueeze(1))\n\n        return self.head(responses.flatten(1)).squeeze(1)"),
+    ("lenet1", "LeNet with max pooling", "x = F.avg_pool2d(torch.tanh(self.conv1(x)), 2)", "x = F.max_pool2d(torch.tanh(self.conv1(x)), 2)"),
+    ("lenet1", "LeNet without tanh after fc2", "x = torch.tanh(self.fc2(x))", "x = self.fc2(x)"),
+    ("lenet1", "lenet_parameters forgets the convolutions' biases", "convolutions = (6 * 1 * 5 * 5 + 6) + (16 * 6 * 5 * 5 + 16)", "convolutions = 6 * 1 * 5 * 5 + 16 * 6 * 5 * 5"),
+    ("lenet1", "train_lenet on probabilities", "loss = F.cross_entropy(model(x[batch]), y[batch])", "loss = F.cross_entropy(torch.softmax(model(x[batch]), dim=1), y[batch])"),
+    ("vgg1", "stack_view adds 3 per layer", "return 2 * layers + 1", "return 3 * layers"),
+    ("vgg1", "weights_compared with one channel factor", "return layers * 9 * c * c, view * view * c * c", "return layers * 9 * c, view * view * c"),
+    ("vgg1", "vgg_block without padding", "out_channels, out_channels, 3, padding=1)", "out_channels, out_channels, 3)"),
+    ("resnet1", "BasicBlock always hands x on", "        if stride == 1 and in_channels == out_channels:", "        if True:"),
+    ("resnet1", "BasicBlock takes the ReLU before adding", "return torch.relu(out + self.shortcut(x))", "return torch.relu(out) + self.shortcut(x)"),
+    ("resnet1", "BasicBlock without the second BatchNorm", "out = self.bn2(self.conv2(out))", "out = self.conv2(out)"),
     ("conv5", "pointwise reshapes the wrong way", "return (weight @ x.reshape(c, -1)).reshape(-1, h, w)", "return (weight @ x.reshape(-1, c).T).reshape(-1, h, w)"),
 ]
 

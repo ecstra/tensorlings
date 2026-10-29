@@ -12,6 +12,7 @@ from . import (
     autograd,
     broken_training,
     chain_rule,
+    classic_nets,
     clipping,
     conv_shapes,
     convolution,
@@ -75,6 +76,7 @@ CHAPTERS: list[Chapter] = [
     convolution.CONVOLUTION,
     conv_shapes.CONV_SHAPES,
     pooling.POOLING,
+    classic_nets.CLASSIC_NETS,
 ]
 
 EXERCISES: list[Exercise] = [
@@ -199,4 +201,7 @@ EXERCISES: list[Exercise] = [
     conv_shapes.CONV5,
     pooling.POOLING1,
     pooling.POOLING2,
+    classic_nets.LENET1,
+    classic_nets.VGG1,
+    classic_nets.RESNET1,
 ]
