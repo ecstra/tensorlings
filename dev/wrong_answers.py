@@ -302,6 +302,18 @@ CASES: list[tuple[str, str, str, str]] = [
     ("quiz5", "DropoutBlock leaves down random", "            self.down.weight.zero_()\n            self.down.bias.zero_()", "            pass"),
     ("quiz5", "block_stack forgets the final norm", "for _ in range(blocks)], nn.LayerNorm(width))", "for _ in range(blocks)])"),
     ("quiz5", "block_parameters forgets the norm", "return 2 * width + 2 * (width * width + width)", "return 2 * (width * width + width)"),
+    ("names1", "vocabulary without the dot", "return [\".\"] + sorted(set(\"\".join(names)))", "return sorted(set(\"\".join(names)))"),
+    ("names1", "bigram_pairs without the dots", "padded = \".\" + name + \".\"", "padded = name"),
+    ("names1", "bigram_pairs swaps the pair", "xs.append(ids[first])\n            ys.append(ids[second])", "xs.append(ids[second])\n            ys.append(ids[first])"),
+    ("names1", "bigram_counts turned around", "return torch.bincount(xs * size + ys, minlength=size * size)", "return torch.bincount(ys * size + xs, minlength=size * size)"),
+    ("names1", "bigram_loss without smoothing", "smoothed = counts + 1", "smoothed = counts"),
+    ("names1", "bigram_loss divides by the column totals", "smoothed.sum(dim=1, keepdim=True)", "smoothed.sum(dim=0, keepdim=True)"),
+    ("names2", "build_contexts never moves the window", "window = window[1:] + [ids[char]]", "window = window"),
+    ("names2", "build_contexts adds at the wrong end", "window = window[1:] + [ids[char]]", "window = [ids[char]] + window[:-1]"),
+    ("names2", "NamesMLP leaves the head as drawn", "            self.head.weight *= 0.1\n            self.head.bias.zero_()", "            pass"),
+    ("names2", "NamesMLP forward without tanh", "return self.head(torch.tanh(self.norm(self.hidden(vectors))))", "return self.head(self.norm(self.hidden(vectors)))"),
+    ("names3", "train_names never drops the rate", "rate = 0.1 if step < steps * 3 // 4 else 0.01", "rate = 0.1"),
+    ("names3", "sample_name draws from the raw scores", "probabilities = torch.softmax(model(torch.tensor([window])), dim=1)", "probabilities = model(torch.tensor([window]))"),
 ]
 
 

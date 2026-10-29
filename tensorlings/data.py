@@ -37,6 +37,10 @@ DATASETS: dict[str, tuple[RemoteFile, ...]] = {
         RemoteFile(MNIST_MIRROR + "t10k-images-idx3-ubyte.gz", "9fb629c4189551a2d022fa330f9573f3"),
         RemoteFile(MNIST_MIRROR + "t10k-labels-idx1-ubyte.gz", "ec29112dd5afa0611ce80d1b7f02629c"),
     ),
+    # The 32,033 names of Karpathy's makemore, one per line.
+    "names": (
+        RemoteFile("https://raw.githubusercontent.com/karpathy/makemore/master/names.txt", "401b3c4cac9e28a586ed15e81256680d"),
+    ),
 }
 
 
@@ -141,3 +145,13 @@ def load_mnist(split: str) -> tuple[Tensor, Tensor]:
 
     # Copies, so a learner's file that changes them in place can't change what the next check reads.
     return images.clone(), labels.clone()
+
+
+@functools.cache
+def read_names() -> tuple[str, ...]:
+    return tuple(dataset_file("names", "names.txt").read_text().split())
+
+
+def load_names() -> list[str]:
+    """The 32,033 names of makemore, in lowercase, in the file's order."""
+    return list(read_names())

@@ -24,6 +24,7 @@ from . import (
     minibatches,
     mlp,
     mnist,
+    names,
     normalization,
     residuals,
     softmax_regression,
@@ -55,6 +56,7 @@ CHAPTERS: list[Chapter] = [
     dropout.DROPOUT,
     normalization.NORMALIZATION,
     residuals.RESIDUALS,
+    names.NAMES,
 ]
 
 EXERCISES: list[Exercise] = [
@@ -144,4 +146,7 @@ EXERCISES: list[Exercise] = [
     residuals.RESIDUAL4,
     residuals.QUIZ4,
     residuals.QUIZ5,
+    names.NAMES1,
+    names.NAMES2,
+    names.NAMES3,
 ]

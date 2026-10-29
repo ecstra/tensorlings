@@ -62,6 +62,11 @@ def run_with_time_limit(
 # PyTorch's own wording for common mistakes, each with the same message in plain words.
 PLAIN_ERRORS: tuple[tuple[str, str], ...] = (
     (
+        r"probability tensor contains either",
+        "torch.multinomial needs probabilities, numbers from 0 up that it can draw by. A model's scores can be "
+        "negative, so pass them through torch.softmax first.",
+    ),
+    (
         r"list indices must be integers or slices, not tuple",
         "Square brackets with a comma, like x[:, 0], only work on a tensor. This is a Python list, so turn it into "
         "a tensor with torch.tensor first.",
