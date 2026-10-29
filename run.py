@@ -1602,8 +1602,7 @@ MATMUL = Chapter(
 
         A weighted sum multiplies each input by how much it counts and adds the
         results. Matrix multiplication does many weighted sums in one call, and
-        most of the work in deep learning is matrix multiplication. This
-        chapter ends with the most common layer in real models.
+        most of the work in deep learning is matrix multiplication.
 
         ## Further reading
 
@@ -1649,16 +1648,9 @@ MATMUL1_LESSON = prose(
     `.T` swaps the two dimensions of a matrix, so its rows become columns and
     `b.T` has shape `(3, 2)`.
 
-    A **layer** is one step of a model, holding weights it learns. The most
-    common one, called Linear, computes several weighted sums of each input
-    row, one per output. It then adds a **bias** to each output, a separate
-    number it learns. Each row of `x` is one input, so an `x` with three rows
-    gets one row of outputs for each of them.
-
-    PyTorch stores the weights with one row per output. `@` pairs rows on the
-    left with columns on the right. So when the inputs are rows, the weight
-    rows have to be turned into columns with `.T` first. A later chapter
-    builds the layer as `nn.Linear`.
+    Most of the work inside a model is matrix multiplication. A later chapter
+    builds the main building block of models from it, and shows why it is
+    built that way.
     """,
 )
 
@@ -1721,29 +1713,17 @@ MATMUL1_SOURCE = source_file(
         return a @ b
 
 
-    x = torch.tensor([1.0, 2.0])
-    weight = torch.tensor([[1.0, 0.0],
-                           [1.0, 1.0],
-                           [0.0, 2.0]])
-    bias = torch.tensor([0.5, 0.0, -1.0])
-
-    # A Linear layer on one input, a flat x. weight has one row per output, so
-    # weight @ x gives one weighted sum per output, and bias adds one number to
-    # each.
-    out = weight @ x + bias                       # tensor([1.5, 3.0, 3.0])
-
-
-    # TODO: Finish the first line, so the layer works on many inputs at once.
-    #   Each row of inputs is one input, and the result has one row of outputs
-    #   per input.
-    def linear(
-        inputs: Tensor,
-        weight: Tensor,
-        bias: Tensor,
+    # TODO: Finish the first line, so scores holds the dot product of every row
+    #   of a with every row of b, the way row_pairs gives it. The second line
+    #   then picks, for each row of a, the position of the row of b it scores
+    #   highest with.
+    def best_match(
+        a: Tensor,
+        b: Tensor,
     ) -> Tensor:
-        weighted = ...
+        scores = ...
 
-        return weighted + bias
+        return scores.argmax(dim=1)
     ''',
 )
 
@@ -1794,24 +1774,13 @@ MATMUL1_SOLUTION = source_file(
         return a @ b.T
 
 
-    x = torch.tensor([1.0, 2.0])
-    weight = torch.tensor([[1.0, 0.0],
-                           [1.0, 1.0],
-                           [0.0, 2.0]])
-    bias = torch.tensor([0.5, 0.0, -1.0])
-
-    out = weight @ x + bias
-
-
-    # Each row of inputs meets each row of weight, so weight's rows become columns.
-    def linear(
-        inputs: Tensor,
-        weight: Tensor,
-        bias: Tensor,
+    def best_match(
+        a: Tensor,
+        b: Tensor,
     ) -> Tensor:
-        weighted = inputs @ weight.T
+        scores = a @ b.T
 
-        return weighted + bias
+        return scores.argmax(dim=1)
     ''',
 )
 
@@ -1851,24 +1820,16 @@ def check_matmul1(checker: Checker) -> None:
         ),
         reference=lambda a, b: a @ b.T,
     )
-    # A square weight among them, where x @ weight runs but gives other numbers.
+    # In the square pair, a @ b runs without .T but picks other rows.
     check_on_inputs(
         checker=checker,
-        function="linear",
-        description="matches PyTorch's own Linear layer",
+        function="best_match",
+        description="picks the row of b each row of a scores highest with",
         inputs=(
-            (
-                torch.tensor([[1.0, 2.0, 3.0], [0.0, 1.0, 0.0], [2.0, 0.0, 1.0], [1.0, 1.0, 1.0]]),
-                torch.tensor([[1.0, 0.0, 1.0], [0.0, 2.0, 0.0]]),
-                torch.tensor([0.5, -1.0]),
-            ),
-            (
-                torch.tensor([[1.0, 0.0, 2.0], [3.0, 1.0, 0.0]]),
-                torch.tensor([[1.0, 2.0, 0.0], [0.0, 1.0, 1.0], [2.0, 0.0, 1.0]]),
-                torch.tensor([0.0, 1.0, 0.0]),
-            ),
+            (torch.tensor([[1.0, 0.0, 2.0], [0.0, 1.0, 1.0]]), torch.tensor([[1.0, 1.0, 1.0], [2.0, 0.0, 1.0], [0.0, 3.0, 0.0], [1.0, 2.0, 3.0]])),
+            (torch.tensor([[1.0, 2.0, 0.0], [0.0, 1.0, 3.0], [2.0, 0.0, 1.0]]), torch.tensor([[1.0, 0.0, 0.0], [0.0, 2.0, 0.0], [1.0, 1.0, 1.0]])),
         ),
-        reference=lambda x, weight, bias: torch.nn.functional.linear(x, weight, bias),
+        reference=lambda a, b: (a @ b.T).argmax(dim=1),
     )
 
 
@@ -1884,10 +1845,10 @@ MATMUL1 = Exercise(
         "row_dots": "Put matrix on the left of @ and w on the right.",
         "row_pairs": "The error says the middle sizes don't match. Turn the rows of b into columns with .T, as the "
         "line that sets b_turned does.",
-        "linear": "Each row of inputs needs a dot product with each row of weight. Turn weight's rows into columns "
-        "with .T, as row_pairs does with b.",
+        "best_match": "scores is every row of a dotted with every row of b, the same thing row_pairs returns once "
+        "it is fixed.",
     },
-    introduces=("weight", "weighted sum", "dot product", "matrix", "matrix multiplication", "layer", "bias"),
+    introduces=("weight", "weighted sum", "dot product", "matrix", "matrix multiplication"),
     check=check_matmul1,
 )
 
@@ -1921,7 +1882,7 @@ QUIZ1_LESSON = prose(
     | `biggest_row` | add up each row, find the position of the largest | reductions1 |
     | `clean_fractions` | replace negatives with 0, divide each row by its total | math1, reductions1 |
     | `center_columns` | take each column's mean, take it away from every row | reductions1, broadcasting1 |
-    | `layer_on_first_columns` | keep the first two columns, run a Linear layer | indexing1, matmul1 |
+    | `weighted_first_columns` | keep the first two columns, take one weighted sum per row | indexing1, matmul1 |
     """,
 )
 
@@ -1958,12 +1919,11 @@ QUIZ1_SOURCE = source_file(
 
 
     # TODO: Fill in both lines. The first keeps the first two columns of grid,
-    #   and the second runs a Linear layer on them. weight has one row per
-    #   output and 2 columns, and bias has one number per output.
-    def layer_on_first_columns(
+    #   and the second gives each row of them its weighted sum with weights,
+    #   one number per row. weights holds 2 numbers.
+    def weighted_first_columns(
         grid: Tensor,
-        weight: Tensor,
-        bias: Tensor,
+        weights: Tensor,
     ) -> Tensor:
         first_two = ...
 
@@ -1994,14 +1954,13 @@ QUIZ1_SOLUTION = source_file(
         return grid - grid.mean(dim=0)
 
 
-    def layer_on_first_columns(
+    def weighted_first_columns(
         grid: Tensor,
-        weight: Tensor,
-        bias: Tensor,
+        weights: Tensor,
     ) -> Tensor:
         first_two = grid[:, 0:2]
 
-        return first_two @ weight.T + bias
+        return first_two @ weights
     ''',
 )
 
@@ -2041,24 +2000,16 @@ def check_quiz1(checker: Checker) -> None:
         ),
         reference=lambda grid: grid - grid.mean(dim=0),
     )
-    # The square weight runs without .T but gives other numbers.
+    # In the grid with 2 rows, weights @ first_two runs but gives other numbers.
     check_on_inputs(
         checker=checker,
-        function="layer_on_first_columns",
-        description="runs a Linear layer on the first two columns",
+        function="weighted_first_columns",
+        description="gives each row's weighted sum of its first two columns",
         inputs=(
-            (
-                torch.tensor([[1.0, 2.0, 9.0, 9.0], [0.0, 1.0, 9.0, 9.0], [3.0, -1.0, 9.0, 9.0]]),
-                torch.tensor([[1.0, 2.0], [0.0, 1.0], [2.0, 0.0]]),
-                torch.tensor([0.5, 0.0, -1.0]),
-            ),
-            (
-                torch.tensor([[1.0, 2.0, 5.0], [3.0, 0.0, 5.0]]),
-                torch.tensor([[1.0, 2.0], [3.0, 0.0]]),
-                torch.tensor([1.0, -1.0]),
-            ),
+            (torch.tensor([[1.0, 2.0, 9.0, 9.0], [0.0, 1.0, 9.0, 9.0], [3.0, -1.0, 9.0, 9.0]]), torch.tensor([10.0, 1.0])),
+            (torch.tensor([[1.0, 2.0, 5.0], [3.0, 0.0, 5.0]]), torch.tensor([2.0, -1.0])),
         ),
-        reference=lambda grid, weight, bias: torch.nn.functional.linear(grid[:, 0:2], weight, bias),
+        reference=lambda grid, weights: grid[:, 0:2] @ weights,
     )
 
 
@@ -2076,8 +2027,8 @@ QUIZ1 = Exercise(
         "rows_to_fractions does in reductions1.",
         "center_columns": "Take the mean of each column, as column_means does in reductions1. Its shape lines up "
         "with every row, so take it away from grid.",
-        "layer_on_first_columns": "Slice the first two columns, as in indexing1, then do what linear does in "
-        "matmul1 with first_two as the inputs.",
+        "weighted_first_columns": "Slice the first two columns, as in indexing1. Then put first_two on the left of @ "
+        "and weights on the right, as row_dots does in matmul1.",
     },
     introduces=(),
     check=check_quiz1,

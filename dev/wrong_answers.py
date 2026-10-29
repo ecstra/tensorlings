@@ -53,14 +53,14 @@ CASES: list[tuple[str, str, str, str]] = [
     ("matmul1", "row_dots in the wrong order", "return matrix @ w", "return w @ matrix"),
     ("matmul1", "row_pairs still crashes", "return a @ b.T", "return a @ b"),
     ("matmul1", "row_pairs turns the wrong side", "return a @ b.T", "return a.T @ b"),
-    ("matmul1", "linear without .T", "weighted = inputs @ weight.T", "weighted = inputs @ weight"),
-    ("matmul1", "linear the one input way", "weighted = inputs @ weight.T", "weighted = weight @ inputs"),
+    ("matmul1", "best_match without .T", "scores = a @ b.T", "scores = a @ b"),
+    ("matmul1", "best_match scores b against a", "scores = a @ b.T", "scores = b @ a.T"),
     ("quiz1", "biggest_row adds down the columns", "return grid.sum(dim=1).argmax().item()", "return grid.sum(dim=0).argmax().item()"),
     ("quiz1", "biggest_row typed in for the grid in the comment", "return grid.sum(dim=1).argmax().item()", "return 1"),
     ("quiz1", "clean_fractions without keepdim", "return cleaned / cleaned.sum(dim=1, keepdim=True)", "return cleaned / cleaned.sum(dim=1)"),
     ("quiz1", "center_columns takes each row's mean", "return grid - grid.mean(dim=0)", "return grid - grid.mean(dim=1)"),
-    ("quiz1", "layer_on_first_columns keeps the first two rows", "first_two = grid[:, 0:2]", "first_two = grid[0:2]"),
-    ("quiz1", "layer_on_first_columns without .T", "return first_two @ weight.T + bias", "return first_two @ weight + bias"),
+    ("quiz1", "weighted_first_columns keeps the first two rows", "first_two = grid[:, 0:2]", "first_two = grid[0:2]"),
+    ("quiz1", "weighted_first_columns in the wrong order", "return first_two @ weights", "return weights @ first_two"),
     ("quiz1", "a loop that never ends", "    cleaned = torch.where(grid < 0, 0.0, grid)", "    while True:\n        pass\n    cleaned = torch.where(grid < 0, 0.0, grid)"),
 ]
 
