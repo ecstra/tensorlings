@@ -87,4 +87,5 @@ EXERCISES: list[Exercise] = [
     generalization.OVERFITTING2,
     generalization.DECAY1,
     generalization.DECAY2,
+    generalization.QUIZ3,
 ]

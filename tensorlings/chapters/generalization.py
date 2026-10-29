@@ -2,22 +2,19 @@
 
 from __future__ import annotations
 
-import math
-
 import torch
+import torch.nn.functional as F
 from torch import Tensor
 
 from ..course import QUIZZES, Chapter, Exercise
 from ..engine import (
     Checker,
     Described,
-    Mismatch,
     check_on_inputs,
     expect_close,
     expect_parts,
     expect_tensor,
     expect_value,
-    reject_missing_return,
     seeded,
     small_tensor,
 )
@@ -1246,4 +1243,237 @@ DECAY2 = Exercise(
     },
     introduces=(),
     check=check_decay2,
+)
+
+
+# ---------------------------------------------------------------------------
+# quiz3
+# ---------------------------------------------------------------------------
+
+QUIZ3_LESSON = prose(
+    """
+    This quiz has no examples and no new tools. Each function combines moves
+    from Section 2. If a step is unclear, the exercise in the table shows it.
+
+    | Function | Moves | Shown in |
+    |---|---|---|
+    | `classifier_loss` | class scores, cross entropy from logits | softmax3, likelihood2 |
+    | `standardize_both` | the training set's mean and spread, used on both sets | descent4, splits1 |
+    | `minibatch_step` | the loss on a minibatch's rows, one step of gradient descent | minibatch1, descent2 |
+    | `decayed_classifier_loss` | cross entropy, plus weight decay on the weights | likelihood2, decay1 |
+    """,
+)
+
+QUIZ3_SOURCE = source_file(
+    '''
+    # quiz3.py
+    #
+    # No examples and no new tools. Each function combines moves from Section 2.
+
+    import torch
+    import torch.nn.functional as F
+    from torch import Tensor
+
+
+    # TODO: Return the cross entropy of softmax regression with weights W and
+    #   bias b on the examples x, against labels.
+    def classifier_loss(
+        x: Tensor,
+        W: Tensor,
+        b: Tensor,
+        labels: Tensor,
+    ) -> Tensor:
+        ...
+
+
+    # TODO: Finish both lines, so this returns train_x and test_x, both
+    #   standardized with the mean and the spread of train_x's columns.
+    def standardize_both(
+        train_x: Tensor,
+        test_x: Tensor,
+    ) -> tuple[Tensor, Tensor]:
+        mean, spread = ...
+
+        return ...
+
+
+    # TODO: Finish the line that sets loss and the last line, so this returns w
+    #   and b after one step of gradient descent on the mean squared error of
+    #   the rows of x and y at positions.
+    def minibatch_step(
+        x: Tensor,
+        y: Tensor,
+        w: Tensor,
+        b: Tensor,
+        positions: Tensor,
+        learning_rate: float,
+    ) -> tuple[Tensor, Tensor]:
+        w = w.clone().requires_grad_()
+        b = b.clone().requires_grad_()
+        loss = ...
+        loss.backward()
+
+        return ...
+
+
+    # TODO: Return the cross entropy of softmax regression on x against labels,
+    #   plus strength times the sum of the squared weights in W.
+    def decayed_classifier_loss(
+        x: Tensor,
+        W: Tensor,
+        b: Tensor,
+        labels: Tensor,
+        strength: float,
+    ) -> Tensor:
+        ...
+    ''',
+)
+
+QUIZ3_SOLUTION = source_file(
+    '''
+    # quiz3.py, a solution for comparison
+
+    import torch
+    import torch.nn.functional as F
+    from torch import Tensor
+
+
+    def classifier_loss(
+        x: Tensor,
+        W: Tensor,
+        b: Tensor,
+        labels: Tensor,
+    ) -> Tensor:
+        return F.cross_entropy(x @ W + b, labels)
+
+
+    # The test set gets the training set's numbers, never its own.
+    def standardize_both(
+        train_x: Tensor,
+        test_x: Tensor,
+    ) -> tuple[Tensor, Tensor]:
+        mean, spread = train_x.mean(dim=0), train_x.std(dim=0)
+
+        return (train_x - mean) / spread, (test_x - mean) / spread
+
+
+    def minibatch_step(
+        x: Tensor,
+        y: Tensor,
+        w: Tensor,
+        b: Tensor,
+        positions: Tensor,
+        learning_rate: float,
+    ) -> tuple[Tensor, Tensor]:
+        w = w.clone().requires_grad_()
+        b = b.clone().requires_grad_()
+        loss = ((x[positions] @ w + b - y[positions]) ** 2).mean()
+        loss.backward()
+
+        return (w - learning_rate * w.grad).detach(), (b - learning_rate * b.grad).detach()
+
+
+    def decayed_classifier_loss(
+        x: Tensor,
+        W: Tensor,
+        b: Tensor,
+        labels: Tensor,
+        strength: float,
+    ) -> Tensor:
+        return F.cross_entropy(x @ W + b, labels) + strength * (W ** 2).sum()
+    ''',
+)
+
+
+def reference_minibatch_step(
+    x: Tensor,
+    y: Tensor,
+    w: Tensor,
+    b: Tensor,
+    positions: Tensor,
+    learning_rate: float,
+) -> tuple[Tensor, Tensor]:
+    w = w.clone().requires_grad_()
+    b = b.clone().requires_grad_()
+    ((x[positions] @ w + b - y[positions]) ** 2).mean().backward()
+
+    return (w - learning_rate * w.grad).detach(), (b - learning_rate * b.grad).detach()
+
+
+def check_quiz3(checker: Checker) -> None:
+    classifiers = (
+        (small_tensor(144, 5, 2), small_tensor(145, 2, 3) / 2, small_tensor(146, 3) / 2, torch.tensor([0, 2, 1, 1, 0])),
+        (small_tensor(147, 4, 3), small_tensor(148, 3, 3) / 2, small_tensor(149, 3) / 2, torch.tensor([2, 2, 0, 1])),
+    )
+    check_on_inputs(
+        checker=checker,
+        function="classifier_loss",
+        description="gives the cross entropy of softmax regression",
+        inputs=classifiers,
+        reference=lambda x, W, b, labels: F.cross_entropy(x @ W + b, labels).item(),
+        expect=lambda call, actual, expected: expect_close(
+            call=call,
+            actual=actual,
+            expected=expected,
+            tolerance=1e-5,
+        ),
+    )
+    # The test set is shifted far from the training set, so standardizing it with its own numbers gives other values.
+    check_on_inputs(
+        checker=checker,
+        function="standardize_both",
+        description="standardizes both sets with the training set's numbers",
+        inputs=(
+            (small_tensor(150, 6, 2), small_tensor(151, 3, 2) + 10),
+        ),
+        reference=lambda train_x, test_x: (
+            (train_x - train_x.mean(dim=0)) / train_x.std(dim=0),
+            (test_x - train_x.mean(dim=0)) / train_x.std(dim=0),
+        ),
+        expect=expect_parts("the training set", "the test set"),
+    )
+    x, y = linear_data(152, 8, 2)
+    check_on_inputs(
+        checker=checker,
+        function="minibatch_step",
+        description="takes one step on the loss of the chosen rows",
+        inputs=(
+            (*named(x, y), small_tensor(153, 2), torch.tensor(0.5), torch.tensor([6, 1, 3]), 0.1),
+        ),
+        reference=reference_minibatch_step,
+        expect=expect_parts("w", "b"),
+    )
+    check_on_inputs(
+        checker=checker,
+        function="decayed_classifier_loss",
+        description="adds weight decay on W to the cross entropy",
+        inputs=tuple((*classifier, 0.1) for classifier in classifiers),
+        reference=lambda x, W, b, labels, strength: (F.cross_entropy(x @ W + b, labels) + strength * (W ** 2).sum()).item(),
+        expect=lambda call, actual, expected: expect_close(
+            call=call,
+            actual=actual,
+            expected=expected,
+            tolerance=1e-5,
+        ),
+    )
+
+
+QUIZ3 = Exercise(
+    name="quiz3",
+    chapter=QUIZZES,
+    title="Learning, start to finish",
+    lesson=QUIZ3_LESSON,
+    source=QUIZ3_SOURCE,
+    solution=QUIZ3_SOLUTION,
+    hints={
+        "classifier_loss": "The scores are x @ W + b, as in softmax3. F.cross_entropy takes the scores and the "
+        "labels.",
+        "standardize_both": "Take the mean and the spread of train_x's columns, as column_stats does in descent4. "
+        "Use those same two on both sets.",
+        "minibatch_step": "The loss is the mean squared error on x[positions] and y[positions]. Then step each of w "
+        "and b against its gradient, and .detach() the results.",
+        "decayed_classifier_loss": "The cross entropy from classifier_loss, plus strength times (W ** 2).sum().",
+    },
+    introduces=(),
+    check=check_quiz3,
 )
