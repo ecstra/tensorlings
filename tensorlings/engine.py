@@ -742,10 +742,32 @@ def check_on_inputs(
         checker.test(
             function=function,
             description=description,
-            # Clones, so a function that changes its input in place can't change what the reference sees.
             run=lambda found, values=values, call=call: expect(
                 call=call,
-                actual=found(*[value.clone() if isinstance(value, Tensor) else value for value in values]),
-                expected=reference(*values),
+                actual=found(*[fresh_copy(value) for value in values]),
+                expected=reference(*[fresh_copy(value) for value in values]),
             ),
         )
+
+
+def fresh_copy(value: object) -> object:
+    """A copy of a tensor or a random generator, so the learner's function and the reference each start from
+    the same input, and one that changes its input in place or draws from a generator can't change the other's."""
+    if isinstance(value, Tensor):
+        return value.clone()
+
+    if isinstance(value, torch.Generator):
+        copy = torch.Generator()
+        copy.set_state(value.get_state())
+
+        return copy
+
+    return value
+
+
+def seeded(seed: int) -> Described:
+    """A random generator with a fixed seed, shown in a failing call by its seed."""
+    return Described(
+        value=torch.Generator().manual_seed(seed),
+        text=f"a generator seeded with {seed}",
+    )

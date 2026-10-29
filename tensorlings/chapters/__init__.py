@@ -14,6 +14,7 @@ from . import (
     linear_regression,
     matmul,
     micrograd,
+    minibatches,
     tensor_backprop,
     tensors,
 )
@@ -29,6 +30,7 @@ CHAPTERS: list[Chapter] = [
     micrograd.MICROGRAD,
     linear_regression.LINEAR_REGRESSION,
     gradient_descent.GRADIENT_DESCENT,
+    minibatches.MINIBATCHES,
 ]
 
 EXERCISES: list[Exercise] = [
@@ -64,4 +66,7 @@ EXERCISES: list[Exercise] = [
     gradient_descent.DESCENT2,
     gradient_descent.DESCENT3,
     gradient_descent.DESCENT4,
+    minibatches.MINIBATCH1,
+    minibatches.MINIBATCH2,
+    minibatches.MINIBATCH3,
 ]
