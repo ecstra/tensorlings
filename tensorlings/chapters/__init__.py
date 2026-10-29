@@ -11,6 +11,7 @@ from . import (
     chain_rule,
     derivatives,
     gradient_descent,
+    likelihood,
     linear_regression,
     matmul,
     micrograd,
@@ -33,6 +34,7 @@ CHAPTERS: list[Chapter] = [
     gradient_descent.GRADIENT_DESCENT,
     minibatches.MINIBATCHES,
     softmax_regression.SOFTMAX_REGRESSION,
+    likelihood.LIKELIHOOD,
 ]
 
 EXERCISES: list[Exercise] = [
@@ -74,4 +76,8 @@ EXERCISES: list[Exercise] = [
     softmax_regression.SOFTMAX1,
     softmax_regression.SOFTMAX2,
     softmax_regression.SOFTMAX3,
+    likelihood.LIKELIHOOD1,
+    likelihood.LIKELIHOOD2,
+    likelihood.LIKELIHOOD3,
+    likelihood.LIKELIHOOD4,
 ]
