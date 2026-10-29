@@ -449,8 +449,8 @@ These are details the table does not name. Each sits inside its section's topic,
 | Phase | Sections | Exercises |
 |---|---|---|
 | 1a | Section 1 up to matmul1 | 7, built |
-| 1b | the rest of Section 1, and Section 2 | 44 |
-| 2 | 3 and 4 | 59 |
+| 1b | the rest of Section 1, and Section 2 | 44, built |
+| 2 | 3 and 4 | 59, built |
 | 3 | 5, 6 and 7 | 94 |
 | 4 | 8, 9 and 10 | 52 |
 | 5 | 11 and 12 | 47 |
