@@ -15,7 +15,9 @@ Built by the brain tool from the folder it lists.
 
 ## Open
 
-Nothing open.
+### course
+
+- [TODO-014](TODO-014-phase-3-sections-5-to-7.md), convolutional nets with the CIFAR-10 project, sequences with the adder project, then attention and transformers with the GPT project
 
 ## Closed
 
