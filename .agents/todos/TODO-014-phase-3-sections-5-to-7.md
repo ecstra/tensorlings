@@ -33,7 +33,7 @@ The same day the owner's gap review added steps 14 to 16, per [DEC-017](../decis
 | 11 | Add the wrong answers for every new exercise | | agent | pending |
 | 12 | Get beginner reader reviews and fix what they find | | agent | pending |
 | 13 | Run the dev check and the screen driver, then write the handover | | agent | pending |
-| 14 | Add soft1 and soft2 to 16_activations and fft1 to 30_convolution, per DEC-017 | | agent | pending |
+| 14 | Add soft1 and soft2 to 16_activations and fft1 to 30_convolution, per DEC-017 | | agent | done |
 | 15 | Write 38_soft_design, derive1 and derive2, per DEC-017 | | agent | pending |
 | 16 | Add stft1, attention6, 48_linear_attention, induction1 and dynamic1 with their chapters, per DEC-017 | | agent | pending |
 
