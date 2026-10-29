@@ -24,7 +24,7 @@ Phase 2 of the plan build-tensorlings, Sections 3 and 4 as [the detailed curricu
 | 4 | Write 22_residuals, quiz4 and quiz5 | | agent | done |
 | 5 | Write the names project with its download | | agent | done |
 | 6 | Write 24_sgd, 25_adaptive and 26_schedules | | agent | done |
-| 7 | Write 27_clipping, 28_debugging and quiz6 | | agent | pending |
+| 7 | Write 27_clipping, 28_debugging and quiz6 | | agent | done |
 | 8 | Write the broken training project | | agent | pending |
 | 9 | Add the wrong answers for every new exercise | | agent | pending |
 | 10 | Get beginner reader reviews and fix what they find | | agent | pending |
