@@ -21,7 +21,7 @@ The same day the owner's gap review added steps 14 to 16, per [DEC-017](../decis
 | # | Step | Points at | By | Status |
 |---|---|---|---|---|
 | 1 | Write 30_convolution, 31_conv_shapes and 32_pooling | | agent | done |
-| 2 | Write 33_classic_nets and 34_upsampling | | agent | pending |
+| 2 | Write 33_classic_nets and 34_upsampling | | agent | done |
 | 3 | Write 35_augmentation, 36_transfer and quiz7 | | agent | pending |
 | 4 | Build the CIFAR-10 project with its download, the checkpoint flow and the device choice | | agent | pending |
 | 5 | Write 38_rnn, 39_bptt and 40_gated_rnns | | agent | pending |
