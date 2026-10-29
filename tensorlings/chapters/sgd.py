@@ -8,6 +8,7 @@ from torch import Tensor
 
 from ..course import OPTIMIZER_IMPORTS, Chapter, Exercise
 from ..engine import (
+    NOT_STARTED,
     Checker,
     Described,
     Mismatch,
@@ -93,7 +94,12 @@ def check_optimizer_class(
     arguments_text = ", ".join(f"{key}={value}" for key, value in arguments.items())
     call = f"5 steps of {name}(model.parameters(), {arguments_text}) on a Linear layer"
 
+    before = [parameter.detach().clone() for parameter in mine.parameters()]
     mse_steps(mine, found(mine.parameters(), **arguments), x, y, 5)
+
+    if all(torch.equal(old, new.detach()) for old, new in zip(before, mine.parameters())):
+        raise Mismatch(f"After {call} the weights did not move, which usually means {name}.step is {NOT_STARTED}.")
+
     mse_steps(theirs, reference(theirs.parameters(), **reference_arguments), x, y, 5)
     expect_same_parameters(call, mine, theirs)
 
