@@ -7,6 +7,7 @@ import gzip
 import hashlib
 import shutil
 import subprocess
+import tarfile
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
@@ -41,7 +42,24 @@ DATASETS: dict[str, tuple[RemoteFile, ...]] = {
     "names": (
         RemoteFile("https://raw.githubusercontent.com/karpathy/makemore/master/names.txt", "401b3c4cac9e28a586ed15e81256680d"),
     ),
+    # The binary version from Krizhevsky's own page, read straight out of the archive, so no pickle is ever loaded.
+    "cifar10": (
+        RemoteFile("https://www.cs.toronto.edu/~kriz/cifar-10-binary.tar.gz", "c32a1d4ab5d03f1284b67883e8d87530"),
+    ),
 }
+
+CIFAR10_CLASSES: tuple[str, ...] = (
+    "airplane",
+    "automobile",
+    "bird",
+    "cat",
+    "deer",
+    "dog",
+    "frog",
+    "horse",
+    "ship",
+    "truck",
+)
 
 
 class MissingData(Exception):
@@ -144,6 +162,41 @@ def load_mnist(split: str) -> tuple[Tensor, Tensor]:
     images, labels = read_mnist(split)
 
     # Copies, so a learner's file that changes them in place can't change what the next check reads.
+    return images.clone(), labels.clone()
+
+
+def read_cifar_batch(raw: bytes) -> tuple[Tensor, Tensor]:
+    """CIFAR-10's binary format, one record of 3,073 bytes per image. The first byte is the label,
+    then come the red plane, the green and the blue, each 32 rows of 32 pixels."""
+    records = torch.frombuffer(bytearray(raw), dtype=torch.uint8).reshape(-1, 3073)
+
+    return records[:, 1:].reshape(-1, 3, 32, 32), records[:, 0].long()
+
+
+@functools.cache
+def read_cifar10(split: str) -> tuple[Tensor, Tensor]:
+    wanted = [f"data_batch_{number}.bin" for number in range(1, 6)] if split == "train" else ["test_batch.bin"]
+    batches: dict[str, tuple[Tensor, Tensor]] = {}
+
+    # Members are read in memory by their names and never extracted, so no path in the archive is ever written to.
+    with tarfile.open(dataset_file("cifar10", "cifar-10-binary.tar.gz"), "r:gz") as archive:
+        for member in archive:
+            name = member.name.rsplit("/", 1)[-1]
+            content = archive.extractfile(member) if member.isfile() and name in wanted else None
+
+            if content is not None:
+                batches[name] = read_cifar_batch(content.read())
+
+    images, labels = zip(*(batches[name] for name in wanted))
+
+    return torch.cat(images), torch.cat(labels)
+
+
+def load_cifar10(split: str) -> tuple[Tensor, Tensor]:
+    """CIFAR-10's images, of shape (count, 3, 32, 32) with pixels from 0 to 255, and their labels from 0 to 9,
+    which CIFAR10_CLASSES names. split is "train" for the 50,000 training images or "test" for the 10,000 test images."""
+    images, labels = read_cifar10(split)
+
     return images.clone(), labels.clone()
 
 
