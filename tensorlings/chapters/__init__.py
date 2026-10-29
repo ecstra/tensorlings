@@ -14,6 +14,7 @@ from . import (
     embeddings,
     generalization,
     gradient_descent,
+    initialization,
     likelihood,
     linear_layers,
     linear_regression,
@@ -47,6 +48,7 @@ CHAPTERS: list[Chapter] = [
     activations.ACTIVATIONS,
     mlp.MLP,
     embeddings.EMBEDDINGS,
+    initialization.INITIALIZATION,
 ]
 
 EXERCISES: list[Exercise] = [
@@ -118,4 +120,8 @@ EXERCISES: list[Exercise] = [
     embeddings.EMBEDDING2,
     embeddings.EMBEDDING3,
     embeddings.EMBEDDING4,
+    initialization.INIT1,
+    initialization.INIT2,
+    initialization.INIT3,
+    initialization.INIT4,
 ]

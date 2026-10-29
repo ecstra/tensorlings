@@ -71,6 +71,8 @@ JARGON: tuple[str, ...] = (
     "overfitting",
     "validation",
     "weight decay",
+    "variance",
+    "fan in",
 )
 
 FILLER: tuple[str, ...] = (
