@@ -15,6 +15,7 @@ from . import (
     matmul,
     micrograd,
     minibatches,
+    softmax_regression,
     tensor_backprop,
     tensors,
 )
@@ -31,6 +32,7 @@ CHAPTERS: list[Chapter] = [
     linear_regression.LINEAR_REGRESSION,
     gradient_descent.GRADIENT_DESCENT,
     minibatches.MINIBATCHES,
+    softmax_regression.SOFTMAX_REGRESSION,
 ]
 
 EXERCISES: list[Exercise] = [
@@ -69,4 +71,7 @@ EXERCISES: list[Exercise] = [
     minibatches.MINIBATCH1,
     minibatches.MINIBATCH2,
     minibatches.MINIBATCH3,
+    softmax_regression.SOFTMAX1,
+    softmax_regression.SOFTMAX2,
+    softmax_regression.SOFTMAX3,
 ]
