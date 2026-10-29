@@ -800,10 +800,10 @@ def check_kaiming_mlp(found: object) -> None:
             right_spread = abs(spread - target) < 0.25 * target
 
             if right_spread and zero_bias:
-                raise Mismatch(f"After {call}, Linear layer {position} has the right spread but different numbers. Fill the layers in the order model.modules() gives them.")
+                raise Mismatch(f"After {call}, Linear layer {position + 1} has the right spread but different numbers. Fill the layers in the order model.modules() gives them.")
 
             raise Mismatch(
-                f"After {call}, Linear layer {position} doesn't hold Kaiming's weights and zero biases. "
+                f"After {call}, Linear layer {position + 1} doesn't hold Kaiming's weights and zero biases. "
                 f"Its weight's spread is {spread:.3g}, where sqrt(2 / {mine.in_features}) is {target:.3g}, "
                 f"and its bias {'is' if zero_bias else 'is not'} all zeros.",
             )

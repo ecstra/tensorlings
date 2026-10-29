@@ -642,7 +642,7 @@ def check_evaluate_records_nothing(found: object) -> None:
     found(watcher, CURVE_X.clone(), CURVE_Y.clone())
 
     if any(watcher.recording):
-        raise Mismatch("evaluate ran the model while autograd was recording. Put the work inside with torch.no_grad():.")
+        raise Mismatch("evaluate ran the model while autograd was recording. Put the work inside a with torch.no_grad() block.")
 
 
 MLP3 = Exercise(
@@ -654,7 +654,7 @@ MLP3 = Exercise(
     solution=MLP3_SOLUTION,
     hints={
         "train": "Call the model on x, .squeeze(1) the result, and take the mean squared error against y.",
-        "evaluate": "The same mean squared error, inside with torch.no_grad():, returned as a plain number.",
+        "evaluate": "The same mean squared error, inside a with torch.no_grad() block, returned as a plain number.",
     },
     introduces=(),
     check=check_mlp3,
