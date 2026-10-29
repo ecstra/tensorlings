@@ -60,8 +60,9 @@ LINREG1_LESSON = prose(
 
     The weights and the bias are the model's **parameters**, the numbers
     training adjusts. The bias lets a prediction be more than 0 when every
-    feature is 0. Predicting a number this way is linear **regression**, where
-    regression means the output is a number rather than a pick among options.
+    feature is 0. Predicting a number this way is linear **regression**.
+    Regression means the output is a number, as opposed to a pick among
+    options.
 
     A model can predict several numbers per example. Then the weights form a
     matrix of shape `(features, outputs)`, one column per output, and the bias
@@ -449,7 +450,7 @@ LINREG3_LESSON = prose(
     A formula like this only exists for linear models with squared error. The
     models of later sections have none, so the next chapter finds parameters
     by walking downhill on the loss. On a linear model, least squares gives the
-    answer that walk should reach, which makes it a good check.
+    answer that walk should reach, so it can check the walk.
     """,
 )
 

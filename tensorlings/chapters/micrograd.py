@@ -203,7 +203,7 @@ MICROGRAD1_SOURCE = source_file(
             ...
 
         # TODO: Finish backward_step, so a ** n, for a plain number n, hands a
-        #   its gradient by the power rule.
+        #   the gradient handed down times the power rule's local derivative.
         def __pow__(self, n: float) -> "Value":
             out = Value(self.data ** n, (self,), f"**{n}")
 
@@ -390,6 +390,8 @@ def check_micrograd1(checker: Checker) -> None:
                 ("a ** 3", lambda a: a ** 3, (2.0,)),
                 ("a ** -1", lambda a: a ** -1, (4.0,)),
                 ("(a * b) ** 0.5", lambda a, b: (a * b) ** 0.5, (2.0, 8.0)),
+                # The power is not the last step here, so its gradient handed down is not 1.
+                ("a ** 2 * 3", lambda a: a ** 2 * 3, (1.5,)),
             ),
         ),
         (
@@ -458,8 +460,8 @@ MICROGRAD2_LESSON = prose(
     `log`'s local derivative is `1 / x`, taken at its input `x`, which is
     `self.data` inside the step.
 
-    A method is called on a value, as in `a.exp()`, and chains like any
-    other. `log` undoes `exp`, so this gives `a * b` back.
+    A method is called on a value, as in `a.exp()`, and you can call another
+    method on its result. `log` undoes `exp`, so this gives `a * b` back.
 
     ```python
     a, b = Value(2.0), Value(3.0)
@@ -468,11 +470,8 @@ MICROGRAD2_LESSON = prose(
     ```
 
     The log of a sum of exps shows up again in Section 2. For a list of
-    numbers it comes out a little above the largest of them, so it works as a
-    smooth maximum. For 1 and 3 it is about 3.127.
-
-    With these two your engine has every operation Section 2 builds its
-    calculations from.
+    numbers it comes out a little above the largest of them, and it changes
+    gradually as the numbers change. For 1 and 3 it is about 3.127.
     """,
 )
 
@@ -587,8 +586,8 @@ MICROGRAD2_SOURCE = source_file(
 
             return out
 
-        # TODO: Finish backward_step, so log hands its input the gradient times
-        #   the local derivative of log, which is 1 / x at its input x.
+        # TODO: Finish backward_step, so log hands its input the gradient handed
+        #   down times log's local derivative.
         def log(self) -> "Value":
             out = Value(math.log(self.data), (self,), "log")
 
@@ -602,11 +601,16 @@ MICROGRAD2_SOURCE = source_file(
     + MICROGRAD_BACKWARD
     + '''
 
-    # TODO: Return the log of the sum of exp(v) for every Value v in values,
-    #   built with the Value methods, so backward works through it. values
-    #   holds at least one Value.
+    # TODO: Finish the line in the loop and the last line, so this returns the
+    #   log of the sum of exp(v) for every Value v in values, built with the
+    #   Value methods so backward works through it.
     def log_sum_exp(values: list[Value]) -> Value:
-        ...
+        total = values[0].exp()
+
+        for value in values[1:]:
+            total = ...
+
+        return ...
     ''',
 )
 
@@ -671,6 +675,8 @@ def check_micrograd2(checker: Checker) -> None:
             ("a.log()", lambda a: a.log(), (2.0,)),
             ("(a * b).log()", lambda a, b: (a * b).log(), (0.5, 3.0)),
             ("(a.exp() + 1).log()", lambda a: (a.exp() + 1).log(), (-1.0,)),
+            # log is not the last step here, so its gradient handed down is not 1.
+            ("(a.log() + b) * b", lambda a, b: (a.log() + b) * b, (2.0, 3.0)),
         ),
     )
     checker.test(
@@ -693,8 +699,7 @@ MICROGRAD2 = Exercise(
     hints={
         "Value.log": "The local derivative is 1 / self.data. Multiply it by out.grad, as exp's step multiplies its "
         "own by out.grad.",
-        "log_sum_exp": "Start a total with the exp of the first Value. Add the exp of each one after it in a loop, "
-        "then call .log() on the total.",
+        "log_sum_exp": "In the loop, add the exp of each value to total. At the end, call .log() on the total.",
     },
     introduces=(),
     check=check_micrograd2,
@@ -707,9 +712,9 @@ MICROGRAD2 = Exercise(
 
 MICROGRAD3_LESSON = prose(
     """
-    An engine that runs is not the same as an engine that is right. A backward
-    step with a wrong sign runs without a complaint. So check the gradients
-    two ways, against nudging from derivatives1, and against PyTorch.
+    A backward step with a wrong sign runs without a complaint. So check the
+    gradients two ways, against nudging from derivatives1, and against
+    PyTorch.
 
     Nudging only needs the forward pass, which is hard to get wrong. Nudge
     one input both ways while the rest stay put, and take the central
@@ -730,24 +735,29 @@ MICROGRAD3_LESSON = prose(
     Without it a tensor keeps about 7, and the answers differ by rounding.
 
     The three agree up to rounding when the engine is right. Nudging has a
-    small error of its own, so a gap around `1e-6` from it is normal. A gap
-    from PyTorch should be far smaller, and a gap near 1 means a backward step
-    is wrong. PyTorch ships the same check as `torch.autograd.gradcheck`.
+    small error of its own, so a gap up to about `1e-6` from it is normal. A
+    gap from PyTorch should be far smaller. A gap far above `1e-6` means a
+    backward step is wrong. PyTorch ships the same check as
+    `torch.autograd.gradcheck`.
 
     `print` works in the exercise files, and what it prints shows in the
-    Result tab, which helps while you hunt for a bug.
+    Result tab. Use it to hunt for the bug.
     """,
 )
 
 MICROGRAD3_TOOLS = '''
 
-    # TODO: Return the gradient your engine gives each input, in a list. Wrap each
-    #   number in a Value, build the output from them, and run backward.
+    # TODO: Finish the middle line, so this returns the gradient your engine
+    #   gives each input, in a list. It builds the output from the Values and
+    #   runs backward on it.
     def engine_gradients(
         build: Callable[..., Value],
         numbers: list[float],
     ) -> list[float]:
+        values = [Value(number) for number in numbers]
         ...
+
+        return [value.grad for value in values]
 
 
     # TODO: Finish the line in the loop, so this returns the central difference
@@ -769,13 +779,17 @@ MICROGRAD3_TOOLS = '''
         return gradients
 
 
-    # TODO: Return PyTorch's gradient for each input, in a list. Use tensors
-    #   with dtype=torch.float64.
+    # TODO: Finish the last two lines, so this returns PyTorch's gradient for
+    #   each input, in a list of plain numbers, the way engine_gradients does
+    #   with Values.
     def torch_gradients(
         build: Callable[..., torch.Tensor],
         numbers: list[float],
     ) -> list[float]:
+        tensors = [torch.tensor(number, dtype=torch.float64, requires_grad=True) for number in numbers]
         ...
+
+        return ...
 '''
 
 MICROGRAD3_SOURCE = source_file(
@@ -994,12 +1008,12 @@ MICROGRAD3 = Exercise(
     source=MICROGRAD3_SOURCE,
     solution=MICROGRAD3_SOLUTION,
     hints={
-        "engine_gradients": "Make a list of Values from numbers, call build with them, call .backward() on the "
-        "result, and collect each Value's .grad.",
+        "engine_gradients": "Call build with the Values spread out as its inputs, build(*values), and call "
+        ".backward() on what it gives.",
         "numeric_gradients": "output(up) is the output with input i nudged up. Take output(up) minus output(down), "
         "and divide by the whole gap, 2e-6.",
-        "torch_gradients": "Do what engine_gradients does, with torch.tensor(number, dtype=torch.float64, "
-        "requires_grad=True) in place of Value(number), and .grad.item() for each gradient.",
+        "torch_gradients": "Run build on the tensors and call .backward(), as engine_gradients does. Then take "
+        ".grad.item() of each tensor, so the list holds plain numbers.",
         "Value": "Compare engine_gradients with torch_gradients on functions that use one operation each, like "
         "lambda a: a.log() or lambda a: a.exp(), and print what they give. The step whose numbers differ is the "
         "wrong one.",

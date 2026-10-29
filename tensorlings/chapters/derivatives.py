@@ -56,18 +56,24 @@ DERIVATIVES1_LESSON = prose(
     Training rests on this. A model's error depends on the numbers inside it,
     and the derivative of the error tells each number which way to move.
 
-    Nudging one way leans toward the side you nudged. Nudging both ways and
-    dividing by the whole gap is far closer for the same nudge. This is the
-    **central difference**.
+    A nudge one way measures the slope a little to that side of `x`, so it
+    gives 6.001 instead of 6. Nudging both ways and dividing by the whole gap
+    is far closer for the same nudge. This is the **central difference**.
 
     ```python
     (f(3.001) - f(2.999)) / 0.002      # 5.999999999999339
     ```
 
     A nudge can also be too small. A float keeps about 16 significant digits,
-    so `3 + 1e-15` is stored as a slightly different number. Two outputs that
-    close differ mostly by rounding, and the slope comes out as nonsense. A
-    nudge around `1e-6` is a safe middle.
+    so a nudge of `1e-15` gets rounded.
+
+    ```python
+    (3 + 1e-15) - 3                    # 8.881784197001252e-16
+    ```
+
+    The nudge that actually happened is about 10 percent off, so the slope
+    comes out about 10 percent off too. A nudge around `1e-6` is a safe
+    middle.
     """,
 )
 
@@ -250,6 +256,7 @@ DERIVATIVES2_LESSON = prose(
     | Function | Derivative | Rule |
     |---|---|---|
     | `c`, a constant | `0` | a constant never changes |
+    | `x` | `1` | power, since `x` is `x ** 1` |
     | `x ** n` | `n * x ** (n - 1)` | power |
     | `c * f(x)` | `c * f'(x)` | a constant factor stays |
     | `f(x) + g(x)` | `f'(x) + g'(x)` | sum |
@@ -265,7 +272,7 @@ DERIVATIVES2_LESSON = prose(
     nudging.
 
     ```python
-    3 * 2 ** 2 + 4                                  # 16, by the power and sum rules
+    3 * 2 ** 2 + 4                                  # 16, by the power, constant factor and sum rules
     f = lambda x: x ** 3 + 4 * x
     (f(2.000001) - f(1.999999)) / 0.000002          # 16.00000000046009
     ```
@@ -403,10 +410,14 @@ DERIVATIVES3_LESSON = prose(
     inputs, `f(x, y) = x * y + y ** 2`. Hold `y` still and nudge only `x`, and
     you get the **partial derivative** of `f` with respect to `x`. A partial
     treats every other input as a constant, so the rules of derivatives2 apply
-    as they are. At `x = 2, y = 3` the partials are
+    as they are.
 
-    - with respect to `x`, `y`, which is 3
-    - with respect to `y`, `x + 2 * y`, which is 8
+    For `x`, hold `y` still. Then `x * y` is the constant `y` times `x`, with
+    derivative `y`. `y ** 2` is a constant, with derivative 0. At `x = 2,
+    y = 3` the partial is 3.
+
+    For `y`, hold `x` still. `x * y` gives `x`, and `y ** 2` gives `2 * y`, so
+    the partial is `x + 2 * y`, which is 8.
 
     Keep the inputs in one tensor `v`, and the partials in a tensor of the same
     shape. That tensor is the **gradient** of `f` at `v`.
@@ -618,7 +629,8 @@ DERIVATIVES3 = Exercise(
     source=DERIVATIVES3_SOURCE,
     solution=DERIVATIVES3_SOLUTION,
     hints={
-        "partial": "Put h at entry i of nudge. Then follow the line that sets partial_0, with h in place of 0.01.",
+        "partial": "Put h at entry i of nudge. Then follow the line that sets partial_0, with 2 * h in place of "
+        "0.02.",
         "numeric_gradient": "Call partial with f, v, i and 0.001.",
         "gradient_of_cubes": "Each entry only touches its own cube, so its partial is the derivative of x ** 3 from "
         "the table in derivatives2. Math on a tensor does it to every entry at once.",

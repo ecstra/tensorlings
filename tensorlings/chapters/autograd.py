@@ -180,10 +180,12 @@ AUTOGRAD1_LESSON = prose(
     c.op            # '+'
     ```
 
-    `c` knows it is the sum of `a` and `b`. Every value made from others keeps
-    a link to them, so the whole computation graph hangs off the last value.
-    `grad` starts at 0 and holds the value's gradient once backpropagation
-    fills it in, which the next exercises add.
+    `c` knows it is the sum of `a` and `b`. The values a value was made from
+    are its children, and it is their parent. Every value keeps a link to its
+    children, so the whole computation graph hangs off the last value.
+
+    `grad` starts at 0. It holds the value's gradient once backpropagation
+    fills it in. The next exercises build that part.
     """,
 )
 
@@ -391,24 +393,25 @@ AUTOGRAD2_SOURCE = source_file(
             return out
 
 
-    # TODO: Finish the walk backward. L's step has run, so d has its gradient.
-    #   Call the backward steps of the other two made values, d and e, in the
-    #   order that gives each one all of its gradient before it passes it on.
+    # TODO: Finish the walk backward. L's step has run, so q has its gradient.
+    #   Call the backward steps of q and p, in the order that gives each one
+    #   all of its gradient before it passes it on.
     def walk_backward(
         a: Value,
         b: Value,
         c: Value,
-        f: Value,
+        r: Value,
     ) -> tuple[float, float, float, float]:
-        e = a * b
-        d = e + c
-        L = d * f
+        p = a * b
+        q = p + c
+        L = q * r
 
         L.grad = 1.0
         L.backward_step()
         ...
+        ...
 
-        return a.grad, b.grad, c.grad, f.grad
+        return a.grad, b.grad, c.grad, r.grad
     ''',
 )
 
@@ -455,23 +458,23 @@ AUTOGRAD2_SOLUTION = source_file(
             return out
 
 
-    # d is made from e, so d's step must run first to hand e its gradient.
+    # q is made from p, so q's step must run first to hand p its gradient.
     def walk_backward(
         a: Value,
         b: Value,
         c: Value,
-        f: Value,
+        r: Value,
     ) -> tuple[float, float, float, float]:
-        e = a * b
-        d = e + c
-        L = d * f
+        p = a * b
+        q = p + c
+        L = q * r
 
         L.grad = 1.0
         L.backward_step()
-        d.backward_step()
-        e.backward_step()
+        q.backward_step()
+        p.backward_step()
 
-        return a.grad, b.grad, c.grad, f.grad
+        return a.grad, b.grad, c.grad, r.grad
     ''',
 )
 
@@ -507,10 +510,10 @@ def check_walk_backward(
 ) -> None:
     for numbers in ((2.0, -3.0, 10.0, -2.0), (1.5, 2.0, -4.0, 0.5)):
         call = "walk_backward({}, {}, {}, {})".format(*(f"Value({number})" for number in numbers))
-        expect_parts("a.grad", "b.grad", "c.grad", "f.grad")(
+        expect_parts("a.grad", "b.grad", "c.grad", "r.grad")(
             call=call,
             actual=found(*(value_class(number) for number in numbers)),
-            expected=autograd_partials(lambda a, b, c, f: (a * b + c) * f, *numbers),
+            expected=autograd_partials(lambda a, b, c, r: (a * b + c) * r, *numbers),
         )
 
 
@@ -541,8 +544,7 @@ AUTOGRAD2 = Exercise(
     hints={
         "Value.__mul__": "self gets other.data times out.grad, and other gets self.data times out.grad. Keep the +=, "
         "so a * a gets both parts.",
-        "walk_backward": "e is one of the values d was made from, so e only has its whole gradient after d's step "
-        "has run.",
+        "walk_backward": "p is a child of q, so p only has its whole gradient after q's step has run.",
     },
     introduces=(),
     check=check_autograd2,
@@ -559,37 +561,58 @@ AUTOGRAD3_LESSON = prose(
     value had its whole gradient before passing it on. A program has to find
     that order by itself.
 
-    A value is ready to pass its gradient on once every value made from it
-    has run its step. So list the values with each one after its children,
+    A value is ready to pass its gradient on once every parent, every value
+    made from it, has run its step. So list the values with each one after its children,
     then run the steps from the end of the list back to the start. A list
     with every value after its children is a **topological order**.
 
     Take this graph.
 
     ```python
-    e = a * b
-    d = e + c
-    L = d * f
+    p = a * b
+    q = p + c
+    L = q * r
     ```
 
-    One topological order is `a, b, e, c, d, f, L`. Read backward, it runs
-    `L`, then `f`, then `d`, before `e`, so `e` has its whole gradient when its
-    turn comes. The values with nothing below them, like `a`, run a step that
-    does nothing.
+    One topological order is `a, b, p, c, q, r, L`. Read backward, it runs
+    `L`, then `r`, then `q`, before `p`, so `p` has its whole gradient when its
+    turn comes. Values with no children, like `a`, run a step that does
+    nothing.
 
     A recursive walk finds the order. It visits a value's children first, and
     adds the value to the list only after them. A set of values already seen
     stops the walk from adding a value twice when it is used twice.
 
     `backward` then sets the last value's gradient to 1, the way chain3 began,
-    and runs every step in reverse topological order. That is all
-    backpropagation needs.
+    and runs every step in reverse topological order.
     """,
 )
 
 AUTOGRAD3_SOURCE = source_file(
     '''
     # autograd3.py
+
+
+    # TODO: Finish the line in the loop, so every child of a value is visited,
+    #   and so added to order, before the value itself.
+    def topological_order(root: "Value") -> list["Value"]:
+        order = []
+        seen = set()
+
+        def visit(value: "Value") -> None:
+            if value in seen:
+                return
+
+            seen.add(value)
+
+            for child in value.children:
+                ...
+
+            order.append(value)
+
+        visit(root)
+
+        return order
 
 
     class Value:
@@ -631,41 +654,39 @@ AUTOGRAD3_SOURCE = source_file(
 
         # TODO: This runs the steps in the wrong order, so values pass their
         #   gradient on before they have all of it. Read the lesson, then fix
-        #   the loop.
+        #   the loop. It needs topological_order, above, finished first.
         def backward(self) -> None:
             order = topological_order(self)
             self.grad = 1.0
 
             for value in order:
                 value.backward_step()
-
-
-    # TODO: Finish the line in the loop, so every child of a value is visited,
-    #   and so added to order, before the value itself.
-    def topological_order(root: Value) -> list[Value]:
-        order = []
-        seen = set()
-
-        def visit(value: Value) -> None:
-            if value in seen:
-                return
-
-            seen.add(value)
-
-            for child in value.children:
-                ...
-
-            order.append(value)
-
-        visit(root)
-
-        return order
     ''',
 )
 
 AUTOGRAD3_SOLUTION = source_file(
     '''
     # autograd3.py, a solution for comparison
+
+
+    def topological_order(root: "Value") -> list["Value"]:
+        order = []
+        seen = set()
+
+        def visit(value: "Value") -> None:
+            if value in seen:
+                return
+
+            seen.add(value)
+
+            for child in value.children:
+                visit(child)
+
+            order.append(value)
+
+        visit(root)
+
+        return order
 
 
     class Value:
@@ -712,26 +733,6 @@ AUTOGRAD3_SOLUTION = source_file(
 
             for value in reversed(order):
                 value.backward_step()
-
-
-    def topological_order(root: Value) -> list[Value]:
-        order = []
-        seen = set()
-
-        def visit(value: Value) -> None:
-            if value in seen:
-                return
-
-            seen.add(value)
-
-            for child in value.children:
-                visit(child)
-
-            order.append(value)
-
-        visit(root)
-
-        return order
     ''',
 )
 
@@ -826,8 +827,8 @@ AUTOGRAD3 = Exercise(
     hints={
         "topological_order": "visit calls itself on each child. When it returns, that child and everything under it "
         "are in order.",
-        "Value.backward": "order lists every child before its parents. Loop over it from the end with reversed, so "
-        "every parent runs its step first.",
+        "Value.backward": "order lists every child before its parents. Loop over it from the end with reversed(order), "
+        "so every parent runs its step before its children do.",
     },
     introduces=("topological order",),
     check=check_autograd3,
@@ -855,7 +856,8 @@ AUTOGRAD4_LESSON = prose(
 
     The numbers match chain3 and your own `Value`. A tensor made by an
     operation keeps the step that made it in `.grad_fn`, much as your `Value`
-    keeps `backward_step`.
+    keeps `backward_step`. `.item()` turns a tensor that holds one number into
+    a plain Python number.
 
     `.backward()` works on whole tensors too, as long as the last value is a
     single number. The gradient has the shape of its tensor, one partial per
@@ -870,9 +872,9 @@ AUTOGRAD4_LESSON = prose(
     ```
 
     PyTorch's gradients add up across calls, as your `+=` does. A second
-    `.backward()` adds onto the `.grad` already there, which is useful when
-    one value feeds several results and a trap when it doesn't. Clear it in
-    between with `v.grad = None`.
+    `.backward()` adds onto the `.grad` already there. That is a trap when two
+    separate calculations each call `.backward()`, as the last TODO shows.
+    Clear the gradient in between with `v.grad = None`.
     """,
 )
 
@@ -905,13 +907,16 @@ AUTOGRAD4_SOURCE = source_file(
         return t.grad.item()
 
 
-    # TODO: Return the gradient of f at v, a tensor with the shape of v. f gives
-    #   a single number.
+    # TODO: Finish the middle line, so this returns the gradient of f at v, a
+    #   tensor with the shape of v. f gives a single number.
     def autograd_gradient(
         f: Callable[[Tensor], Tensor],
         v: Tensor,
     ) -> Tensor:
+        v.requires_grad_()
         ...
+
+        return v.grad
 
 
     # TODO: This should return the derivative of the second calculation alone,
@@ -1059,8 +1064,7 @@ AUTOGRAD4 = Exercise(
     solution=AUTOGRAD4_SOLUTION,
     hints={
         "autograd_slope": "Call f on t to get the result, then call .backward() on the result.",
-        "autograd_gradient": "Switch recording on for v with .requires_grad_(), call f on v, call .backward() on "
-        "what it gives, and return v.grad.",
+        "autograd_gradient": "Call f on v, then call .backward() on what it gives.",
         "second_gradient": "The first .backward() leaves its gradient in t.grad. Clear t.grad before the second "
         "calculation runs its .backward().",
     },

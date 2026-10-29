@@ -380,8 +380,7 @@ DESCENT2_LESSON = prose(
 
     Watching the loss tells you whether training works. It should fall fast at
     first, then level off. `loss.item()` turns the loss into a plain number to
-    keep or print. The same loop trains any loss and any model, which is what
-    makes it the heart of deep learning.
+    keep or print. The same loop trains any loss and any model.
     """,
 )
 

@@ -57,10 +57,10 @@ BACKPROP1_LESSON = prose(
     """
     autograd4 showed that a tensor's gradient has the tensor's shape, one
     partial per entry. Real training leaves this to autograd. Working a few out
-    by hand shows what autograd does, which helps a lot when training goes
-    wrong.
+    by hand shows what autograd does, and that knowledge is what finds the
+    problem when training goes wrong.
 
-    Picture one step that makes `y` from `x`, inside a bigger calculation that
+    Take one step that makes `y` from `x`, inside a bigger calculation that
     ends in a single number `L`. Backpropagation hands the step `grad_y`, the
     gradient of `L` with respect to `y`, shaped like `y`. The step's job is to
     hand back `grad_x`, shaped like `x`.
@@ -76,7 +76,7 @@ BACKPROP1_LESSON = prose(
     grad_x = grad_y * 2 * x                    # tensor([ 2., -2., 12.])
     ```
 
-    A multiplication `y = a * b` of two tensors with one shape gives each
+    A multiplication `y = a * b` of two tensors of the same shape gives each
     input `grad_y` times the other input, entry by entry, as a `Value` did.
 
     A sum `s = x.sum()` makes one number, and each entry of `x` moves it one
@@ -263,12 +263,15 @@ BACKPROP2_LESSON = prose(
 
     The rule holds in general. Backward through broadcasting adds the
     gradient up along every dimension the tensor was copied along, back to
-    the tensor's own shape. `keepdim=True` keeps a size 1 dimension as it was.
+    the tensor's own shape. When the tensor had a size 1 dimension, like a
+    column of shape `(rows, 1)`, add up along it with `keepdim=True` so it
+    keeps that shape.
 
     A sum along a dimension goes the other way. `s = x.sum(dim=1)` gives one
     total per row, and every entry of a row moves its total one for one. So
     each entry gets its row's gradient, copied across the row, and
-    broadcasting does the copying.
+    broadcasting does the copying. `torch.ones(2, 3)` makes ones of that
+    shape, and `torch.ones_like(x)` makes ones shaped like `x`.
 
     ```python
     x = torch.ones(2, 3)
@@ -277,8 +280,9 @@ BACKPROP2_LESSON = prose(
     # tensor([[10., 10., 10.], [20., 20., 20.]])
     ```
 
-    Copying forward means adding up backward, and adding up forward means
-    copying backward.
+    Along dimension 0 there is one number per column instead. A shape
+    `(columns,)` already lines up with every row, so it needs no
+    `.unsqueeze`.
     """,
 )
 
@@ -461,11 +465,18 @@ BACKPROP3_LESSON = prose(
     ```
 
     The shortcut needs care when sizes are equal, since then a wrong
-    arrangement has the right shape too. Check it against PyTorch.
+    arrangement has the right shape too. Check it against autograd, as
+    autograd4 did.
 
     When `v` is flat, `y = a @ v` gives one number per row. `a[i, t]` then
     moves `y[i]` by `v[t]`, so `grad_a[i, t]` is `grad_y[i] * v[t]`, one
-    product for every pair of `i` and `t`.
+    product for every pair of `i` and `t`. Broadcasting makes every pair, from
+    a column of shape `(n, 1)` and a flat tensor of shape `(k,)`.
+
+    ```python
+    torch.tensor([1.0, 2.0]).unsqueeze(1) * torch.tensor([10.0, 20.0, 30.0])
+    # tensor([[10., 20., 30.], [20., 40., 60.]])
+    ```
     """,
 )
 
@@ -504,7 +515,7 @@ BACKPROP3_SOURCE = source_file(
 
 
     # TODO: The same y = matrix @ v. Return the gradient of matrix, shaped like
-    #   matrix, where entry [i, t] is grad_y[i] * v[t].
+    #   matrix.
     def matvec_grad_matrix(
         v: Tensor,
         grad_y: Tensor,
@@ -629,22 +640,24 @@ BACKPROP3 = Exercise(
 
 BACKPROP4_LESSON = prose(
     """
-    A real calculation chains many steps. Backward runs them in reverse, and
-    each step hands the gradient of its input to the step before it. Keep
-    every value from the forward pass, since the backward steps need them.
+    A real calculation chains many steps. Running them from the inputs to the
+    result is the forward pass. Backward runs them in reverse, and each step
+    hands the gradient of its input to the step before it. Keep every value
+    from the forward pass, since the backward steps need them.
 
     ```python
     # forward
     h = x @ w               # (n, k) @ (k, m)
-    L = (h ** 2).mean()     # a single number
+    sq = h ** 2
+    L = sq.mean()           # a single number
 
-    # backward
-    grad_h = 2 * h / h.numel()    # through the mean, then the square
-    grad_w = x.T @ grad_h         # through the matrix multiplication
+    # backward, starting from the gradient of L, which is 1
+    grad_sq = torch.full_like(sq, 1.0 / sq.numel())    # through the mean
+    grad_h = grad_sq * 2 * h                           # through the square
+    grad_w = x.T @ grad_h                              # through the matrix multiplication
     ```
 
-    Each backward line uses one rule from the last three exercises. The
-    gradient of `L` itself is 1, so the first line starts from it.
+    Each backward line uses one rule from the last three exercises.
 
     Checking against PyTorch is cheap, so do it every time.
     `torch.allclose(a, b)` says whether two tensors match up to rounding.
@@ -669,8 +682,9 @@ BACKPROP4_SOURCE = source_file(
 
 
     # TODO: Finish the backward lines, so this returns the gradients of L with
-    #   respect to w and c. c has shape (m,) and is copied into every row of z.
-    #   Each line undoes one forward step, from the last to the first.
+    #   respect to w and c. c holds one number per column of z and is copied
+    #   into every row. Each line passes the gradient back through one forward
+    #   step, from the last forward line up.
     def backward_through_steps(
         x: Tensor,
         w: Tensor,
@@ -683,7 +697,7 @@ BACKPROP4_SOURCE = source_file(
         L = s.mean()
 
         grad_s = torch.full_like(s, 1.0 / s.numel())
-        grad_e = ...
+        grad_e = grad_s.unsqueeze(1) * torch.ones_like(e)
         grad_u = ...
         grad_c = ...
         grad_z = grad_u
@@ -786,9 +800,9 @@ BACKPROP4 = Exercise(
     source=BACKPROP4_SOURCE,
     solution=BACKPROP4_SOLUTION,
     hints={
-        "backward_through_steps": "Go up from the bottom. s is a sum along dimension 1, so grad_e copies grad_s "
-        "across each row. e = exp(u), so grad_u is grad_e times e. c was copied into every row, so grad_c adds "
-        "grad_u up over the rows. z = x @ w, so grad_w is x.T @ grad_z.",
+        "backward_through_steps": "Work from the last forward line up. e = exp(u), so grad_u is grad_e times "
+        "exp's local derivative. c was copied into every row, so its gradient adds grad_u up over the rows. w is "
+        "on the right of x @ w, like b in backprop3.",
         "grad_of_x": "x is on the left of @, like a in backprop3, whose gradient is grad_y @ b.T.",
     },
     introduces=(),
@@ -809,7 +823,7 @@ QUIZ2_LESSON = prose(
     | Function | Moves | Shown in |
     |---|---|---|
     | `partials_of_exp_product` | partial derivatives, the chain rule through exp | derivatives3, chain1 |
-    | `steepest_input` | a gradient from autograd, the position of its largest entry | autograd4, reductions1 |
+    | `largest_partial` | a gradient from autograd, the position of its largest entry | autograd4, reductions1 |
     | `squared_matmul_grad_w` | backward through a square, then through a matrix multiplication | backprop1, backprop3 |
     | `shifted_row_sums_grad` | backward through a row sum, then through broadcasting | backprop2 |
     """,
@@ -830,7 +844,8 @@ QUIZ2_SOURCE = source_file(
 
 
     # TODO: Return the partial derivatives of f(x, y) = exp(x * y), first with
-    #   respect to x, then with respect to y. Use math.exp or torch.exp.
+    #   respect to x, then with respect to y. x and y are plain numbers, so use
+    #   math.exp.
     def partials_of_exp_product(
         x: float,
         y: float,
@@ -838,9 +853,9 @@ QUIZ2_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the position of the entry of v whose partial derivative of
-    #   f is the largest, using PyTorch's autograd. f gives a single number.
-    def steepest_input(
+    # TODO: Return the position of the largest entry of the gradient of f at v,
+    #   sign included, using PyTorch's autograd. f gives a single number.
+    def largest_partial(
         f: Callable[[Tensor], Tensor],
         v: Tensor,
     ) -> int:
@@ -894,7 +909,7 @@ QUIZ2_SOLUTION = source_file(
         return outer * y, outer * x
 
 
-    def steepest_input(
+    def largest_partial(
         f: Callable[[Tensor], Tensor],
         v: Tensor,
     ) -> int:
@@ -943,7 +958,7 @@ def check_quiz2(checker: Checker) -> None:
     )
     check_on_inputs(
         checker=checker,
-        function="steepest_input",
+        function="largest_partial",
         description="gives the position of the largest partial derivative",
         inputs=(
             (Described(lambda v: (v ** 2).sum(), "(v ** 2).sum()"), torch.tensor([1.0, 3.0, -4.0, 2.0])),
@@ -990,8 +1005,8 @@ QUIZ2 = Exercise(
     hints={
         "partials_of_exp_product": "The outer step is exp, with local derivative exp(x * y). The inner step x * y "
         "has partial y for x and x for y. Multiply each by the outer one.",
-        "steepest_input": "Get the gradient of f at v as autograd_gradient does in autograd4, then find the position "
-        "of its largest entry with argmax.",
+        "largest_partial": "Get the gradient of f at v as autograd_gradient does in autograd4, then find the "
+        "position of its largest entry with argmax.",
         "squared_matmul_grad_w": "The square is elementwise, so grad_z is grad_y times its local derivative at z. "
         "Then w is on the right of @, as b is in backprop3.",
         "shifted_row_sums_grad": "Backward through the row sum copies each grad_y across its row of grid. Then row "
