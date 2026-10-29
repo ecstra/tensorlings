@@ -21,7 +21,7 @@ Phase 2 of the plan build-tensorlings, Sections 3 and 4 as [the detailed curricu
 | 1 | Write 15_linear, 16_activations and 17_mlp | | agent | done |
 | 2 | Write 18_embeddings and 19_initialization | | agent | done |
 | 3 | Write 20_dropout and 21_normalization | | agent | done |
-| 4 | Write 22_residuals, quiz4 and quiz5 | | agent | pending |
+| 4 | Write 22_residuals, quiz4 and quiz5 | | agent | done |
 | 5 | Write the names project with its download | | agent | pending |
 | 6 | Write 24_sgd, 25_adaptive and 26_schedules | | agent | pending |
 | 7 | Write 27_clipping, 28_debugging and quiz6 | | agent | pending |
