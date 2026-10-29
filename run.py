@@ -2758,6 +2758,12 @@ APP_CSS = """
     margin-bottom: 1;
 }
 
+/* Bold marks a new term in a lesson. Plain bold barely shows in most terminals, so it gets a color and an underline. */
+#lesson-text MarkdownBlock > .strong {
+    color: $text-primary;
+    text-style: bold underline;
+}
+
 #exercises {
     height: 1fr;
     border: round $primary;

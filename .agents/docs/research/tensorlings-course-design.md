@@ -97,6 +97,7 @@ Each rule gets exercises where the wrong combination fails and the right one wor
 - Checks run in a thread worker so the screen never freezes, one at a time under `CHECK_LOCK`, and only the latest check of a burst of saves is shown. The app polls the file's time twice a second.
 - The list screen works like rustlings, with DONE and PENDING, the current exercise marked, and keys to continue at, reset, search and filter. Resetting the open file asks first in a small box.
 - The app keeps the mouse, so tabs and list rows are clickable, per [DEC-009](../../decisions/DEC-009-the-app-keeps-the-mouse-and-option-drag-copies.md). Cmd+C never reaches a terminal app on a Mac, since VS Code and Terminal keep it, and it only copies the terminal's own selection. So the learner holds Option while dragging, which `.vscode/settings.json` allows through `terminal.integrated.macOptionClickForcesSelection`, then presses cmd+c. In macOS Terminal it is Fn. A plain drag makes Textual's own selection, which ctrl+c copies through `pbcopy`.
+- A new term in a lesson is bold in the Markdown and shows in blue with an underline, since the owner found plain bold barely visible. See `#lesson-text` in `APP_CSS`.
 - The tab bar never takes focus. A focused tab bar paints the active tab as a solid block, which flashed on every click.
 - Commands are `init`, `run`, `hint`, `reset`, `check-all`, `--manual-run` and `dev check`.
 
