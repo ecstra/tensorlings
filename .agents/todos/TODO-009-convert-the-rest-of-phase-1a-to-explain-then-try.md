@@ -4,10 +4,11 @@ kind: todo
 description: rewrite the remaining exercises as math1, broadcasting1, reductions1 and matmul1 in the tensors1 and indexing1 format, with a quiz that combines them
 updated: 2026-10-29
 links: []
-status: open
+status: done
 by: owner
 area: course
 born: 2026-10-28
+done: 2026-10-29
 ---
 
 ## What
@@ -28,8 +29,10 @@ tensors1 and indexing1 now use explain then try, fix the error and try first, ch
 | 4 | Update the wrong answers for the new exercises | | owner | done |
 | 5 | Run the dev check, the lesson lint, the wrong answers, the screen driver and a beginner review | | owner | done |
 | 6 | Put the new files in the owner's exercises folder | | owner | done |
-| 7 | functions for every computed task so answers cannot be typed in | TODO-010 | agent | pending |
+| 7 | functions for every computed task so answers cannot be typed in | TODO-010 | agent | done |
 
 ## Done when
 
 tensors1, indexing1, math1, broadcasting1, reductions1, matmul1 and quiz1 all use the approved format, every check passes, and the owner has tried them and called phase 1a fine.
+
+Met on 2026-10-29 through TODO-010. The owner said "follow the curriculum and you may proceed with the other phases".

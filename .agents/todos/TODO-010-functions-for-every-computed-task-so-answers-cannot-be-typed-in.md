@@ -4,10 +4,11 @@ kind: todo
 description: turn the variable TODOs of indexing1 to quiz1 into functions the checker calls on inputs the file never shows
 updated: 2026-10-29
 links: []
-status: open
+status: done
 by: owner
 area: course
 born: 2026-10-29
+done: 2026-10-29
 ---
 
 ## What
@@ -34,3 +35,5 @@ A variable TODO is checked against one value, and its comment shows that value, 
 ## Done when
 
 Every task in indexing1 to quiz1 that computes something is a function checked on inputs the file never shows, a typed in answer fails, every check passes, and the owner has tried it.
+
+Met on 2026-10-29. Commits f8f1049 to 6ac4d6e made the mix of plain line examples, empty and partly written functions, and the owner worked through all seven and said "this was good".

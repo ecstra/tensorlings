@@ -2,7 +2,7 @@
 name: build-tensorlings
 kind: plan
 description: a rustlings style course from tensors to designing new modules, built in phases the owner reviews
-updated: 2026-10-28
+updated: 2026-10-29
 links: []
 status: open
 by: owner
@@ -24,8 +24,8 @@ The curriculum, the app and the writing rules are in [the course design](../docs
 | # | Step | Points at | By | Status |
 |---|---|---|---|---|
 | 1 | Write the plan, docs, decisions and handover | | owner | done |
-| 2 | Phase 1a, the app and the first 5 exercises, for the owner's review | | owner | pending |
-| 3 | The owner reviews phase 1a, and from then on acks every phase | | owner | pending |
+| 2 | Phase 1a, the app and the first 5 exercises, for the owner's review | | owner | done |
+| 3 | The owner reviews phase 1a, and from then on acks every phase | | owner | done |
 | 4 | Phase 1b, the rest of parts 1 and 2 | | owner | pending |
 | 5 | Phase 2, parts 3 and 4 | | owner | pending |
 | 6 | Phase 3, parts 5 to 7, with the GPT project | | owner | pending |

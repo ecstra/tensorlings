@@ -2,12 +2,13 @@
 name: TODO-005-lessons-that-sound-human-tasks-that-need-thinking-clearer-results-and-a-better-tui
 kind: todo
 description: the owner's second round on phase 1a, lesson language, answers given away, results, and the TUI
-updated: 2026-10-28
+updated: 2026-10-29
 links: []
-status: open
+status: done
 by: owner
 area: course
 born: 2026-10-28
+done: 2026-10-29
 ---
 
 ## What
@@ -28,8 +29,10 @@ born: 2026-10-28
 | 8 | Rewrite the examples as plain grids with no stories or comparisons | | owner | done |
 | 9 | Rebuild the six exercises around Karpathy's makemore bigram model | | owner | done |
 | 10 | Give each function one hint and drop the hint levels | | owner | done |
-| 11 | rework the six exercises as one topic each with a closing quiz | TODO-006 | agent | pending |
+| 11 | rework the six exercises as one topic each with a closing quiz | TODO-006 | agent | done |
 
 ## Done when
 
 Every lesson reads like a person explaining, no task can be solved by copying a line from its lesson, the result shows every test grouped by function, the TUI choice is made and built, every check passes, and the owner has tried it.
+
+Met on 2026-10-29 through TODO-006. The owner approved phase 1a in the app built on Textual.

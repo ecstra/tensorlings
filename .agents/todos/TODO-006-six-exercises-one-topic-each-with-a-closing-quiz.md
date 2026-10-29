@@ -2,12 +2,13 @@
 name: TODO-006-six-exercises-one-topic-each-with-a-closing-quiz
 kind: todo
 description: rework phase 1a as one Section 1 topic per exercise, rustlings style, with real model operations as tasks, a closing quiz, and sections in place of parts
-updated: 2026-10-28
+updated: 2026-10-29
 links: []
-status: open
+status: done
 by: owner
 area: course
 born: 2026-10-28
+done: 2026-10-29
 ---
 
 ## What
@@ -31,8 +32,10 @@ The six exercises had become Karpathy's makemore bigram model, which was never i
 | 7 | Get a beginner reader review and fix what it finds | | owner | done |
 | 8 | Reset the owner's exercise files to the new versions | | owner | done |
 | 9 | plain instructions in every exercise | TODO-007 | agent | done |
-| 10 | convert the rest of phase 1a to explain then try | TODO-009 | agent | pending |
+| 10 | convert the rest of phase 1a to explain then try | TODO-009 | agent | done |
 
 ## Done when
 
 Each of the six exercises teaches one Section 1 topic, every task is an operation real models do, quiz1 combines them with nothing new, the course says section wherever it said part, every check passes, and the owner has tried it.
+
+Met on 2026-10-29 through TODO-009, with the real model operations rule replaced by explain then try in DEC-013 on the owner's word.

@@ -2,12 +2,13 @@
 name: TODO-003-phase-1a-the-app-and-the-first-5-exercises
 kind: todo
 description: the full-screen tensorlings app and exercises tensors1 to tensors4 and matmul1, for the owner to judge
-updated: 2026-10-28
+updated: 2026-10-29
 links: []
-status: open
+status: done
 by: owner
 area: course
 born: 2026-10-27
+done: 2026-10-29
 ---
 
 ## What
@@ -35,8 +36,10 @@ born: 2026-10-27
 | 15 | Show only failing tests beside the lesson and count what the code printed | | owner | done |
 | 16 | Open the full result on its own scrollable screen with tab | | owner | done |
 | 17 | Put what the code printed in a box of its own | | owner | done |
-| 18 | the owner's second round on lessons, tasks, results and the TUI | TODO-005 | owner | pending |
+| 18 | the owner's second round on lessons, tasks, results and the TUI | TODO-005 | owner | done |
 
 ## Done when
 
 `run.py init` writes the 5 exercises, the app redraws in place with the lesson, the task, the result and the key bar, `run.py dev check` passes, and the owner has tried it.
+
+Met on 2026-10-29. Phase 1a became seven exercises, tensors1 to quiz1, through TODO-005, and the owner worked through them and acked every phase after it.
