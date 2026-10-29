@@ -79,6 +79,7 @@ Each rule gets exercises where the wrong combination fails and the right one wor
 - Each name or function an exercise checks has one hint, per [DEC-010](../../decisions/DEC-010-one-hint-per-function.md).
 - A check tests whatever its exercise produces, not only names. A function is called on several inputs, and a later exercise can build the learner's class and compare it with PyTorch's, or run their training loop and check that the loss goes down. A new kind of check gets added to `Checker` when an exercise first needs it.
 - A test that runs past `TIME_LIMIT_SECONDS` fails with a note about loops that never end, so a learner's endless loop can't stall the app. See `run_with_time_limit` in `tensorlings/engine.py`.
+- A check never passes a tensor to `.backward()`. Its first call in a process imports sympy, which takes about 4 seconds untraced and runs past the time limit under the trace, leaving sympy half imported until the app restarts. A reference gradient multiplies the result by the gradient handed down and sums it, which gives the same gradient with a plain `.backward()`. See `autograd_backward` in `tensorlings/chapters/tensor_backprop.py`.
 - A wrong tensor with more than `SHOWN_ENTRIES` entries is described by the entries that differ, so a big tensor never prints whole.
 - After a pass the reference solution is written to `solutions/<chapter>/<name>.py`.
 
