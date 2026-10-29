@@ -496,6 +496,14 @@ CASES: list[tuple[str, str, str, str]] = [
     ("resnet2", "plain_stack keeps the conv bias", "modules.extend([nn.Conv2d(channels, channels, 3, padding=1, bias=False), nn.BatchNorm2d(channels), nn.ReLU()])", "modules.extend([nn.Conv2d(channels, channels, 3, padding=1), nn.BatchNorm2d(channels), nn.ReLU()])"),
     ("resnet2", "residual_stack halves the size", "return nn.Sequential(*[BasicBlock(channels, channels, 1) for _ in range(blocks)])", "return nn.Sequential(*[BasicBlock(channels, channels, 2) for _ in range(blocks)])"),
     ("resnet2", "zero_last_norms_ zeroes the first norm", "module.bn2.weight.zero_()", "module.bn1.weight.zero_()"),
+    ("quiz7", "image_size_through pads one side", "h = (h + 2 * p - k) // s + 1", "h = (h + p - k) // s + 1"),
+    ("quiz7", "conv_bn_relu keeps the bias", "stride=stride, padding=1, bias=False", "stride=stride, padding=1"),
+    ("quiz7", "conv_bn_relu has no padding", "stride=stride, padding=1, bias=False", "stride=stride, bias=False"),
+    ("quiz7", "conv_bn_relu norms the input channels", "nn.BatchNorm2d(out_channels)", "nn.BatchNorm2d(in_channels)"),
+    ("quiz7", "pooled_scores takes the max", "features.mean(dim=(2, 3))", "features.amax(dim=(2, 3))"),
+    ("quiz7", "flip_and_normalize flips the other half", "flipped = torch.where(draws < 0.5, images.flip(-1), images)", "flipped = torch.where(draws < 0.5, images, images.flip(-1))"),
+    ("quiz7", "flip_and_normalize lines mean up with the width", "(flipped - mean.view(1, -1, 1, 1))", "(flipped - mean)"),
+    ("quiz7", "flip_and_normalize multiplies by the spread", "/ spread.view(1, -1, 1, 1)", "* spread.view(1, -1, 1, 1)"),
     ("conv5", "pointwise reshapes the wrong way", "return (weight @ x.reshape(c, -1)).reshape(-1, h, w)", "return (weight @ x.reshape(-1, c).T).reshape(-1, h, w)"),
 ]
 

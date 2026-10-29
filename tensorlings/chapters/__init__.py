@@ -219,4 +219,5 @@ EXERCISES: list[Exercise] = [
     augmentation.AUGMENT2,
     transfer.TRANSFER1,
     transfer.TRANSFER2,
+    transfer.QUIZ7,
 ]

@@ -6,13 +6,19 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 
-from ..course import OPTIMIZER_IMPORTS, Chapter, Exercise
+from ..course import OPTIMIZER_IMPORTS, QUIZZES, Chapter, Exercise
 from ..engine import (
     Checker,
+    Described,
     Mismatch,
+    check_on_inputs,
+    expect_tensor,
     expect_value,
+    seeded,
+    small_tensor,
 )
 from ..text import prose, source_file
+from .conv_shapes import reference_output_size
 from .linear_layers import expect_module
 
 TRANSFER = Chapter(
@@ -464,4 +470,263 @@ TRANSFER2 = Exercise(
     introduces=(),
     check=check_transfer2,
     imports_first=OPTIMIZER_IMPORTS,
+)
+
+
+# ---------------------------------------------------------------------------
+# quiz7
+# ---------------------------------------------------------------------------
+
+QUIZ7_LESSON = prose(
+    """
+    This quiz has no examples and no new tools. Each function combines moves
+    from Section 5. If a step is unclear, the exercise in the table shows it.
+
+    | Function | Moves | Shown in |
+    |---|---|---|
+    | `image_size_through` | the output size formula, followed through layers, for height and width | stride1, conv5 |
+    | `conv_bn_relu` | a 3 by 3 convolution with a stride and padding 1, no bias, BatchNorm and ReLU | stride1, resnet1 |
+    | `pooled_scores` | global average pooling of feature maps, then a Linear head | pooling1, lenet1 |
+    | `flip_and_normalize` | a random flip per image, then each channel's mean taken away and divided by its spread | augment2, batchnorm1 |
+    """,
+)
+
+QUIZ7_SOURCE = source_file(
+    '''
+    # quiz7.py
+    #
+    # No examples and no new tools. Each function combines moves from Section 5.
+
+    import torch
+    import torch.nn as nn
+    from torch import Tensor
+
+
+    # TODO: Return the height and width of an image of h by w after each layer of
+    #   layers in turn, as one (height, width) pair at the end. Each layer is a
+    #   (k, s, p) triple for a square kernel, stride and padding.
+    def image_size_through(
+        h: int,
+        w: int,
+        layers: list[tuple[int, int, int]],
+    ) -> tuple[int, int]:
+        ...
+
+
+    # TODO: Return an nn.Sequential of a 3 by 3 nn.Conv2d from in_channels to
+    #   out_channels with the given stride, padding 1 and no bias, then an
+    #   nn.BatchNorm2d and a ReLU.
+    def conv_bn_relu(
+        in_channels: int,
+        out_channels: int,
+        stride: int,
+    ) -> nn.Sequential:
+        ...
+
+
+    # TODO: Return head's scores for features, of shape (batch, channels, h, w),
+    #   after global average pooling.
+    def pooled_scores(
+        features: Tensor,
+        head: nn.Linear,
+    ) -> Tensor:
+        ...
+
+
+    # TODO: Mirror each image of images, of shape (batch, channels, h, w), whose
+    #   draw from torch.rand with generator is below 0.5, one draw per image.
+    #   Then take each channel's mean away and divide by its spread, mean and
+    #   spread holding one number per channel.
+    def flip_and_normalize(
+        images: Tensor,
+        mean: Tensor,
+        spread: Tensor,
+        generator: torch.Generator,
+    ) -> Tensor:
+        ...
+    ''',
+)
+
+QUIZ7_SOLUTION = source_file(
+    '''
+    # quiz7.py, a solution for comparison
+
+    import torch
+    import torch.nn as nn
+    from torch import Tensor
+
+
+    def image_size_through(
+        h: int,
+        w: int,
+        layers: list[tuple[int, int, int]],
+    ) -> tuple[int, int]:
+        for k, s, p in layers:
+            h = (h + 2 * p - k) // s + 1
+            w = (w + 2 * p - k) // s + 1
+
+        return h, w
+
+
+    def conv_bn_relu(
+        in_channels: int,
+        out_channels: int,
+        stride: int,
+    ) -> nn.Sequential:
+        return nn.Sequential(
+            nn.Conv2d(in_channels, out_channels, 3, stride=stride, padding=1, bias=False),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(),
+        )
+
+
+    def pooled_scores(
+        features: Tensor,
+        head: nn.Linear,
+    ) -> Tensor:
+        return head(features.mean(dim=(2, 3)))
+
+
+    def flip_and_normalize(
+        images: Tensor,
+        mean: Tensor,
+        spread: Tensor,
+        generator: torch.Generator,
+    ) -> Tensor:
+        draws = torch.rand(len(images), 1, 1, 1, generator=generator)
+        flipped = torch.where(draws < 0.5, images.flip(-1), images)
+
+        return (flipped - mean.view(1, -1, 1, 1)) / spread.view(1, -1, 1, 1)
+    ''',
+)
+
+
+def reference_image_size_through(
+    h: int,
+    w: int,
+    layers: list[tuple[int, int, int]],
+) -> tuple[int, int]:
+    for k, s, p in layers:
+        h = reference_output_size(h, k, p, s)
+        w = reference_output_size(w, k, p, s)
+
+    return h, w
+
+
+def reference_flip_and_normalize(
+    images: Tensor,
+    mean: Tensor,
+    spread: Tensor,
+    generator: torch.Generator,
+) -> Tensor:
+    draws = torch.rand(len(images), 1, 1, 1, generator=generator)
+    flipped = torch.where(draws < 0.5, images.flip(-1), images)
+
+    return (flipped - mean.view(1, -1, 1, 1)) / spread.view(1, -1, 1, 1)
+
+
+def check_conv_bn_relu(found: object) -> None:
+    for in_channels, out_channels, stride in ((3, 16, 1), (16, 32, 2)):
+        call = f"conv_bn_relu({in_channels}, {out_channels}, {stride})"
+        block = expect_module(call, found(in_channels, out_channels, stride))
+        layer_names = [type(layer).__name__ for layer in block] if isinstance(block, nn.Sequential) else []
+
+        if layer_names != ["Conv2d", "BatchNorm2d", "ReLU"]:
+            raise Mismatch(f"{call} should be an nn.Sequential of Conv2d, BatchNorm2d and ReLU.")
+
+        conv, norm = block[0], block[1]
+        settings = (
+            conv.in_channels,
+            conv.out_channels,
+            conv.kernel_size,
+            conv.stride,
+            conv.padding,
+            conv.bias is None,
+            norm.num_features,
+        )
+        wanted = (
+            in_channels,
+            out_channels,
+            (3, 3),
+            (stride, stride),
+            (1, 1),
+            True,
+            out_channels,
+        )
+
+        if settings != wanted:
+            raise Mismatch(
+                f"{call} should hold a 3 by 3 convolution from {in_channels} to {out_channels} channels "
+                f"with stride {stride}, padding 1 and no bias, then BatchNorm2d({out_channels}).",
+            )
+
+
+def check_quiz7(checker: Checker) -> None:
+    check_on_inputs(
+        checker=checker,
+        function="image_size_through",
+        description="follows the height and width through the layers",
+        inputs=(
+            (224, 224, [(7, 2, 3), (3, 2, 1)]),
+            (32, 20, [(3, 1, 1), (3, 2, 1), (3, 2, 0)]),
+        ),
+        reference=reference_image_size_through,
+        expect=lambda call, actual, expected: expect_value(
+            call=call,
+            actual=tuple(actual) if isinstance(actual, (tuple, list)) else actual,
+            expected=expected,
+        ),
+    )
+    checker.test(
+        function="conv_bn_relu",
+        description="builds convolution, BatchNorm and ReLU",
+        run=check_conv_bn_relu,
+    )
+
+    torch.manual_seed(870)
+    head = nn.Linear(4, 3)
+    check_on_inputs(
+        checker=checker,
+        function="pooled_scores",
+        description="pools each channel, then scores",
+        inputs=(
+            (small_tensor(871, 2, 4, 3, 3), Described(head, "a Linear head from 4 to 3")),
+        ),
+        reference=lambda features, head: head(features.mean(dim=(2, 3))),
+        expect=expect_tensor,
+    )
+    check_on_inputs(
+        checker=checker,
+        function="flip_and_normalize",
+        description="flips about half, then normalizes each channel",
+        inputs=(
+            (
+                small_tensor(872, 4, 3, 2, 3),
+                torch.tensor([0.5, -1.0, 0.0]),
+                torch.tensor([2.0, 1.0, 0.5]),
+                seeded(873),
+            ),
+        ),
+        reference=reference_flip_and_normalize,
+        expect=expect_tensor,
+    )
+
+
+QUIZ7 = Exercise(
+    name="quiz7",
+    chapter=QUIZZES,
+    title="Convolutional nets, start to finish",
+    lesson=QUIZ7_LESSON,
+    source=QUIZ7_SOURCE,
+    solution=QUIZ7_SOLUTION,
+    hints={
+        "image_size_through": "For each (k, s, p), update h and w with stride1's formula.",
+        "conv_bn_relu": "nn.Sequential of nn.Conv2d(in_channels, out_channels, 3, stride=stride, padding=1, "
+        "bias=False), nn.BatchNorm2d(out_channels) and nn.ReLU().",
+        "pooled_scores": "Average over dim=(2, 3), then pass the result to head.",
+        "flip_and_normalize": "Flip as augment2's augment_batch does. Then give mean and spread the shape "
+        "(1, channels, 1, 1) with .view so they line up with the channels.",
+    },
+    introduces=(),
+    check=check_quiz7,
 )
