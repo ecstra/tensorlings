@@ -470,6 +470,14 @@ CASES: list[tuple[str, str, str, str]] = [
     ("resnet1", "BasicBlock always hands x on", "        if stride == 1 and in_channels == out_channels:", "        if True:"),
     ("resnet1", "BasicBlock takes the ReLU before adding", "return torch.relu(out + self.shortcut(x))", "return torch.relu(out) + self.shortcut(x)"),
     ("resnet1", "BasicBlock without the second BatchNorm", "out = self.bn2(self.conv2(out))", "out = self.conv2(out)"),
+    ("upsample1", "nearest grows the rows only", "return image.repeat_interleave(s, dim=0).repeat_interleave(s, dim=1)", "return image.repeat_interleave(s, dim=0)"),
+    ("upsample1", "bilinear repeats instead", "return F.interpolate(x, scale_factor=s, mode=\"bilinear\")", "return F.interpolate(x, scale_factor=s, mode=\"nearest\")"),
+    ("upsample1", "linear_1d swaps the weights", "return x[left] * (1 - fraction) + x[left + 1] * fraction", "return x[left] * fraction + x[left + 1] * (1 - fraction)"),
+    ("transposed1", "transposed_size forgets the kernel", "return (n - 1) * s + k", "return n * s"),
+    ("transposed1", "transposed_1d overwrites the overlaps", "output[i * s:i * s + k] += x[i] * w", "output[i * s:i * s + k] = x[i] * w"),
+    ("transposed1", "conv_input_gradient without the gradient handed down", "(outputs * grad).sum().backward()", "outputs.sum().backward()"),
+    ("unet1", "center_crop takes the corner", "return x[:, :, top:top + size, left:left + size]", "return x[:, :, :size, :size]"),
+    ("unet1", "TinyUNet joins the skip first", "torch.cat([F.interpolate(c, scale_factor=2), b], dim=1)", "torch.cat([b, F.interpolate(c, scale_factor=2)], dim=1)"),
     ("conv5", "pointwise reshapes the wrong way", "return (weight @ x.reshape(c, -1)).reshape(-1, h, w)", "return (weight @ x.reshape(-1, c).T).reshape(-1, h, w)"),
 ]
 

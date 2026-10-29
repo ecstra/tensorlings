@@ -40,6 +40,7 @@ from . import (
     softmax_regression,
     tensor_backprop,
     tensors,
+    upsampling,
 )
 
 CHAPTERS: list[Chapter] = [
@@ -77,6 +78,7 @@ CHAPTERS: list[Chapter] = [
     conv_shapes.CONV_SHAPES,
     pooling.POOLING,
     classic_nets.CLASSIC_NETS,
+    upsampling.UPSAMPLING,
 ]
 
 EXERCISES: list[Exercise] = [
@@ -204,4 +206,7 @@ EXERCISES: list[Exercise] = [
     classic_nets.LENET1,
     classic_nets.VGG1,
     classic_nets.RESNET1,
+    upsampling.UPSAMPLE1,
+    upsampling.TRANSPOSED1,
+    upsampling.UNET1,
 ]
