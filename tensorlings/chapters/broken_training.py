@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import textwrap
 
 import torch
 import torch.nn as nn
@@ -64,6 +65,9 @@ class NamesMLP(nn.Module):
 
         return self.head(torch.tanh(self.norm(self.hidden(vectors))))
 '''
+
+# Indented like the files around it, which source_file takes the indentation off.
+INDENTED_NAMES_MLP = textwrap.indent(NAMES_MLP_CLASS.strip("\n"), "    ")
 
 
 def names_model(
@@ -400,5 +404,302 @@ BROKEN1 = Exercise(
     introduces=(),
     check=check_broken1,
     time_limit=60,
+    imports_first=OPTIMIZER_IMPORTS,
+)
+
+
+# ---------------------------------------------------------------------------
+# broken2
+# ---------------------------------------------------------------------------
+
+TUNED_TARGET = 2.20
+
+BROKEN2_LESSON = prose(
+    """
+    With the slips fixed, tune the run. names3 trained with plain SGD and one
+    drop of the rate. Swap in what Section 4 built.
+
+    - AdamW at 0.003, with weight decay 0.01 on the weight matrices and embeddings only.
+    - 200 steps of warmup, then cosine decay to a tenth of the base rate.
+    - the global gradient norm clipped at 1.0.
+    - minibatches of 64, which halves the noise in each step's gradient.
+
+    | Run | Batch | Steps | Validation loss |
+    |---|---|---|---|
+    | names3, SGD with one drop | 32 | 10,000 | 2.217 |
+    | tuned, AdamW | 32 | 10,000 | 2.202 |
+    | tuned, AdamW | 64 | 10,000 | 2.170 |
+
+    The tuned run beats names3 in the same number of steps, and the larger
+    batch helps most. The gains are small next to a slip, since names3 was
+    already sound. That is why the recipe's checks come before any tuning.
+
+    The check trains your tuned run for 10,000 steps and needs it below 2.20.
+    It takes a minute or two, so let it finish.
+    """,
+)
+
+BROKEN2_SOURCE = source_file(
+    '''
+    # broken2.py
+
+    import math
+
+    import torch
+    import torch.nn as nn
+    import torch.nn.functional as F
+    from torch import Tensor
+
+
+    # The fixed model from broken1.
+''' + INDENTED_NAMES_MLP + '''
+
+
+    # TODO: Return AdamW for model at lr, with weight decay 0.01 on the
+    #   parameters of two or more dimensions and none on the rest.
+    def make_optimizer(
+        model: nn.Module,
+        lr: float,
+    ) -> torch.optim.Optimizer:
+        ...
+
+
+    # TODO: Return the rate at step. It warms up over warmup steps to base, as
+    #   warmup1 does, then falls along a cosine to base / 10 at step total.
+    def rate_at(
+        step: int,
+        base: float,
+        warmup: int,
+        total: int,
+    ) -> float:
+        ...
+
+
+    # TODO: Finish the two lines with ..., so each step sets the rate from
+    #   rate_at, with base 0.003 and 200 warmup steps, and clips the global
+    #   norm at 1.0 between backward and step.
+    def train_tuned(
+        model: nn.Module,
+        X: Tensor,
+        Y: Tensor,
+        steps: int,
+        generator: torch.Generator,
+    ) -> None:
+        optimizer = make_optimizer(model, 0.003)
+        model.train()
+
+        for step in range(steps):
+            for group in optimizer.param_groups:
+                group["lr"] = ...
+
+            batch = torch.randint(0, len(X), (64,), generator=generator)
+            loss = F.cross_entropy(model(X[batch]), Y[batch])
+            optimizer.zero_grad()
+            loss.backward()
+            ...
+            optimizer.step()
+    ''',
+)
+
+BROKEN2_SOLUTION = source_file(
+    '''
+    # broken2.py, a solution for comparison
+
+    import math
+
+    import torch
+    import torch.nn as nn
+    import torch.nn.functional as F
+    from torch import Tensor
+
+
+''' + INDENTED_NAMES_MLP + '''
+
+
+    def make_optimizer(
+        model: nn.Module,
+        lr: float,
+    ) -> torch.optim.Optimizer:
+        decayed = [parameter for parameter in model.parameters() if parameter.dim() >= 2]
+        kept = [parameter for parameter in model.parameters() if parameter.dim() < 2]
+
+        return torch.optim.AdamW([{"params": decayed, "weight_decay": 0.01}, {"params": kept, "weight_decay": 0.0}], lr=lr)
+
+
+    def rate_at(
+        step: int,
+        base: float,
+        warmup: int,
+        total: int,
+    ) -> float:
+        if step < warmup:
+            return base * (step + 1) / warmup
+
+        progress = (step - warmup) / (total - warmup)
+
+        return base / 10 + (base - base / 10) * (1 + math.cos(math.pi * progress)) / 2
+
+
+    def train_tuned(
+        model: nn.Module,
+        X: Tensor,
+        Y: Tensor,
+        steps: int,
+        generator: torch.Generator,
+    ) -> None:
+        optimizer = make_optimizer(model, 0.003)
+        model.train()
+
+        for step in range(steps):
+            for group in optimizer.param_groups:
+                group["lr"] = rate_at(step, 0.003, 200, steps)
+
+            batch = torch.randint(0, len(X), (64,), generator=generator)
+            loss = F.cross_entropy(model(X[batch]), Y[batch])
+            optimizer.zero_grad()
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            optimizer.step()
+    ''',
+)
+
+
+def reference_rate_at(
+    step: int,
+    base: float,
+    warmup: int,
+    total: int,
+) -> float:
+    if step < warmup:
+        return base * (step + 1) / warmup
+
+    progress = (step - warmup) / (total - warmup)
+
+    return base / 10 + (base - base / 10) * (1 + math.cos(math.pi * progress)) / 2
+
+
+def reference_train_tuned(
+    model: nn.Module,
+    X: Tensor,
+    Y: Tensor,
+    steps: int,
+    generator: torch.Generator,
+) -> None:
+    decayed = [parameter for parameter in model.parameters() if parameter.dim() >= 2]
+    kept = [parameter for parameter in model.parameters() if parameter.dim() < 2]
+    optimizer = torch.optim.AdamW([{"params": decayed, "weight_decay": 0.01}, {"params": kept, "weight_decay": 0.0}], lr=0.003)
+    model.train()
+
+    for step in range(steps):
+        for group in optimizer.param_groups:
+            group["lr"] = reference_rate_at(step, 0.003, 200, steps)
+
+        batch = torch.randint(0, len(X), (64,), generator=generator)
+        loss = F.cross_entropy(model(X[batch]), Y[batch])
+        optimizer.zero_grad()
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+        optimizer.step()
+
+
+def check_make_optimizer(found: object) -> None:
+    model = names_model(670)
+    call = "make_optimizer for the names model at 0.003"
+    optimizer = found(model, 0.003)
+
+    if type(optimizer) is not torch.optim.AdamW:
+        raise Mismatch(f"{call} is {type(optimizer).__name__}, but it should be torch.optim.AdamW.")
+
+    names = {id(parameter): name for name, parameter in model.named_parameters()}
+    wanted = (
+        ([name for name, parameter in model.named_parameters() if parameter.dim() >= 2], 0.01),
+        ([name for name, parameter in model.named_parameters() if parameter.dim() < 2], 0.0),
+    )
+    decays = {}
+
+    for group in optimizer.param_groups:
+        for parameter in group["params"]:
+            decays[names.get(id(parameter), "something else")] = group["weight_decay"]
+
+    for expected, decay in wanted:
+        for name in expected:
+            if decays.get(name) != decay:
+                raise Mismatch(f"In {call}, {name} should have a weight decay of {decay}, but it has {decays.get(name, 'no group')}.")
+
+
+def check_rate_at(found: object) -> None:
+    for step in (0, 199, 200, 5100, 9999):
+        expected = reference_rate_at(step, 0.003, 200, 10000)
+        expect_close(
+            call=f"rate_at({step}, 0.003, 200, 10000)",
+            actual=found(step, 0.003, 200, 10000),
+            expected=expected,
+            tolerance=1e-12 + 1e-9 * expected,
+        )
+
+
+def check_train_tuned_steps(found: object) -> None:
+    X, Y = context_sets()["train"]
+    mine = names_model(671)
+    found(mine, X, Y, 300, torch.Generator().manual_seed(672))
+    theirs = names_model(671)
+    reference_train_tuned(theirs, X, Y, 300, torch.Generator().manual_seed(672))
+    expect_close(
+        call="the validation loss after 300 steps of train_tuned",
+        actual=validation_loss_of(mine),
+        expected=validation_loss_of(theirs),
+        tolerance=1e-3,
+    )
+
+
+def check_beats_names3(found: object) -> None:
+    X, Y = context_sets()["train"]
+    model = names_model(0)
+    found(model, X, Y, 10000, torch.Generator().manual_seed(1))
+    loss = validation_loss_of(model)
+
+    if loss >= TUNED_TARGET:
+        raise Mismatch(f"After 10,000 steps of train_tuned the validation loss is {loss:.4f}, which isn't below the target of {TUNED_TARGET}.")
+
+
+def check_broken2(checker: Checker) -> None:
+    checker.test(
+        function="make_optimizer",
+        description="decays the weight matrices and embeddings only",
+        run=check_make_optimizer,
+    )
+    checker.test(
+        function="rate_at",
+        description="warms up, then decays to a tenth along a cosine",
+        run=check_rate_at,
+    )
+    checker.test(
+        function="train_tuned",
+        description="steps like the tuned reference",
+        run=check_train_tuned_steps,
+    )
+    checker.test(
+        function="train_tuned",
+        description="gets the validation loss below 2.20 in 10,000 steps",
+        run=check_beats_names3,
+    )
+
+
+BROKEN2 = Exercise(
+    name="broken2",
+    chapter=BROKEN_TRAINING,
+    title="Tuning the fixed run",
+    lesson=BROKEN2_LESSON,
+    source=BROKEN2_SOURCE,
+    solution=BROKEN2_SOLUTION,
+    hints={
+        "make_optimizer": "Make the two groups as quiz6's adamw_for does, with 0.01 as the decay.",
+        "rate_at": "quiz6's set_rate works the rate out the same way, without setting it.",
+        "train_tuned": "The rate is rate_at(step, 0.003, 200, steps). The missing line is "
+        "torch.nn.utils.clip_grad_norm_ on model.parameters() at 1.0.",
+    },
+    introduces=(),
+    check=check_broken2,
+    time_limit=300,
     imports_first=OPTIMIZER_IMPORTS,
 )

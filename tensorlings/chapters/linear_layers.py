@@ -273,6 +273,17 @@ def check_scale_then_shift(found: type) -> None:
         expected=x,
     )
 
+    # A fresh scale of 1 and shift of 0 give x back in either order, so set them to tell the order apart.
+    with torch.no_grad():
+        module.scale.factor.fill_(2.0)
+        module.shift.offset.fill_(1.0)
+
+    expect_tensor(
+        call=f"{call}, with its factor set to 2 and its offset to 1, on {value_text(x)}",
+        actual=module(x),
+        expected=x * 2 + 1,
+    )
+
 
 def check_gradient_step(found: object) -> None:
     torch.manual_seed(0)

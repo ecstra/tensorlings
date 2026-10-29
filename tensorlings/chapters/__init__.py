@@ -181,4 +181,5 @@ EXERCISES: list[Exercise] = [
     debugging.DEBUG5,
     debugging.QUIZ6,
     broken_training.BROKEN1,
+    broken_training.BROKEN2,
 ]
