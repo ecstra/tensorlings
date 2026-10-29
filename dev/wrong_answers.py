@@ -481,6 +481,13 @@ CASES: list[tuple[str, str, str, str]] = [
     ("unet2", "NoSkipUNet upsamples once", "        u = self.up1(F.interpolate(u, scale_factor=2))\n", "        u = self.up1(u)\n"),
     ("unet2", "iou over the marked pixels only", "return ((marked & truth).sum() / (marked | truth).sum()).item()", "return ((marked & truth).sum() / marked.sum()).item()"),
     ("unet2", "edge_pixels grown against the mask", "return grown != shrunk", "return grown != masks"),
+    ("augment1", "horizontal_flip flips upside down", "    return images.flip(-1)", "    return images.flip(-2)"),
+    ("augment1", "padded_crop forgets to pad", "return F.pad(image, (pad, pad, pad, pad))[:, top:top + h, left:left + w]", "return image[:, top:top + h, left:left + w]"),
+    ("augment1", "random_shifts with one place for all", "for image, top, left in zip(images, tops, lefts)", "for image, top, left in zip(images, tops[:1].repeat(len(images)), lefts[:1].repeat(len(images)))"),
+    ("transfer1", "freeze_ freezes nothing", "        parameter.requires_grad_(False)", "        parameter.requires_grad_(True)"),
+    ("transfer1", "trainable_count counts everything", "return sum(parameter.numel() for parameter in model.parameters() if parameter.requires_grad)", "return sum(parameter.numel() for parameter in model.parameters())"),
+    ("transfer1", "transfer leaves the body training", "    freeze_(target.body)\n", ""),
+    ("transfer1", "transfer copies nothing", "    target.body.load_state_dict(source.body.state_dict())\n", ""),
     ("conv5", "pointwise reshapes the wrong way", "return (weight @ x.reshape(c, -1)).reshape(-1, h, w)", "return (weight @ x.reshape(-1, c).T).reshape(-1, h, w)"),
 ]
 

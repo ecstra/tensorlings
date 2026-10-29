@@ -9,6 +9,7 @@ from ..course import QUIZZES, Chapter, Exercise
 from . import (
     activations,
     adaptive,
+    augmentation,
     autograd,
     broken_training,
     chain_rule,
@@ -40,6 +41,7 @@ from . import (
     softmax_regression,
     tensor_backprop,
     tensors,
+    transfer,
     upsampling,
 )
 
@@ -79,6 +81,8 @@ CHAPTERS: list[Chapter] = [
     pooling.POOLING,
     classic_nets.CLASSIC_NETS,
     upsampling.UPSAMPLING,
+    augmentation.AUGMENTATION,
+    transfer.TRANSFER,
 ]
 
 EXERCISES: list[Exercise] = [
@@ -210,4 +214,6 @@ EXERCISES: list[Exercise] = [
     upsampling.TRANSPOSED1,
     upsampling.UNET1,
     upsampling.UNET2,
+    augmentation.AUGMENT1,
+    transfer.TRANSFER1,
 ]
