@@ -98,9 +98,9 @@ SPLITS1_LESSON = prose(
     A model can fit its training examples and still fail on new ones. So the
     data gets split three ways before anything is trained.
 
-    - The training set is what the parameters are fitted on.
+    - The **training set** is what the parameters are fitted on.
     - The **validation** set judges choices, like the learning rate or the size of the model, by how each does on examples it never trained on.
-    - The test set is measured once, at the very end, to report how well the final model does.
+    - The **test set** is measured once, at the very end, to report how well the final model does.
 
     Making choices with the test set turns it into a second validation set,
     and the number reported at the end comes out too good.
@@ -140,13 +140,17 @@ SPLITS1_SOURCE = source_file(
     train, validation, test = order[:8], order[8:9], order[9:]
 
 
-    # TODO: Return the training, validation and test positions for n examples,
-    #   shuffled with generator and cut at int(0.8 * n) and int(0.9 * n).
+    # TODO: Finish the last line, so this returns the training, validation and
+    #   test positions for n examples, the shuffled order cut at the two cuts.
     def split_positions(
         n: int,
         generator: torch.Generator,
     ) -> tuple[Tensor, Tensor, Tensor]:
-        ...
+        order = torch.randperm(n, generator=generator)
+        first_cut = int(0.8 * n)
+        second_cut = int(0.9 * n)
+
+        return ...
 
 
     # TODO: This cuts x and y without a shuffle, so with sorted data each set
@@ -287,8 +291,7 @@ SPLITS1 = Exercise(
     source=SPLITS1_SOURCE,
     solution=SPLITS1_SOLUTION,
     hints={
-        "split_positions": "Make the order with torch.randperm(n, generator=generator), then slice it at the two "
-        "cuts, as the line that sets train, validation and test does.",
+        "split_positions": "Slice order at the two cuts, as the line that sets train, validation and test does.",
         "split_rows": "Get the three sets of positions from split_positions(len(x), generator), then pick the rows "
         "of x and y at each.",
         "class_counts": "torch.bincount with minlength=classes, so a class that never appears still gets a 0.",
@@ -332,10 +335,8 @@ OVERFITTING1_LESSON = prose(
     Degree 9 passes through all 10 training points, noise and all, and swings
     wildly between them. Fitting the noise of the training set instead of the
     pattern under it is **overfitting**. A model too simple to fit even the
-    training set is underfitting, like degree 1 here.
-
-    The best model is the one with the lowest validation error, and only
-    examples the model never trained on can find it.
+    training set is **underfitting**, like degree 1 here. The best degree is
+    the one with the lowest validation error.
     """,
 )
 
@@ -389,7 +390,8 @@ OVERFITTING1_SOURCE = source_file(
         return ...
 
 
-    # TODO: Return the degree from degrees with the lowest validation error.
+    # TODO: Finish the last line, so this returns the degree from degrees with the
+    #   lowest validation error. errors holds each degree's validation error.
     def best_degree(
         train_x: Tensor,
         train_y: Tensor,
@@ -397,7 +399,9 @@ OVERFITTING1_SOURCE = source_file(
         validation_y: Tensor,
         degrees: list[int],
     ) -> int:
-        ...
+        errors = [fit_errors(train_x, train_y, validation_x, validation_y, degree)[1] for degree in degrees]
+
+        return ...
     ''',
 )
 
@@ -521,8 +525,8 @@ OVERFITTING1 = Exercise(
         "with dim=1.",
         "fit_errors": "Predict with the features of each set, @ w + b. The errors are the mean squared errors "
         "against train_y and validation_y, as plain numbers from .item().",
-        "best_degree": "Call fit_errors for each degree and keep the degree whose validation error, the second "
-        "number, is lowest.",
+        "best_degree": "errors.index(min(errors)) gives the position of the lowest error. The degree at that "
+        "position in degrees is the answer.",
     },
     introduces=("overfitting",),
     check=check_overfitting1,
@@ -542,8 +546,8 @@ OVERFITTING2_LESSON = prose(
     kept falling.
 
     So keep the parameters from the step with the lowest validation error.
-    This is early stopping, and it is the cheapest cure for overfitting there
-    is.
+    This is **early stopping**, and it costs nothing but a copy of the
+    parameters.
 
     Keeping parameters means keeping a copy. `w.detach()` gives the same
     numbers without the autograd record, and `.clone()` copies them, so the
@@ -554,8 +558,8 @@ OVERFITTING2_LESSON = prose(
     ```
 
     Validation error is noisy and can bounce for a while before it truly turns
-    up. So training usually waits a set number of steps, the patience, after
-    the best one. If none of them beats it, training stops.
+    up. So training usually waits a set number of steps, the **patience**,
+    after the best one. If none of them beats it, training stops.
 
     `with torch.no_grad():` around the validation loss keeps it out of the
     autograd record, since it never takes part in a gradient.
@@ -604,6 +608,13 @@ OVERFITTING2_SOURCE = source_file(
                 best_step = ...
 
         return best_w, best_b, best_step
+
+
+    history = [5.0, 4.0, 3.0, 3.5, 3.6]
+
+    # The position of the lowest loss, and how many steps came after it.
+    lowest_at = history.index(min(history))             # 2
+    steps_since = len(history) - 1 - lowest_at          # 2
 
 
     # TODO: Return True when training should stop, when the lowest loss in history
@@ -657,6 +668,12 @@ OVERFITTING2_SOLUTION = source_file(
                 best_step = step
 
         return best_w, best_b, best_step
+
+
+    history = [5.0, 4.0, 3.0, 3.5, 3.6]
+
+    lowest_at = history.index(min(history))
+    steps_since = len(history) - 1 - lowest_at
 
 
     def should_stop(
@@ -746,8 +763,8 @@ OVERFITTING2 = Exercise(
     hints={
         "train_with_early_stopping": "Keep copies of w and b with .detach().clone(), as the lesson shows, and keep "
         "step as the step number.",
-        "should_stop": "history.index(min(history)) gives the position of the lowest loss. Count how many steps "
-        "came after it, up to the last position, len(history) - 1.",
+        "should_stop": "Work out the steps since the lowest loss, as the line that sets steps_since does, and "
+        "compare it with patience.",
     },
     introduces=(),
     check=check_overfitting2,
@@ -785,8 +802,9 @@ DECAY1_LESSON = prose(
 
     So every step shrinks each weight by a small fraction, then takes the
     usual step. The weights decay toward 0 unless the data pushes back, hence
-    the name. The same idea is also called L2 regularization. Section 4 shows
-    a way of training where the two differ.
+    the name. Adding the squared weights to the loss is also called L2
+    regularization. With plain gradient descent it does exactly what decay
+    does, and Section 4 meets a way of training where the two part.
     """,
 )
 
@@ -796,6 +814,15 @@ DECAY1_SOURCE = source_file(
 
     import torch
     from torch import Tensor
+
+    w = torch.tensor([3.0, -1.0, 2.0])
+
+    # The sum of the squared weights, the size weight decay puts a cost on.
+    squared_size = (w ** 2).sum()                     # tensor(14.)
+
+    # One step shrinks each weight by a fraction, here with learning rate 0.1,
+    # strength 0.5 and a gradient of zero, so only the shrinking shows.
+    shrunk = (1 - 2 * 0.1 * 0.5) * w - 0.1 * torch.zeros(3)    # tensor([2.7, -0.9, 1.8])
 
 
     # TODO: Return the mean squared error of x @ w + b against y, plus strength
@@ -854,6 +881,12 @@ DECAY1_SOLUTION = source_file(
 
     import torch
     from torch import Tensor
+
+    w = torch.tensor([3.0, -1.0, 2.0])
+
+    squared_size = (w ** 2).sum()
+
+    shrunk = (1 - 2 * 0.1 * 0.5) * w - 0.1 * torch.zeros(3)
 
 
     def loss_with_decay(
@@ -1005,10 +1038,10 @@ DECAY2_LESSON = prose(
     Too little decay overfits and too much underfits. Even a tiny strength
     tames the degree 9 fit.
 
-    Numbers chosen by trying them and comparing on the validation set, and not
-    learned by gradient descent, are called hyperparameters. The learning
-    rate, the minibatch size, the degree and the decay strength are all
-    hyperparameters.
+    Numbers chosen by trying them and comparing on the validation set are
+    called **hyperparameters**. Gradient descent learns the parameters, and
+    you choose the hyperparameters. The learning rate, the minibatch size, the
+    degree and the decay strength are all hyperparameters.
 
     Once the choice is made, measure the chosen model on the test set, once,
     and report that number. It is the only honest estimate of how the model
@@ -1039,8 +1072,17 @@ DECAY2_SOURCE = source_file(
         return w, y.mean() - x_mean @ w
 
 
-    # TODO: Return the mean squared error on the validation set of the model
-    #   fitted on the training set with this strength.
+    x = torch.tensor([[1.0], [2.0], [3.0]], dtype=torch.float64)
+    y = torch.tensor([2.0, 4.0, 6.5], dtype=torch.float64)
+
+    # Fit with a strength, then measure, here on the same points for a small example.
+    w, b = fit_with_decay(x, y, 0.1)
+    error = ((x @ w + b - y) ** 2).mean().item()
+
+
+    # TODO: Finish the last line, so this returns the mean squared error on the
+    #   validation set of the model fitted on the training set with this
+    #   strength.
     def validation_error(
         train_x: Tensor,
         train_y: Tensor,
@@ -1048,10 +1090,13 @@ DECAY2_SOURCE = source_file(
         validation_y: Tensor,
         strength: float,
     ) -> float:
-        ...
+        w, b = fit_with_decay(train_x, train_y, strength)
+
+        return ...
 
 
-    # TODO: Return the strength from strengths with the lowest validation error.
+    # TODO: Finish the last line, so this returns the strength from strengths
+    #   with the lowest validation error.
     def pick_strength(
         train_x: Tensor,
         train_y: Tensor,
@@ -1059,7 +1104,9 @@ DECAY2_SOURCE = source_file(
         validation_y: Tensor,
         strengths: list[float],
     ) -> float:
-        ...
+        errors = [validation_error(train_x, train_y, validation_x, validation_y, strength) for strength in strengths]
+
+        return ...
 
 
     # TODO: Finish the two lines, so this picks the strength on the validation set,
@@ -1100,6 +1147,13 @@ DECAY2_SOLUTION = source_file(
         w = torch.linalg.solve(centered.T @ centered + penalty, centered.T @ (y - y.mean()))
 
         return w, y.mean() - x_mean @ w
+
+
+    x = torch.tensor([[1.0], [2.0], [3.0]], dtype=torch.float64)
+    y = torch.tensor([2.0, 4.0, 6.5], dtype=torch.float64)
+
+    w, b = fit_with_decay(x, y, 0.1)
+    error = ((x @ w + b - y) ** 2).mean().item()
 
 
     def validation_error(
@@ -1234,10 +1288,9 @@ DECAY2 = Exercise(
     source=DECAY2_SOURCE,
     solution=DECAY2_SOLUTION,
     hints={
-        "validation_error": "Fit with fit_with_decay on the training set, then take the mean squared error of "
-        "validation_x @ w + b against validation_y, as a plain number.",
-        "pick_strength": "Call validation_error for each strength and keep the strength whose error is lowest, as "
-        "best_degree does in overfitting1.",
+        "validation_error": "Measure the way the line that sets error does, on validation_x and validation_y.",
+        "pick_strength": "errors.index(min(errors)) is the position of the lowest error, as in best_degree of "
+        "overfitting1.",
         "test_error": "The strength comes from pick_strength. The error is the mean squared error of test_x @ w + b "
         "against test_y.",
     },

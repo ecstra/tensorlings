@@ -317,8 +317,8 @@ MNIST2_LESSON = prose(
 
     The weights start at zero. Every class then gets the same score, so the
     loss starts at `log(10)`, about 2.303, as likelihood2 said. A first loss
-    far from that means a bug before training has even begun. Checking it is
-    the first step of Karpathy's recipe for training.
+    far from that means a bug before training has even begun. Karpathy's
+    recipe for training lists this check among its first.
 
     With minibatches of 128, an epoch of 50,000 examples is 391 steps. Two
     epochs with a learning rate of 0.5 take about a second here, and reach
@@ -330,7 +330,7 @@ MNIST2_LESSON = prose(
     of Section 3 pass 98 percent.
 
     Measuring accuracy needs no gradients, so it can run inside
-    `with torch.no_grad():`, which saves the work of recording.
+    `with torch.no_grad():`. That saves the work of recording.
     """,
 )
 
@@ -508,23 +508,29 @@ MNIST3_LESSON = prose(
     | 0.01 | 0.931 | 0.860 |
     | 0.1 | 0.724 | 0.694 |
 
-    Decay helps a little, and too much hurts. A linear model has too few
-    parameters for decay to matter much. It matters far more for the bigger
-    models of Section 3.
+    Every strength fits the training set almost perfectly, while validation
+    stays near 86 percent. Decay closes that gap only a little here, and too
+    much of it hurts both.
 
     Pick the strength on the validation set, then measure on the test set,
-    once. That last number is the one to report.
+    once.
 
-    A confusion matrix shows which mistakes a model makes. It counts, for
+    A **confusion matrix** shows which mistakes a model makes. It counts, for
     every true class and every predicted class, how many examples had that
     pair. The diagonal holds the right answers, and the largest count off the
     diagonal is the mistake made most. For the model of mnist2 that is a 9
     read as a 4, 41 times in the test set.
 
     `.fill_diagonal_(0)` sets a square matrix's diagonal to 0 in place, so
-    clone the matrix first. Python's `divmod(a, b)` gives `a // b` and
-    `a % b`, which turns a position in a flattened matrix back into its row and
-    column.
+    clone the matrix first. `.argmax()` with no `dim` gives a position in the
+    matrix read row after row, as if it were flat. Python's `divmod(a, b)`
+    gives `a // b` and `a % b`, and with `b` the number of columns, that is the
+    row and the column.
+
+    ```python
+    torch.tensor([[1, 9], [5, 2]]).argmax()    # tensor(1), row 0, column 1
+    divmod(1, 2)                               # (0, 1)
+    ```
     """,
 )
 
@@ -575,8 +581,9 @@ MNIST3_SOURCE = source_file(
         return ((x @ W + b).argmax(dim=1) == y).float().mean().item()
 
 
-    # TODO: Return the strength from strengths whose model, trained on the
-    #   training set, has the highest accuracy on the validation set.
+    # TODO: Finish the line in the loop, so this returns the strength from
+    #   strengths whose model, trained on the training set, has the highest
+    #   accuracy on the validation set.
     def pick_strength(
         train_x: Tensor,
         train_y: Tensor,
@@ -584,7 +591,13 @@ MNIST3_SOURCE = source_file(
         validation_y: Tensor,
         strengths: list[float],
     ) -> float:
-        ...
+        scores = []
+
+        for strength in strengths:
+            W, b = train_with_decay(train_x, train_y, strength)
+            scores.append(...)
+
+        return strengths[scores.index(max(scores))]
 
 
     # TODO: Finish the first and last lines, so this trains with the strength
@@ -620,10 +633,14 @@ MNIST3_SOURCE = source_file(
         return counts
 
 
-    # TODO: Return the true class and the predicted class of the largest count off
-    #   the diagonal of matrix, the mistake made most.
+    # TODO: Finish the last line, so this returns the true class and the
+    #   predicted class of the largest count off the diagonal of matrix, the
+    #   mistake made most.
     def most_confused(matrix: Tensor) -> tuple[int, int]:
-        ...
+        mistakes = matrix.clone()
+        mistakes.fill_diagonal_(0)
+
+        return ...
     ''',
 )
 
@@ -679,7 +696,11 @@ MNIST3_SOLUTION = source_file(
         validation_y: Tensor,
         strengths: list[float],
     ) -> float:
-        scores = [accuracy(validation_x, validation_y, *train_with_decay(train_x, train_y, strength)) for strength in strengths]
+        scores = []
+
+        for strength in strengths:
+            W, b = train_with_decay(train_x, train_y, strength)
+            scores.append(accuracy(validation_x, validation_y, W, b))
 
         return strengths[scores.index(max(scores))]
 
@@ -849,12 +870,11 @@ MNIST3 = Exercise(
     source=MNIST3_SOURCE,
     solution=MNIST3_SOLUTION,
     hints={
-        "pick_strength": "For each strength, train with train_with_decay on the training set and measure accuracy "
-        "on the validation set. Keep the strength with the highest.",
+        "pick_strength": "Append the accuracy of W and b on the validation set.",
         "test_accuracy": "The strength comes from pick_strength. The last line is accuracy on test_x and test_y.",
         "confusion_matrix": "Add 1 to the entry at row true_class and column guess.",
-        "most_confused": "Clone the matrix and set its diagonal to 0 with .fill_diagonal_(0). The position of its "
-        "largest entry, from .argmax().item(), splits into row and column with divmod by the column count.",
+        "most_confused": "The position of the largest entry of mistakes, from .argmax().item(), splits into a row "
+        "and a column with divmod by the number of columns, matrix.shape[1].",
     },
     introduces=(),
     check=check_mnist3,
