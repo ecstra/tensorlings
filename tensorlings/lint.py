@@ -54,6 +54,23 @@ JARGON: tuple[str, ...] = (
     "attention",
     "transformer",
     "convolution",
+    "chain rule",
+    "computation graph",
+    "topological order",
+    "feature",
+    "regression",
+    "prediction",
+    "learning rate",
+    "gradient descent",
+    "least squares",
+    "minibatch",
+    "probability distribution",
+    "likelihood",
+    "cross entropy",
+    "one hot",
+    "overfitting",
+    "validation",
+    "weight decay",
 )
 
 FILLER: tuple[str, ...] = (
@@ -140,7 +157,7 @@ def code_tokens(code: str) -> list[str]:
 
 def solution_bodies(solution: str) -> dict[str, list[str]]:
     """Each solution function's body as code tokens, with the return keyword left out,
-    and the value of each top level name the solution sets."""
+    the value of each top level name the solution sets, and each method's body named like Value.__mul__."""
     bodies: dict[str, list[str]] = {}
 
     for node in ast.parse(solution).body:
@@ -150,20 +167,38 @@ def solution_bodies(solution: str) -> dict[str, list[str]]:
 
             continue
 
-        if not isinstance(node, ast.FunctionDef):
+        if isinstance(node, ast.ClassDef):
+            for method in node.body:
+                if isinstance(method, ast.FunctionDef):
+                    bodies[f"{node.name}.{method.name}"] = body_tokens(
+                        function=method,
+                        solution=solution,
+                    )
+
             continue
 
-        tokens: list[str] = []
-
-        for statement in node.body:
-            if isinstance(statement, ast.Return) and statement.value is not None:
-                statement = statement.value
-
-            tokens.extend(code_tokens(ast.get_source_segment(solution, statement)))
-
-        bodies[node.name] = tokens
+        if isinstance(node, ast.FunctionDef):
+            bodies[node.name] = body_tokens(
+                function=node,
+                solution=solution,
+            )
 
     return bodies
+
+
+def body_tokens(
+    function: ast.FunctionDef,
+    solution: str,
+) -> list[str]:
+    tokens: list[str] = []
+
+    for statement in function.body:
+        if isinstance(statement, ast.Return) and statement.value is not None:
+            statement = statement.value
+
+        tokens.extend(code_tokens(ast.get_source_segment(solution, statement)))
+
+    return tokens
 
 
 def shown_code(text: str) -> str:

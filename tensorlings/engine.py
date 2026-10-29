@@ -290,6 +290,40 @@ class Checker:
             run=lambda: run(found),
         )
 
+    def test_method(
+        self,
+        class_name: str,
+        method: str,
+        description: str,
+        run: Callable[[type], None],
+    ) -> None:
+        """Run one test of one method of a class the file defines. The row is named like Value.__mul__,
+        and the test gets the class, since a method is tested through the objects it makes."""
+        row = f"{class_name}.{method}"
+        found = getattr(self.module, class_name, None)
+
+        if not isinstance(found, type):
+            self.fail(
+                function=row,
+                description=description,
+                detail=f"{self.path.name} has no class called {class_name}. Check the name in its class line.",
+            )
+            return
+
+        if not callable(getattr(found, method, None)):
+            self.fail(
+                function=row,
+                description=description,
+                detail=f"{class_name} has no method called {method}. Check the name in its def line.",
+            )
+            return
+
+        self.run_test(
+            function=row,
+            description=description,
+            run=lambda: run(found),
+        )
+
     def check_name(
         self,
         name: str,
@@ -422,8 +456,19 @@ def shape_text(shape: tuple[int, ...]) -> str:
     return "(" + ", ".join(str(size) for size in shape) + ")"
 
 
+@dataclass(frozen=True)
+class Described:
+    """An input the result shows by its text, such as a function shown as its formula."""
+
+    value: object
+    text: str
+
+
 def value_text(value: object) -> str:
     """A value on one line, a tensor written the way PyTorch prints it."""
+    if isinstance(value, Described):
+        return value.text
+
     if isinstance(value, Tensor):
         return re.sub(r"\n\s*", " ", str(value))
 
@@ -547,6 +592,69 @@ def expect_value(
         )
 
 
+def expect_close(
+    call: str,
+    actual: object,
+    expected: float,
+    tolerance: float = 1e-6,
+) -> None:
+    """A single number that may differ from the expected one by rounding, or by an estimate's error."""
+    reject_missing_return(
+        call=call,
+        actual=actual,
+    )
+
+    if isinstance(actual, Tensor) and actual.numel() != 1:
+        raise Mismatch(f"{call} is {value_text(actual)}, but it should be the single number {expected:.10g}.")
+
+    if isinstance(actual, Tensor):
+        actual = actual.item()
+
+    if isinstance(actual, bool) or not isinstance(actual, (int, float)):
+        raise Mismatch(f"{call} is {value_text(actual)}, but it should be the number {expected:.10g}.")
+
+    if abs(actual - expected) <= tolerance:
+        return
+
+    raise Mismatch(f"{call} is {actual:.10g}, but it should be {expected:.10g}, give or take {tolerance:g}.")
+
+
+def expect_parts(*names: str) -> Callable[..., None]:
+    """An expect function for a result made of several parts, like two gradients returned together.
+    Each part is a tensor or a number, and a message names the part that is wrong."""
+
+    def expect(
+        call: str,
+        actual: object,
+        expected: tuple[object, ...],
+    ) -> None:
+        reject_missing_return(
+            call=call,
+            actual=actual,
+        )
+        listed = ", ".join(names[:-1]) + f" and {names[-1]}"
+
+        if not isinstance(actual, (tuple, list)) or len(actual) != len(names):
+            raise Mismatch(f"{call} should give {len(names)} things, {listed}, but it gives {value_text(actual)}.")
+
+        for name, part, wanted in zip(names, actual, expected):
+            if isinstance(wanted, Tensor):
+                expect_tensor(
+                    call=f"{name} from {call}",
+                    actual=part,
+                    expected=wanted,
+                )
+                continue
+
+            expect_close(
+                call=f"{name} from {call}",
+                actual=part,
+                expected=wanted,
+            )
+
+    return expect
+
+
 def expect_shape(
     call: str,
     actual: object,
@@ -587,13 +695,14 @@ def check_on_inputs(
     """Call the learner's function on inputs the file never shows, so typing an answer in fails."""
     for arguments in inputs:
         call = f"{function}({', '.join(value_text(argument) for argument in arguments)})"
+        values = [argument.value if isinstance(argument, Described) else argument for argument in arguments]
         checker.test(
             function=function,
             description=description,
             # Clones, so a function that changes its input in place can't change what the reference sees.
-            run=lambda found, arguments=arguments, call=call: expect(
+            run=lambda found, values=values, call=call: expect(
                 call=call,
-                actual=found(*[argument.clone() if isinstance(argument, Tensor) else argument for argument in arguments]),
-                expected=reference(*arguments),
+                actual=found(*[value.clone() if isinstance(value, Tensor) else value for value in values]),
+                expected=reference(*values),
             ),
         )

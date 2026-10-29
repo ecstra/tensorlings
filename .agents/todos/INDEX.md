@@ -15,7 +15,9 @@ Built by the brain tool from the folder it lists.
 
 ## Open
 
-Nothing open.
+### course
+
+- [TODO-012](TODO-012-phase-1b-the-rest-of-section-1-and-section-2.md), derivatives to the micrograd project, then linear regression to the MNIST project, 44 exercises in the approved format
 
 ## Closed
 
