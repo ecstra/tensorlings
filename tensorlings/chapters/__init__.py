@@ -210,6 +210,7 @@ EXERCISES: list[Exercise] = [
     classic_nets.LENET1,
     classic_nets.VGG1,
     classic_nets.RESNET1,
+    classic_nets.RESNET2,
     upsampling.UPSAMPLE1,
     upsampling.TRANSPOSED1,
     upsampling.UNET1,

@@ -493,6 +493,9 @@ CASES: list[tuple[str, str, str, str]] = [
     ("transfer2", "split_by_label keeps the second part's labels", "return x[below], y[below], x[~below], y[~below] - low", "return x[below], y[below], x[~below], y[~below]"),
     ("transfer2", "few_labels takes the first examples", "picked = torch.randperm(len(x), generator=generator)[:count]", "picked = torch.arange(count)"),
     ("transfer2", "fine_tune_optimizer swaps the rates", "groups = [{\"params\": model.body.parameters(), \"lr\": body_lr}, {\"params\": model.head.parameters(), \"lr\": head_lr}]", "groups = [{\"params\": model.body.parameters(), \"lr\": head_lr}, {\"params\": model.head.parameters(), \"lr\": body_lr}]"),
+    ("resnet2", "plain_stack keeps the conv bias", "modules.extend([nn.Conv2d(channels, channels, 3, padding=1, bias=False), nn.BatchNorm2d(channels), nn.ReLU()])", "modules.extend([nn.Conv2d(channels, channels, 3, padding=1), nn.BatchNorm2d(channels), nn.ReLU()])"),
+    ("resnet2", "residual_stack halves the size", "return nn.Sequential(*[BasicBlock(channels, channels, 1) for _ in range(blocks)])", "return nn.Sequential(*[BasicBlock(channels, channels, 2) for _ in range(blocks)])"),
+    ("resnet2", "zero_last_norms_ zeroes the first norm", "module.bn2.weight.zero_()", "module.bn1.weight.zero_()"),
     ("conv5", "pointwise reshapes the wrong way", "return (weight @ x.reshape(c, -1)).reshape(-1, h, w)", "return (weight @ x.reshape(-1, c).T).reshape(-1, h, w)"),
 ]
 

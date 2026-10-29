@@ -758,3 +758,278 @@ RESNET1 = Exercise(
     introduces=(),
     check=check_resnet1,
 )
+
+
+# ---------------------------------------------------------------------------
+# resnet2
+# ---------------------------------------------------------------------------
+
+RESNET2_LESSON = prose(
+    """
+    He and others found something odd about depth. On CIFAR-10, a plain net of
+    56 layers had a higher training error than one of 20, BatchNorm and all.
+    The training error was worse too, so it was not overfitting. They called
+    it degradation.
+
+    Here small nets of width 8 learned MNIST shrunk to 14 by 14, from 5000
+    images, in 800 steps of SGD with momentum.
+
+    | Net | Training loss | Validation accuracy |
+    |---|---|---|
+    | plain, 4 layers | 0.185 | 94.0% |
+    | plain, 24 layers | 0.806 | 75.1% |
+    | ResNet, 24 layers in 12 basic blocks | 0.203 | 93.8% |
+
+    The 24 layer plain net could copy the 4 layer one, its extra layers
+    handing their input on. Training doesn't find that. A residual block
+    starts close to handing its input on, so depth stops hurting.
+
+    These ResNet blocks had the scale of their second BatchNorm set to 0, so
+    each began as `relu(x)`, which Goyal and others use. In an earlier run of
+    300 steps without that, the ResNet got 68.6% against the plain net's
+    62.8%. So here the zero start mattered as much as the skip.
+
+    On ImageNet, ResNet-18, 34, 50, 101 and 152 got better with every step of
+    depth.
+    """,
+)
+
+RESNET2_SOURCE = source_file(
+    '''
+    # resnet2.py
+
+    import torch
+    import torch.nn as nn
+    from torch import Tensor
+
+
+    # The basic block from resnet1.
+    class BasicBlock(nn.Module):
+        def __init__(
+            self,
+            in_channels: int,
+            out_channels: int,
+            stride: int,
+        ) -> None:
+            super().__init__()
+            self.conv1 = nn.Conv2d(in_channels, out_channels, 3, stride=stride, padding=1, bias=False)
+            self.bn1 = nn.BatchNorm2d(out_channels)
+            self.conv2 = nn.Conv2d(out_channels, out_channels, 3, padding=1, bias=False)
+            self.bn2 = nn.BatchNorm2d(out_channels)
+
+            if stride == 1 and in_channels == out_channels:
+                self.shortcut = nn.Identity()
+            else:
+                self.shortcut = nn.Sequential(
+                    nn.Conv2d(in_channels, out_channels, 1, stride=stride, bias=False),
+                    nn.BatchNorm2d(out_channels),
+                )
+
+        def forward(self, x: Tensor) -> Tensor:
+            out = torch.relu(self.bn1(self.conv1(x)))
+            out = self.bn2(self.conv2(out))
+
+            return torch.relu(out + self.shortcut(x))
+
+
+    norm = nn.BatchNorm2d(4)
+    scale = norm.weight                              # the learned scale, starting at 1
+
+
+    # TODO: Return an nn.Sequential of layers plain layers, each a 3 by 3
+    #   nn.Conv2d from channels to channels with padding 1 and no bias, an
+    #   nn.BatchNorm2d and a ReLU.
+    def plain_stack(
+        channels: int,
+        layers: int,
+    ) -> nn.Sequential:
+        ...
+
+
+    # TODO: Return an nn.Sequential of blocks BasicBlocks, each from channels to
+    #   channels at stride 1.
+    def residual_stack(
+        channels: int,
+        blocks: int,
+    ) -> nn.Sequential:
+        ...
+
+
+    # TODO: Set the scale of bn2 in every BasicBlock inside model to 0, in place,
+    #   so each block starts as relu(x).
+    def zero_last_norms_(model: nn.Module) -> None:
+        ...
+    ''',
+)
+
+RESNET2_SOLUTION = source_file(
+    '''
+    # resnet2.py, a solution for comparison
+
+    import torch
+    import torch.nn as nn
+    from torch import Tensor
+
+
+    class BasicBlock(nn.Module):
+        def __init__(
+            self,
+            in_channels: int,
+            out_channels: int,
+            stride: int,
+        ) -> None:
+            super().__init__()
+            self.conv1 = nn.Conv2d(in_channels, out_channels, 3, stride=stride, padding=1, bias=False)
+            self.bn1 = nn.BatchNorm2d(out_channels)
+            self.conv2 = nn.Conv2d(out_channels, out_channels, 3, padding=1, bias=False)
+            self.bn2 = nn.BatchNorm2d(out_channels)
+
+            if stride == 1 and in_channels == out_channels:
+                self.shortcut = nn.Identity()
+            else:
+                self.shortcut = nn.Sequential(
+                    nn.Conv2d(in_channels, out_channels, 1, stride=stride, bias=False),
+                    nn.BatchNorm2d(out_channels),
+                )
+
+        def forward(self, x: Tensor) -> Tensor:
+            out = torch.relu(self.bn1(self.conv1(x)))
+            out = self.bn2(self.conv2(out))
+
+            return torch.relu(out + self.shortcut(x))
+
+
+    norm = nn.BatchNorm2d(4)
+    scale = norm.weight
+
+
+    def plain_stack(
+        channels: int,
+        layers: int,
+    ) -> nn.Sequential:
+        modules = []
+
+        for _ in range(layers):
+            modules.extend([nn.Conv2d(channels, channels, 3, padding=1, bias=False), nn.BatchNorm2d(channels), nn.ReLU()])
+
+        return nn.Sequential(*modules)
+
+
+    def residual_stack(
+        channels: int,
+        blocks: int,
+    ) -> nn.Sequential:
+        return nn.Sequential(*[BasicBlock(channels, channels, 1) for _ in range(blocks)])
+
+
+    def zero_last_norms_(model: nn.Module) -> None:
+        with torch.no_grad():
+            for module in model.modules():
+                if isinstance(module, BasicBlock):
+                    module.bn2.weight.zero_()
+    ''',
+)
+
+
+def stack_summary(stack: nn.Module) -> list[str]:
+    parts = []
+
+    for layer in stack:
+        if isinstance(layer, nn.Conv2d):
+            parts.append(f"Conv2d({layer.in_channels}, {layer.out_channels}, {layer.kernel_size[0]}, padding={layer.padding[0]}, bias={layer.bias is not None})")
+            continue
+
+        if isinstance(layer, nn.BatchNorm2d):
+            parts.append(f"BatchNorm2d({layer.num_features})")
+            continue
+
+        parts.append(type(layer).__name__)
+
+    return parts
+
+
+def check_plain_stack(found: object) -> None:
+    for channels, layers in ((8, 3), (4, 1)):
+        call = f"plain_stack({channels}, {layers})"
+        stack = expect_module(call, found(channels, layers))
+
+        if not isinstance(stack, nn.Sequential):
+            raise Mismatch(f"{call} is a {type(stack).__name__}. It should be an nn.Sequential.")
+
+        wanted = [f"Conv2d({channels}, {channels}, 3, padding=1, bias=False)", f"BatchNorm2d({channels})", "ReLU"] * layers
+        got = stack_summary(stack)
+
+        if got != wanted:
+            raise Mismatch(f"{call} should hold {', '.join(wanted)}, but it holds {', '.join(got)}.")
+
+
+def check_residual_stack(found: object) -> None:
+    for channels, blocks in ((8, 3), (4, 2)):
+        call = f"residual_stack({channels}, {blocks})"
+        stack = expect_module(call, found(channels, blocks))
+        names = [type(layer).__name__ for layer in stack]
+
+        if not isinstance(stack, nn.Sequential) or names != ["BasicBlock"] * blocks:
+            raise Mismatch(f"{call} should be an nn.Sequential of {blocks} BasicBlocks, but it holds {', '.join(names) or 'nothing'}.")
+
+        for block in stack:
+            if block.conv1.in_channels != channels or block.conv2.out_channels != channels or block.conv1.stride != (1, 1):
+                raise Mismatch(f"Every block of {call} should go from {channels} channels to {channels} at stride 1.")
+
+
+def check_zero_with_learner_blocks(found: object) -> None:
+    # The function looks for the file's own BasicBlock class, so the model is built from that class.
+    block_class = found.__globals__.get("BasicBlock")
+
+    if not isinstance(block_class, type):
+        raise Mismatch("resnet2.py should keep its BasicBlock class, which zero_last_norms_ looks for.")
+
+    torch.manual_seed(797)
+    model = nn.Sequential(block_class(4, 4, 1), nn.ReLU(), block_class(4, 8, 2))
+    found(model)
+
+    for position in (0, 2):
+        block = model[position]
+
+        if block.bn2.weight.detach().abs().max().item() != 0:
+            raise Mismatch(f"After zero_last_norms_, the scale of bn2 in the block at position {position} is not all 0.")
+
+        if not torch.all(block.bn1.weight.detach() == 1):
+            raise Mismatch("zero_last_norms_ should leave bn1 alone and set only bn2's scale to 0.")
+
+
+def check_resnet2(checker: Checker) -> None:
+    checker.test(
+        function="plain_stack",
+        description="stacks convolution, BatchNorm and ReLU",
+        run=check_plain_stack,
+    )
+    checker.test(
+        function="residual_stack",
+        description="stacks basic blocks",
+        run=check_residual_stack,
+    )
+    checker.test(
+        function="zero_last_norms_",
+        description="sets each block's second BatchNorm scale to 0",
+        run=check_zero_with_learner_blocks,
+    )
+
+
+RESNET2 = Exercise(
+    name="resnet2",
+    chapter=CLASSIC_NETS,
+    title="Why ResNet's blocks",
+    lesson=RESNET2_LESSON,
+    source=RESNET2_SOURCE,
+    solution=RESNET2_SOLUTION,
+    hints={
+        "plain_stack": "Loop layers times, adding the Conv2d, the BatchNorm2d and an nn.ReLU() each time, then pass "
+        "the list to nn.Sequential with *.",
+        "residual_stack": "nn.Sequential of a list of BasicBlock(channels, channels, 1), one per block, spread with *.",
+        "zero_last_norms_": "Inside a with torch.no_grad() block, loop over model.modules(). For each module that "
+        "isinstance says is a BasicBlock, call .zero_() on module.bn2.weight.",
+    },
+    introduces=(),
+    check=check_resnet2,
+)
