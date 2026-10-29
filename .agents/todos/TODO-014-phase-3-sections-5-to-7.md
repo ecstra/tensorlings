@@ -18,7 +18,7 @@ Phase 3 of the plan build-tensorlings, Sections 5, 6 and 7 as [the detailed curr
 
 | # | Step | Points at | By | Status |
 |---|---|---|---|---|
-| 1 | Write 30_convolution, 31_conv_shapes and 32_pooling | | agent | pending |
+| 1 | Write 30_convolution, 31_conv_shapes and 32_pooling | | agent | done |
 | 2 | Write 33_classic_nets and 34_upsampling | | agent | pending |
 | 3 | Write 35_augmentation, 36_transfer and quiz7 | | agent | pending |
 | 4 | Build the CIFAR-10 project with its download, the checkpoint flow and the device choice | | agent | pending |
