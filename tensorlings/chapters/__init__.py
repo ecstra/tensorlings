@@ -24,6 +24,7 @@ from . import (
     minibatches,
     mlp,
     mnist,
+    normalization,
     softmax_regression,
     tensor_backprop,
     tensors,
@@ -51,6 +52,7 @@ CHAPTERS: list[Chapter] = [
     embeddings.EMBEDDINGS,
     initialization.INITIALIZATION,
     dropout.DROPOUT,
+    normalization.NORMALIZATION,
 ]
 
 EXERCISES: list[Exercise] = [
@@ -129,4 +131,9 @@ EXERCISES: list[Exercise] = [
     dropout.DROPOUT1,
     dropout.DROPOUT2,
     dropout.DROPOUT3,
+    normalization.BATCHNORM1,
+    normalization.BATCHNORM2,
+    normalization.LAYERNORM1,
+    normalization.RMSNORM1,
+    normalization.NORM1,
 ]

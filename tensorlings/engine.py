@@ -523,8 +523,9 @@ def value_text(value: object) -> str:
     if isinstance(value, Described):
         return value.text
 
+    # Detached, since a module's output would otherwise print its grad_fn, which means nothing to the learner.
     if isinstance(value, Tensor):
-        return re.sub(r"\n\s*", " ", str(value))
+        return re.sub(r"\n\s*", " ", str(value.detach()))
 
     return repr(value)
 
