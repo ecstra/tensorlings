@@ -97,7 +97,8 @@ PLAIN_ERRORS: tuple[tuple[str, str], ...] = (
     (
         r"mat1 and mat2 shapes cannot be multiplied \((\d+)x(\d+) and (\d+)x(\d+)\)",
         "For @, the size at the end of the first shape must equal the size at the start of the second. Here the "
-        "shapes are ({0}, {1}) and ({2}, {3}), so {1} meets {2}.",
+        "shapes are ({0}, {1}) and ({2}, {3}), so {1} meets {2}. A flat tensor counts as one row when it is on the "
+        "left of @.",
     ),
     (
         r"size mismatch, got input \((\d+)\), mat \((\d+)x(\d+)\), vec \((\d+)\)",
@@ -592,12 +593,28 @@ def reject_missing_return(
         raise Mismatch(f"{call} is still ..., so it is {NOT_STARTED}.")
 
 
+def reject_values_and_positions(
+    call: str,
+    actual: object,
+) -> None:
+    """.max(dim=...) and .min(dim=...) give a pair of values and positions, which is a tuple underneath."""
+    if type(actual).__module__ == "torch.return_types":
+        raise Mismatch(
+            f"{call} is the pair that .max or .min with a dim gives, the values and their positions. "
+            "Use .amax or .amin for the values alone.",
+        )
+
+
 def expect_tensor(
     call: str,
     actual: object,
     expected: Tensor,
 ) -> None:
     reject_missing_return(
+        call=call,
+        actual=actual,
+    )
+    reject_values_and_positions(
         call=call,
         actual=actual,
     )

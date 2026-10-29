@@ -59,10 +59,10 @@ LINREG1_LESSON = prose(
     is added to each. The examples are the rows, so `x` goes on the left.
 
     The weights and the bias are the model's **parameters**, the numbers
-    training adjusts. The bias lets a prediction be more than 0 when every
-    feature is 0. Predicting a number this way is linear **regression**.
-    Regression means the output is a number, as opposed to a pick among
-    options.
+    training adjusts. The bias lets a prediction be something other than 0
+    when every feature is 0. Predicting a number this way is linear
+    **regression**. A regression model is one whose output is a number, and
+    models that pick among options come in a later chapter.
 
     A model can predict several numbers per example. Then the weights form a
     matrix of shape `(features, outputs)`, one column per output, and the bias
@@ -251,22 +251,23 @@ LINREG2_LESSON = prose(
     the **loss**. Lower is better, and training searches for parameters that
     give a low loss.
 
-    For regression the usual loss is the mean squared error, the mean of each
-    prediction's error squared.
+    For regression the usual loss is the **mean squared error**, the mean of
+    each prediction's error squared.
 
     ```python
     predictions = torch.tensor([4.5, 7.5, 10.5])
     targets = torch.tensor([5.0, 7.0, 12.0])
     errors = predictions - targets    # tensor([-0.5000,  0.5000, -1.5000])
     (errors ** 2).mean()              # tensor(0.9167)
+    errors.abs()                      # tensor([0.5000, 0.5000, 1.5000]), the sign dropped
     ```
 
     Squaring makes every error count as positive, so misses in both directions
     add up instead of canceling. It also makes a big miss cost far more than a
     small one. An error of 3 costs 9, and an error of 1 costs 1. The mean
     absolute error counts each miss by its size alone, so one wild target
-    pulls on it less. PyTorch has both, as `F.mse_loss` and `F.l1_loss` from
-    `torch.nn.functional`, which code imports as `F`.
+    pulls on it less. PyTorch has both, as `F.mse_loss` and `F.l1_loss`. `F`
+    is the usual name code gives `torch.nn.functional` when it imports it.
 
     The data stays fixed while a model trains, so the loss depends only on the
     parameters. New weights give new predictions, and so a new loss.
@@ -290,7 +291,7 @@ LINREG2_SOURCE = source_file(
 
     # The mean squared error, each error squared, then the mean.
     errors = predictions - targets                 # tensor([-0.5, 0.5, -1.5])
-    squared = (errors ** 2).mean()                 # tensor(0.9167)
+    mse = (errors ** 2).mean()                     # tensor(0.9167)
 
 
     # TODO: Return the mean squared error between predictions and targets.
@@ -302,8 +303,7 @@ LINREG2_SOURCE = source_file(
 
 
     # TODO: Return the mean absolute error, the mean of how far each prediction
-    #   is from its target whatever the sign. .abs() drops the sign of every
-    #   entry.
+    #   is from its target whatever the sign.
     def mean_absolute_error(
         predictions: Tensor,
         targets: Tensor,
@@ -337,7 +337,7 @@ LINREG2_SOLUTION = source_file(
     targets = torch.tensor([5.0, 7.0, 12.0])
 
     errors = predictions - targets
-    squared = (errors ** 2).mean()
+    mse = (errors ** 2).mean()
 
 
     def mean_squared_error(
@@ -406,8 +406,8 @@ LINREG2 = Exercise(
     source=LINREG2_SOURCE,
     solution=LINREG2_SOLUTION,
     hints={
-        "mean_squared_error": "Follow the two lines that set errors and squared, with the function's own "
-        "predictions and targets.",
+        "mean_squared_error": "Follow the two lines that set errors and mse, with the function's own predictions "
+        "and targets.",
         "mean_absolute_error": "Take the errors as mean_squared_error does, then .abs() in place of squaring, then "
         "the mean.",
         "column_model_loss": "The predictions have shape (examples, 1) and the targets (examples,), which broadcast "
@@ -447,9 +447,9 @@ LINREG3_LESSON = prose(
 
     The best line here is `1.94 * x + 1.15`.
 
-    A formula like this only exists for linear models with squared error. The
-    models of later sections have none, so the next chapter finds parameters
-    by walking downhill on the loss. On a linear model, least squares gives the
+    Only a few simple models have a formula like this. The models of later
+    sections have none, so the next chapter finds parameters by walking
+    downhill on the loss. On a linear model, least squares gives the
     answer that walk should reach, so it can check the walk.
     """,
 )
@@ -491,13 +491,17 @@ LINREG3_SOURCE = source_file(
         return solution[:-1], solution[-1]
 
 
-    # TODO: Return the mean squared error of the best fit on x and y. Use
-    #   best_fit, then predict and measure the loss as linreg1 and linreg2 do.
+    # TODO: Finish the last two lines, so this returns the mean squared error of
+    #   the best fit on x and y. Predict and measure the loss as linreg1 and
+    #   linreg2 do.
     def lowest_loss(
         x: Tensor,
         y: Tensor,
     ) -> Tensor:
-        ...
+        w, b = best_fit(x, y)
+        predictions = ...
+
+        return ...
     ''',
 )
 

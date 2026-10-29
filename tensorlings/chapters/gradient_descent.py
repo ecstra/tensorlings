@@ -119,9 +119,8 @@ def autograd_descent(
 
 DESCENT1_LESSON = prose(
     """
-    Least squares only works for a linear model with squared error. Most
-    models have no formula for their best parameters, so training finds them
-    another way. Start anywhere, then walk downhill on the loss, a small step
+    Least squares only works for a few simple models. Most models have no
+    formula for their best parameters, so training finds them another way. Start anywhere, then walk downhill on the loss, a small step
     at a time.
 
     The gradient of the loss points the way each parameter would raise the
@@ -181,8 +180,11 @@ DESCENT1_SOURCE = source_file(
         ...
 
 
-    # TODO: Finish the three lines, so this returns grad_w and grad_b, the
-    #   gradients of the mean squared error of x @ w + b against y.
+    # TODO: Finish the last two lines, so this returns grad_w and grad_b, the
+    #   gradients of the mean squared error of x @ w + b against y. grad_errors,
+    #   the gradient of the errors, is filled in from the lesson. x @ w is a
+    #   matrix times a flat tensor, as in matvec_grad_v of backprop3, and b is
+    #   copied into every prediction, as row is in backprop2.
     def mse_gradients(
         x: Tensor,
         w: Tensor,
@@ -190,7 +192,7 @@ DESCENT1_SOURCE = source_file(
         y: Tensor,
     ) -> tuple[Tensor, Tensor]:
         errors = x @ w + b - y
-        grad_errors = ...
+        grad_errors = 2 * errors / errors.numel()
         grad_w = ...
         grad_b = ...
 
@@ -335,9 +337,8 @@ DESCENT1 = Exercise(
     solution=DESCENT1_SOLUTION,
     hints={
         "step": "Take the learning rate times the gradient away from w, as the line in the loop above does.",
-        "mse_gradients": "grad_errors is 2 * errors divided by the number of examples, errors.numel(). w is on the "
-        "right of x @ w, like b in backprop3, so grad_w is x.T @ grad_errors. b was copied into every prediction, "
-        "so grad_b adds grad_errors up.",
+        "mse_gradients": "w plays the part of v in matvec_grad_v of backprop3, with grad_errors as the gradient "
+        "handed down. b was copied into every prediction, so its gradient adds grad_errors up.",
         "descend": "Call step for w with grad_w, and for b with grad_b.",
     },
     introduces=("learning rate", "gradient descent"),
@@ -380,7 +381,11 @@ DESCENT2_LESSON = prose(
 
     Watching the loss tells you whether training works. It should fall fast at
     first, then level off. `loss.item()` turns the loss into a plain number to
-    keep or print. The same loop trains any loss and any model.
+    keep or print.
+
+    The loops here end with `return w.detach(), b.detach()`. `.detach()`
+    gives the same numbers as a tensor that autograd no longer records. So
+    whatever the caller does with them stays out of the training's graph.
     """,
 )
 
@@ -393,8 +398,8 @@ DESCENT2_SOURCE = source_file(
 
 
     # TODO: This should run gradient descent with autograd and return the final
-    #   w and b, but the parameters run off after a few steps. Read the lesson,
-    #   then fix it.
+    #   w and b, but they come out wrong, since each step's gradient piles onto
+    #   the ones before. Read the lesson, then fix it.
     def train(
         x: Tensor,
         y: Tensor,
@@ -648,7 +653,7 @@ DESCENT3_LESSON = prose(
 
     Too small wastes steps. Too big overshoots, and past a limit every step
     lands farther from the bottom than the last. The loss then grows without
-    end, until it is `inf` or `nan`, which means not a number. A loss like that
+    end, until it is `inf`, infinity, or `nan`, short for not a number. A loss like that
     is the first sign of a learning rate that is too big.
 
     `math.isfinite(x)` is True for a plain number and False for `inf` and
@@ -696,20 +701,31 @@ DESCENT3_SOURCE = source_file(
         return ((x @ w + b - y) ** 2).mean().item()
 
 
-    # TODO: Return the learning rate from rates whose final_loss after the given
-    #   steps is lowest. Skip any rate whose loss is not finite.
+    # TODO: Finish the if line, so this returns the learning rate from rates whose
+    #   final_loss after the given steps is lowest, skipping any rate whose loss
+    #   is not finite.
     def best_learning_rate(
         x: Tensor,
         y: Tensor,
         rates: list[float],
         steps: int,
     ) -> float:
-        ...
+        best_rate = None
+        best_loss = math.inf
+
+        for rate in rates:
+            loss = final_loss(x, y, rate, steps)
+
+            if ...:
+                best_rate = rate
+                best_loss = loss
+
+        return best_rate
 
 
-    # TODO: Finish blows_up, the test the while loop runs, so the rate keeps
-    #   halving while its final_loss is not finite or is above start_loss, the
-    #   loss with w and b at zero, before any step.
+    # TODO: Finish blows_up, the test the while loop runs. It returns True when
+    #   final_loss at that rate is not finite, or is above start_loss, the loss
+    #   with w and b at zero before any step.
     def halve_until_stable(
         x: Tensor,
         y: Tensor,
@@ -788,7 +804,7 @@ DESCENT3_SOLUTION = source_file(
     ) -> float:
         start_loss = (y ** 2).mean().item()
 
-        # A nan fails every comparison, so the isfinite test has to come first.
+        # A nan fails every comparison, so loss > start_loss alone would call a nan stable.
         def blows_up(rate: float) -> bool:
             loss = final_loss(x, y, rate, steps)
 
@@ -839,14 +855,15 @@ def reference_halving(
 
 
 def check_descent3(checker: Checker) -> None:
-    # The largest rates blow up to inf or nan, which a plain comparison would let win.
+    # The first rate of each list gives a nan loss, and min with a key keeps a nan that comes first.
+    # Halving from 10.0 starts at a nan, which loss > start_loss alone would call stable.
     check_on_inputs(
         checker=checker,
         function="best_learning_rate",
         description="gives the rate with the lowest finite loss",
         inputs=(
-            (*named(*linear_data(72, 10, 2)), [0.001, 0.01, 0.1, 1.0, 10.0], 30),
-            (*named(*linear_data(73, 12, 3)), [0.3, 0.03, 3.0, 0.003], 30),
+            (*named(*linear_data(72, 10, 2)), [10.0, 0.001, 0.01, 0.1, 1.0], 30),
+            (*named(*linear_data(73, 12, 3)), [3.0, 0.3, 0.03, 0.003], 30),
         ),
         reference=reference_best_rate,
         expect=expect_close,
@@ -856,6 +873,7 @@ def check_descent3(checker: Checker) -> None:
         function="halve_until_stable",
         description="halves the rate until training stops blowing up",
         inputs=(
+            (*named(*linear_data(72, 10, 2)), 10.0, 30),
             (*named(*linear_data(74, 10, 2)), 8.0, 20),
             (*named(*linear_data(75, 12, 3)), 0.05, 20),
         ),
@@ -872,8 +890,8 @@ DESCENT3 = Exercise(
     source=DESCENT3_SOURCE,
     solution=DESCENT3_SOLUTION,
     hints={
-        "best_learning_rate": "Loop over rates, calling final_loss for each. Keep the rate whose loss is finite "
-        "and lower than any seen so far.",
+        "best_learning_rate": "Keep a rate when math.isfinite says its loss is finite and the loss is below "
+        "best_loss.",
         "halve_until_stable": "In blows_up, get final_loss(x, y, rate, steps). Return True when math.isfinite "
         "says it isn't finite, or when it is above start_loss.",
     },
@@ -977,9 +995,9 @@ DESCENT4_SOURCE = source_file(
         return ((x @ w + b - y) ** 2).mean().item()
 
 
-    # TODO: This trains on x as it is, and the loss blows up. Make it train on x
-    #   standardized with its own column stats instead, keeping the rate and the
-    #   steps.
+    # TODO: This trains on x as it is, and the loss blows up. x here is the
+    #   training data, so its own column stats are the right ones. Make it train
+    #   on x standardized with them, keeping the rate and the steps.
     def fit_loss(
         x: Tensor,
         y: Tensor,

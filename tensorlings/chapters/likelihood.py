@@ -81,10 +81,13 @@ LIKELIHOOD1_LESSON = prose(
 
     `torch.full((1000,), 0.5)` is 1000 entries of 0.5, and `.prod()`
     multiplies all entries. 0.5 to the power 1000 is far below the smallest
-    float, so it comes out as 0. A 0 can't tell a good model from a bad one.
+    float32, the kind of number a tensor holds, so it comes out as 0. A 0
+    can't tell a good model from a bad one.
 
-    The log fixes it. The log of a product is the sum of the logs. A sum of
-    thousands of negative numbers is a big negative number, nothing worse.
+    The log fixes it. The log of a product is the sum of the logs, and the log
+    of a division is the difference, so `math.log(6 / 2)` equals
+    `math.log(6) - math.log(2)`. A sum of thousands of negative numbers is a
+    big negative number, nothing worse.
     log grows when its input grows, so the model with the higher likelihood
     has the higher log likelihood too. Training lowers a loss, so it flips the
     sign. The negative log likelihood, divided by the number of examples, is
@@ -140,8 +143,8 @@ LIKELIHOOD1_SOURCE = source_file(
         return torch.log(picked.prod())
 
 
-    # TODO: Return the mean negative log likelihood, the loss, the mean over the
-    #   examples of minus the log of each label's probability.
+    # TODO: Return the loss, minus the log of each label's probability, averaged
+    #   over the examples.
     def negative_log_likelihood(
         probabilities: Tensor,
         labels: Tensor,
@@ -280,8 +283,9 @@ LIKELIHOOD2_LESSON = prose(
     torch.log(torch.softmax(scores, dim=1))    # tensor([[  0., -60., -inf]]), the last should be -120
     ```
 
-    So work in logs from the start. The log of softmax is each score minus
-    the log of the sum of the exps of the row's scores. `torch.logsumexp`
+    So work in logs from the start. Softmax is `exp(score) / total`. By the
+    rule for the log of a division, its log is each score minus the log of the
+    row's total of exps. `torch.logsumexp`
     computes that log of a sum of exps with the largest score taken out first,
     as softmax2 did, so it never overflows.
 
@@ -294,10 +298,10 @@ LIKELIHOOD2_LESSON = prose(
     softmax to the loss.
 
     A model that knows nothing gives every class the same score, so every
-    class gets probability `1 / classes`. Its cross entropy is then
-    `log(classes)`, which is 2.303 for 10 classes. A new model should start
-    near that number. A starting loss far above it means the model is
-    confidently wrong before it has learned anything.
+    class gets probability `1 / classes`. With 10 classes its cross entropy
+    comes out at 2.303. A new model should start near that number. A starting
+    loss far above it means the model is confidently wrong before it has
+    learned anything.
     """,
 )
 
@@ -308,7 +312,6 @@ LIKELIHOOD2_SOURCE = source_file(
     import math
 
     import torch
-    import torch.nn.functional as F
     from torch import Tensor
 
     scores = torch.tensor([[60.0, 0.0, -60.0]])
@@ -325,7 +328,7 @@ LIKELIHOOD2_SOURCE = source_file(
 
     # TODO: Finish the two lines, so this returns the cross entropy of logits
     #   against labels, the mean of minus each row's log probability for its
-    #   label. It should match F.cross_entropy(logits, labels).
+    #   label. It should match PyTorch's own cross entropy.
     def cross_entropy(
         logits: Tensor,
         labels: Tensor,
@@ -350,7 +353,6 @@ LIKELIHOOD2_SOLUTION = source_file(
     import math
 
     import torch
-    import torch.nn.functional as F
     from torch import Tensor
 
     scores = torch.tensor([[60.0, 0.0, -60.0]])
@@ -451,33 +453,34 @@ LIKELIHOOD3_LESSON = prose(
     """
     Squared error is a likelihood too. Suppose each target is the prediction
     plus random noise, and the noise follows a Gaussian, the bell curve, with
-    spread `sigma`. The probability density of seeing target `y` is
+    spread `sigma`. A target here can be any number, so it gets a probability
+    density in place of a probability. A density is higher where targets are
+    more likely. The density of seeing target `y` is
 
     ```text
     exp(-(y - prediction) ** 2 / (2 * sigma ** 2)) / (sigma * sqrt(2 * pi))
     ```
 
-    Its negative log is
+    Its negative log, by the rules for the log of a product and a division, is
 
     ```text
     (y - prediction) ** 2 / (2 * sigma ** 2) + log(sigma * sqrt(2 * pi))
     ```
 
+    `math.pi` and `math.sqrt` give pi and square roots of plain numbers. For
+    one target of 3.0, a prediction of 2.5 and `sigma` of 1, that is 1.0439.
+
     With `sigma` fixed, the second part is the same for every model, and the
     first is the squared error divided by a constant. So the model with the
     lowest squared error has the highest likelihood under Gaussian noise. The
     mean squared error is the negative log likelihood with the constants
-    dropped.
+    dropped. Picking squared error says the misses are Gaussian.
 
     Other noise gives other losses. A Laplace distribution has density
     `exp(-abs(y - prediction) / b) / (2 * b)` for a spread `b`. Its negative
-    log is the absolute error divided by `b`, plus `log(2 * b)`. Its tails
-    are heavier, so it expects the odd wild target, which is why the mean
-    absolute error worries less about one.
-
-    So a loss is a statement about the noise in the data. Picking squared error
-    says the misses are Gaussian. `math.pi` and `math.sqrt` give pi and square
-    roots of plain numbers.
+    log is the absolute error divided by `b`, plus `log(2 * b)`. A Laplace
+    gives far misses more probability than a Gaussian does. So one wild target
+    costs the absolute error less than it costs the squared error.
     """,
 )
 
@@ -490,9 +493,13 @@ LIKELIHOOD3_SOURCE = source_file(
     import torch
     from torch import Tensor
 
+    # The Gaussian negative log for one target of 3.0, a prediction of 2.5 and
+    # sigma of 1.
+    one_target = (3.0 - 2.5) ** 2 / (2 * 1.0 ** 2) + math.log(1.0 * math.sqrt(2 * math.pi))    # 1.0439
 
-    # TODO: Return the mean over the examples of the Gaussian negative log
-    #   likelihood from the lesson, for noise with spread sigma.
+
+    # TODO: Return the Gaussian negative log likelihood from the lesson, for
+    #   noise with spread sigma, averaged over the examples.
     def gaussian_nll(
         predictions: Tensor,
         targets: Tensor,
@@ -501,9 +508,8 @@ LIKELIHOOD3_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the mean Gaussian negative log likelihood from the mean
-    #   squared error alone. It is the mean squared error divided by
-    #   2 * sigma ** 2, plus the constant.
+    # TODO: Return the mean Gaussian negative log likelihood, given only the mean
+    #   squared error of the predictions and sigma.
     def nll_from_mse(
         mse: float,
         sigma: float,
@@ -530,6 +536,8 @@ LIKELIHOOD3_SOLUTION = source_file(
 
     import torch
     from torch import Tensor
+
+    one_target = (3.0 - 2.5) ** 2 / (2 * 1.0 ** 2) + math.log(1.0 * math.sqrt(2 * math.pi))
 
 
     def gaussian_nll(
@@ -640,10 +648,12 @@ LIKELIHOOD4_LESSON = prose(
     form, worth working out by hand once.
 
     For one example with logits `z` and label `y`, the loss is
-    `-z[y] + logsumexp(z)`. The partial of `logsumexp(z)` with respect to
-    `z[j]` is `exp(z[j])` over the sum of the exps, which is `softmax(z)[j]`.
-    The partial of `-z[y]` is -1 for `j == y` and 0 for every other `j`. So the
-    gradient is the softmax probabilities, with 1 taken away at the label.
+    `-z[y] + logsumexp(z)`. `logsumexp(z)` is the log of a total. By the chain
+    rule, its partial with respect to `z[j]` is `1 / total` times the total's
+    own partial, which is `exp(z[j])`. That makes `exp(z[j]) / total`, which
+    is `softmax(z)[j]`. The partial of `-z[y]` is -1 for `j == y` and 0
+    for every other `j`. So the gradient is the softmax probabilities, with 1
+    taken away at the label.
 
     ```text
     gradient = softmax(z) - one_hot(y)
@@ -653,9 +663,8 @@ LIKELIHOOD4_LESSON = prose(
     1 sits at the label. For the mean loss over `n` examples, divide by
     `n`.
 
-    The gradient reads well. The correct class gets pushed up by the
-    probability it is missing, and every other class gets pushed down by the
-    probability it took.
+    So the correct class gets pushed up by the probability it is missing, and
+    every other class gets pushed down by the probability it took.
 
     Two position tensors also set entries, the way they pick them.
 
@@ -694,13 +703,16 @@ LIKELIHOOD4_SOURCE = source_file(
         return encoded
 
 
-    # TODO: Return the gradient of the mean cross entropy of logits against
-    #   labels, with respect to the logits, worked out by hand.
+    # TODO: Finish the last line, so this returns the gradient of the mean cross
+    #   entropy of logits against labels, with respect to the logits, worked out
+    #   by hand.
     def cross_entropy_grad(
         logits: Tensor,
         labels: Tensor,
     ) -> Tensor:
-        ...
+        probabilities = torch.softmax(logits, dim=1)
+
+        return ...
 
 
     # TODO: Finish the last two lines, so this returns the gradients of the mean

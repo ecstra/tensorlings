@@ -38,7 +38,7 @@ SOFTMAX1_LESSON = prose(
     """
     Regression predicts a number. Often the answer is a pick among a fixed set
     of options instead, like which of ten digits an image shows. Each option is
-    called a class, which has nothing to do with a Python class.
+    called a **class**. It has nothing to do with a Python class.
 
     The model gives one score per class. A raw score like this, any number at
     all, is a **logit**. To turn the scores into probabilities, take the exp of
@@ -171,9 +171,10 @@ SOFTMAX1 = Exercise(
 
 SOFTMAX2_LESSON = prose(
     """
-    exp grows fast. A float32 holds numbers up to about `3.4e38`, and
-    `exp(89)` is already more than that, so it comes out as `inf`. Then
-    `inf / inf` is `nan`.
+    exp grows fast. Tensors hold float32 numbers unless told otherwise, about
+    7 digits, as micrograd3 said. A float32 holds numbers up to about
+    `3.4e38`, and `exp(89)` is already more than that, so it comes out as
+    `inf`. Then `inf / inf` is `nan`.
 
     ```python
     scores = torch.tensor([1000.0, 999.0])
@@ -216,8 +217,8 @@ SOFTMAX2_SOURCE = source_file(
     probabilities = torch.exp(shifted) / torch.exp(shifted).sum()    # tensor([0.7311, 0.2689])
 
 
-    # TODO: This gives nan for rows with big scores. Read the lesson, then fix it
-    #   so it works for any scores.
+    # TODO: This gives nan for rows with big scores. Fix it by taking each row's
+    #   largest score away first, as the lesson shows.
     def softmax_rows(scores: Tensor) -> Tensor:
         exps = torch.exp(scores)
 
@@ -323,8 +324,8 @@ SOFTMAX3_LESSON = prose(
 
     Each example's correct class is its **label**, a whole number from 0 up to
     the number of classes minus 1. The model's predicted class is the one with
-    the largest score. Accuracy is the fraction of examples whose predicted
-    class equals the label.
+    the largest score. **Accuracy** is the fraction of examples whose
+    predicted class equals the label.
 
     `==` between two tensors compares them entry by entry, giving `True` and
     `False`. `.mean()` refuses `True` and `False`, but `.float()` turns them

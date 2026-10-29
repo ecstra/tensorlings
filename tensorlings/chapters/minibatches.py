@@ -95,9 +95,9 @@ MINIBATCH1_LESSON = prose(
     of examples the model takes in together is a **batch**, and a batch drawn
     at random from the data is a **minibatch**.
 
-    A minibatch's gradient is not the gradient over every example, but on
-    average it points the same way. Averaging the gradients of many
-    minibatches gives back the full one. So each step is noisy, but cheap,
+    A minibatch's gradient is a noisy estimate of the gradient over every
+    example, and on average it points the same way. Averaging the gradients of
+    many minibatches gives back the full one. So each step is noisy, but cheap,
     and many cheap noisy steps beat a few exact ones.
 
     A tensor of positions picks those rows, in that order.
@@ -108,13 +108,14 @@ MINIBATCH1_LESSON = prose(
     ```
 
     `torch.randperm(n)` gives the numbers 0 to `n - 1` in a random order, so
-    its first `k` entries are `k` different random positions. `.clone()`
-    makes a copy of a tensor, which a function can change without touching
-    the one it was given. Pass it a
+    its first `k` entries are `k` different random positions. Pass it a
     generator, as in `torch.randperm(5, generator=g)`, and the order comes out
     the same every run. A generator made with
     `torch.Generator().manual_seed(0)` always draws the same random numbers,
     which is how the checks repeat your draws.
+
+    `.clone()` makes a copy of a tensor. A function can change the copy
+    without touching the tensor it was given.
     """,
 )
 
@@ -135,8 +136,8 @@ MINIBATCH1_SOURCE = source_file(
     order = torch.randperm(5, generator=torch.Generator().manual_seed(0))
 
 
-    # TODO: Return size different rows of x picked at random with generator, and
-    #   the entries of y at the same positions.
+    # TODO: Return the rows of x at the first size positions of a randperm made
+    #   with generator, and the entries of y at the same positions.
     def random_minibatch(
         x: Tensor,
         y: Tensor,
@@ -166,8 +167,8 @@ MINIBATCH1_SOURCE = source_file(
 
 
     # TODO: Finish the line in the loop, so this returns the mean of grad_w over
-    #   draws random minibatches of the given size. It comes out close to the
-    #   gradient over every example.
+    #   the random minibatches of the given size, one per draw. It comes out
+    #   close to the gradient over every example.
     def mean_minibatch_gradient(
         x: Tensor,
         y: Tensor,
@@ -380,25 +381,29 @@ MINIBATCH2_SOURCE = source_file(
     pieces = [order[start:start + 4] for start in range(0, 10, 4)]    # sizes 4, 4 and 2
 
 
-    # TODO: Return the positions of every minibatch of one epoch over n examples,
-    #   shuffled with generator and cut into pieces of size. The last piece may
-    #   be smaller.
+    # TODO: Finish the last line, so this returns the positions of every
+    #   minibatch of one epoch over n examples, the shuffled order cut into
+    #   pieces of size. The last piece may be smaller.
     def epoch_batches(
         n: int,
         size: int,
         generator: torch.Generator,
     ) -> list[Tensor]:
-        ...
+        order = torch.randperm(n, generator=generator)
+
+        return ...
 
 
-    # TODO: The same, but leave out the last piece when it is smaller than size,
-    #   so every minibatch has size positions.
+    # TODO: Finish the last line the same way, but leave out the last piece when
+    #   it is smaller than size, so every minibatch has size positions.
     def full_batches(
         n: int,
         size: int,
         generator: torch.Generator,
     ) -> list[Tensor]:
-        ...
+        order = torch.randperm(n, generator=generator)
+
+        return ...
 
 
     # TODO: Finish the two lines that set xb and yb, the rows of the minibatch, so
@@ -576,8 +581,7 @@ MINIBATCH2 = Exercise(
     source=MINIBATCH2_SOURCE,
     solution=MINIBATCH2_SOLUTION,
     hints={
-        "epoch_batches": "Make the order with torch.randperm(n, generator=generator). Then cut it the way the line "
-        "that sets pieces does, with n and size in place of 10 and 4.",
+        "epoch_batches": "Cut order the way the line that sets pieces does, with n and size in place of 10 and 4.",
         "full_batches": "Cut the same way, but stop the starts early enough that every piece is whole. The last "
         "start that leaves room for a whole piece is n - size.",
         "train_epochs": "xb is the rows of x at positions, and yb the entries of y at positions, picked as in "
