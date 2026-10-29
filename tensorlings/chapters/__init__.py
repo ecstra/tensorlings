@@ -202,6 +202,7 @@ EXERCISES: list[Exercise] = [
     convolution.CONV2,
     convolution.CONV3,
     convolution.CONV4,
+    convolution.FFT1,
     conv_shapes.CHANNELS1,
     conv_shapes.PADDING1,
     conv_shapes.STRIDE1,

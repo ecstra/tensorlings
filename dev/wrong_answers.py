@@ -513,6 +513,13 @@ CASES: list[tuple[str, str, str, str]] = [
     ("soft2", "soft_lookup softmaxes the values", "return torch.softmax(keys @ query, dim=0) @ values", "return (keys @ query) @ torch.softmax(values, dim=0)"),
     ("soft2", "soft_lookup forgets the softmax", "return torch.softmax(keys @ query, dim=0) @ values", "return (keys @ query) @ values"),
     ("soft2", "soft_lookups softmaxes the columns", "return torch.softmax(queries @ keys.T, dim=1) @ values", "return torch.softmax(queries @ keys.T, dim=0) @ values"),
+    ("fft1", "frequency_response never adds the zeros", "return torch.fft.rfft(kernel, n=n).abs()", "return torch.fft.rfft(kernel).abs()"),
+    ("fft1", "frequency_response keeps the complex numbers", "return torch.fft.rfft(kernel, n=n).abs()", "return torch.fft.rfft(kernel, n=n).real"),
+    ("fft1", "circular_convolve loses an odd length", "torch.fft.rfft(b), n=len(a))", "torch.fft.rfft(b))"),
+    ("fft1", "circular_convolve adds the spectra", "torch.fft.rfft(a) * torch.fft.rfft(b)", "torch.fft.rfft(a) + torch.fft.rfft(b)"),
+    ("fft1", "fft_convolve wraps around", "product = torch.fft.rfft(signal, n=length) * torch.fft.rfft(kernel, n=length)", "product = torch.fft.rfft(signal) * torch.fft.rfft(kernel, n=len(signal))"),
+    ("fft1", "conv1d_by_fft never flips", "fft_convolve(signal, kernel.flip(0))", "fft_convolve(signal, kernel)"),
+    ("fft1", "conv1d_by_fft keeps the wrong part", "[k - 1 : len(signal)]", "[: len(signal) - k + 1]"),
     ("conv5", "pointwise reshapes the wrong way", "return (weight @ x.reshape(c, -1)).reshape(-1, h, w)", "return (weight @ x.reshape(-1, c).T).reshape(-1, h, w)"),
 ]
 

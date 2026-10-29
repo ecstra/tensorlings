@@ -33,7 +33,9 @@ CONVOLUTION = Chapter(
         weights along its input and takes a dot product at every place. This
         chapter shows it is a Linear layer with most weights zero and the rest
         shared, builds it in 1D and 2D, matches PyTorch's, and shows why a
-        model built from it finds a pattern wherever it sits.
+        model built from it finds a pattern wherever it sits. It ends with the
+        convolution theorem, which turns a long convolution into a product of
+        spectra.
 
         ## Further reading
 
@@ -882,4 +884,255 @@ CONV4 = Exercise(
     check=check_conv4,
     time_limit=30,
     imports_first=OPTIMIZER_IMPORTS,
+)
+
+
+# ---------------------------------------------------------------------------
+# fft1
+# ---------------------------------------------------------------------------
+
+FFT1_LESSON = prose(
+    """
+    A long kernel is slow to slide. An echo in a room lasts thousands of
+    samples, and sliding k weights along n samples costs about n times k
+    multiplications. The Fourier transform gives a faster road, and a new way
+    to see what a kernel does.
+
+    Any signal of n samples is a sum of waves, one for each frequency from 0
+    up to n / 2 cycles across the signal. `torch.fft.rfft` says how much of
+    each wave the signal holds. It gives one complex number per frequency,
+    which holds the wave's strength and its shift, and `.abs()` is the
+    strength. `torch.fft.irfft` adds the waves back up into the signal.
+
+    ```python
+    t = torch.arange(16)
+    signal = torch.cos(2 * torch.pi * 3 * t / 16)    # 3 cycles across 16 samples
+    torch.fft.rfft(signal).abs().round()             # tensor([0., 0., 0., 8., 0., 0., 0., 0., 0.])
+    ```
+
+    These strengths, one per frequency, are the signal's **spectrum**.
+
+    The convolution theorem says that convolving two signals multiplies their
+    spectra. Take both spectra, multiply them frequency by frequency, and turn
+    the product back with `irfft`. That costs about n log n. For 100,000
+    samples and a kernel of 10,000, `F.conv1d` took about 6 seconds here, and
+    the spectra 0.1.
+
+    Two details make it match `F.conv1d`.
+
+    The waves wrap around, so the plain product gives a circular convolution.
+    There the end of the kernel spills onto the start of the signal. Zeros
+    added to both, up to the full output length of n + k - 1, stop that.
+    `rfft(x, n=length)` adds the zeros, and `irfft(spectrum, n=length)` gives
+    that length back.
+
+    The theorem's convolution flips the kernel, and `F.conv1d` doesn't, as
+    conv2 said. So flip the kernel with `.flip(0)` first. Then keep the
+    outputs where it fits fully, from k - 1 up to n.
+
+    A kernel's spectrum shows what it does to each frequency. Here is an
+    average of 4 samples, with zeros added up to 16.
+
+    | Frequency | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 |
+    |---|---|---|---|---|---|---|---|---|---|
+    | Strength kept | 1.00 | 0.91 | 0.65 | 0.32 | 0.00 | 0.21 | 0.27 | 0.18 | 0.00 |
+
+    It keeps slow changes and mostly wipes out fast ones, so it smooths. A
+    learned kernel is a filter like this one, and its spectrum says which
+    frequencies it listens to. The echo project later works on spectra like
+    these.
+    """,
+)
+
+FFT1_SOURCE = source_file(
+    '''
+    # fft1.py
+
+    import torch
+    import torch.nn.functional as F
+    from torch import Tensor
+
+    t = torch.arange(16)
+    signal = torch.cos(2 * torch.pi * 3 * t / 16)
+    strengths = torch.fft.rfft(signal).abs()    # 8 at frequency 3, about 0 elsewhere
+
+
+    # TODO: Return how strongly kernel keeps each frequency, from 0 up to n // 2,
+    #   once zeros fill it out to n samples.
+    def frequency_response(
+        kernel: Tensor,
+        n: int,
+    ) -> Tensor:
+        ...
+
+
+    # TODO: Return the circular convolution of a and b, two signals of the same
+    #   length, by multiplying their spectra. The result has that length too.
+    def circular_convolve(
+        a: Tensor,
+        b: Tensor,
+    ) -> Tensor:
+        ...
+
+
+    # TODO: Return the full convolution of signal and kernel by multiplying their
+    #   spectra, with zeros added so nothing wraps around. It has length
+    #   len(signal) + len(kernel) - 1.
+    def fft_convolve(
+        signal: Tensor,
+        kernel: Tensor,
+    ) -> Tensor:
+        ...
+
+
+    # TODO: Return what F.conv1d gives for signal and kernel, as one row of length
+    #   len(signal) - len(kernel) + 1, using fft_convolve.
+    def conv1d_by_fft(
+        signal: Tensor,
+        kernel: Tensor,
+    ) -> Tensor:
+        ...
+    ''',
+)
+
+FFT1_SOLUTION = source_file(
+    '''
+    # fft1.py, a solution for comparison
+
+    import torch
+    import torch.nn.functional as F
+    from torch import Tensor
+
+    t = torch.arange(16)
+    signal = torch.cos(2 * torch.pi * 3 * t / 16)
+    strengths = torch.fft.rfft(signal).abs()
+
+
+    def frequency_response(
+        kernel: Tensor,
+        n: int,
+    ) -> Tensor:
+        return torch.fft.rfft(kernel, n=n).abs()
+
+
+    def circular_convolve(
+        a: Tensor,
+        b: Tensor,
+    ) -> Tensor:
+        return torch.fft.irfft(torch.fft.rfft(a) * torch.fft.rfft(b), n=len(a))
+
+
+    def fft_convolve(
+        signal: Tensor,
+        kernel: Tensor,
+    ) -> Tensor:
+        length = len(signal) + len(kernel) - 1
+        product = torch.fft.rfft(signal, n=length) * torch.fft.rfft(kernel, n=length)
+
+        return torch.fft.irfft(product, n=length)
+
+
+    # F.conv1d skips the flip, so flipping first cancels the theorem's own flip.
+    def conv1d_by_fft(
+        signal: Tensor,
+        kernel: Tensor,
+    ) -> Tensor:
+        k = len(kernel)
+
+        return fft_convolve(signal, kernel.flip(0))[k - 1 : len(signal)]
+    ''',
+)
+
+
+def reference_circular_convolve(
+    a: Tensor,
+    b: Tensor,
+) -> Tensor:
+    n = len(a)
+    positions = torch.arange(n)
+
+    return torch.stack([(a * b[(i - positions) % n]).sum() for i in range(n)])
+
+
+def reference_full_convolve(
+    signal: Tensor,
+    kernel: Tensor,
+) -> Tensor:
+    k = len(kernel)
+
+    return F.conv1d(signal.view(1, 1, -1), kernel.flip(0).view(1, 1, -1), padding=k - 1).flatten()
+
+
+def double_signal(
+    seed: int,
+    length: int,
+) -> Tensor:
+    """Doubles, so the spectra's rounding stays far below what the check can see."""
+    return small_tensor(seed, length).double()
+
+
+def check_fft1(checker: Checker) -> None:
+    check_on_inputs(
+        checker=checker,
+        function="frequency_response",
+        description="gives the strength of each frequency of the padded kernel",
+        inputs=(
+            (torch.full((4,), 0.25, dtype=torch.float64), 16),
+            (double_signal(301, 5), 12),
+            (double_signal(302, 3), 9),
+        ),
+        reference=lambda kernel, n: torch.fft.rfft(kernel, n=n).abs(),
+        expect=expect_tensor,
+    )
+    check_on_inputs(
+        checker=checker,
+        function="circular_convolve",
+        description="wraps around the end, the same length as its inputs",
+        inputs=(
+            (double_signal(303, 6), double_signal(304, 6)),
+            (double_signal(305, 7), double_signal(306, 7)),
+        ),
+        reference=reference_circular_convolve,
+        expect=expect_tensor,
+    )
+    check_on_inputs(
+        checker=checker,
+        function="fft_convolve",
+        description="gives the full convolution, with nothing wrapped around",
+        inputs=(
+            (double_signal(307, 8), double_signal(308, 3)),
+            (double_signal(309, 11), double_signal(310, 4)),
+        ),
+        reference=reference_full_convolve,
+        expect=expect_tensor,
+    )
+    check_on_inputs(
+        checker=checker,
+        function="conv1d_by_fft",
+        description="matches F.conv1d",
+        inputs=(
+            (double_signal(311, 9), double_signal(312, 3)),
+            (double_signal(313, 12), double_signal(314, 5)),
+        ),
+        reference=lambda signal, kernel: F.conv1d(signal.view(1, 1, -1), kernel.view(1, 1, -1)).flatten(),
+        expect=expect_tensor,
+    )
+
+
+FFT1 = Exercise(
+    name="fft1",
+    chapter=CONVOLUTION,
+    title="Convolution through spectra",
+    lesson=FFT1_LESSON,
+    source=FFT1_SOURCE,
+    solution=FFT1_SOLUTION,
+    hints={
+        "frequency_response": "torch.fft.rfft with n=n adds the zeros, then .abs() gives the strengths.",
+        "circular_convolve": "Multiply torch.fft.rfft(a) by torch.fft.rfft(b), then torch.fft.irfft the product "
+        "with n=len(a), which an odd length needs.",
+        "fft_convolve": "Pass n=length to both rfft calls and to irfft, with length the full output length.",
+        "conv1d_by_fft": "Call fft_convolve with kernel.flip(0), then slice from k - 1 up to len(signal).",
+    },
+    introduces=(),
+    check=check_fft1,
 )
