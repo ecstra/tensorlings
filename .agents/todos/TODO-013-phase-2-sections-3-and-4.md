@@ -23,7 +23,7 @@ Phase 2 of the plan build-tensorlings, Sections 3 and 4 as [the detailed curricu
 | 3 | Write 20_dropout and 21_normalization | | agent | done |
 | 4 | Write 22_residuals, quiz4 and quiz5 | | agent | done |
 | 5 | Write the names project with its download | | agent | done |
-| 6 | Write 24_sgd, 25_adaptive and 26_schedules | | agent | pending |
+| 6 | Write 24_sgd, 25_adaptive and 26_schedules | | agent | done |
 | 7 | Write 27_clipping, 28_debugging and quiz6 | | agent | pending |
 | 8 | Write the broken training project | | agent | pending |
 | 9 | Add the wrong answers for every new exercise | | agent | pending |
