@@ -441,6 +441,21 @@ CASES: list[tuple[str, str, str, str]] = [
     ("conv4", "Detector without the ReLU", "responses = torch.relu(self.conv(x.unsqueeze(1)))", "responses = self.conv(x.unsqueeze(1))"),
     ("conv4", "accuracy with a threshold of 0.5", "((model(x) > 0).float() == y)", "((model(x) > 0.5).float() == y)"),
     ("conv4", "train_detector on the squared error", "loss = F.binary_cross_entropy_with_logits(model(x), y)", "loss = ((model(x) - y) ** 2).mean()"),
+    ("channels1", "multi_channel_conv reads one channel", "sum(conv_one(image[c], kernels[out, c]) for c in range(image.shape[0]))", "conv_one(image[0], kernels[out, 0])"),
+    ("channels1", "conv_parameters forgets the biases", "return out_channels * in_channels * k * k + out_channels", "return out_channels * in_channels * k * k"),
+    ("channels1", "linear_parameters with one output per channel", "outputs = out_channels * h * w", "outputs = out_channels"),
+    ("padding1", "pad_zeros pads the width only", "return F.pad(image, (p, p, p, p))", "return F.pad(image, (p, p))"),
+    ("padding1", "padded_size pads one side", "return n + 2 * p - k + 1", "return n + p - k + 1"),
+    ("padding1", "same_padding takes all of k - 1", "return (k - 1) // 2", "return k - 1"),
+    ("stride1", "strided_size divides without rounding", "return (n + 2 * p - k) // s + 1", "return (n + 2 * p - k) / s + 1"),
+    ("stride1", "strided_conv1d at stride 1", "return x.unfold(0, len(w), s) @ w", "return x.unfold(0, len(w), 1) @ w"),
+    ("stride1", "halving_conv without padding", "return nn.Conv2d(in_channels, out_channels, 3, stride=2, padding=1)", "return nn.Conv2d(in_channels, out_channels, 3, stride=2)"),
+    ("dilation1", "spanned forgets the 1", "return d * (k - 1) + 1", "return d * k"),
+    ("dilation1", "dilated_conv1d reads the first taps", "return windows[:, ::d] @ w", "return windows[:, :len(w)] @ w"),
+    ("dilation1", "receptive_field ignores dilation", "return 1 + sum((k - 1) * d for k, d in layers)", "return 1 + sum(k - 1 for k, d in layers)"),
+    ("conv5", "sizes_through never moves on", "        n = (n + 2 * p - k) // s + 1\n        sizes.append(n)", "        sizes.append((n + 2 * p - k) // s + 1)"),
+    ("conv5", "padding_for gives the largest", "for p in range(k + 1):", "for p in reversed(range(k + 1)):"),
+    ("conv5", "pointwise reshapes the wrong way", "return (weight @ x.reshape(c, -1)).reshape(-1, h, w)", "return (weight @ x.reshape(-1, c).T).reshape(-1, h, w)"),
 ]
 
 
