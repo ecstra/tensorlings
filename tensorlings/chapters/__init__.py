@@ -241,6 +241,7 @@ EXERCISES: list[Exercise] = [
     transfer.QUIZ7,
     cifar.CIFAR1,
     cifar.CIFAR2,
+    cifar.CIFAR3,
     soft_design.DERIVE1,
     soft_design.DERIVE2,
     rnn.RNN1,

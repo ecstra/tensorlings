@@ -501,10 +501,10 @@ CIFAR2_LESSON = prose(
 
     | Epoch | 1 | 5 | 10 | 15 |
     |---|---|---|---|---|
-    | Validation accuracy | VAL1 | VAL5 | VAL10 | VAL15 |
+    | Validation accuracy | 46.1% | 71.9% | 82.3% | 85.6% |
 
-    It took about MINUTES minutes here, while other work shared the machine.
-    On a CPU alone expect it to take several times longer.
+    It took about 11 minutes here, while other work shared the machine. On a
+    CPU alone expect it to take several times longer.
     """,
 )
 
@@ -892,14 +892,23 @@ CIFAR3_LESSON = prose(
 
     `.topk(k)` gives the k largest entries, largest first, and where they sit.
 
-    The run behind this project labels TEST_ACCURACY of the test set right,
-    against VALIDATION_ACCURACY on validation. CLASS_SENTENCE
+    The run behind this project labels 85.3% of the test set right, against
+    85.6% on validation. Test close to validation means the validation set
+    did its job, a fair stand in for photos never seen. Cats are its weakest
+    class at 70.8%, then dogs at 78.6%, and ships its best at 92.6%. Here are
+    its largest mistakes on the 10,000 test images.
 
     | True class | Read as | Times |
     |---|---|---|
-    CONFUSION_ROWS
+    | cat | dog | 115 |
+    | dog | cat | 108 |
+    | bird | deer | 54 |
+    | cat | bird | 50 |
+    | automobile | truck | 47 |
 
-    MISTAKE_SENTENCE
+    Cats and dogs swap the most. At 32 by 32 pixels both are a furry shape
+    with four legs, often in the same poses. Your own run will land close to
+    these numbers but not on them.
     """,
 )
 
