@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import importlib
 import io
 import threading
 from collections.abc import Callable
@@ -35,6 +36,8 @@ class Exercise:
     check: Callable[[Checker], None]
     # How long one test may run. Exercises that train on real data need longer than the usual few seconds.
     time_limit: float = TIME_LIMIT_SECONDS
+    # Modules imported before the learner's file runs, so a slow first import doesn't count against the time limit.
+    imports_first: tuple[str, ...] = ()
 
     @property
     def path(self) -> Path:
@@ -49,6 +52,10 @@ class Exercise:
 # sys.stdout to catch what the code prints, and overlapping swaps would mix up.
 CHECK_LOCK = threading.Lock()
 
+# The first optimizer torch.optim makes imports torch._dynamo, which takes 10 to 20 seconds and, run under
+# the time limit's trace, can leave sympy half imported. Every exercise that makes one imports it first.
+OPTIMIZER_IMPORTS: tuple[str, ...] = ("torch._dynamo",)
+
 
 def attempt(
     exercise: Exercise,
@@ -57,6 +64,9 @@ def attempt(
     printed = io.StringIO()
 
     with CHECK_LOCK, contextlib.redirect_stdout(printed), contextlib.redirect_stderr(printed):
+        for module_name in exercise.imports_first:
+            importlib.import_module(module_name)
+
         try:
             module, crashes = load_module(
                 path=path,

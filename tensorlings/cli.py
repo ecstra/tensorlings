@@ -171,6 +171,7 @@ def dev_check(
                         + (f"\n{solution.problem}" if solution.problem else ""),
                         "      ",
                     ),
+                    markup=False,
                 )
 
             if verbose:
@@ -184,6 +185,7 @@ def dev_check(
                         + (f"\nstub problem: {stub.problem}" if stub.problem else ""),
                         "      ",
                     ),
+                    markup=False,
                 )
 
     console.print()

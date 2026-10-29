@@ -27,6 +27,7 @@ from . import (
     names,
     normalization,
     residuals,
+    sgd,
     softmax_regression,
     tensor_backprop,
     tensors,
@@ -57,6 +58,7 @@ CHAPTERS: list[Chapter] = [
     normalization.NORMALIZATION,
     residuals.RESIDUALS,
     names.NAMES,
+    sgd.SGD,
 ]
 
 EXERCISES: list[Exercise] = [
@@ -149,4 +151,7 @@ EXERCISES: list[Exercise] = [
     names.NAMES1,
     names.NAMES2,
     names.NAMES3,
+    sgd.SGD1,
+    sgd.MOMENTUM1,
+    sgd.MOMENTUM2,
 ]

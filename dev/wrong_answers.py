@@ -314,6 +314,16 @@ CASES: list[tuple[str, str, str, str]] = [
     ("names2", "NamesMLP forward without tanh", "return self.head(torch.tanh(self.norm(self.hidden(vectors))))", "return self.head(self.norm(self.hidden(vectors)))"),
     ("names3", "train_names never drops the rate", "rate = 0.1 if step < steps * 3 // 4 else 0.01", "rate = 0.1"),
     ("names3", "sample_name draws from the raw scores", "probabilities = torch.softmax(model(torch.tensor([window])), dim=1)", "probabilities = model(torch.tensor([window]))"),
+    ("sgd1", "MySGD steps uphill", "parameter -= self.lr * parameter.grad", "parameter += self.lr * parameter.grad"),
+    ("sgd1", "MySGD steps a parameter with no gradient", "                if parameter.grad is None:\n                    continue\n\n", "                if parameter.grad is None:\n                    parameter -= self.lr\n                    continue\n\n"),
+    ("sgd1", "MySGD zero_grad does nothing", "            parameter.grad = None", "            pass"),
+    ("sgd1", "train never clears the gradients", "        optimizer.zero_grad()\n", ""),
+    ("momentum1", "momentum_update shrinks the gradient", "return momentum * velocity + grad", "return velocity + momentum * grad"),
+    ("momentum1", "MyMomentumSGD steps by the gradient", "parameter -= self.lr * self.velocities[position]", "parameter -= self.lr * parameter.grad"),
+    ("momentum1", "velocity_after forgets to shrink", "velocity = momentum * velocity + grad", "velocity = velocity + grad"),
+    ("momentum2", "valley with the steep side on x", "return point[0] ** 2 + 100 * point[1] ** 2", "return 100 * point[0] ** 2 + point[1] ** 2"),
+    ("momentum2", "steps_to_reach never clears the gradients", "        optimizer.zero_grad()\n        loss.backward()", "        loss.backward()"),
+    ("momentum2", "best_rate picks the most steps", "return rates[steps.index(min(steps))]", "return rates[steps.index(max(steps))]"),
 ]
 
 
