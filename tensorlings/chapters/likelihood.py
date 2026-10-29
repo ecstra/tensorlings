@@ -9,7 +9,7 @@ import torch.nn.functional as F
 from torch import Tensor
 
 from ..course import Chapter, Exercise
-from ..engine import Checker, check_on_inputs, expect_close, expect_parts, expect_tensor, small_tensor
+from ..engine import Checker, Described, check_on_inputs, expect_close, expect_parts, expect_tensor, small_tensor
 from ..text import prose, source_file
 from .tensor_backprop import autograd_backward
 
@@ -190,7 +190,10 @@ LIKELIHOOD1_SOLUTION = source_file(
     ''',
 )
 
-MANY_ROWS = (probability_rows(104, 400, 5), label_tensor(105, 400, 5))
+MANY_ROWS = (
+    Described(probability_rows(104, 400, 5), "probabilities with 400 rows"),
+    Described(label_tensor(105, 400, 5), "labels"),
+)
 
 
 def check_likelihood1(checker: Checker) -> None:

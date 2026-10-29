@@ -343,15 +343,6 @@ MNIST2_SOURCE = source_file(
     from torch import Tensor
 
 
-    # TODO: Return the cross entropy of the untrained model, with W and b all
-    #   zeros, on x and y. It should come out at log(10), about 2.303.
-    def first_loss(
-        x: Tensor,
-        y: Tensor,
-    ) -> float:
-        ...
-
-
     # TODO: Finish the line that sets loss, the cross entropy of softmax
     #   regression on the minibatch's rows, so this trains W and b and returns
     #   them.
@@ -405,16 +396,7 @@ MNIST2_SOLUTION = source_file(
     from torch import Tensor
 
 
-    def first_loss(
-        x: Tensor,
-        y: Tensor,
-    ) -> float:
-        W = torch.zeros(x.shape[1], 10)
-        b = torch.zeros(10)
-
-        return F.cross_entropy(x @ W + b, y).item()
-
-
+    # The first loss, with W and b at zero, should be log(10), about 2.303.
     def train(
         x: Tensor,
         y: Tensor,
@@ -471,21 +453,6 @@ def check_trained_on_mnist(found: object) -> None:
 
 
 def check_mnist2(checker: Checker) -> None:
-    check_on_inputs(
-        checker=checker,
-        function="first_loss",
-        description="gives the loss of the untrained model, log(10)",
-        inputs=(
-            (Described(small_tensor(160, 6, 784) / 3, "x with 6 rows"), Described(torch.tensor([0, 3, 9, 1, 1, 7]), "y")),
-        ),
-        reference=lambda x, y: math.log(10),
-        expect=lambda call, actual, expected: expect_close(
-            call=call,
-            actual=actual,
-            expected=expected,
-            tolerance=1e-5,
-        ),
-    )
     checker.test(
         function="train",
         description="trains softmax regression past 90 percent on the validation set",
@@ -512,8 +479,6 @@ MNIST2 = Exercise(
     source=MNIST2_SOURCE,
     solution=MNIST2_SOLUTION,
     hints={
-        "first_loss": "Make W with torch.zeros(x.shape[1], 10) and b with torch.zeros(10). Then take "
-        "F.cross_entropy of the scores and y, as a plain number.",
         "train": "The scores of the minibatch are x[positions] @ W + b, and its labels are y[positions]. Pass both "
         "to F.cross_entropy.",
         "accuracy": "Predict with argmax of the scores along dim=1, compare with y, then the mean of the matches as "
