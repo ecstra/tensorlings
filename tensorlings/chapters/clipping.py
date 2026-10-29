@@ -11,6 +11,7 @@ from torch import Tensor
 
 from ..course import OPTIMIZER_IMPORTS, Chapter, Exercise
 from ..engine import (
+    NOT_STARTED,
     Checker,
     Mismatch,
     check_on_inputs,
@@ -89,9 +90,9 @@ CLIPPING1_LESSON = prose(
     before clipping, which is worth logging. It divides by `norm + 1e-6`, a
     difference too small to matter.
 
-    Pascanu and others brought it in in 2013 for models that read long
-    sequences, whose gradients can explode. GPT-3 and nanoGPT clip at 1.0, and
-    most language models do the same.
+    Pascanu and others proposed clipping the norm in 2013, for models that
+    read long sequences, whose gradients can explode. GPT-3 and nanoGPT clip
+    at 1.0, and most language models do the same.
     """,
 )
 
@@ -205,7 +206,13 @@ def check_global_norm(found: object) -> None:
     )
 
 
-def check_clip_gradients(found: object) -> None:
+def check_clip_gradients(
+    found: object,
+    global_norm: object,
+) -> None:
+    if callable(global_norm) and global_norm(list(model_with_gradients(582, 50.0).parameters())) is None:
+        raise Mismatch(f"global_norm gives None, which usually means it is {NOT_STARTED}. clip_gradients_ needs it, so write it first.")
+
     for seed, scale, max_norm in ((582, 50.0, 2.0), (583, 1.0, 100.0)):
         mine = model_with_gradients(seed, scale)
         theirs = model_with_gradients(seed, scale)
@@ -236,7 +243,10 @@ def check_clipping1(checker: Checker) -> None:
     checker.test(
         function="clip_gradients_",
         description="scales the gradients like clip_grad_norm_",
-        run=check_clip_gradients,
+        run=lambda found: check_clip_gradients(
+            found=found,
+            global_norm=getattr(checker.module, "global_norm", None),
+        ),
     )
     check_on_inputs(
         checker=checker,
@@ -305,6 +315,10 @@ CLIPPING2_LESSON = prose(
     Clipping at 1.0 caught ordinary steps too, and that cost nothing here.
     Logging the norm each step shows where the spikes are, so a bad batch can
     be found and looked at.
+
+    A spike stands far above the median of the norms, their middle value.
+    Spikes don't pull the median up the way they pull up a mean. For an even
+    count, PyTorch's `median()` takes the lower of the two middle values.
     """,
 )
 

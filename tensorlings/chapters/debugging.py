@@ -108,8 +108,10 @@ DEBUG1_LESSON = prose(
 
     The second is a baseline that ignores the inputs. The best such model
     always predicts each class's share of the labels. Its loss is the
-    entropy of those shares, minus the sum of `share * log(share)`. A trained
-    model that doesn't beat it isn't using its inputs at all.
+    entropy of those shares, which is minus the sum of `share * log(share)`.
+    Entropy measures how evenly the labels spread over the classes. It is 0
+    when one class has every label, and `log(classes)` when all have the same
+    share. A trained model that doesn't beat it isn't using its inputs at all.
 
     ```python
     shares = torch.tensor([0.5, 0.25, 0.25])
@@ -137,7 +139,9 @@ DEBUG1_SOURCE = source_file(
 
 
     # TODO: Return the loss of the best model that ignores its inputs, the
-    #   entropy of the class shares of the labels y, as a plain number.
+    #   entropy of the class shares of the labels y, as a plain number. The
+    #   classes argument only lets torch.bincount count a class that never
+    #   shows up, and a share of 0 is left out anyway.
     def baseline_loss(
         y: Tensor,
         classes: int,
@@ -247,9 +251,18 @@ class ScaledClassifier(ReferenceClassifier):
 def check_fixed_classifier(found: type) -> None:
     mine = expect_module("Classifier(6, 16, 3)", seeded_classifier(590, found))
     theirs = seeded_classifier(590)
+    points, labels = labelled_points(592, 60, 6, 3)
     x = small_tensor(591, 5, 6)
 
     with torch.no_grad():
+        scores = mine(points)
+
+        if isinstance(scores, Tensor) and scores.shape == (60, 3):
+            start = F.cross_entropy(scores, labels).item()
+
+            if start > math.log(3) + 0.3:
+                raise Mismatch(f"Classifier(6, 16, 3) starts at a loss of {start:.2f} on 60 points, far above log(3) = 1.10, so it starts confidently wrong.")
+
         expect_tensor(
             call="Classifier(6, 16, 3) on x of shape (5, 6)",
             actual=mine(x),
@@ -321,8 +334,8 @@ DEBUG2_LESSON = prose(
     """
     The next check is the strongest. Take one small batch and train on it
     alone. Any model worth training can learn a handful of examples by heart,
-    so the loss should fall close to 0. If it can't, the bug is in the model
-    or the loss, not in the data or the rate, and it is cheap to find.
+    so the loss should fall close to 0. If it can't, the bug is most likely
+    in the model, the loss or the loop, and it is cheap to find.
 
     One classic slip is a model that ends with softmax while the loss is
     `F.cross_entropy`. The loss takes a softmax of its own, so the model's
@@ -681,7 +694,17 @@ def check_gradient_norms(found: object) -> None:
 def check_uses_every_layer(found: type) -> None:
     mine = expect_module("Classifier(6, 16, 3)", seeded_classifier(611, found))
     theirs = seeded_classifier(611, ReferenceThreeLayers)
+    points, labels = labelled_points(613, 20, 6, 3)
     x = small_tensor(612, 5, 6)
+    scores = mine(points)
+
+    if isinstance(scores, Tensor) and scores.shape == (20, 3):
+        F.cross_entropy(scores, labels).backward()
+        silent = [name for name, parameter in mine.named_parameters() if parameter.grad is None]
+
+        if silent:
+            listed = silent[0] if len(silent) == 1 else ", ".join(silent[:-1]) + " and " + silent[-1]
+            raise Mismatch(f"After one backward pass of Classifier(6, 16, 3), {listed} got no gradient, so that layer never trains.")
 
     with torch.no_grad():
         expect_tensor(
@@ -740,7 +763,7 @@ DEBUG3 = Exercise(
 
 DEBUG4_LESSON = prose(
     """
-    Karpathy's first step comes before any model, look at the data. Read
+    Karpathy's first step comes before any model. Look at the data. Read
     examples with their labels, count the labels, and look for repeats. Bugs
     in the data look like a model that learns badly.
 
@@ -919,19 +942,21 @@ DEBUG4 = Exercise(
 
 DEBUG5_LESSON = prose(
     """
-    A few slips come up again and again. Each one trains, only worse.
+    A few slips come up again and again. Each one still trains, and a short
+    run can even look better at first. Over a whole run it comes out worse.
 
     - no `zero_grad`: each step's gradient is added to every earlier one, so the steps grow and point the wrong way.
     - the wrong mode: dropout and BatchNorm act differently in training and in use, so `model.eval()` and `model.train()` must be set.
-    - a summed loss: `reduction="sum"` makes the loss grow with the batch, so the right rate changes with the batch size.
+    - a summed loss: `reduction="sum"` makes the loss grow with the batch, so with SGD the right rate changes with the batch size.
 
     `F.cross_entropy` takes the mean over the batch by default. With
     `reduction="sum"` it adds up instead, so a batch of 64 gives a gradient
-    64 times larger, and the steps with it.
+    64 times larger. With SGD the steps grow 64 times with it. Adam's steps
+    stay about its rate, as adamw2 showed.
 
     Karpathy's recipe has more checks, like fixing the seed so runs repeat,
     and plotting predictions next to their labels. These are the ones that
-    hide best. Each exercise below has one, in the function named after it.
+    hide best. Each function below has one of them.
     """,
 )
 
@@ -1040,21 +1065,53 @@ def dropout_classifier(seed: int) -> nn.Sequential:
     return nn.Sequential(nn.Linear(6, 32), nn.ReLU(), nn.Dropout(0.5), nn.Linear(32, 3))
 
 
-def check_train_steps(found: object) -> None:
-    x, y = labelled_points(630, 40, 6, 3)
-    mine, theirs = seeded_classifier(631), seeded_classifier(631)
-    optimizer = torch.optim.SGD(theirs.parameters(), lr=0.1)
+def last_sgd_loss(
+    model: nn.Module,
+    x: Tensor,
+    y: Tensor,
+    clears_gradients: bool,
+) -> float:
+    optimizer = torch.optim.SGD(model.parameters(), lr=0.1)
 
     for _ in range(10):
-        loss = F.cross_entropy(theirs(x), y)
-        optimizer.zero_grad()
+        loss = F.cross_entropy(model(x), y)
+
+        if clears_gradients:
+            optimizer.zero_grad()
+
         loss.backward()
         optimizer.step()
 
+    return loss.item()
+
+
+def check_train_steps(found: object) -> None:
+    x, y = labelled_points(630, 40, 6, 3)
+    call = "train_steps for 10 steps at 0.1 on a classifier and 40 points"
+    actual = found(seeded_classifier(631), x, y, 10, 0.1)
+    expected = last_sgd_loss(
+        model=seeded_classifier(631),
+        x=x,
+        y=y,
+        clears_gradients=True,
+    )
+    piled_up = last_sgd_loss(
+        model=seeded_classifier(631),
+        x=x,
+        y=y,
+        clears_gradients=False,
+    )
+
+    if isinstance(actual, float) and abs(actual - piled_up) <= 1e-5:
+        raise Mismatch(
+            f"{call} ends at a loss of {actual:.4f}, but a loop that clears the gradients each step ends at {expected:.4f}. "
+            "The gradients were never cleared, so each step's gradient piled onto the ones before.",
+        )
+
     expect_close(
-        call="train_steps for 10 steps at 0.1 on a classifier and 40 points",
-        actual=found(mine, x, y, 10, 0.1),
-        expected=loss.item(),
+        call=call,
+        actual=actual,
+        expected=expected,
         tolerance=1e-5,
     )
 
@@ -1188,8 +1245,9 @@ QUIZ6_SOURCE = source_file(
 
 
     # TODO: Set every group of optimizer to the rate at step and return it. The
-    #   rate warms up over warmup steps, as warmup1's warmup_rate does, then
-    #   falls along a cosine to a tenth of base at step total.
+    #   rate warms up over warmup steps, as warmup1's warmup_rate does. Then it
+    #   falls along a cosine from base at step warmup to a tenth of base at
+    #   step total, as warmup1's warmup_cosine does.
     def set_rate(
         optimizer: torch.optim.Optimizer,
         step: int,

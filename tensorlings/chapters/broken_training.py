@@ -115,9 +115,9 @@ def reference_train_names(
 BROKEN1_LESSON = prose(
     """
     Section 4's project starts with a broken run. The file holds the names
-    model of Section 3 with one slip planted in each of its four parts.
-    Nothing crashes. It trains, and comes out worse than names3, and the job
-    is to find out why.
+    model of Section 3 with four slips planted in it, one for each check
+    below. Nothing crashes. It trains, and comes out worse than names3, and
+    the job is to find out why.
 
     Guessing wastes hours. Karpathy's recipe goes through cheap checks in
     order, and each one here points at one part.
@@ -127,10 +127,23 @@ BROKEN1_LESSON = prose(
     - every layer's gradient: after one backward pass, no parameter should be left without one.
     - the training loop: a sound loop trains the model down, and the same loop with its gradients piling up does not.
 
-    Run each check in your own scratch file or in a Python prompt, with the
-    tools of debug1 to debug5, then fix what it finds. The checks of this
-    exercise say which part is still off and what they saw, so you can work
-    one at a time.
+    Run each check in a Python prompt with the tools of debug1 to debug5,
+    then fix what it finds. From the project folder, this opens a prompt that
+    has run your file, and the lines after it look at the data.
+
+    ```bash
+    PYTHONPATH=. .venv/bin/python -i exercises/29_broken_training/broken1.py
+    ```
+
+    ```python
+    from tensorlings.data import load_names
+    names = load_names()
+    chars = ["."] + sorted(set("".join(names)))
+    build_contexts(["emma"], chars, 3)
+    ```
+
+    The checks of this exercise say which part is still off and what they
+    saw, so you can work one at a time.
 
     The fixed model, trained like names3, reaches about 2.22 on the validation
     names in 10,000 steps.
@@ -141,7 +154,7 @@ BROKEN1_SOURCE = source_file(
     '''
     # broken1.py
     #
-    # The names model of Section 3, with a slip planted in each part. Find each
+    # The names model of Section 3, with four slips planted in it. Find each
     # one with a check from Karpathy's recipe and fix it.
 
     import torch
@@ -172,7 +185,8 @@ BROKEN1_SOURCE = source_file(
 
 
     # TODO: Two slips, one in each method. The loss at the start is far from
-    #   log(27), and one layer never gets a gradient. Fix both.
+    #   log(27), and one layer never gets a gradient. Fix both, so the model
+    #   matches names2's NamesMLP.
     class NamesMLP(nn.Module):
         def __init__(
             self,
@@ -341,6 +355,7 @@ def check_every_gradient(found: type) -> None:
         raise Mismatch(f"After one backward pass, {listed} got no gradient, so that layer never trains.")
 
     theirs = names_model(661)
+    theirs.load_state_dict(model.state_dict())
     x = X[:8]
 
     with torch.no_grad():
@@ -397,8 +412,10 @@ BROKEN1 = Exercise(
     hints={
         "build_contexts": "Look at the order of the three lines in the inner loop. Which context does X get, the one "
         "before the character or the one after?",
-        "NamesMLP.__init__": "The head should start small, so the scores start nearly equal.",
-        "NamesMLP.forward": "One module made in __init__ is never called here.",
+        "NamesMLP.__init__": "The head should start small, so the scores start nearly equal. Shrink its weights to a "
+        "tenth of what nn.Linear drew, as names2 did.",
+        "NamesMLP.forward": "One module made in __init__ is never called here. Run hidden, norm, tanh and head in that "
+        "order, as names2 did.",
         "train_names": "Compare the loop with sgd1's. One of its three lines is missing.",
     },
     introduces=(),
@@ -422,7 +439,7 @@ BROKEN2_LESSON = prose(
     - AdamW at 0.003, with weight decay 0.01 on the weight matrices and embeddings only.
     - 200 steps of warmup, then cosine decay to a tenth of the base rate.
     - the global gradient norm clipped at 1.0.
-    - minibatches of 64, which halves the noise in each step's gradient.
+    - minibatches of 64, which halves the variance of each step's gradient, at twice the work per step.
 
     | Run | Batch | Steps | Validation loss |
     |---|---|---|---|
@@ -430,9 +447,10 @@ BROKEN2_LESSON = prose(
     | tuned, AdamW | 32 | 10,000 | 2.202 |
     | tuned, AdamW | 64 | 10,000 | 2.170 |
 
-    The tuned run beats names3 in the same number of steps, and the larger
-    batch helps most. The gains are small next to a slip, since names3 was
-    already sound. That is why the recipe's checks come before any tuning.
+    The tuned run beats names3 in the same number of steps. The larger batch
+    helps most, though each of its steps sees twice the examples. The gains
+    are small next to a slip, since names3 was already sound. That is why the
+    recipe's checks come before any tuning.
 
     The check trains your tuned run for 10,000 steps and needs it below 2.20.
     It takes a minute or two, so let it finish.
