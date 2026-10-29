@@ -215,5 +215,6 @@ EXERCISES: list[Exercise] = [
     upsampling.UNET1,
     upsampling.UNET2,
     augmentation.AUGMENT1,
+    augmentation.AUGMENT2,
     transfer.TRANSFER1,
 ]

@@ -488,6 +488,8 @@ CASES: list[tuple[str, str, str, str]] = [
     ("transfer1", "trainable_count counts everything", "return sum(parameter.numel() for parameter in model.parameters() if parameter.requires_grad)", "return sum(parameter.numel() for parameter in model.parameters())"),
     ("transfer1", "transfer leaves the body training", "    freeze_(target.body)\n", ""),
     ("transfer1", "transfer copies nothing", "    target.body.load_state_dict(source.body.state_dict())\n", ""),
+    ("augment2", "augment_batch flips every image", "images = torch.where(torch.rand(len(images), 1, 1, 1, generator=generator) < 0.5, images.flip(-1), images)", "images = images.flip(-1)"),
+    ("augment2", "train_with_augment never augments", "loss = F.cross_entropy(model(augment_batch(x[batch], generator, flip)), y[batch])", "loss = F.cross_entropy(model(x[batch]), y[batch])"),
     ("conv5", "pointwise reshapes the wrong way", "return (weight @ x.reshape(c, -1)).reshape(-1, h, w)", "return (weight @ x.reshape(-1, c).T).reshape(-1, h, w)"),
 ]
 

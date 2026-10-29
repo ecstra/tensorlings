@@ -9,6 +9,7 @@ EXERCISES_DIR = ROOT / "exercises"
 SOLUTIONS_DIR = ROOT / "solutions"
 STATE_FILE = ROOT / ".tensorlings-state.json"
 DATA_DIR = ROOT / "data"
+CHECKPOINTS_DIR = ROOT / "checkpoints"
 START_COMMAND = ".venv/bin/python run.py"
 
 

@@ -6,7 +6,7 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor
 
-from ..course import Chapter, Exercise
+from ..course import OPTIMIZER_IMPORTS, Chapter, Exercise
 from ..engine import (
     Checker,
     check_on_inputs,
@@ -229,4 +229,263 @@ AUGMENT1 = Exercise(
     },
     introduces=(),
     check=check_augment1,
+)
+
+
+# ---------------------------------------------------------------------------
+# augment2
+# ---------------------------------------------------------------------------
+
+AUGMENT2_LESSON = prose(
+    """
+    Here a small convolutional net learned MNIST from only 500 images, for
+    600 steps of minibatches of 64 with Adam. It was measured on 3000
+    validation images.
+
+    | Augmentation | Training | Validation |
+    |---|---|---|
+    | none | 100% | 91.1% |
+    | shifts of up to 2 pixels | 99.8% | 95.0% |
+    | shifts and left to right flips | 96.0% | 88.1% |
+
+    With no augmentation the net learned the 500 images by heart. Shifts made
+    every step show a slightly different set, and validation went up 4 points.
+    Flips made it worse than nothing. A flipped 2 or 7 is not a 2 or 7, and
+    a 3 turns backwards, so the model learned from wrong pictures.
+
+    So a change has to keep the label for the data at hand. Flips suit photos
+    of cats and cars, which look as natural mirrored, and not digits or text.
+    Rotating a 6 by half a turn makes a 9. Colour changes suit photos, and do
+    nothing for grey digits.
+
+    Augmentation helps most when data is scarce and the model can memorize.
+    With millions of images it matters less, though big image models still
+    use it.
+
+    `torch.where(condition, a, b)` takes `a` where the condition is `True`
+    and `b` elsewhere, broadcasting all three.
+    """,
+)
+
+AUGMENT2_SOURCE = source_file(
+    '''
+    # augment2.py
+
+    import torch
+    import torch.nn as nn
+    import torch.nn.functional as F
+    from torch import Tensor
+
+    choose = torch.tensor([True, False])
+    picked = torch.where(choose, torch.tensor([1, 2]), torch.tensor([9, 9]))    # tensor([1, 9])
+
+
+    # The shifts from augment1.
+    def random_shifts(
+        images: Tensor,
+        pad: int,
+        generator: torch.Generator,
+    ) -> Tensor:
+        tops = torch.randint(0, 2 * pad + 1, (len(images),), generator=generator)
+        lefts = torch.randint(0, 2 * pad + 1, (len(images),), generator=generator)
+        h, w = images.shape[2], images.shape[3]
+        padded = F.pad(images, (pad, pad, pad, pad))
+
+        return torch.stack([padded[i, :, top:top + h, left:left + w] for i, (top, left) in enumerate(zip(tops, lefts))])
+
+
+    # TODO: Finish the line that flips, so this shifts every image by up to 2
+    #   pixels, then, when flip is True, mirrors each image whose draw from
+    #   torch.rand is below 0.5. Draw one number per image, shaped
+    #   (batch, 1, 1, 1).
+    def augment_batch(
+        images: Tensor,
+        generator: torch.Generator,
+        flip: bool,
+    ) -> Tensor:
+        images = random_shifts(images, 2, generator)
+
+        if flip:
+            images = ...
+
+        return images
+
+
+    # TODO: Finish the line that sets loss, so each step trains on 64 random
+    #   images of x, augmented with augment_batch, against their labels.
+    def train_with_augment(
+        model: nn.Module,
+        x: Tensor,
+        y: Tensor,
+        steps: int,
+        flip: bool,
+        generator: torch.Generator,
+    ) -> float:
+        optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+
+        for _ in range(steps):
+            batch = torch.randint(0, len(x), (64,), generator=generator)
+            loss = ...
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+        return loss.item()
+    ''',
+)
+
+AUGMENT2_SOLUTION = source_file(
+    '''
+    # augment2.py, a solution for comparison
+
+    import torch
+    import torch.nn as nn
+    import torch.nn.functional as F
+    from torch import Tensor
+
+    choose = torch.tensor([True, False])
+    picked = torch.where(choose, torch.tensor([1, 2]), torch.tensor([9, 9]))
+
+
+    def random_shifts(
+        images: Tensor,
+        pad: int,
+        generator: torch.Generator,
+    ) -> Tensor:
+        tops = torch.randint(0, 2 * pad + 1, (len(images),), generator=generator)
+        lefts = torch.randint(0, 2 * pad + 1, (len(images),), generator=generator)
+        h, w = images.shape[2], images.shape[3]
+        padded = F.pad(images, (pad, pad, pad, pad))
+
+        return torch.stack([padded[i, :, top:top + h, left:left + w] for i, (top, left) in enumerate(zip(tops, lefts))])
+
+
+    def augment_batch(
+        images: Tensor,
+        generator: torch.Generator,
+        flip: bool,
+    ) -> Tensor:
+        images = random_shifts(images, 2, generator)
+
+        if flip:
+            images = torch.where(torch.rand(len(images), 1, 1, 1, generator=generator) < 0.5, images.flip(-1), images)
+
+        return images
+
+
+    def train_with_augment(
+        model: nn.Module,
+        x: Tensor,
+        y: Tensor,
+        steps: int,
+        flip: bool,
+        generator: torch.Generator,
+    ) -> float:
+        optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+
+        for _ in range(steps):
+            batch = torch.randint(0, len(x), (64,), generator=generator)
+            loss = F.cross_entropy(model(augment_batch(x[batch], generator, flip)), y[batch])
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+        return loss.item()
+    ''',
+)
+
+
+def reference_augment_batch(
+    images: Tensor,
+    generator: torch.Generator,
+    flip: bool,
+) -> Tensor:
+    images = reference_random_shifts(images, 2, generator)
+
+    if flip:
+        images = torch.where(torch.rand(len(images), 1, 1, 1, generator=generator) < 0.5, images.flip(-1), images)
+
+    return images
+
+
+def small_net(seed: int) -> torch.nn.Module:
+    torch.manual_seed(seed)
+
+    return torch.nn.Sequential(
+        torch.nn.Conv2d(1, 4, 3, padding=1),
+        torch.nn.ReLU(),
+        torch.nn.Flatten(),
+        torch.nn.Linear(4 * 6 * 6, 3),
+    )
+
+
+def reference_train_with_augment(
+    model: torch.nn.Module,
+    x: Tensor,
+    y: Tensor,
+    steps: int,
+    flip: bool,
+    generator: torch.Generator,
+) -> float:
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+
+    for _ in range(steps):
+        batch = torch.randint(0, len(x), (64,), generator=generator)
+        loss = F.cross_entropy(model(reference_augment_batch(x[batch], generator, flip)), y[batch])
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+    return loss.item()
+
+
+def check_train_with_augment(found: object) -> None:
+    from ..engine import expect_close
+
+    x = torch.rand(100, 1, 6, 6, generator=torch.Generator().manual_seed(855))
+    y = torch.randint(0, 3, (100,), generator=torch.Generator().manual_seed(856))
+
+    for flip in (False, True):
+        expect_close(
+            call=f"train_with_augment for 10 steps on 100 small images with flip {flip}",
+            actual=found(small_net(857), x, y, 10, flip, torch.Generator().manual_seed(858)),
+            expected=reference_train_with_augment(small_net(857), x, y, 10, flip, torch.Generator().manual_seed(858)),
+            tolerance=1e-5,
+        )
+
+
+def check_augment2(checker: Checker) -> None:
+    check_on_inputs(
+        checker=checker,
+        function="augment_batch",
+        description="shifts every image and flips about half when asked",
+        inputs=(
+            (small_tensor(850, 6, 1, 4, 4), seeded(851), False),
+            (small_tensor(852, 8, 1, 4, 4), seeded(853), True),
+        ),
+        reference=reference_augment_batch,
+        expect=expect_tensor,
+    )
+    checker.test(
+        function="train_with_augment",
+        description="trains on augmented minibatches",
+        run=check_train_with_augment,
+    )
+
+
+AUGMENT2 = Exercise(
+    name="augment2",
+    chapter=AUGMENTATION,
+    title="What augmentation buys",
+    lesson=AUGMENT2_LESSON,
+    source=AUGMENT2_SOURCE,
+    solution=AUGMENT2_SOLUTION,
+    hints={
+        "augment_batch": "torch.where of torch.rand(len(images), 1, 1, 1, generator=generator) < 0.5, then "
+        "images.flip(-1), then images.",
+        "train_with_augment": "F.cross_entropy of model(augment_batch(x[batch], generator, flip)) against y[batch].",
+    },
+    introduces=(),
+    check=check_augment2,
+    imports_first=OPTIMIZER_IMPORTS,
 )

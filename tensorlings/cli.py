@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import os
 import sys
 import tempfile
@@ -34,6 +35,7 @@ USAGE = prose(
     {START_COMMAND} reset name         reset an exercise file to how it started
     {START_COMMAND} check-all          check every exercise and update your progress
     {START_COMMAND} data name          download a dataset an exercise needs, like mnist
+    {START_COMMAND} train name         train a project's model for the minutes it needs, like cifar2
     {START_COMMAND} dev check          maintainer check of every exercise and lesson
     """,
 )
@@ -194,6 +196,29 @@ def dev_check(
     return 1 if problems else 0
 
 
+def train_exercise(name: str) -> int:
+    """Run an exercise file's main(), the long training a project's check reads back as a checkpoint.
+    It runs outside the app and its time limit, on the best device the machine has."""
+    exercise = exercise_named(name)
+
+    if exercise is None:
+        print(f"There is no exercise called {name}.")
+        return 1
+
+    spec = importlib.util.spec_from_file_location(exercise.name, exercise.path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    train = getattr(module, "main", None)
+
+    if not callable(train):
+        print(f"{exercise.path.name} has no main() to train with. Only the exercises that train for minutes have one.")
+        return 1
+
+    train()
+
+    return 0
+
+
 def main(arguments: list[str]) -> int:
     flags = [argument for argument in arguments if argument.startswith("-")]
     words = [argument for argument in arguments if not argument.startswith("-")]
@@ -229,6 +254,13 @@ def main(arguments: list[str]) -> int:
 
     if not require_setup():
         return 1
+
+    if command == "train":
+        if not rest:
+            print(f"Name the exercise to train, for example `{START_COMMAND} train cifar2`.")
+            return 1
+
+        return train_exercise(rest[0])
 
     progress = load_progress()
 
