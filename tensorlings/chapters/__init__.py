@@ -11,6 +11,7 @@ from . import (
     autograd,
     chain_rule,
     derivatives,
+    embeddings,
     generalization,
     gradient_descent,
     likelihood,
@@ -45,6 +46,7 @@ CHAPTERS: list[Chapter] = [
     linear_layers.LINEAR,
     activations.ACTIVATIONS,
     mlp.MLP,
+    embeddings.EMBEDDINGS,
 ]
 
 EXERCISES: list[Exercise] = [
@@ -112,4 +114,8 @@ EXERCISES: list[Exercise] = [
     mlp.MLP2,
     mlp.MLP3,
     mlp.MLP4,
+    embeddings.EMBEDDING1,
+    embeddings.EMBEDDING2,
+    embeddings.EMBEDDING3,
+    embeddings.EMBEDDING4,
 ]
