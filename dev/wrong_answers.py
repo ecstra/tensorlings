@@ -490,6 +490,9 @@ CASES: list[tuple[str, str, str, str]] = [
     ("transfer1", "transfer copies nothing", "    target.body.load_state_dict(source.body.state_dict())\n", ""),
     ("augment2", "augment_batch flips every image", "images = torch.where(torch.rand(len(images), 1, 1, 1, generator=generator) < 0.5, images.flip(-1), images)", "images = images.flip(-1)"),
     ("augment2", "train_with_augment never augments", "loss = F.cross_entropy(model(augment_batch(x[batch], generator, flip)), y[batch])", "loss = F.cross_entropy(model(x[batch]), y[batch])"),
+    ("transfer2", "split_by_label keeps the second part's labels", "return x[below], y[below], x[~below], y[~below] - low", "return x[below], y[below], x[~below], y[~below]"),
+    ("transfer2", "few_labels takes the first examples", "picked = torch.randperm(len(x), generator=generator)[:count]", "picked = torch.arange(count)"),
+    ("transfer2", "fine_tune_optimizer swaps the rates", "groups = [{\"params\": model.body.parameters(), \"lr\": body_lr}, {\"params\": model.head.parameters(), \"lr\": head_lr}]", "groups = [{\"params\": model.body.parameters(), \"lr\": head_lr}, {\"params\": model.head.parameters(), \"lr\": body_lr}]"),
     ("conv5", "pointwise reshapes the wrong way", "return (weight @ x.reshape(c, -1)).reshape(-1, h, w)", "return (weight @ x.reshape(-1, c).T).reshape(-1, h, w)"),
 ]
 

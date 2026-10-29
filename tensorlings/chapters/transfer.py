@@ -270,3 +270,198 @@ TRANSFER1 = Exercise(
     introduces=(),
     check=check_transfer1,
 )
+
+
+# ---------------------------------------------------------------------------
+# transfer2
+# ---------------------------------------------------------------------------
+
+TRANSFER2_LESSON = prose(
+    """
+    Here a small convolutional net learned digits 0 to 4 from 20,000 MNIST
+    images, and reached 98.8% on them. The new task was digits 5 to 9, with
+    only 100 labeled images. Each model trained 300 steps on those 100 and was
+    measured on 5 to 9's validation images.
+
+    | Start | Validation on 5 to 9 |
+    |---|---|
+    | from scratch | 90.7% |
+    | the 0 to 4 body, frozen, with a new head | 93.9% |
+    | the 0 to 4 body, everything trained at the same rate | 91.7% |
+
+    The frozen body did best. It learned strokes and loops from thousands of
+    other digits, and those serve 5 to 9 as well. Only the small head had to
+    learn from 100 images. Training everything at the same rate let the 100 images
+    pull the body away from what it knew.
+
+    MNIST is easy, so even 100 images get far from scratch. On photos, where
+    100 images are far too few to learn edges and textures, the gap is much
+    larger. That is why most image work starts from a body trained on
+    ImageNet.
+
+    When the new task has more data, train everything, with the body at a
+    smaller rate than the head. An optimizer takes one rate per group, as in
+    adamw2.
+    """,
+)
+
+TRANSFER2_SOURCE = source_file(
+    '''
+    # transfer2.py
+
+    import torch
+    import torch.nn as nn
+    from torch import Tensor
+
+    y = torch.tensor([3, 7, 5, 0])
+    low = y < 5                                      # tensor([ True, False, False,  True])
+
+
+    # TODO: Split x and y into the examples whose label is below low and the
+    #   rest. Return x and y of the first, then x and y of the second with low
+    #   taken off its labels, so they count from 0.
+    def split_by_label(
+        x: Tensor,
+        y: Tensor,
+        low: int,
+    ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
+        ...
+
+
+    # TODO: Return count examples of x and y picked at random without repeats,
+    #   with the first count positions of torch.randperm from generator.
+    def few_labels(
+        x: Tensor,
+        y: Tensor,
+        count: int,
+        generator: torch.Generator,
+    ) -> tuple[Tensor, Tensor]:
+        ...
+
+
+    # TODO: Return Adam with two groups, model.body's parameters at body_lr and
+    #   model.head's at head_lr.
+    def fine_tune_optimizer(
+        model: nn.Module,
+        body_lr: float,
+        head_lr: float,
+    ) -> torch.optim.Optimizer:
+        ...
+    ''',
+)
+
+TRANSFER2_SOLUTION = source_file(
+    '''
+    # transfer2.py, a solution for comparison
+
+    import torch
+    import torch.nn as nn
+    from torch import Tensor
+
+    y = torch.tensor([3, 7, 5, 0])
+    low = y < 5
+
+
+    def split_by_label(
+        x: Tensor,
+        y: Tensor,
+        low: int,
+    ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
+        below = y < low
+
+        return x[below], y[below], x[~below], y[~below] - low
+
+
+    def few_labels(
+        x: Tensor,
+        y: Tensor,
+        count: int,
+        generator: torch.Generator,
+    ) -> tuple[Tensor, Tensor]:
+        picked = torch.randperm(len(x), generator=generator)[:count]
+
+        return x[picked], y[picked]
+
+
+    def fine_tune_optimizer(
+        model: nn.Module,
+        body_lr: float,
+        head_lr: float,
+    ) -> torch.optim.Optimizer:
+        groups = [{"params": model.body.parameters(), "lr": body_lr}, {"params": model.head.parameters(), "lr": head_lr}]
+
+        return torch.optim.Adam(groups)
+    ''',
+)
+
+
+def check_fine_tune_optimizer(found: object) -> None:
+    model = ReferenceNet(5)
+    call = "fine_tune_optimizer(a Net(5), 0.0001, 0.001)"
+    optimizer = found(model, 0.0001, 0.001)
+
+    if type(optimizer) is not torch.optim.Adam:
+        raise Mismatch(f"{call} is {type(optimizer).__name__}, but it should be torch.optim.Adam.")
+
+    groups = optimizer.param_groups
+
+    if len(groups) != 2:
+        raise Mismatch(f"{call} should have two groups, but it has {len(groups)}.")
+
+    for group, part, rate in ((groups[0], model.body, 0.0001), (groups[1], model.head, 0.001)):
+        if [id(parameter) for parameter in group["params"]] != [id(parameter) for parameter in part.parameters()] or group["lr"] != rate:
+            name = "body" if part is model.body else "head"
+            raise Mismatch(f"In {call}, the {name}'s group should hold the {name}'s parameters at a rate of {rate}.")
+
+
+def check_transfer2(checker: Checker) -> None:
+    from ..engine import check_on_inputs, expect_parts, expect_tensor, seeded, small_tensor
+
+    labels = torch.tensor([3, 7, 5, 0, 9, 4, 6, 1])
+    check_on_inputs(
+        checker=checker,
+        function="split_by_label",
+        description="splits by label and counts the second part from 0",
+        inputs=(
+            (small_tensor(860, 8, 2), labels, 5),
+            (small_tensor(861, 8, 3), labels, 3),
+        ),
+        reference=lambda x, y, low: (x[y < low], y[y < low], x[y >= low], y[y >= low] - low),
+        expect=expect_parts("x of the first part", "y of the first part", "x of the second part", "y of the second part"),
+    )
+    check_on_inputs(
+        checker=checker,
+        function="few_labels",
+        description="picks count examples at random without repeats",
+        inputs=(
+            (small_tensor(862, 10, 2), torch.arange(10), 4, seeded(863)),
+            (small_tensor(864, 6, 3), torch.arange(6), 6, seeded(865)),
+        ),
+        reference=lambda x, y, count, generator: (lambda picked: (x[picked], y[picked]))(torch.randperm(len(x), generator=generator)[:count]),
+        expect=expect_parts("the examples", "their labels"),
+    )
+    checker.test(
+        function="fine_tune_optimizer",
+        description="gives the body and the head rates of their own",
+        run=check_fine_tune_optimizer,
+    )
+
+
+TRANSFER2 = Exercise(
+    name="transfer2",
+    chapter=TRANSFER,
+    title="What a trained body buys",
+    lesson=TRANSFER2_LESSON,
+    source=TRANSFER2_SOURCE,
+    solution=TRANSFER2_SOLUTION,
+    hints={
+        "split_by_label": "below = y < low picks the first part, and ~below the rest. Take low off the second "
+        "part's labels.",
+        "few_labels": "torch.randperm(len(x), generator=generator)[:count] gives the positions. Index x and y with "
+        "them.",
+        "fine_tune_optimizer": "torch.optim.Adam of a list of two dicts, each with \"params\" and \"lr\".",
+    },
+    introduces=(),
+    check=check_transfer2,
+    imports_first=OPTIMIZER_IMPORTS,
+)
