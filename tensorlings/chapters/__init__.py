@@ -6,7 +6,7 @@ closes, and goes in the quizzes folder like every quiz."""
 from __future__ import annotations
 
 from ..course import QUIZZES, Chapter, Exercise
-from . import autograd, chain_rule, derivatives, matmul, micrograd, tensor_backprop, tensors
+from . import autograd, chain_rule, derivatives, linear_regression, matmul, micrograd, tensor_backprop, tensors
 
 CHAPTERS: list[Chapter] = [
     tensors.TENSORS,
@@ -17,6 +17,7 @@ CHAPTERS: list[Chapter] = [
     autograd.AUTOGRAD,
     tensor_backprop.TENSOR_BACKPROP,
     micrograd.MICROGRAD,
+    linear_regression.LINEAR_REGRESSION,
 ]
 
 EXERCISES: list[Exercise] = [
@@ -45,4 +46,7 @@ EXERCISES: list[Exercise] = [
     micrograd.MICROGRAD1,
     micrograd.MICROGRAD2,
     micrograd.MICROGRAD3,
+    linear_regression.LINREG1,
+    linear_regression.LINREG2,
+    linear_regression.LINREG3,
 ]

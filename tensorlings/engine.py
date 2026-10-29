@@ -552,6 +552,15 @@ def differences_text(
 # ---------------------------------------------------------------------------
 
 
+def small_tensor(
+    seed: int,
+    *shape: int,
+) -> Tensor:
+    """The same tensor of small whole numbers every run, so a check never changes between saves
+    and a failing call stays short enough to read."""
+    return torch.randint(-3, 4, shape, generator=torch.Generator().manual_seed(seed)).float()
+
+
 def reject_missing_return(
     call: str,
     actual: object,

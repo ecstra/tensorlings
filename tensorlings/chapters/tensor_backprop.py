@@ -9,7 +9,7 @@ import torch
 from torch import Tensor
 
 from ..course import QUIZZES, Chapter, Exercise
-from ..engine import Checker, Described, check_on_inputs, expect_parts, expect_tensor, expect_value
+from ..engine import Checker, Described, check_on_inputs, expect_parts, expect_tensor, expect_value, small_tensor
 from ..text import prose, source_file
 
 TENSOR_BACKPROP = Chapter(
@@ -32,15 +32,6 @@ TENSOR_BACKPROP = Chapter(
         """,
     ),
 )
-
-
-def small_tensor(
-    seed: int,
-    *shape: int,
-) -> Tensor:
-    """The same tensor of small whole numbers every run, so a check never changes between saves
-    and a failing call stays short enough to read."""
-    return torch.randint(-3, 4, shape, generator=torch.Generator().manual_seed(seed)).float()
 
 
 def autograd_backward(
