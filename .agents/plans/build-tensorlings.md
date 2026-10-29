@@ -27,7 +27,7 @@ The curriculum, the app and the writing rules are in [the course design](../docs
 | 2 | Phase 1a, the app and the first 5 exercises, for the owner's review | | owner | done |
 | 3 | The owner reviews phase 1a, and from then on acks every phase | | owner | done |
 | 4 | Phase 1b, the rest of parts 1 and 2 | | owner | done |
-| 5 | Phase 2, parts 3 and 4 | | owner | pending |
+| 5 | Phase 2, parts 3 and 4 | | owner | done |
 | 6 | Phase 3, parts 5 to 7, with the GPT project | | owner | pending |
 | 7 | Phase 4, parts 8 to 10 | | owner | pending |
 | 8 | Phase 5, parts 11 and 12 | | owner | pending |
