@@ -6,7 +6,7 @@ closes, and goes in the quizzes folder like every quiz."""
 from __future__ import annotations
 
 from ..course import QUIZZES, Chapter, Exercise
-from . import chain_rule, derivatives, matmul, tensors
+from . import autograd, chain_rule, derivatives, matmul, tensors
 
 CHAPTERS: list[Chapter] = [
     tensors.TENSORS,
@@ -14,6 +14,7 @@ CHAPTERS: list[Chapter] = [
     QUIZZES,
     derivatives.DERIVATIVES,
     chain_rule.CHAIN_RULE,
+    autograd.AUTOGRAD,
 ]
 
 EXERCISES: list[Exercise] = [
@@ -30,4 +31,8 @@ EXERCISES: list[Exercise] = [
     chain_rule.CHAIN1,
     chain_rule.CHAIN2,
     chain_rule.CHAIN3,
+    autograd.AUTOGRAD1,
+    autograd.AUTOGRAD2,
+    autograd.AUTOGRAD3,
+    autograd.AUTOGRAD4,
 ]

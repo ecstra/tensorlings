@@ -121,6 +121,11 @@ PLAIN_ERRORS: tuple[tuple[str, str], ...] = (
         r"len\(\) of a 0-d tensor",
         "len() needs a tensor with at least one dimension, and this one has none.",
     ),
+    (
+        r"'NoneType' object has no attribute '(\w+)'",
+        "Something here is None, so it has no .{0}. A tensor's .grad stays None until .backward() runs on a result "
+        "made from it, and a function with no return line gives None.",
+    ),
 )
 
 
@@ -132,6 +137,23 @@ def plain_words(error: BaseException) -> str | None:
             return explanation.format(*match.groups())
 
     return None
+
+
+def learner_line(
+    error: BaseException,
+    path: Path,
+) -> int | None:
+    """The line of the learner's file where the error was raised, if it was raised there."""
+    learner_frames = [
+        frame
+        for frame in traceback.extract_tb(error.__traceback__)
+        if Path(frame.filename).resolve() == path.resolve()
+    ]
+
+    if not learner_frames:
+        return None
+
+    return learner_frames[-1].lineno
 
 
 def describe_crash(
@@ -406,8 +428,16 @@ class Checker:
             return
         except Exception as error:
             # A TODO left as ... makes code like x[...] fail, which means the function is not finished.
+            # The ... can sit in another function this one calls, so the message names its line.
             if "ellipsis" in str(error):
+                line = learner_line(
+                    error=error,
+                    path=self.path,
+                )
                 detail = f"{function} still has a ... where a TODO goes, so it is {NOT_STARTED}."
+
+                if line is not None:
+                    detail = f"{function} runs into a ... where a TODO goes, on line {line} of {self.path.name}, so it is {NOT_STARTED}."
             else:
                 detail = describe_crash(
                     error=error,
