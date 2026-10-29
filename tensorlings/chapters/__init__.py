@@ -25,6 +25,7 @@ from . import (
     mlp,
     mnist,
     normalization,
+    residuals,
     softmax_regression,
     tensor_backprop,
     tensors,
@@ -53,6 +54,7 @@ CHAPTERS: list[Chapter] = [
     initialization.INITIALIZATION,
     dropout.DROPOUT,
     normalization.NORMALIZATION,
+    residuals.RESIDUALS,
 ]
 
 EXERCISES: list[Exercise] = [
@@ -136,4 +138,10 @@ EXERCISES: list[Exercise] = [
     normalization.LAYERNORM1,
     normalization.RMSNORM1,
     normalization.NORM1,
+    residuals.RESIDUAL1,
+    residuals.RESIDUAL2,
+    residuals.RESIDUAL3,
+    residuals.RESIDUAL4,
+    residuals.QUIZ4,
+    residuals.QUIZ5,
 ]
