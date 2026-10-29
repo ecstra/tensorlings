@@ -478,6 +478,9 @@ CASES: list[tuple[str, str, str, str]] = [
     ("transposed1", "conv_input_gradient without the gradient handed down", "(outputs * grad).sum().backward()", "outputs.sum().backward()"),
     ("unet1", "center_crop takes the corner", "return x[:, :, top:top + size, left:left + size]", "return x[:, :, :size, :size]"),
     ("unet1", "TinyUNet joins the skip first", "torch.cat([F.interpolate(c, scale_factor=2), b], dim=1)", "torch.cat([b, F.interpolate(c, scale_factor=2)], dim=1)"),
+    ("unet2", "NoSkipUNet upsamples once", "        u = self.up1(F.interpolate(u, scale_factor=2))\n", "        u = self.up1(u)\n"),
+    ("unet2", "iou over the marked pixels only", "return ((marked & truth).sum() / (marked | truth).sum()).item()", "return ((marked & truth).sum() / marked.sum()).item()"),
+    ("unet2", "edge_pixels grown against the mask", "return grown != shrunk", "return grown != masks"),
     ("conv5", "pointwise reshapes the wrong way", "return (weight @ x.reshape(c, -1)).reshape(-1, h, w)", "return (weight @ x.reshape(-1, c).T).reshape(-1, h, w)"),
 ]
 

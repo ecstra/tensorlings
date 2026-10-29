@@ -625,3 +625,261 @@ UNET1 = Exercise(
     introduces=(),
     check=check_unet1,
 )
+
+
+# ---------------------------------------------------------------------------
+# unet2
+# ---------------------------------------------------------------------------
+
+UNET2_LESSON = prose(
+    """
+    Here two models learned to mark made up shapes, circles and squares on
+    noisy images of 32 by 32, from 1000 examples for 400 steps. One was
+    unet1's U-Net. The other was the same with no skips, its way up fed only
+    from below.
+
+    | Model | Pixels right | Pixels on an edge right | IoU |
+    |---|---|---|---|
+    | no skips | 98.5% | 86.2% | 0.876 |
+    | U-Net | 99.1% | 92.2% | 0.927 |
+
+    Most pixels are easy, far inside or far outside a shape, so the share of
+    all pixels right hides the gap. On the pixels next to an edge the skips
+    win by 6 points. The way down shrank the maps to 8 by 8. Without skips,
+    the way up has to guess where each edge falls inside a block of 4 by 4.
+
+    **IoU**, intersection over union, scores a mask. It is the count of pixels
+    both masks mark, divided by the count of pixels either marks, 1 for a
+    perfect match. `&` and `|` are and and or on tensors of `True` and
+    `False`.
+
+    `F.max_pool2d(mask, 3, stride=1, padding=1)` grows a mask by one pixel all
+    around, since a pixel next to a marked one becomes marked. Minus the max
+    pool of minus the mask shrinks it the same way. The pixels where the grown
+    and the shrunk masks differ are the edge.
+    """,
+)
+
+UNET2_SOURCE = source_file(
+    '''
+    # unet2.py
+
+    import torch
+    import torch.nn as nn
+    import torch.nn.functional as F
+    from torch import Tensor
+
+    mask = torch.zeros(1, 1, 5, 5)
+    mask[0, 0, 2, 2] = 1.0
+    grown = F.max_pool2d(mask, 3, stride=1, padding=1)    # the middle 3 by 3 marked
+
+
+    def block(
+        inputs: int,
+        outputs: int,
+    ) -> nn.Sequential:
+        return nn.Sequential(
+            nn.Conv2d(inputs, outputs, 3, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(outputs, outputs, 3, padding=1),
+            nn.ReLU(),
+        )
+
+
+    # TODO: Finish forward like TinyUNet's in unet1, with no skips. The way up
+    #   upsamples c and runs up2, then upsamples that and runs up1, and nothing
+    #   is joined on.
+    class NoSkipUNet(nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.down1 = block(1, 8)
+            self.down2 = block(8, 16)
+            self.bottom = block(16, 32)
+            self.up2 = block(32, 16)
+            self.up1 = block(16, 8)
+            self.out = nn.Conv2d(8, 1, 1)
+
+        def forward(self, x: Tensor) -> Tensor:
+            ...
+
+
+    # TODO: Return the IoU of the mask the model marks, where logits are above 0,
+    #   against masks of 0 and 1, as a plain number.
+    def iou(
+        logits: Tensor,
+        masks: Tensor,
+    ) -> float:
+        ...
+
+
+    # TODO: Return a tensor of True and False, the same shape as masks, of shape
+    #   (batch, 1, h, w), True on the pixels where the grown and the shrunk masks
+    #   differ.
+    def edge_pixels(masks: Tensor) -> Tensor:
+        ...
+    ''',
+)
+
+UNET2_SOLUTION = source_file(
+    '''
+    # unet2.py, a solution for comparison
+
+    import torch
+    import torch.nn as nn
+    import torch.nn.functional as F
+    from torch import Tensor
+
+    mask = torch.zeros(1, 1, 5, 5)
+    mask[0, 0, 2, 2] = 1.0
+    grown = F.max_pool2d(mask, 3, stride=1, padding=1)
+
+
+    def block(
+        inputs: int,
+        outputs: int,
+    ) -> nn.Sequential:
+        return nn.Sequential(
+            nn.Conv2d(inputs, outputs, 3, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(outputs, outputs, 3, padding=1),
+            nn.ReLU(),
+        )
+
+
+    class NoSkipUNet(nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.down1 = block(1, 8)
+            self.down2 = block(8, 16)
+            self.bottom = block(16, 32)
+            self.up2 = block(32, 16)
+            self.up1 = block(16, 8)
+            self.out = nn.Conv2d(8, 1, 1)
+
+        def forward(self, x: Tensor) -> Tensor:
+            a = self.down1(x)
+            b = self.down2(F.max_pool2d(a, 2))
+            c = self.bottom(F.max_pool2d(b, 2))
+            u = self.up2(F.interpolate(c, scale_factor=2))
+            u = self.up1(F.interpolate(u, scale_factor=2))
+
+            return self.out(u)
+
+
+    def iou(
+        logits: Tensor,
+        masks: Tensor,
+    ) -> float:
+        marked = logits > 0
+        truth = masks > 0.5
+
+        return ((marked & truth).sum() / (marked | truth).sum()).item()
+
+
+    def edge_pixels(masks: Tensor) -> Tensor:
+        grown = F.max_pool2d(masks, 3, stride=1, padding=1)
+        shrunk = -F.max_pool2d(-masks, 3, stride=1, padding=1)
+
+        return grown != shrunk
+    ''',
+)
+
+
+class ReferenceNoSkip(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.down1 = block(1, 8)
+        self.down2 = block(8, 16)
+        self.bottom = block(16, 32)
+        self.up2 = block(32, 16)
+        self.up1 = block(16, 8)
+        self.out = nn.Conv2d(8, 1, 1)
+
+    def forward(self, x: Tensor) -> Tensor:
+        a = self.down1(x)
+        b = self.down2(F.max_pool2d(a, 2))
+        c = self.bottom(F.max_pool2d(b, 2))
+        u = self.up2(F.interpolate(c, scale_factor=2))
+        u = self.up1(F.interpolate(u, scale_factor=2))
+
+        return self.out(u)
+
+
+def check_no_skip_forward(found: type) -> None:
+    torch.manual_seed(830)
+    model = expect_module("NoSkipUNet()", found())
+    reference = ReferenceNoSkip()
+    reference.load_state_dict(model.state_dict())
+    x = torch.rand(2, 1, 16, 16, generator=torch.Generator().manual_seed(831))
+
+    with torch.no_grad():
+        expected = reference(x)
+
+    expect_tensor(
+        call="NoSkipUNet() on 2 images of 16 by 16",
+        actual=model(x),
+        expected=expected,
+    )
+
+
+def square_masks() -> Tensor:
+    masks = torch.zeros(2, 1, 6, 6)
+    masks[0, 0, 1:4, 1:4] = 1.0
+    masks[1, 0, 2:6, 0:3] = 1.0
+
+    return masks
+
+
+def check_unet2(checker: Checker) -> None:
+    from ..engine import expect_close
+
+    checker.test_method(
+        class_name="NoSkipUNet",
+        method="forward",
+        description="goes down and up with nothing joined on",
+        run=check_no_skip_forward,
+    )
+    check_on_inputs(
+        checker=checker,
+        function="iou",
+        description="divides the overlap by what either marks",
+        inputs=(
+            (small_tensor(832, 2, 1, 6, 6), square_masks()),
+            (torch.ones(1, 1, 3, 3), torch.tensor([[[[1.0, 0.0, 0.0], [1.0, 1.0, 0.0], [0.0, 0.0, 0.0]]]])),
+        ),
+        reference=lambda logits, masks: (((logits > 0) & (masks > 0.5)).sum() / ((logits > 0) | (masks > 0.5)).sum()).item(),
+        expect=lambda call, actual, expected: expect_close(
+            call=call,
+            actual=actual,
+            expected=expected,
+        ),
+    )
+    check_on_inputs(
+        checker=checker,
+        function="edge_pixels",
+        description="marks where the grown and shrunk masks differ",
+        inputs=(
+            (square_masks(),),
+        ),
+        reference=lambda masks: F.max_pool2d(masks, 3, stride=1, padding=1) != -F.max_pool2d(-masks, 3, stride=1, padding=1),
+        expect=expect_tensor,
+    )
+
+
+UNET2 = Exercise(
+    name="unet2",
+    chapter=UPSAMPLING,
+    title="Why the skips",
+    lesson=UNET2_LESSON,
+    source=UNET2_SOURCE,
+    solution=UNET2_SOLUTION,
+    hints={
+        "NoSkipUNet.forward": "The same a, b and c as TinyUNet. Then self.up2(F.interpolate(c, scale_factor=2)), "
+        "the same with up1, and self.out at the end.",
+        "iou": "Take logits > 0 and masks > 0.5. Divide the sum of their & by the sum of their |, and use .item().",
+        "edge_pixels": "Grow with F.max_pool2d(masks, 3, stride=1, padding=1), shrink with minus that of -masks, "
+        "and compare the two with !=.",
+    },
+    introduces=(),
+    check=check_unet2,
+)
