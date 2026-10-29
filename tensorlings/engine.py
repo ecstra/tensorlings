@@ -152,18 +152,18 @@ def plain_words(error: BaseException) -> str | None:
     return None
 
 
-def learner_line(
+def ellipsis_line(
     error: BaseException,
     path: Path,
 ) -> int | None:
-    """The line of the learner's file where the error was raised, if it was raised there."""
+    """The line of the learner's file where the error was raised, when that line holds a ... of its own."""
     learner_frames = [
         frame
         for frame in traceback.extract_tb(error.__traceback__)
         if Path(frame.filename).resolve() == path.resolve()
     ]
 
-    if not learner_frames:
+    if not learner_frames or "..." not in (learner_frames[-1].line or ""):
         return None
 
     return learner_frames[-1].lineno
@@ -450,13 +450,14 @@ class Checker:
             return
         except Exception as error:
             # A TODO left as ... makes code like x[...] fail, which means the function is not finished.
-            # The ... can sit in another function this one calls, so the message names its line.
+            # The ... can sit in another function this one calls, so the message names its line when the
+            # line that failed holds it. A ... set earlier and used later fails on a line without one.
             if "ellipsis" in str(error):
-                line = learner_line(
+                line = ellipsis_line(
                     error=error,
                     path=self.path,
                 )
-                detail = f"{function} still has a ... where a TODO goes, so it is {NOT_STARTED}."
+                detail = f"{function}, or a function it calls, still has a ... where a TODO goes, so it is {NOT_STARTED}."
 
                 if line is not None:
                     detail = f"{function} runs into a ... where a TODO goes, on line {line} of {self.path.name}, so it is {NOT_STARTED}."

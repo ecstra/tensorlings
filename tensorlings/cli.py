@@ -14,6 +14,7 @@ from rich.panel import Panel
 from .app import TensorlingsApp
 from .chapters import CHAPTERS, EXERCISES
 from .course import COURSE_README, Exercise, attempt
+from .data import DATASETS, download
 from .engine import Outcome
 from .lint import lint_exercise
 from .paths import EXERCISES_DIR, START_COMMAND
@@ -32,6 +33,7 @@ USAGE = prose(
     {START_COMMAND} hint [name]        print the hints for an exercise
     {START_COMMAND} reset name         reset an exercise file to how it started
     {START_COMMAND} check-all          check every exercise and update your progress
+    {START_COMMAND} data name          download a dataset an exercise needs, like mnist
     {START_COMMAND} dev check          maintainer check of every exercise and lesson
     """,
 )
@@ -196,6 +198,16 @@ def main(arguments: list[str]) -> int:
 
     if command == "init":
         return initialize()
+
+    if command == "data":
+        if rest[:1] == [] or rest[0] not in DATASETS:
+            print(f"Name a dataset to download, one of {', '.join(DATASETS)}, for example `{START_COMMAND} data mnist`.")
+            return 1
+
+        download(rest[0])
+        print(f"The {rest[0]} data is ready in the data folder.")
+
+        return 0
 
     if command == "dev":
         if rest[:1] != ["check"]:

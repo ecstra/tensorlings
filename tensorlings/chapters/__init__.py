@@ -17,6 +17,7 @@ from . import (
     matmul,
     micrograd,
     minibatches,
+    mnist,
     softmax_regression,
     tensor_backprop,
     tensors,
@@ -37,6 +38,7 @@ CHAPTERS: list[Chapter] = [
     softmax_regression.SOFTMAX_REGRESSION,
     likelihood.LIKELIHOOD,
     generalization.GENERALIZATION,
+    mnist.MNIST,
 ]
 
 EXERCISES: list[Exercise] = [
@@ -88,4 +90,7 @@ EXERCISES: list[Exercise] = [
     generalization.DECAY1,
     generalization.DECAY2,
     generalization.QUIZ3,
+    mnist.MNIST1,
+    mnist.MNIST2,
+    mnist.MNIST3,
 ]

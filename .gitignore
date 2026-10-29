@@ -39,3 +39,8 @@ solutions/
 
 # The virtual environment is rebuilt from requirements.txt on each machine.
 .venv/
+
+# Datasets download on first use with `run.py data <name>`, and models that
+# train for minutes save their checkpoints here. Both are rebuilt, never shipped.
+data/
+checkpoints/
