@@ -146,6 +146,8 @@ EXERCISES: list[Exercise] = [
     activations.ACTIVATIONS1,
     activations.GELU1,
     activations.ACTIVATIONS2,
+    activations.SOFT1,
+    activations.SOFT2,
     mlp.MLP1,
     mlp.MLP2,
     mlp.MLP3,

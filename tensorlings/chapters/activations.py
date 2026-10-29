@@ -23,7 +23,9 @@ ACTIVATIONS = Chapter(
         them, a simple function applied to every entry, stops that and lets a
         model bend to fit curved shapes. This chapter builds ReLU, shows a task
         a Linear model can't learn and a model with ReLU can, then covers
-        sigmoid, tanh and GELU, and which job each one fits.
+        sigmoid, tanh and GELU, and which job each one fits. It ends with
+        steps like `argmax` that pass no gradient, and the soft versions that
+        sigmoid and softmax give them.
 
         ## Further reading
 
@@ -915,4 +917,403 @@ ACTIVATIONS2 = Exercise(
     },
     introduces=(),
     check=check_activations2,
+)
+
+
+# ---------------------------------------------------------------------------
+# soft1
+# ---------------------------------------------------------------------------
+
+SOFT1_LESSON = prose(
+    """
+    A model learns only through gradients. Some everyday steps of code pass
+    none back, and then nothing before them can learn.
+
+    ```python
+    w = torch.tensor(0.3, requires_grad=True)
+    w > 0                     # tensor(True), with no grad_fn
+    torch.sigmoid(w / 0.1)    # tensor(0.9526, grad_fn=<SigmoidBackward0>)
+    ```
+
+    A comparison gives True or False. Nudge `w` a little and the answer stays
+    the same, so its derivative is 0 and autograd doesn't record it at all.
+    The same goes for an `if` on a tensor, for `argmax`, and for indexing with
+    an index the model computed. The row that was picked can still learn, but
+    the scores that chose it get no gradient.
+
+    Each hard step has a soft version that changes smoothly.
+
+    | Hard step | Soft version |
+    |---|---|
+    | `x > 0`, a jump from 0 to 1 | `torch.sigmoid(x / t)` |
+    | `values[scores.argmax()]`, one row | `torch.softmax(scores / t, dim=0) @ values`, a weighted sum of rows |
+
+    The number `t` is the **temperature**. A small one makes the soft version
+    nearly hard, and a large one blurs it.
+
+    `fit_scores` below learns which row of `values` to pick. It runs gradient
+    descent on scores that start out favouring row 0, while the target is row
+    1. Here are 100 steps at three temperatures.
+
+    | Temperature | Weights on the rows at the end | Loss |
+    |---|---|---|
+    | 1 | 0.025, 0.939, 0.036 | 0.004 |
+    | 0.1 | 0.000, 0.000, 1.000 | 1.0 |
+    | 0.01 | 1.000, 0.000, 0.000 | 2.0 |
+
+    At 0.01 the softmax sits entirely on row 0. Its gradient rounds to 0, so
+    the scores never move, the hard step's problem back again. At 0.1 the
+    weights slide onto row 2 and stick there. At 1 they find row 1.
+
+    So a soft step trades exactness for a gradient, and the temperature sets
+    the trade. Gates in Section 6 and lookups in Section 7 are built from these
+    two soft steps.
+    """,
+)
+
+SOFT1_SOURCE = source_file(
+    '''
+    # soft1.py
+
+    import torch
+    from torch import Tensor
+
+    torch.sigmoid(torch.tensor([-1.0, 1.0]) / 0.5)    # tensor([0.1192, 0.8808])
+
+
+    # TODO: Return a soft version of x > 0, a number between 0 and 1 for each
+    #   entry of x, closer to the hard step the smaller temperature is.
+    def soft_step(
+        x: Tensor,
+        temperature: float,
+    ) -> Tensor:
+        ...
+
+
+    # TODO: Return a soft version of values[scores.argmax()], with scores of
+    #   shape (n,) and values of shape (n, d). The result has shape (d,).
+    def soft_pick(
+        scores: Tensor,
+        values: Tensor,
+        temperature: float,
+    ) -> Tensor:
+        ...
+
+
+    # TODO: Finish the loop. Each step takes the loss, the sum of the squared
+    #   differences between soft_pick's result and target, then one gradient
+    #   descent step on scores with learning rate lr.
+    def fit_scores(
+        scores: Tensor,
+        values: Tensor,
+        target: Tensor,
+        temperature: float,
+        steps: int,
+        lr: float,
+    ) -> Tensor:
+        scores = scores.clone().requires_grad_()
+
+        for step in range(steps):
+            ...
+
+        return scores.detach()
+    ''',
+)
+
+SOFT1_SOLUTION = source_file(
+    '''
+    # soft1.py, a solution for comparison
+
+    import torch
+    from torch import Tensor
+
+
+    def soft_step(
+        x: Tensor,
+        temperature: float,
+    ) -> Tensor:
+        return torch.sigmoid(x / temperature)
+
+
+    def soft_pick(
+        scores: Tensor,
+        values: Tensor,
+        temperature: float,
+    ) -> Tensor:
+        return torch.softmax(scores / temperature, dim=0) @ values
+
+
+    def fit_scores(
+        scores: Tensor,
+        values: Tensor,
+        target: Tensor,
+        temperature: float,
+        steps: int,
+        lr: float,
+    ) -> Tensor:
+        scores = scores.clone().requires_grad_()
+
+        for step in range(steps):
+            loss = ((soft_pick(scores, values, temperature) - target) ** 2).sum()
+            loss.backward()
+
+            with torch.no_grad():
+                scores -= lr * scores.grad
+                scores.grad.zero_()
+
+        return scores.detach()
+    ''',
+)
+
+
+def reference_fit_scores(
+    scores: Tensor,
+    values: Tensor,
+    target: Tensor,
+    temperature: float,
+    steps: int,
+    lr: float,
+) -> Tensor:
+    scores = scores.clone().requires_grad_()
+
+    for _ in range(steps):
+        loss = ((torch.softmax(scores / temperature, dim=0) @ values - target) ** 2).sum()
+        loss.backward()
+
+        with torch.no_grad():
+            scores -= lr * scores.grad
+            scores.grad.zero_()
+
+    return scores.detach()
+
+
+def check_soft1(checker: Checker) -> None:
+    check_on_inputs(
+        checker=checker,
+        function="soft_step",
+        description="gives sigmoid of x over the temperature",
+        inputs=(
+            (torch.tensor([-0.3, 0.0, 0.3]), 0.1),
+            (small_tensor(214, 2, 3), 2.0),
+        ),
+        reference=lambda x, temperature: torch.sigmoid(x / temperature),
+        expect=expect_tensor,
+    )
+    check_on_inputs(
+        checker=checker,
+        function="soft_pick",
+        description="weights the rows by softmax of the scores over the temperature",
+        inputs=(
+            (torch.tensor([0.5, 2.0, 1.0]), small_tensor(215, 3, 2), 1.0),
+            (small_tensor(216, 4), small_tensor(217, 4, 3), 0.25),
+        ),
+        reference=lambda scores, values, temperature: torch.softmax(scores / temperature, dim=0) @ values,
+        expect=expect_tensor,
+    )
+    check_on_inputs(
+        checker=checker,
+        function="fit_scores",
+        description="learns the scores by gradient descent through soft_pick",
+        inputs=(
+            (torch.tensor([1.0, 0.0, 0.5]), small_tensor(218, 3, 2), torch.tensor([0.0, 1.0]), 1.0, 20, 0.5),
+            (torch.zeros(4), small_tensor(219, 4, 3), small_tensor(220, 3), 0.5, 15, 0.2),
+        ),
+        reference=reference_fit_scores,
+        expect=expect_tensor,
+    )
+
+
+SOFT1 = Exercise(
+    name="soft1",
+    chapter=ACTIVATIONS,
+    title="Steps that pass no gradient",
+    lesson=SOFT1_LESSON,
+    source=SOFT1_SOURCE,
+    solution=SOFT1_SOLUTION,
+    hints={
+        "soft_step": "Divide x by the temperature, then take torch.sigmoid.",
+        "soft_pick": "torch.softmax of the scores over the temperature with dim=0 gives one weight per row. "
+        "Then @ values sums the rows with those weights.",
+        "fit_scores": "Take the loss with soft_pick and target and call loss.backward(). Then inside "
+        "torch.no_grad(), take lr * scores.grad from scores and zero the gradient, as relu2's loop does.",
+    },
+    introduces=(),
+    check=check_soft1,
+)
+
+
+# ---------------------------------------------------------------------------
+# soft2
+# ---------------------------------------------------------------------------
+
+SOFT2_LESSON = prose(
+    """
+    A Python dict finds the key equal to the query and gives back its value.
+    "Equal" is a hard step, so no gradient could teach a model what to look
+    up. soft1's soft pick fixes that, once a score says how well the query
+    matches each key.
+
+    With the keys and the query as rows of numbers, the dot product is that
+    score. It is large when both have big entries in the same places, near 0
+    when they share nothing, and negative when their signs disagree.
+
+    ```python
+    keys = torch.tensor([[1.0, 0.0], [0.0, 1.0], [1.0, 1.0]])
+    keys @ torch.tensor([3.0, -1.0])    # tensor([ 3., -1.,  2.])
+    ```
+
+    A **soft lookup** turns those scores into weights with softmax and returns
+    the weighted sum of the values. With values 10, 20 and 30 for the three
+    keys, the weights are 0.721, 0.013 and 0.265, and the lookup gives 15.4. A
+    hard lookup would give 10, the value of the best match.
+
+    A query with bigger entries spreads the scores further apart, which
+    sharpens the softmax the way a lower temperature does.
+
+    | Query | Weights | Soft lookup |
+    |---|---|---|
+    | `[3, -1]` | 0.721, 0.013, 0.265 | 15.4 |
+    | `[6, -2]` | 0.881, 0.000, 0.119 | 12.4 |
+    | `[12, -4]` | 0.982, 0.000, 0.018 | 10.4 |
+
+    So a model sets how sharp its lookups are through the size of its numbers,
+    and learns that like anything else.
+
+    Many queries go at once as the rows of a matrix. `queries @ keys.T` gives
+    one row of scores per query, a softmax over each row gives the weights,
+    and `@ values` sums the values for every query together. Section 7 builds
+    its main block on exactly this.
+    """,
+)
+
+SOFT2_SOURCE = source_file(
+    '''
+    # soft2.py
+
+    import torch
+    from torch import Tensor
+
+    keys = torch.tensor([[1.0, 0.0], [0.0, 1.0], [1.0, 1.0]])
+    scores = keys @ torch.tensor([3.0, -1.0])    # tensor([ 3., -1.,  2.])
+
+
+    # TODO: Return the value of the key that matches query best, by the dot
+    #   product. query has shape (d,), keys (n, d) and values (n, v).
+    def hard_lookup(
+        query: Tensor,
+        keys: Tensor,
+        values: Tensor,
+    ) -> Tensor:
+        ...
+
+
+    # TODO: Return the soft lookup of query, the values weighted by softmax of
+    #   how well query matches each key. The result has shape (v,).
+    def soft_lookup(
+        query: Tensor,
+        keys: Tensor,
+        values: Tensor,
+    ) -> Tensor:
+        ...
+
+
+    # TODO: Return the soft lookup of every row of queries, of shape (m, d), as
+    #   one row each, in one go without a loop. The result has shape (m, v).
+    def soft_lookups(
+        queries: Tensor,
+        keys: Tensor,
+        values: Tensor,
+    ) -> Tensor:
+        ...
+    ''',
+)
+
+SOFT2_SOLUTION = source_file(
+    '''
+    # soft2.py, a solution for comparison
+
+    import torch
+    from torch import Tensor
+
+    keys = torch.tensor([[1.0, 0.0], [0.0, 1.0], [1.0, 1.0]])
+    scores = keys @ torch.tensor([3.0, -1.0])
+
+
+    def hard_lookup(
+        query: Tensor,
+        keys: Tensor,
+        values: Tensor,
+    ) -> Tensor:
+        return values[(keys @ query).argmax()]
+
+
+    def soft_lookup(
+        query: Tensor,
+        keys: Tensor,
+        values: Tensor,
+    ) -> Tensor:
+        return torch.softmax(keys @ query, dim=0) @ values
+
+
+    def soft_lookups(
+        queries: Tensor,
+        keys: Tensor,
+        values: Tensor,
+    ) -> Tensor:
+        return torch.softmax(queries @ keys.T, dim=1) @ values
+    ''',
+)
+
+
+def check_soft2(checker: Checker) -> None:
+    check_on_inputs(
+        checker=checker,
+        function="hard_lookup",
+        description="gives the value of the best matching key",
+        inputs=(
+            (torch.tensor([-1.0, 3.0]), torch.tensor([[1.0, 0.0], [0.0, 1.0], [1.0, 1.0]]), small_tensor(221, 3, 2)),
+            (small_tensor(222, 4), small_tensor(223, 5, 4), small_tensor(224, 5, 3)),
+        ),
+        reference=lambda query, keys, values: values[(keys @ query).argmax()],
+        expect=expect_tensor,
+    )
+    check_on_inputs(
+        checker=checker,
+        function="soft_lookup",
+        description="weights the values by softmax of the dot products",
+        inputs=(
+            (torch.tensor([-1.0, 3.0]), torch.tensor([[1.0, 0.0], [0.0, 1.0], [1.0, 1.0]]), small_tensor(225, 3, 2)),
+            (small_tensor(226, 4) / 2, small_tensor(227, 5, 4) / 2, small_tensor(228, 5, 3)),
+        ),
+        reference=lambda query, keys, values: torch.softmax(keys @ query, dim=0) @ values,
+        expect=expect_tensor,
+    )
+    check_on_inputs(
+        checker=checker,
+        function="soft_lookups",
+        description="does a soft lookup for every row of queries at once",
+        inputs=(
+            (small_tensor(229, 2, 3) / 2, small_tensor(230, 4, 3) / 2, small_tensor(231, 4, 2)),
+            (small_tensor(232, 3, 4) / 2, small_tensor(233, 5, 4) / 2, small_tensor(234, 5, 3)),
+        ),
+        reference=lambda queries, keys, values: torch.softmax(queries @ keys.T, dim=1) @ values,
+        expect=expect_tensor,
+    )
+
+
+SOFT2 = Exercise(
+    name="soft2",
+    chapter=ACTIVATIONS,
+    title="A lookup that learns",
+    lesson=SOFT2_LESSON,
+    source=SOFT2_SOURCE,
+    solution=SOFT2_SOLUTION,
+    hints={
+        "hard_lookup": "keys @ query gives one score per key. Index values with the argmax of the scores.",
+        "soft_lookup": "torch.softmax of keys @ query with dim=0 gives the weights, then @ values sums the values.",
+        "soft_lookups": "queries @ keys.T has one row of scores per query. Take the softmax over each row with "
+        "dim=1, then @ values.",
+    },
+    introduces=(),
+    check=check_soft2,
 )

@@ -504,6 +504,15 @@ CASES: list[tuple[str, str, str, str]] = [
     ("quiz7", "flip_and_normalize flips the other half", "flipped = torch.where(draws < 0.5, images.flip(-1), images)", "flipped = torch.where(draws < 0.5, images, images.flip(-1))"),
     ("quiz7", "flip_and_normalize lines mean up with the width", "(flipped - mean.view(1, -1, 1, 1))", "(flipped - mean)"),
     ("quiz7", "flip_and_normalize multiplies by the spread", "/ spread.view(1, -1, 1, 1)", "* spread.view(1, -1, 1, 1)"),
+    ("soft1", "soft_step multiplies by the temperature", "return torch.sigmoid(x / temperature)", "return torch.sigmoid(x * temperature)"),
+    ("soft1", "soft_pick ignores the temperature", "return torch.softmax(scores / temperature, dim=0) @ values", "return torch.softmax(scores, dim=0) @ values"),
+    ("soft1", "soft_pick takes the hard row", "return torch.softmax(scores / temperature, dim=0) @ values", "return values[scores.argmax()]"),
+    ("soft1", "fit_scores climbs the loss", "scores -= lr * scores.grad", "scores += lr * scores.grad"),
+    ("soft1", "fit_scores never zeroes the gradient", "            scores.grad.zero_()\n", ""),
+    ("soft2", "hard_lookup takes the worst match", "return values[(keys @ query).argmax()]", "return values[(keys @ query).argmin()]"),
+    ("soft2", "soft_lookup softmaxes the values", "return torch.softmax(keys @ query, dim=0) @ values", "return (keys @ query) @ torch.softmax(values, dim=0)"),
+    ("soft2", "soft_lookup forgets the softmax", "return torch.softmax(keys @ query, dim=0) @ values", "return (keys @ query) @ values"),
+    ("soft2", "soft_lookups softmaxes the columns", "return torch.softmax(queries @ keys.T, dim=1) @ values", "return torch.softmax(queries @ keys.T, dim=0) @ values"),
     ("conv5", "pointwise reshapes the wrong way", "return (weight @ x.reshape(c, -1)).reshape(-1, h, w)", "return (weight @ x.reshape(-1, c).T).reshape(-1, h, w)"),
 ]
 
