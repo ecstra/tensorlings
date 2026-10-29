@@ -146,9 +146,9 @@ MLP1_SOURCE = source_file(
         ...
 
 
-    # TODO: Finish the line in the loop, so this returns an MLP with depth hidden
-    #   layers of the given width, each a Linear then a ReLU, then a last Linear to
-    #   the outputs.
+    # TODO: Finish the line in the loop. This returns an MLP with `depth` hidden
+    #   layers, each `hidden` wide and each a Linear then a ReLU. A last Linear
+    #   then gives the outputs.
     def make_deep_mlp(
         inputs: int,
         hidden: int,
@@ -315,8 +315,8 @@ MLP2_LESSON = prose(
     """
     `nn.Sequential` fits a model that is one chain. Most models need more
     control, so they are written as a module with a `forward` of their own.
-    Here is the MLP that way, taking a list of sizes, one per layer edge, like
-    `[2, 8, 8, 1]`.
+    Here is the MLP that way. It takes a list of sizes, the inputs, each
+    hidden width, then the outputs, like `[2, 8, 8, 1]`.
 
     The layers live in a list, and a plain Python list is a trap. A module only
     finds parameters stored in attributes it knows about, so the Linear layers
@@ -332,9 +332,9 @@ MLP2_LESSON = prose(
     len(list(Broken().parameters()))    # 0
     ```
 
-    `nn.ModuleList` is a list a module does know about. It works like a list,
-    you can loop over it and index it, and its modules' parameters belong to the
-    model.
+    `nn.ModuleList` is a list a module does know about. It works like a list.
+    You can loop over it and index it, and its modules' parameters belong to
+    the model.
 
     In `forward`, the activation goes between the layers and not after the
     last one, since the last layer gives the answer, as activations2 said.
@@ -578,6 +578,14 @@ def check_mlp_training(found: object) -> None:
     call = "train on sin(x) with an MLP of width 32, for 1000 steps with learning rate 0.1"
     final = found(seeded_mlp(0, (1, 32, 1)), CURVE_X.clone(), CURVE_Y.clone(), 1000, 0.1)
     expected = train_reference(seeded_mlp(0, (1, 32, 1)), CURVE_X, CURVE_Y, 1000, 0.1)
+
+    # A loss stuck far above the reference is the shape trap of linreg2, (examples, 1) against (examples,).
+    if isinstance(final, (int, float)) and final > 100 * expected:
+        raise Mismatch(
+            f"{call} ends at a loss of {final:.4g}, where it should reach about {expected:.4g}. Check that the "
+            "predictions have shape (examples,) before subtracting y, as linreg2 warned.",
+        )
+
     expect_close(
         call=call,
         actual=final,
@@ -608,6 +616,33 @@ def check_mlp3(checker: Checker) -> None:
             tolerance=1e-5,
         ),
     )
+    checker.test(
+        function="evaluate",
+        description="runs the model without recording for autograd",
+        run=check_evaluate_records_nothing,
+    )
+
+
+class GradWatcher(nn.Module):
+    """An MLP that notes whether autograd was recording each time it ran."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.inner = seeded_mlp(3, (1, 8, 1))
+        self.recording: list[bool] = []
+
+    def forward(self, x: Tensor) -> Tensor:
+        self.recording.append(torch.is_grad_enabled())
+
+        return self.inner(x)
+
+
+def check_evaluate_records_nothing(found: object) -> None:
+    watcher = GradWatcher()
+    found(watcher, CURVE_X.clone(), CURVE_Y.clone())
+
+    if any(watcher.recording):
+        raise Mismatch("evaluate ran the model while autograd was recording. Put the work inside with torch.no_grad():.")
 
 
 MLP3 = Exercise(
@@ -640,10 +675,10 @@ MLP4_LESSON = prose(
 
     | Width | Training error | Validation error |
     |---|---|---|
-    | 1 | 0.175 | 0.224 |
-    | 4 | 0.106 | 0.206 |
-    | 32 | 0.056 | 0.120 |
-    | 512 | 0.050 | 0.139 |
+    | 1 | 0.175 | 0.222 |
+    | 4 | 0.106 | 0.233 |
+    | 32 | 0.056 | 0.127 |
+    | 512 | 0.050 | 0.142 |
 
     Width 1 is too narrow to bend, and underfits both. Width 32 does best on new
     points. Width 512 fits the training points a little better and new points
@@ -688,7 +723,8 @@ MLP4_SOURCE = source_file(
 
     # TODO: Finish the line that sets model, an MLP with one hidden layer of the
     #   given width, built after torch.manual_seed(0) so every run starts the same.
-    #   It returns the training and validation errors after training.
+    #   train_x has shape (points, 1). It returns the training and validation
+    #   errors after training.
     def errors_for_width(
         width: int,
         train_x: Tensor,
@@ -829,6 +865,8 @@ def check_mlp4(checker: Checker) -> None:
         description="gives the width with the lowest validation error",
         inputs=(
             ([1, 4, 32], *data, 1000),
+            # At 5000 steps width 512 has the lowest training error and width 32 the lowest validation error.
+            ([32, 512], *data, 5000),
         ),
         reference=lambda widths, tx, ty, vx, vy, steps: min(widths, key=lambda width: reference_width_errors(width, tx, ty, vx, vy, steps)[1]),
         expect=expect_value,

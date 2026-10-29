@@ -68,17 +68,18 @@ EMBEDDING1_LESSON = prose(
     table[ids]                            # the same rows, picked directly
     ```
 
-    So a Linear layer on one hot inputs is a table lookup, and building the
-    one hot rows is wasted work. An **embedding** is the lookup done directly.
-    Its table has shape `(vocabulary size, size)`, and its numbers are
-    parameters, learned like any weight. A flat tensor of numbers that stands
-    for something is a **vector**, so each id's row is its embedding vector.
+    So a Linear layer with no bias, on one hot inputs, is a table lookup, and
+    building the one hot rows is wasted work. An **embedding** is the lookup
+    done directly. Its table has shape `(vocabulary size, embedding size)`,
+    and its numbers are parameters, learned like any weight. A flat tensor of
+    numbers is also called a **vector**, so each id's row is its embedding
+    vector.
 
     Indexing with a tensor of ids of any shape gives one row per id, in the
     same arrangement. Ids of shape `(examples, positions)` give a result of
-    shape `(examples, positions, size)`. `.reshape(len(x), -1)` then lays each
-    example's rows end to end, one long row per example, which a Linear layer
-    can take.
+    shape `(examples, positions, embedding size)`. `.reshape(len(vectors), -1)`
+    then lays each example's rows end to end, one long row per example, which
+    a Linear layer can take.
     """,
 )
 
@@ -179,6 +180,8 @@ def check_embedding1(checker: Checker) -> None:
         inputs=(
             (TABLE, torch.tensor([2, 0, 2])),
             (small_tensor(222, 5, 3), torch.tensor([4, 1, 1, 0])),
+            # The table's last rows go unpicked, so the one hot rows need the table's size, not the largest id.
+            (small_tensor(222, 5, 3), torch.tensor([0, 2, 1])),
         ),
         reference=lambda table, ids: table[ids],
         expect=expect_tensor,
@@ -282,8 +285,8 @@ EMBEDDING2_SOURCE = source_file(
             ...
 
 
-    # TODO: Return the positions of the rows of the table's gradient that got any
-    #   number other than 0, as a flat tensor, the ids that were looked up.
+    # TODO: Return the ids that were looked up, the positions of the rows of grad
+    #   that hold any number other than 0, as a flat tensor.
     def used_rows(grad: Tensor) -> Tensor:
         ...
     ''',
@@ -445,9 +448,9 @@ EMBEDDING3_SOURCE = source_file(
         return train(model, inputs, targets, steps, 0.01)
 
 
-    # TODO: Finish the line that sets model, an nn.Embedding with a row of size 4
-    #   for each of the count ids, then an nn.Linear from 4 to 1, chained by
-    #   nn.Sequential.
+    # TODO: Finish the line that sets model. It is an nn.Embedding with a row of
+    #   size 4 for each of the count ids, then an nn.Linear from 4 to 1, chained
+    #   by nn.Sequential.
     def fit_embedded_ids(
         ids: Tensor,
         targets: Tensor,

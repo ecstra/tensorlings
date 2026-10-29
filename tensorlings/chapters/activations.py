@@ -62,11 +62,12 @@ RELU1_LESSON = prose(
     everywhere else.
 
     Put ReLU between two Linears, `Linear, ReLU, Linear`, and the product no
-    longer multiplies out. Each hidden neuron is off, giving 0, for some inputs
-    and passes its weighted sum for others. The output is then made of
-    straight pieces that meet at corners, and with enough neurons those pieces
-    can follow any curve. The outputs of the middle layer are called the
-    hidden features, since nothing outside the model sees them.
+    longer multiplies out. The outputs of the middle layer are called the
+    hidden features, since nothing outside the model sees them. Each hidden
+    neuron is off, giving 0, for some inputs and passes its weighted sum for
+    others. The output is then made of straight pieces that meet at corners.
+    With enough neurons those pieces can follow any smooth curve over a
+    limited range.
 
     `.float()` turns a tensor of `True` and `False` into 1.0 and 0.0. So
     `(x < 0).float()` gives 1.0 for each entry below 0, and 0.0 for the rest.
@@ -223,7 +224,8 @@ RELU2_LESSON = prose(
 
     This is called XOR. Raising either feature from 0 to 1 raises the target,
     but raising both lowers it again. A weighted sum can't do that, since
-    raising a feature always moves it the same way. Trained on these points, a
+    raising a feature always moves the output the same way, whatever the other
+    feature is. Trained on these points, a
     Linear model ends up giving 0.5 for every point. That is a mean squared
     error of 0.25, the best a straight answer can do.
 
@@ -278,6 +280,8 @@ RELU2_SOURCE = source_file(
 
     # TODO: Finish the line that sets predictions, Linear, ReLU, Linear on x, so
     #   this trains the two layer net and returns the final mean squared error.
+    #   W2 is scaled down so the output starts small. The initialization chapter
+    #   shows why.
     def fit_relu_net(
         x: Tensor,
         y: Tensor,
@@ -617,7 +621,7 @@ ACTIVATIONS1 = Exercise(
         "sigmoid": "Write the formula with torch.exp. It works on every entry at once.",
         "tanh_derivative": "Take t = torch.tanh(x), then the derivative from the lesson in terms of t.",
         "saturated_fraction": "Compare sigmoid_derivative(x) with 0.01, then take the mean of the matches as "
-        "floats, as accuracy does in softmax3.",
+        "floats, as accuracy does in softmax3. Turn it into a plain number with .item().",
     },
     introduces=(),
     check=check_activations1,
@@ -639,8 +643,8 @@ GELU1_LESSON = prose(
     GELU(x) = x * Phi(x),   Phi(x) = 0.5 * (1 + erf(x / sqrt(2)))
     ```
 
-    `Phi` is the chance that a number drawn from the standard bell curve is
-    below `x`. `erf` is the error function, which `torch.erf` computes. For a
+    `Phi` is the chance that a number drawn from the bell curve with mean 0
+    and spread 1 is below `x`. `erf` is the error function, which `torch.erf` computes. For a
     big positive `x`, `Phi` is almost 1 and GELU is almost `x`, like ReLU. For
     a big negative `x` it is almost 0. Near 0 it bends smoothly, with a small
     dip below 0, where ReLU has a sharp corner.
@@ -800,7 +804,8 @@ ACTIVATIONS2_SOURCE = source_file(
     # TODO: Return scores through the output activation the job needs. kind is
     #   "number" for any number, "probability" for the probability of yes,
     #   "bounded" for a value held between -1 and 1, and "choice" for a
-    #   probability for each class, one row of classes per example.
+    #   probability for each class, one row of classes per example. Here, return
+    #   the probabilities themselves.
     def output_activation(
         scores: Tensor,
         kind: str,

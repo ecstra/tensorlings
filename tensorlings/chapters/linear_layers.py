@@ -33,9 +33,9 @@ LINEAR = Chapter(
 
         Section 3 builds the blocks real models are made of. This chapter starts
         with the way PyTorch packages a model, as a module that holds its
-        parameters, then builds the Linear layer, the block that holds most of
-        the parameters of most models, and shows why two of them in a row are
-        no better than one.
+        parameters. Then it builds the Linear layer, the block that holds most
+        of the parameters of most models, and shows why two of them in a row
+        are no better than one.
 
         ## Further reading
 
@@ -98,6 +98,7 @@ MODULES1_LESSON = prose(
     Calling the model runs `forward`.
 
     ```python
+    import torch
     import torch.nn as nn
 
     class Scale(nn.Module):
@@ -295,7 +296,14 @@ def check_gradient_step(found: object) -> None:
     for name, parameter in model.named_parameters():
         expected[name] = expected[name] - 0.1 * parameter.grad
 
+    before = {name: parameter.detach().clone() for name, parameter in model.named_parameters()}
     found(model, 0.1)
+
+    if all(torch.equal(parameter.detach(), before[name]) for name, parameter in model.named_parameters()):
+        raise Mismatch(
+            "After gradient_step the weights did not change. parameter = ... makes a new tensor and leaves the "
+            "model's own alone, so use -= to change it in place.",
+        )
 
     for name, parameter in model.named_parameters():
         expect_tensor(
@@ -558,8 +566,9 @@ LINEAR2_LESSON = prose(
 
     The weights can't start at zero. Every neuron would then compute the same
     thing and get the same gradient, and they would stay copies of each other
-    forever. So they start random. PyTorch draws each weight and each bias
-    evenly between `-1 / sqrt(in_features)` and `1 / sqrt(in_features)`. The
+    forever. So they start random. PyTorch draws each weight and each bias at
+    random between `-1 / sqrt(in_features)` and `1 / sqrt(in_features)`, with
+    every value in between equally likely. That is called a uniform draw. The
     initialization chapter shows why that size.
 
     `torch.empty(4, 3)` makes a tensor without setting its entries, and
