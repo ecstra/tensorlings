@@ -27,9 +27,9 @@ A variable TODO is checked against one value, and its comment shows that value, 
 | 1 | Turn indexing1, math1 and broadcasting1 into example and TODO functions | | owner | done |
 | 2 | Turn reductions1 and matmul1 into example and TODO functions | | owner | done |
 | 3 | Rewrite quiz1 as functions that each combine two or three earlier moves | | owner | done |
-| 4 | Update the wrong answers, with a typed in answer among them | | owner | pending |
-| 5 | Run the dev check, the wrong answers and the screen driver | | owner | pending |
-| 6 | Reset the owner's files to the new versions | | owner | pending |
+| 4 | Update the wrong answers, with a typed in answer among them | | owner | done |
+| 5 | Run the dev check, the wrong answers and the screen driver | | owner | done |
+| 6 | Reset the owner's files to the new versions | | owner | done |
 
 ## Done when
 
