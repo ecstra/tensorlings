@@ -18,8 +18,8 @@ Phase 2 of the plan build-tensorlings, Sections 3 and 4 as [the detailed curricu
 
 | # | Step | Points at | By | Status |
 |---|---|---|---|---|
-| 1 | Write 15_linear, 16_activations and 17_mlp | | agent | pending |
-| 2 | Write 18_embeddings and 19_initialization | | agent | pending |
+| 1 | Write 15_linear, 16_activations and 17_mlp | | agent | done |
+| 2 | Write 18_embeddings and 19_initialization | | agent | done |
 | 3 | Write 20_dropout and 21_normalization | | agent | pending |
 | 4 | Write 22_residuals, quiz4 and quiz5 | | agent | pending |
 | 5 | Write the names project with its download | | agent | pending |
