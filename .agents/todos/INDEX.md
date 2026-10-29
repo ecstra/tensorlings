@@ -15,7 +15,9 @@ Built by the brain tool from the folder it lists.
 
 ## Open
 
-Nothing open.
+### course
+
+- [TODO-011](TODO-011-split-run-py-into-the-tensorlings-package.md), move the engine, exercise model, lint, progress, app, commands and chapters out of run.py into modules
 
 ## Closed
 

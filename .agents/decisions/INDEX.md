@@ -12,6 +12,7 @@ Every decision taken, newest first.
 Filed per [spec/decisions.md](../spec/decisions.md).
 Built by the brain tool from the folder it lists.
 
+- [DEC-015](DEC-015-the-course-lives-in-a-package-with-one-module-per-chapter.md), run.py becomes a thin entry point and the engine, app, lint and chapters live in the tensorlings package
 - [DEC-014](DEC-014-projects-for-the-sections-the-table-left-open.md), the agent picked a project for Sections 1, 2, 4, 6 and 8 to 12 from each section's own topics, on the owner's word
 - [DEC-013](DEC-013-exercises-explain-then-try-fix-an-error-or-try-first.md), each task repeats the move its example just showed, fixes a line that crashes on purpose, or is tried before the lesson opens, checked by name with no print lines
 - [DEC-012](DEC-012-one-topic-per-exercise-with-real-model-operations-and-quizzes.md), each exercise teaches one section topic, every task is an operation real models run, and a quiz combines a group of chapters with nothing new (superseded by DEC-013)
