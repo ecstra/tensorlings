@@ -10,6 +10,7 @@ from . import (
     activations,
     adaptive,
     autograd,
+    broken_training,
     chain_rule,
     clipping,
     debugging,
@@ -67,6 +68,7 @@ CHAPTERS: list[Chapter] = [
     schedules.SCHEDULES,
     clipping.CLIPPING,
     debugging.DEBUGGING,
+    broken_training.BROKEN_TRAINING,
 ]
 
 EXERCISES: list[Exercise] = [
@@ -178,4 +180,5 @@ EXERCISES: list[Exercise] = [
     debugging.DEBUG4,
     debugging.DEBUG5,
     debugging.QUIZ6,
+    broken_training.BROKEN1,
 ]
