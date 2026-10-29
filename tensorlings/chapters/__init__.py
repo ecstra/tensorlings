@@ -10,6 +10,7 @@ from . import (
     autograd,
     chain_rule,
     derivatives,
+    generalization,
     gradient_descent,
     likelihood,
     linear_regression,
@@ -35,6 +36,7 @@ CHAPTERS: list[Chapter] = [
     minibatches.MINIBATCHES,
     softmax_regression.SOFTMAX_REGRESSION,
     likelihood.LIKELIHOOD,
+    generalization.GENERALIZATION,
 ]
 
 EXERCISES: list[Exercise] = [
@@ -80,4 +82,9 @@ EXERCISES: list[Exercise] = [
     likelihood.LIKELIHOOD2,
     likelihood.LIKELIHOOD3,
     likelihood.LIKELIHOOD4,
+    generalization.SPLITS1,
+    generalization.OVERFITTING1,
+    generalization.OVERFITTING2,
+    generalization.DECAY1,
+    generalization.DECAY2,
 ]

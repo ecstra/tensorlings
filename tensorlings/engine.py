@@ -32,13 +32,17 @@ class TookTooLong(Exception):
 
 
 # Long enough for any correct answer, short enough that a loop that never ends doesn't stall the app.
+# An exercise that trains on real data sets a longer limit of its own.
 TIME_LIMIT_SECONDS = 5
 
 
-def run_with_time_limit(run: Callable[[], object]) -> None:
+def run_with_time_limit(
+    run: Callable[[], object],
+    seconds: float = TIME_LIMIT_SECONDS,
+) -> None:
     """Run code with a time limit. Checks run in a thread, where signals can't interrupt them,
     so a trace function raises TookTooLong inside the learner's code once time is up."""
-    deadline = time.monotonic() + TIME_LIMIT_SECONDS
+    deadline = time.monotonic() + seconds
 
     def stop_when_late(frame: object, event: str, argument: object) -> object:
         if time.monotonic() > deadline:
@@ -126,6 +130,11 @@ PLAIN_ERRORS: tuple[tuple[str, str], ...] = (
         "A plain number has no .data, only a Value does. Wrap the number in a Value first, the way __add__ does.",
     ),
     (
+        r"object of type 'NoneType' has no len\(\)",
+        "Something here is None, so it has no length. A function with no return line gives None, so check that "
+        "every function this line uses is written.",
+    ),
+    (
         r"'NoneType' object has no attribute '(\w+)'",
         "Something here is None, so it has no .{0}. A tensor's .grad stays None until .backward() runs on a result "
         "made from it, and a function with no return line gives None.",
@@ -209,6 +218,7 @@ def assigned_names(statement: ast.stmt) -> tuple[str, ...]:
 def load_module(
     path: Path,
     name: str,
+    seconds: float = TIME_LIMIT_SECONDS,
 ) -> tuple[ModuleType, list[Crash]]:
     """Run the file one top level statement at a time. A line that crashes on purpose,
     as in a fix the error task, then hides nothing that comes after it."""
@@ -235,9 +245,12 @@ def load_module(
         )
 
         try:
-            run_with_time_limit(lambda: exec(code, module.__dict__))
+            run_with_time_limit(
+                run=lambda: exec(code, module.__dict__),
+                seconds=seconds,
+            )
         except TookTooLong:
-            raise Problem(f"{path.name} was still running after {TIME_LIMIT_SECONDS} seconds while loading. Look for a loop that never ends.") from None
+            raise Problem(f"{path.name} was still running after {seconds:g} seconds while loading. Look for a loop that never ends.") from None
         except Exception as error:
             crashes.append(
                 Crash(
@@ -271,10 +284,12 @@ class Checker:
         module: ModuleType,
         path: Path,
         crashes: list[Crash],
+        seconds: float = TIME_LIMIT_SECONDS,
     ) -> None:
         self.module = module
         self.path = path
         self.crashes = crashes
+        self.seconds = seconds
         self.checked_names: set[str] = set()
         self.results: list[TestResult] = []
 
@@ -409,14 +424,17 @@ class Checker:
         shown: str = "",
     ) -> None:
         try:
-            run_with_time_limit(run)
+            run_with_time_limit(
+                run=run,
+                seconds=self.seconds,
+            )
         except TookTooLong:
             self.results.append(
                 TestResult(
                     function=function,
                     description=description,
                     passed=False,
-                    detail=f"{function} was still running after {TIME_LIMIT_SECONDS} seconds. Look for a loop that never ends.",
+                    detail=f"{function} was still running after {self.seconds:g} seconds. Look for a loop that never ends.",
                 ),
             )
             return

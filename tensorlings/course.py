@@ -9,7 +9,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from .engine import Checker, Outcome, Problem, load_module
+from .engine import TIME_LIMIT_SECONDS, Checker, Outcome, Problem, load_module
 from .paths import EXERCISES_DIR, SOLUTIONS_DIR
 from .text import prose, source_file
 
@@ -33,6 +33,8 @@ class Exercise:
     hints: dict[str, str]
     introduces: tuple[str, ...]
     check: Callable[[Checker], None]
+    # How long one test may run. Exercises that train on real data need longer than the usual few seconds.
+    time_limit: float = TIME_LIMIT_SECONDS
 
     @property
     def path(self) -> Path:
@@ -59,6 +61,7 @@ def attempt(
             module, crashes = load_module(
                 path=path,
                 name=exercise.name,
+                seconds=exercise.time_limit,
             )
         except Problem as problem:
             return Outcome(
@@ -71,6 +74,7 @@ def attempt(
             module=module,
             path=path,
             crashes=crashes,
+            seconds=exercise.time_limit,
         )
 
         try:
