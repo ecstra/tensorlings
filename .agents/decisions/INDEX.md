@@ -12,6 +12,7 @@ Every decision taken, newest first.
 Filed per [spec/decisions.md](../spec/decisions.md).
 Built by the brain tool from the folder it lists.
 
+- [DEC-016](DEC-016-training-picks-the-best-device-and-exercises-stay-on-the-cpu.md), projects that train for real run on CUDA, MPS or the CPU, whichever the machine has, while short exercises and every check run on the CPU
 - [DEC-015](DEC-015-the-course-lives-in-a-package-with-one-module-per-chapter.md), run.py becomes a thin entry point and the engine, app, lint and chapters live in the tensorlings package
 - [DEC-014](DEC-014-projects-for-the-sections-the-table-left-open.md), the agent picked a project for Sections 1, 2, 4, 6 and 8 to 12 from each section's own topics, on the owner's word
 - [DEC-013](DEC-013-exercises-explain-then-try-fix-an-error-or-try-first.md), each task repeats the move its example just showed, fixes a line that crashes on purpose, or is tried before the lesson opens, checked by name with no print lines

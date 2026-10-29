@@ -23,7 +23,7 @@ The owner approved phase 1a and said "So follow the curriculum and you may proce
 | 3 | Write 04_chain_rule | | agent | done |
 | 4 | Write 05_autograd | | agent | done |
 | 5 | Write 06_tensor_backprop and quiz2 | | agent | done |
-| 6 | Write the micrograd project | | agent | pending |
+| 6 | Write the micrograd project | | agent | done |
 | 7 | Write 08_linear_regression and 09_gradient_descent | | agent | pending |
 | 8 | Write 10_minibatches and 11_softmax_regression | | agent | pending |
 | 9 | Write 12_likelihood and 13_generalization, and quiz3 | | agent | pending |

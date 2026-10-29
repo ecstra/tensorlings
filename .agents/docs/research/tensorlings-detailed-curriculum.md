@@ -18,6 +18,7 @@ It plans about 330 exercises. Names and counts can still shift while a phase is 
 - Quizzes go in `exercises/quizzes/` as in rustlings, and the tables list each one where it falls.
 - A project is a chapter of two to four exercises at the end of its section. A project that trains for minutes has the learner run the file, which saves a checkpoint to `checkpoints/`, and the check loads it and measures the result.
 - From Section 3 on, a block gets the five exercises of [how every block is taught](tensorlings-course-design.md#how-every-block-is-taught) where each makes sense, so a block with no paper gets no paper exercise.
+- Training that gains from a GPU runs on the best device the machine has, CUDA, MPS or the CPU, and short exercises run on the CPU, per [DEC-016](../../decisions/DEC-016-training-picks-the-best-device-and-exercises-stay-on-the-cpu.md).
 - Datasets download on first use into `data/`, which git ignores. The owner allowed names.txt, tiny Shakespeare, MNIST and CIFAR-10 on 2026-10-29.
 
 ## Section 1 Foundations

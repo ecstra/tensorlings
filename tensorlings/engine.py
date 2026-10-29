@@ -122,6 +122,10 @@ PLAIN_ERRORS: tuple[tuple[str, str], ...] = (
         "len() needs a tensor with at least one dimension, and this one has none.",
     ),
     (
+        r"'(int|float)' object has no attribute 'data'",
+        "A plain number has no .data, only a Value does. Wrap the number in a Value first, the way __add__ does.",
+    ),
+    (
         r"'NoneType' object has no attribute '(\w+)'",
         "Something here is None, so it has no .{0}. A tensor's .grad stays None until .backward() runs on a result "
         "made from it, and a function with no return line gives None.",
