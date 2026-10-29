@@ -24,11 +24,11 @@ The owner approved phase 1a and said "So follow the curriculum and you may proce
 | 4 | Write 05_autograd | | agent | done |
 | 5 | Write 06_tensor_backprop and quiz2 | | agent | done |
 | 6 | Write the micrograd project | | agent | done |
-| 7 | Write 08_linear_regression and 09_gradient_descent | | agent | pending |
-| 8 | Write 10_minibatches and 11_softmax_regression | | agent | pending |
-| 9 | Write 12_likelihood and 13_generalization, and quiz3 | | agent | pending |
-| 10 | Write the MNIST project with its download | | agent | pending |
-| 11 | Add the wrong answers for every new exercise | | agent | pending |
+| 7 | Write 08_linear_regression and 09_gradient_descent | | agent | done |
+| 8 | Write 10_minibatches and 11_softmax_regression | | agent | done |
+| 9 | Write 12_likelihood and 13_generalization, and quiz3 | | agent | done |
+| 10 | Write the MNIST project with its download | | agent | done |
+| 11 | Add the wrong answers for every new exercise | | agent | done |
 | 12 | Get a beginner reader review and fix what it finds | | agent | pending |
 | 13 | Run the dev check and the screen driver, then write the handover | | agent | pending |
 

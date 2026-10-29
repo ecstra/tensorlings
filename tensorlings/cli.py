@@ -26,7 +26,7 @@ USAGE = prose(
     f"""
     tensorlings, small exercises that teach deep learning from tensors up.
 
-    {START_COMMAND} init               set up the exercises folder, once
+    {START_COMMAND} init               set up the exercises folder, or add new exercises to it
     {START_COMMAND}                    start the course
     {START_COMMAND} --manual-run       start the course, checking only when you press r
     {START_COMMAND} run [name]         check one exercise and print the result
@@ -58,22 +58,28 @@ def require_setup() -> bool:
 
 
 def initialize() -> int:
-    if EXERCISES_DIR.exists():
-        print(f"The exercises folder already exists. Start the course with `{START_COMMAND}`.")
-        return 1
-
-    EXERCISES_DIR.mkdir()
+    """Write every exercise file that isn't there yet. The course grows in phases, so running this again
+    adds the new chapters and leaves every file the learner already has alone."""
+    existed = EXERCISES_DIR.exists()
+    EXERCISES_DIR.mkdir(exist_ok=True)
     (EXERCISES_DIR / "README.md").write_text(COURSE_README)
 
     for chapter in CHAPTERS:
         folder = EXERCISES_DIR / chapter.folder
-        folder.mkdir()
+        folder.mkdir(exist_ok=True)
         (folder / "README.md").write_text(chapter.readme)
 
-    for exercise in EXERCISES:
+    added = [exercise for exercise in EXERCISES if not exercise.path.exists()]
+
+    for exercise in added:
         exercise.path.write_text(exercise.source)
 
-    print("The exercises are ready in the exercises folder. Start the course with\n")
+    if existed:
+        print(f"Added {len(added)} new exercise files, and left the ones you have as they are.")
+    else:
+        print("The exercises are ready in the exercises folder.")
+
+    print("Start the course with\n")
     print(f"    {START_COMMAND}\n")
 
     return 0
