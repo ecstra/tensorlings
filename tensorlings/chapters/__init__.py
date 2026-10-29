@@ -7,16 +7,19 @@ from __future__ import annotations
 
 from ..course import QUIZZES, Chapter, Exercise
 from . import (
+    activations,
     autograd,
     chain_rule,
     derivatives,
     generalization,
     gradient_descent,
     likelihood,
+    linear_layers,
     linear_regression,
     matmul,
     micrograd,
     minibatches,
+    mlp,
     mnist,
     softmax_regression,
     tensor_backprop,
@@ -39,6 +42,9 @@ CHAPTERS: list[Chapter] = [
     likelihood.LIKELIHOOD,
     generalization.GENERALIZATION,
     mnist.MNIST,
+    linear_layers.LINEAR,
+    activations.ACTIVATIONS,
+    mlp.MLP,
 ]
 
 EXERCISES: list[Exercise] = [
@@ -93,4 +99,17 @@ EXERCISES: list[Exercise] = [
     mnist.MNIST1,
     mnist.MNIST2,
     mnist.MNIST3,
+    linear_layers.MODULES1,
+    linear_layers.LINEAR1,
+    linear_layers.LINEAR2,
+    linear_layers.LINEAR3,
+    activations.RELU1,
+    activations.RELU2,
+    activations.ACTIVATIONS1,
+    activations.GELU1,
+    activations.ACTIVATIONS2,
+    mlp.MLP1,
+    mlp.MLP2,
+    mlp.MLP3,
+    mlp.MLP4,
 ]
