@@ -16,7 +16,7 @@ By the end the owner can explain any common layer four ways, what it computes, w
 
 ## The curriculum
 
-About 330 small exercises in 13 sections. Each section ends with a project that uses what it taught, and the capstones are the projects of Section 13. The table names the projects the owner set, and [the detailed curriculum](tensorlings-detailed-curriculum.md) lists every chapter, exercise and project, including the ones the agent picked per [DEC-014](../../decisions/DEC-014-projects-for-the-sections-the-table-left-open.md).
+About 340 small exercises in 13 sections. Each section ends with a project that uses what it taught, and the capstones are the projects of Section 13. The table names the projects the owner set, and [the detailed curriculum](tensorlings-detailed-curriculum.md) lists every chapter, exercise and project, including the ones the agent picked per [DEC-014](../../decisions/DEC-014-projects-for-the-sections-the-table-left-open.md).
 
 | Section | Content |
 |---|---|

@@ -14,6 +14,8 @@ born: 2026-10-29
 
 Phase 3 of the plan build-tensorlings, Sections 5, 6 and 7 as [the detailed curriculum](../docs/research/tensorlings-detailed-curriculum.md) lists them, 94 exercises. The owner acked every phase on 2026-10-29 with "Ack all till done!", and said the same day they will work through the course only once it is all built.
 
+The same day the owner's gap review added steps 14 to 16, per [DEC-017](../decisions/DEC-017-the-owner-s-six-gaps-added-to-the-curriculum.md). Steps 5 to 10 name chapters by their numbers from before it, and the folders take the curriculum's new numbers, 39_rnn on.
+
 ## Steps
 
 | # | Step | Points at | By | Status |
@@ -31,6 +33,9 @@ Phase 3 of the plan build-tensorlings, Sections 5, 6 and 7 as [the detailed curr
 | 11 | Add the wrong answers for every new exercise | | agent | pending |
 | 12 | Get beginner reader reviews and fix what they find | | agent | pending |
 | 13 | Run the dev check and the screen driver, then write the handover | | agent | pending |
+| 14 | Add soft1 and soft2 to 16_activations and fft1 to 30_convolution, per DEC-017 | | agent | pending |
+| 15 | Write 38_soft_design, derive1 and derive2, per DEC-017 | | agent | pending |
+| 16 | Add stft1, attention6, 48_linear_attention, induction1 and dynamic1 with their chapters, per DEC-017 | | agent | pending |
 
 ## Done when
 
