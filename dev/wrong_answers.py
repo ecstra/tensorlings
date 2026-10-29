@@ -341,6 +341,17 @@ CASES: list[tuple[str, str, str, str]] = [
     ("adamw2", "make_optimizer gives Adam for adamw", "return torch.optim.AdamW(parameters, lr=lr, weight_decay=0.01)", "return torch.optim.Adam(parameters, lr=lr, weight_decay=0.01)"),
     ("adamw2", "decay_groups decays everything", "decayed = [parameter for parameter in model.parameters() if parameter.dim() >= 2]\n    kept = [parameter for parameter in model.parameters() if parameter.dim() < 2]", "decayed = list(model.parameters())\n    kept = []"),
     ("adamw2", "best_setting picks the highest loss", "return min(results, key=results.get)", "return max(results, key=results.get)"),
+    ("schedule1", "step_rate decays every step", "return base * gamma ** (step // step_size)", "return base * gamma ** step"),
+    ("schedule1", "cosine_rate ends at base", "return minimum + (base - minimum) * (1 + math.cos(math.pi * step / total)) / 2", "return minimum + (base - minimum) * (1 - math.cos(math.pi * step / total)) / 2"),
+    ("schedule1", "scheduler_rates never steps the scheduler", "        scheduler.step()\n", ""),
+    ("schedule1", "scheduler_rates reads the rate after the scheduler", "        rates.append(optimizer.param_groups[0][\"lr\"])\n        optimizer.step()\n        scheduler.step()", "        optimizer.step()\n        scheduler.step()\n        rates.append(optimizer.param_groups[0][\"lr\"])"),
+    ("warmup1", "warmup_rate starts at base", "return base * min(1.0, (step + 1) / warmup)", "return base * min(1.0, step / warmup)"),
+    ("warmup1", "warmup_cosine decays over every step", "progress = (step - warmup) / (total - warmup)", "progress = step / total"),
+    ("warmup1", "train_scheduled keeps Adam's default rate", "            group[\"lr\"] = rate_at(step)", "            pass"),
+    ("schedule2", "exponential_rates spread evenly", "return [start * (end / start) ** (k / (count - 1)) for k in range(count)]", "return [start + (end - start) * k / (count - 1) for k in range(count)]"),
+    ("schedule2", "smooth without the correction", "smoothed.append(average / (1 - beta ** k))", "smoothed.append(average)"),
+    ("schedule2", "pick_rate takes the lowest point itself", "return rates[smoothed.index(min(smoothed))] / 10", "return rates[smoothed.index(min(smoothed))]"),
+    ("schedule2", "range_test keeps one rate", "optimizer.param_groups[0][\"lr\"] = rate\n", "optimizer.param_groups[0][\"lr\"] = rates[0]\n"),
 ]
 
 

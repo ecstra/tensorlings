@@ -28,6 +28,7 @@ from . import (
     names,
     normalization,
     residuals,
+    schedules,
     sgd,
     softmax_regression,
     tensor_backprop,
@@ -61,6 +62,7 @@ CHAPTERS: list[Chapter] = [
     names.NAMES,
     sgd.SGD,
     adaptive.ADAPTIVE,
+    schedules.SCHEDULES,
 ]
 
 EXERCISES: list[Exercise] = [
@@ -161,4 +163,7 @@ EXERCISES: list[Exercise] = [
     adaptive.ADAM2,
     adaptive.ADAMW1,
     adaptive.ADAMW2,
+    schedules.SCHEDULE1,
+    schedules.WARMUP1,
+    schedules.SCHEDULE2,
 ]
