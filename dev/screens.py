@@ -2,7 +2,8 @@
 
     .venv/bin/python dev/screens.py COURSE_DIR OUT_DIR WIDTHxHEIGHT STEP...
 
-COURSE_DIR holds a copy of run.py with its exercises set up by `run.py init`.
+COURSE_DIR holds a copy of run.py and the tensorlings folder, with its
+exercises set up by `run.py init`.
 Use a scratch copy, since the steps edit exercise files and save progress.
 Each STEP is one of these.
 
@@ -17,25 +18,20 @@ On macOS, turn a screenshot into a PNG to look at with
 """
 
 import asyncio
-import importlib.util
+import importlib
 import sys
 from pathlib import Path
 from types import ModuleType
 
-# Loading run.py would otherwise leave a __pycache__ folder in the course copy.
+# Loading the course would otherwise leave __pycache__ folders in the course copy.
 sys.dont_write_bytecode = True
 
 
-def load_course(course: Path) -> ModuleType:
-    spec = importlib.util.spec_from_file_location(
-        name="run",
-        location=course / "run.py",
-    )
-    module = importlib.util.module_from_spec(spec)
-    sys.modules["run"] = module
-    spec.loader.exec_module(module)
+def load_course(course: Path) -> tuple[ModuleType, ModuleType]:
+    """The copy's app and progress modules, which find their files from where the copy sits."""
+    sys.path.insert(0, str(course))
 
-    return module
+    return importlib.import_module("tensorlings.app"), importlib.import_module("tensorlings.progress")
 
 
 def parse_size(text: str) -> tuple[int, int]:
@@ -64,9 +60,9 @@ async def drive(
     size: tuple[int, int],
     steps: list[str],
 ) -> None:
-    run = load_course(course)
-    app = run.TensorlingsApp(
-        progress=run.load_progress(),
+    app_module, progress_module = load_course(course)
+    app = app_module.TensorlingsApp(
+        progress=progress_module.load_progress(),
         manual=False,
     )
 

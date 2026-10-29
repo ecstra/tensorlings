@@ -9,16 +9,18 @@ because a beginner sees exactly these.
     .venv/bin/python dev/wrong_answers.py
 """
 
-import importlib.util
 import sys
 import tempfile
 from pathlib import Path
-from types import ModuleType
 
 REPO = Path(__file__).resolve().parent.parent
 
-# Loading run.py would otherwise leave a __pycache__ folder at the repo root.
+# Loading the course would otherwise leave __pycache__ folders in the package.
 sys.dont_write_bytecode = True
+sys.path.insert(0, str(REPO))
+
+from tensorlings.course import attempt
+from tensorlings.progress import exercise_named
 
 # (exercise, what is wrong, a piece of the solution, what a learner might write instead)
 CASES: list[tuple[str, str, str, str]] = [
@@ -65,25 +67,12 @@ CASES: list[tuple[str, str, str, str]] = [
 ]
 
 
-def load_course() -> ModuleType:
-    spec = importlib.util.spec_from_file_location(
-        name="run",
-        location=REPO / "run.py",
-    )
-    course = importlib.util.module_from_spec(spec)
-    sys.modules["run"] = course
-    spec.loader.exec_module(course)
-
-    return course
-
-
 def main() -> int:
-    course = load_course()
     accepted: list[str] = []
 
     with tempfile.TemporaryDirectory() as folder:
         for number, (name, label, piece, mistake) in enumerate(CASES):
-            exercise = course.exercise_named(name)
+            exercise = exercise_named(name)
 
             # A case whose piece is gone from the solution would test the solution itself.
             if exercise.solution.count(piece) != 1:
@@ -92,7 +81,7 @@ def main() -> int:
             path = Path(folder) / str(number) / f"{name}.py"
             path.parent.mkdir()
             path.write_text(exercise.solution.replace(piece, mistake))
-            outcome = course.attempt(
+            outcome = attempt(
                 exercise=exercise,
                 path=path,
             )
