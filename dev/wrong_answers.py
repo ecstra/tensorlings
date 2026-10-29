@@ -429,6 +429,18 @@ CASES: list[tuple[str, str, str, str]] = [
     ("broken2", "make_optimizer decays everything", "return torch.optim.AdamW([{\"params\": decayed, \"weight_decay\": 0.01}, {\"params\": kept, \"weight_decay\": 0.0}], lr=lr)", "return torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=0.01)"),
     ("broken2", "rate_at decays to 0", "return base / 10 + (base - base / 10) * (1 + math.cos(math.pi * progress)) / 2", "return base * (1 + math.cos(math.pi * progress)) / 2"),
     ("broken2", "train_tuned never clips", "        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)\n", ""),
+    ("conv1", "conv_matrix puts w at the start of every row", "matrix[row, row:row + k] = w", "matrix[row, :k] = w"),
+    ("conv1", "weight_counts with a square Linear", "return (n - k + 1) * n, k", "return n * n, k"),
+    ("conv2", "slide takes the mean", "outputs.append((x[start:start + k] * w).sum())", "outputs.append((x[start:start + k] * w).mean())"),
+    ("conv2", "unfold_conv steps a whole window", "return x.unfold(0, len(w), 1) @ w", "return x.unfold(0, len(w), len(w)) @ w"),
+    ("conv2", "batch_conv flips the kernel", "F.conv1d(x.unsqueeze(1), w.view(1, 1, -1))", "F.conv1d(x.unsqueeze(1), w.flip(0).view(1, 1, -1))"),
+    ("conv3", "output_shape forgets the 1", "return h - kh + 1, w - kw + 1", "return h - kh, w - kw"),
+    ("conv3", "conv2d_loop takes the mean", "output[i, j] = (image[i:i + kh, j:j + kw] * kernel).sum()", "output[i, j] = (image[i:i + kh, j:j + kw] * kernel).mean()"),
+    ("conv3", "batch_conv2d flips the kernel", "F.conv2d(images.unsqueeze(1), kernel[None, None])", "F.conv2d(images.unsqueeze(1), kernel.flip(0, 1)[None, None])"),
+    ("conv4", "Detector averages the responses", "self.head(responses.amax(dim=2))", "self.head(responses.mean(dim=2))"),
+    ("conv4", "Detector without the ReLU", "responses = torch.relu(self.conv(x.unsqueeze(1)))", "responses = self.conv(x.unsqueeze(1))"),
+    ("conv4", "accuracy with a threshold of 0.5", "((model(x) > 0).float() == y)", "((model(x) > 0.5).float() == y)"),
+    ("conv4", "train_detector on the squared error", "loss = F.binary_cross_entropy_with_logits(model(x), y)", "loss = ((model(x) - y) ** 2).mean()"),
 ]
 
 

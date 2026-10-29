@@ -13,6 +13,7 @@ from . import (
     broken_training,
     chain_rule,
     clipping,
+    convolution,
     debugging,
     derivatives,
     dropout,
@@ -69,6 +70,7 @@ CHAPTERS: list[Chapter] = [
     clipping.CLIPPING,
     debugging.DEBUGGING,
     broken_training.BROKEN_TRAINING,
+    convolution.CONVOLUTION,
 ]
 
 EXERCISES: list[Exercise] = [
@@ -182,4 +184,8 @@ EXERCISES: list[Exercise] = [
     debugging.QUIZ6,
     broken_training.BROKEN1,
     broken_training.BROKEN2,
+    convolution.CONV1,
+    convolution.CONV2,
+    convolution.CONV3,
+    convolution.CONV4,
 ]
