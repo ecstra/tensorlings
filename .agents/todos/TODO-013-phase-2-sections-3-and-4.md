@@ -4,10 +4,11 @@ kind: todo
 description: the building blocks with the names project, then optimization with the broken training project, in the approved format
 updated: 2026-10-29
 links: [docs/research/tensorlings-detailed-curriculum.md]
-status: open
+status: done
 by: agent
 area: course
 born: 2026-10-29
+done: 2026-10-29
 ---
 
 ## What
@@ -28,8 +29,10 @@ Phase 2 of the plan build-tensorlings, Sections 3 and 4 as [the detailed curricu
 | 8 | Write the broken training project | | agent | done |
 | 9 | Add the wrong answers for every new exercise | | agent | done |
 | 10 | Get beginner reader reviews and fix what they find | | agent | done |
-| 11 | Run the dev check and the screen driver, then write the handover | | agent | pending |
+| 11 | Run the dev check and the screen driver, then write the handover | | agent | done |
 
 ## Done when
 
 Every exercise of Sections 3 and 4 in the detailed curriculum exists, the dev check reports each one healthy, every new exercise has wrong answers that fail, the beginner reader reviews found nothing left to fix, and a handover names what the owner should try.
+
+Closed on 2026-10-29. All 59 exercises exist, the dev check reports all 110 healthy, all 404 wrong answers fail, the four reviews' findings are fixed, and [the handover](../handover/tensorlings-phase-2-built-sections-3-and-4.md) says where it stands.

@@ -15,10 +15,8 @@ Built by the brain tool from the folder it lists.
 
 ## Open
 
-### course
-
-- [TODO-013](TODO-013-phase-2-sections-3-and-4.md), the building blocks with the names project, then optimization with the broken training project, in the approved format
+Nothing open.
 
 ## Closed
 
-- course: 12 done, 0 dropped
+- course: 13 done, 0 dropped
