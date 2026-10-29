@@ -7,6 +7,7 @@ that accepts a wrong answer is testing nothing. Read the printed messages too,
 because a beginner sees exactly these.
 
     .venv/bin/python dev/wrong_answers.py
+    .venv/bin/python dev/wrong_answers.py init1 dropout2    # only these exercises
 """
 
 import sys
@@ -219,14 +220,51 @@ CASES: list[tuple[str, str, str, str]] = [
     ("mnist3", "test_accuracy measures on the validation set", "return accuracy(test_x, test_y, W, b)", "return accuracy(validation_x, validation_y, W, b)"),
     ("mnist3", "confusion_matrix swaps rows and columns", "counts[true_class, guess] += 1", "counts[guess, true_class] += 1"),
     ("mnist3", "most_confused counts the diagonal", "    mistakes.fill_diagonal_(0)\n", ""),
+    ("init1", "predicted_spread forgets the depth", "return (math.sqrt(n) * weight_spread) ** depth", "return math.sqrt(n) * weight_spread"),
+    ("init1", "predicted_spread grows by n", "return (math.sqrt(n) * weight_spread) ** depth", "return (n * weight_spread) ** depth"),
+    ("init1", "spreads_through with the weight turned", "x = x @ weight\n", "x = x @ weight.T\n"),
+    ("init1", "scaled_weights divides by the width", "/ math.sqrt(width) for _ in range(depth)]", "/ width for _ in range(depth)]"),
+    ("init1", "scaled_weights without the generator", "torch.randn(width, width, generator=generator) / math.sqrt(width)", "torch.randn(width, width) / math.sqrt(width)"),
+    ("init2", "default_std forgets the sqrt(3)", "return 1 / math.sqrt(fan_in) / math.sqrt(3)", "return 1 / math.sqrt(fan_in)"),
+    ("init2", "kaiming_std without the 2", "return math.sqrt(2 / fan_in)", "return math.sqrt(1 / fan_in)"),
+    ("init2", "xavier_std with fan_in only", "return math.sqrt(2 / (fan_in + fan_out))", "return math.sqrt(2 / fan_in)"),
+    ("init2", "kaiming_init_ leaves the bias", "        layer.weight.normal_(0, kaiming_std(layer.in_features))\n        layer.bias.zero_()", "        layer.weight.normal_(0, kaiming_std(layer.in_features))"),
+    ("init2", "kaiming_init_ with the fan out", "layer.weight.normal_(0, kaiming_std(layer.in_features))", "layer.weight.normal_(0, kaiming_std(layer.out_features))"),
+    ("init2", "kaiming_init_ outside no_grad", "    with torch.no_grad():\n        layer.weight.normal_(0, kaiming_std(layer.in_features))\n        layer.bias.zero_()", "    layer.weight.normal_(0, kaiming_std(layer.in_features))\n    layer.bias.zero_()"),
+    ("init3", "start_loss on probabilities", "return F.cross_entropy(model(x), y).item()", "return F.cross_entropy(torch.softmax(model(x), dim=1), y).item()"),
+    ("init3", "start_gap with the number of examples", "return start_loss(model, x, y) - math.log(classes)", "return start_loss(model, x, y) - math.log(len(x))"),
+    ("init3", "kaiming_mlp_ without the isinstance check", "        if isinstance(module, nn.Linear):\n            kaiming_init_(module)", "        kaiming_init_(module)"),
+    ("init3", "kaiming_mlp_ fills the first layer only", "for module in model.modules():", "for module in list(model.modules())[:2]:"),
+    ("init4", "init_std gives tanh Kaiming", "if activation in (\"relu\", \"gelu\"):", "if activation in (\"relu\", \"gelu\", \"tanh\"):"),
+    ("init4", "init_std gives none Kaiming", "return 1 / math.sqrt(fan_in)", "return math.sqrt(2 / fan_in)"),
+    ("init4", "final_spread forgets the activation", "x = ACTIVATIONS[activation](x @ weight)", "x = x @ weight"),
+    ("init4", "final_spread without the generator", "weight = torch.randn(width, width, generator=generator) *", "weight = torch.randn(width, width) *"),
+    ("init4", "last_bias without the log", "return (counts / len(y)).log()", "return counts / len(y)"),
+    ("dropout1", "keep_mask keeps the small draws", "return torch.rand(shape, generator=generator) >= p", "return torch.rand(shape, generator=generator) < p"),
+    ("dropout1", "dropout forgets to scale", "return x * keep / (1 - p)", "return x * keep"),
+    ("dropout1", "dropout scales by p", "return x * keep / (1 - p)", "return x * keep / p"),
+    ("dropout1", "MyDropout drops in eval mode too", "        if not self.training:\n            return x\n\n", ""),
+    ("dropout1", "MyDropout drops the same numbers every call", "keep = torch.rand(x.shape) >= self.p", "keep = torch.rand(x.shape, generator=torch.Generator().manual_seed(0)) >= self.p"),
+    ("dropout1", "MyDropout forgets to scale", "return x * keep / (1 - self.p)", "return x * keep"),
+    ("dropout2", "train_epochs left unfixed", "        model.train()\n", ""),
+    ("dropout2", "evaluate without eval mode", "    model.eval()\n\n    with torch.no_grad():", "    with torch.no_grad():"),
+    ("dropout2", "evaluate takes the argmax down the columns", ".argmax(dim=1) == y", ".argmax(dim=0) == y"),
+    ("dropout2", "best_epoch counts from 0", "return validation_losses.index(min(validation_losses)) + 1", "return validation_losses.index(min(validation_losses))"),
+    ("dropout3", "paper_dropout scales in training", "return x * keep_mask(x.shape, p, generator)\n", "return x * keep_mask(x.shape, p, generator) / (1 - p)\n"),
+    ("dropout3", "paper_dropout passes x through at test time", "return x * (1 - p)", "return x"),
+    ("dropout3", "average_of_draws adds up", ".mean(dim=0)", ".sum(dim=0)"),
+    ("dropout3", "dropout_mlp without the hidden dropout", "layers.extend([nn.Linear(inputs, outputs), nn.ReLU(), nn.Dropout(p_hidden)])", "layers.extend([nn.Linear(inputs, outputs), nn.ReLU()])"),
+    ("dropout3", "dropout_mlp drops before the ReLU", "layers.extend([nn.Linear(inputs, outputs), nn.ReLU(), nn.Dropout(p_hidden)])", "layers.extend([nn.Linear(inputs, outputs), nn.Dropout(p_hidden), nn.ReLU()])"),
 ]
 
 
 def main() -> int:
     accepted: list[str] = []
+    only = set(sys.argv[1:])
+    cases = [case for case in CASES if not only or case[0] in only]
 
     with tempfile.TemporaryDirectory() as folder:
-        for number, (name, label, piece, mistake) in enumerate(CASES):
+        for number, (name, label, piece, mistake) in enumerate(cases):
             exercise = exercise_named(name)
 
             # A case whose piece is gone from the solution would test the solution itself.
@@ -262,7 +300,7 @@ def main() -> int:
         print("These wrong answers passed: " + ", ".join(accepted))
         return 1
 
-    print(f"All {len(CASES)} wrong answers fail.")
+    print(f"All {len(cases)} wrong answers fail.")
     return 0
 
 

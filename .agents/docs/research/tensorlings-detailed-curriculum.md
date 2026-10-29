@@ -109,7 +109,7 @@ The project is CS231n's first assignment, a softmax classifier on real images wi
 | | init4 | when, the initialization each activation needs |
 | 20_dropout | dropout1 | dropout, zeroing with probability p and scaling the rest, in training and eval mode |
 | | dropout2 | why, an MLP that overfits a small set, with and without dropout |
-| | dropout3 | the paper's inverted dropout, and where dropout goes in a model |
+| | dropout3 | the paper's scaling at test time next to the inverted dropout PyTorch uses, and where dropout goes in a model |
 | 21_normalization | batchnorm1 | BatchNorm from its paper, built and matched with `nn.BatchNorm1d` in training mode |
 | | batchnorm2 | running statistics for eval mode, with a forgotten `model.eval()` to fix |
 | | layernorm1 | LayerNorm, each example over its own features, matched with `nn.LayerNorm` |

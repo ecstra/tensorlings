@@ -11,6 +11,7 @@ from . import (
     autograd,
     chain_rule,
     derivatives,
+    dropout,
     embeddings,
     generalization,
     gradient_descent,
@@ -49,6 +50,7 @@ CHAPTERS: list[Chapter] = [
     mlp.MLP,
     embeddings.EMBEDDINGS,
     initialization.INITIALIZATION,
+    dropout.DROPOUT,
 ]
 
 EXERCISES: list[Exercise] = [
@@ -124,4 +126,7 @@ EXERCISES: list[Exercise] = [
     initialization.INIT2,
     initialization.INIT3,
     initialization.INIT4,
+    dropout.DROPOUT1,
+    dropout.DROPOUT2,
+    dropout.DROPOUT3,
 ]
