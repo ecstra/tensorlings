@@ -11,6 +11,8 @@ from . import (
     adaptive,
     autograd,
     chain_rule,
+    clipping,
+    debugging,
     derivatives,
     dropout,
     embeddings,
@@ -63,6 +65,8 @@ CHAPTERS: list[Chapter] = [
     sgd.SGD,
     adaptive.ADAPTIVE,
     schedules.SCHEDULES,
+    clipping.CLIPPING,
+    debugging.DEBUGGING,
 ]
 
 EXERCISES: list[Exercise] = [
@@ -166,4 +170,12 @@ EXERCISES: list[Exercise] = [
     schedules.SCHEDULE1,
     schedules.WARMUP1,
     schedules.SCHEDULE2,
+    clipping.CLIPPING1,
+    clipping.CLIPPING2,
+    debugging.DEBUG1,
+    debugging.DEBUG2,
+    debugging.DEBUG3,
+    debugging.DEBUG4,
+    debugging.DEBUG5,
+    debugging.QUIZ6,
 ]
