@@ -102,8 +102,13 @@ BATCHNORM1_LESSON = prose(
     For each feature, it takes the mean and the variance over the examples in
     the batch. It subtracts the mean and divides by the square root of the
     variance. Every feature then has mean 0 and spread 1 within that batch.
+    That spread divides by n too, so `.std(dim=0, unbiased=False)` of the
+    result shows 1. Plain `.std(dim=0)` divides by `n - 1` and shows more,
+    1.41 on 2 rows.
+
     A small `eps`, 0.00001 in PyTorch, is added to the variance, so a feature
-    that never changes doesn't divide by 0.
+    that never changes doesn't divide by 0. `torch.sqrt` takes the square
+    root of every number in a tensor.
 
     Spread 1 everywhere might not be what the next layer needs. So each
     feature then gets a learned scale and shift, starting at 1 and 0.
@@ -344,8 +349,9 @@ BATCHNORM2_SOURCE = source_file(
 
 
     # TODO: Finish the three lines with ... in forward. In training mode it
-    #   normalizes with the batch's statistics and updates the running ones,
-    #   the variance dividing by n - 1. In eval mode it uses the running ones.
+    #   normalizes x with the batch's statistics, the variance dividing by n.
+    #   It also updates the running ones, and the running variance takes the
+    #   batch variance dividing by n - 1. In eval mode it uses the running ones.
     class MyBatchNorm(nn.Module):
         def __init__(
             self,
@@ -499,7 +505,7 @@ def check_predict(found: object) -> None:
         reference = trained_bn_model(seed)
         before = model[1].running_mean.clone()
         x = small_tensor(seed + 9, 6, 4)
-        call = f"predict on a model with BatchNorm, left in training mode, and x of shape (6, 4)"
+        call = f"predict on a model with BatchNorm, passed in still in training mode, and x of shape (6, 4)"
         actual = found(model, x)
         reference.eval()
 
@@ -573,8 +579,9 @@ LAYERNORM1_LESSON = prose(
     statistics, and a batch of 1 works. It keeps the learned scale and shift
     per feature, and divides the variance by n.
 
-    `keepdim=True` keeps a reduced dimension with size 1, so one mean per row
-    lines up against the row's features by broadcasting.
+    `dim=-1` is the last dimension, counted from the end like a Python list
+    index. `keepdim=True` keeps a reduced dimension with size 1, so one mean
+    per row lines up against the row's features by broadcasting.
 
     ```python
     x = torch.tensor([[1.0, 3.0],
@@ -838,9 +845,9 @@ RMSNORM1_SOURCE = source_file(
     layer_normed = F.layer_norm(x, (2,), eps=1e-5)    # tensor([[-1.0000,  1.0000]]), up to eps
 
 
-    # TODO: Return what F.layer_norm gives with no scale or shift, by taking
-    #   each row's mean away and then dividing by the root mean square, with eps
-    #   inside the root.
+    # TODO: Return what F.layer_norm gives with no scale or shift. Take each
+    #   row's mean away, then divide by the root mean square of that centered
+    #   row, with eps inside the root.
     def layer_norm_by_rms(
         x: Tensor,
         eps: float,
@@ -981,7 +988,7 @@ NORM1_LESSON = prose(
 
     With PyTorch's default start the plain MLP never learned, as init3 found.
     Every norm rescued it. From the Kaiming start the gains were smaller, and
-    BatchNorm did best. From the default start, LayerNorm and RMSNorm fell
+    RMSNorm gained nothing at all. BatchNorm did best. From the default start, LayerNorm and RMSNorm fell
     apart at 0.3 in every run, so a norm doesn't make every step size safe. In
     one run with 16 hidden layers, every version did worse than with 8, which
     the next chapter fixes.
@@ -995,6 +1002,8 @@ NORM1_LESSON = prose(
     A Linear layer right before BatchNorm doesn't need its bias, since the
     mean subtraction takes it away. `nn.Linear(n, m, bias=False)` leaves it
     out. `nn.Identity()` is a module that hands its input back unchanged.
+
+    A loop over an `nn.Sequential` gives its layers one at a time, in order.
     """,
 )
 
@@ -1267,7 +1276,7 @@ NORM1 = Exercise(
         "matched.",
         "normed_mlp": "Each hidden layer adds three modules, nn.Linear(inputs, outputs), norm_layer(kind, outputs) "
         "and nn.ReLU().",
-        "spreads_after_relu": "Inside with torch.no_grad():, loop over model, set x to layer(x), and append "
+        "spreads_after_relu": "Inside a with torch.no_grad() block, loop over model, set x to layer(x), and append "
         "x.std().item() whenever isinstance says the layer is an nn.ReLU.",
     },
     introduces=(),

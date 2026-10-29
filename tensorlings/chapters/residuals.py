@@ -338,6 +338,9 @@ RESIDUAL2_LESSON = prose(
     | 17 | 72.1% | 86.1% |
     | 51 | 11.0%, never learned | 79.5% |
 
+    In init3 the plain MLP of 8 layers got 85.9%, at a learning rate of 0.1
+    against the 0.05 here.
+
     The plain MLP gets worse with depth, and its training loss rises with it,
     0.56 at 5 layers and 0.79 at 17. So this isn't overfitting. He and others
     found the same, deeper plain models training worse, which is what led them
@@ -646,8 +649,8 @@ RESIDUAL2 = Exercise(
         "and return self.head(x).",
         "first_layer_gradient": "Call .backward() on F.cross_entropy(model(x), y). Then take first.weight.grad, "
         ".abs().mean() it, and return it as a plain number.",
-        "spreads_through_blocks": "Inside with torch.no_grad():, loop over blocks, set x to block(x), and append "
-        "x.std().item() each time.",
+        "spreads_through_blocks": "Inside a with torch.no_grad() block, loop over blocks, set x to block(x), and "
+        "append x.std().item() each time.",
     },
     introduces=(),
     check=check_residual2,
@@ -679,6 +682,12 @@ RESIDUAL3_LESSON = prose(
     From Kaiming starts with zeroed last layers, pre norm MLPs trained to
     84.4%, 78.9% and 81.2% at 5, 17 and 51 hidden layers. That was in the
     same setup as residual2, where the plain MLP of 51 layers never learned.
+
+    Those scores are no better than residual2's residual MLPs, and worse at 17
+    layers. Three epochs are too few to show an accuracy gain, and the differences
+    between residual versions are within noise. What the fixes buy here is a
+    safe start from Kaiming. The main path's spread stays steady with no
+    `nan`, where Kaiming in both layers of residual2's blocks blew up.
 
     A zeroed layer still learns. Its gradient isn't zero, since the layer
     before it gives it nonzero inputs.
@@ -956,8 +965,8 @@ RESIDUAL4_SOURCE = source_file(
     names = [name for name, _ in pairs]              # ['a', 'b']
 
 
-    # TODO: Return the post norm block of Vaswani and others, the norm of x
-    #   plus f of x.
+    # TODO: Return the post norm block of Vaswani and others, the norm of the
+    #   sum, x plus f of x.
     def post_norm(
         x: Tensor,
         f: nn.Module,
@@ -1357,7 +1366,7 @@ def batchnorm_classifier(seed: int) -> nn.Sequential:
 def check_eval_accuracy(found: object) -> None:
     for seed in (420, 430):
         x, y = labelled_points(seed, 40, 6, 3)
-        call = "eval_accuracy on a model with BatchNorm, left in training mode, and 40 labelled points"
+        call = "eval_accuracy on a model with BatchNorm, passed in still in training mode, and 40 labelled points"
         model = batchnorm_classifier(seed)
         before = model[1].running_mean.clone()
         actual = found(model, x, y)
@@ -1431,8 +1440,8 @@ QUIZ4 = Exercise(
         "Then give every nn.Linear in model.modules() Kaiming's start, as init3 does.",
         "batchnorm_mlp": "Each hidden layer adds nn.Linear(inputs, outputs, bias=False), nn.BatchNorm1d(outputs) and "
         "nn.ReLU().",
-        "eval_accuracy": "Call model.eval(), then inside with torch.no_grad(): compare model(x).argmax(dim=1) with y "
-        "and take the mean of the matches as floats.",
+        "eval_accuracy": "Call model.eval(). Then, inside a with torch.no_grad() block, compare "
+        "model(x).argmax(dim=1) with y and take the mean of the matches as floats.",
         "normed_embeddings": "Index table with ids, then normalize along dim=-1 as layer_normalize does in "
         "layernorm1.",
     },
@@ -1457,6 +1466,10 @@ QUIZ5_LESSON = prose(
     | `DropoutBlock` | a pre norm block starting at zero, with dropout on the branch's output | residual3, dropout1 |
     | `block_stack` | blocks in an nn.Sequential, then a final LayerNorm | residual3, mlp1 |
     | `block_parameters` | the parameters of one DropoutBlock, worked out by hand | linear1, layernorm1 |
+
+    Dropout on a residual branch goes on the branch's output, before the add,
+    as in nanoGPT and GPT-2. The branch's last layer isn't the model's last
+    layer, so dropout3's rule still holds.
     """,
 )
 
@@ -1485,10 +1498,11 @@ QUIZ5_SOURCE = source_file(
         ...
 
 
-    # TODO: Finish both methods. The block holds norm, a LayerNorm, the Linear
-    #   layers up and down, both width to width, and dropout, an nn.Dropout of p.
-    #   down starts at zero. forward returns x plus the dropout of down of the
-    #   ReLU of up of the norm of x.
+    # TODO: Finish both methods. The block holds four modules. norm is a
+    #   LayerNorm of width. up and down are Linear layers from width to width.
+    #   dropout is an nn.Dropout of p. down's weight and bias both start at
+    #   zero. forward returns x plus the dropout of down of the ReLU of up of
+    #   the norm of x.
     class DropoutBlock(nn.Module):
         def __init__(
             self,
@@ -1502,8 +1516,8 @@ QUIZ5_SOURCE = source_file(
             ...
 
 
-    # TODO: Return an nn.Sequential of blocks DropoutBlocks of width and p,
-    #   followed by a LayerNorm of width.
+    # TODO: Return an nn.Sequential of `blocks` DropoutBlocks, each of width
+    #   and p, followed by a LayerNorm of width.
     def block_stack(
         width: int,
         blocks: int,

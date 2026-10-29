@@ -145,8 +145,9 @@ DROPOUT1_SOURCE = source_file(
     below = draws < 0.5                              # True for about half of them
 
 
-    # TODO: Return a tensor of the given shape that is True where a number
-    #   survives dropout with probability p, drawn with torch.rand from generator.
+    # TODO: Return a tensor of the given shape for dropout that drops each
+    #   number with probability p. Draw it with torch.rand from generator, so it
+    #   is True where a draw is at or above p and the number survives.
     def keep_mask(
         shape: tuple[int, ...],
         p: float,
@@ -334,7 +335,8 @@ DROPOUT2_LESSON = prose(
     """
     Here an MLP with two hidden layers of 512 learned from only 1000 MNIST
     images. It trained for 300 epochs on minibatches of 100, at a learning rate
-    of 0.1, with dropout after each hidden ReLU.
+    of 0.1, with dropout after each hidden ReLU. The training loss here was
+    measured with dropout off, after all 300 epochs.
 
     | Dropout | Training loss | Validation loss | Validation accuracy |
     |---|---|---|---|
@@ -342,14 +344,19 @@ DROPOUT2_LESSON = prose(
     | 0.2 | 0.0009 | 0.556 | 88.9% |
     | 0.5 | 0.0005 | 0.511 | 89.5% |
 
-    All three fit the training images perfectly, so dropout didn't stop that.
-    It changed how far the validation loss climbed. Without dropout it rose
-    from 0.41 at epoch 30 to 0.62, and with 0.5 only to 0.51. The accuracy came
-    out about 1.5 points higher, and three more seeds gave between 1.3 and 1.8.
+    By the end all three fit the training images perfectly, so dropout didn't
+    stop that. It changed how far the validation loss climbed. Without dropout
+    it rose from 0.41 at epoch 30 to 0.62, and with 0.5 only to 0.51. The
+    accuracy came out about 1.5 points higher, and three more seeds gave
+    between 1.3 and 1.8.
 
     Dropout has a cost. Each step trains a thinned model, so training takes
-    longer to get as far, two to three times as long by the paper's count. A
-    model with plenty of data for its size doesn't overfit, and there dropout
+    longer to get as far, two to three times as long by the paper's count. At
+    epoch 10 here, the model without dropout had a training loss of 0.608, and
+    the one with 0.5 had 0.696. Both were measured with dropout off. Their
+    validation accuracy was 81.9% against 80.4%.
+
+    A model with plenty of data for its size doesn't overfit, and there dropout
     only slows it down. Karpathy's nanoGPT turns it off for training from
     scratch, and suggests 0.1 or more for further training on a small set.
 
@@ -375,6 +382,7 @@ DROPOUT2_SOURCE = source_file(
 
     # TODO: Return the model's cross entropy and accuracy on x and y, measured in
     #   eval mode without recording anything for autograd, as two plain numbers.
+    #   The accuracy is the share of right answers, between 0 and 1.
     def evaluate(
         model: nn.Module,
         x: Tensor,
@@ -558,7 +566,7 @@ def reference_train_epochs(
 def check_evaluate(found: object) -> None:
     for seed, p in ((270, 0.5), (271, 0.3)):
         x, y = labelled_points(seed, 50, 6, 3)
-        call = f"evaluate on a model with dropout {p}, left in training mode, and 50 labelled points"
+        call = f"evaluate on a model with dropout {p}, passed in still in training mode, and 50 labelled points"
         model = dropout_model(seed, 6, 16, 3, p)
         actual = found(model, x, y)
         expected = reference_evaluate(dropout_model(seed, 6, 16, 3, p), x, y)
@@ -634,7 +642,7 @@ DROPOUT2 = Exercise(
     source=DROPOUT2_SOURCE,
     solution=DROPOUT2_SOLUTION,
     hints={
-        "evaluate": "Call model.eval() first, then work inside with torch.no_grad():. Take the logits once. "
+        "evaluate": "Call model.eval() first, then work inside a with torch.no_grad() block. Take the logits once. "
         "F.cross_entropy of them is the loss, and the share of rows whose .argmax(dim=1) equals y is the accuracy.",
         "train_epochs": "Add model.train() as the first line inside the loop over epochs.",
         "best_epoch": "Find the position of the smallest loss with .index(min(...)), then add 1.",
@@ -654,9 +662,9 @@ DROPOUT3_LESSON = prose(
     The 2014 dropout paper by Srivastava and others did not scale while
     training. It dropped numbers, and at test time multiplied the weights after
     them by the keep probability `1 - p` to make up for it. PyTorch scales
-    during training instead, which is called inverted dropout. Both give the
-    next layer the same average, and inverted dropout leaves the model at test
-    time with nothing to change.
+    during training instead, which is called inverted dropout. Each gives the
+    next layer the same average in training and at test time. Inverted
+    dropout leaves the model at test time with nothing to change.
 
     Each draw of dropout gives different numbers, but their average over many
     draws is the input itself. That is what dividing by `1 - p` buys.
@@ -726,7 +734,8 @@ DROPOUT3_SOURCE = source_file(
     piled = torch.stack([torch.ones(3), torch.zeros(3)])    # shape (2, 3)
 
 
-    # TODO: Return the average of draws runs of dropout on x, each from generator.
+    # TODO: Run dropout on x as many times as draws, each run from generator,
+    #   and return the average of the runs.
     def average_of_draws(
         x: Tensor,
         p: float,
@@ -910,8 +919,8 @@ DROPOUT3 = Exercise(
     solution=DROPOUT3_SOLUTION,
     hints={
         "paper_dropout": "When training, multiply x by keep_mask(x.shape, p, generator). Otherwise multiply x by 1 - p.",
-        "average_of_draws": "Make a list of draws runs of dropout(x, p, generator), torch.stack them, and take the "
-        "mean along dim=0.",
+        "average_of_draws": "Make a list of as many runs of dropout(x, p, generator) as draws, torch.stack them, and "
+        "take the mean along dim=0.",
         "dropout_mlp": "Each hidden layer adds three modules, a Linear from inputs to outputs, a ReLU and an "
         "nn.Dropout of p_hidden.",
     },

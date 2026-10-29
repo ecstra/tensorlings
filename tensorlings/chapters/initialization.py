@@ -89,7 +89,7 @@ def expect_numbers(
 
     for position, (got, wanted) in enumerate(zip(actual, expected)):
         expect_close(
-            call=f"number {position} of {call}",
+            call=f"number {position + 1} of {call}",
             actual=got,
             expected=wanted,
             tolerance=relative(wanted),
@@ -113,7 +113,7 @@ def expect_scaled_weights(
         raise Mismatch(f"{call} has {len(actual)} weights, but it should have {len(expected)}.")
 
     for position, (got, wanted) in enumerate(zip(actual, expected)):
-        name = f"weight {position} of {call}"
+        name = f"weight {position + 1} of {call}"
 
         if isinstance(got, Tensor) and got.shape == wanted.shape and got.numel() > 1:
             spread = got.std().item()
@@ -380,10 +380,11 @@ INIT2_LESSON = prose(
     Kaiming He and others made up for it in 2015 by doubling the variance.
 
     - Kaiming: spread `sqrt(2 / fan_in)`, for layers followed by ReLU.
-    - Xavier: spread `sqrt(2 / (fan_in + fan_out))`, for tanh, from Glorot and Bengio in 2010.
+    - Xavier: spread `sqrt(2 / (fan_in + fan_out))`, for tanh, from Xavier Glorot and Yoshua Bengio in 2010.
 
-    The forward pass adds up fan_in numbers and the backward pass adds up
-    fan_out, and Xavier's rule balances the two.
+    The rule is named after Glorot's first name. The forward pass adds up
+    fan_in numbers and the backward pass adds up fan_out, and Xavier's rule
+    balances the two.
 
     PyTorch's own Linear draws evenly between `-1 / sqrt(fan_in)` and
     `1 / sqrt(fan_in)`, as linear2 said. Numbers drawn evenly between `-b`
@@ -589,7 +590,7 @@ INIT2 = Exercise(
         "bound / sqrt(3).",
         "kaiming_std": "The square root of 2 / fan_in. math.sqrt takes the square root of a plain number.",
         "xavier_std": "The square root of 2 divided by fan_in and fan_out added together.",
-        "kaiming_init_": "Inside with torch.no_grad():, call .normal_ on layer.weight with mean 0 and "
+        "kaiming_init_": "Inside a with torch.no_grad() block, call .normal_ on layer.weight with mean 0 and "
         "kaiming_std(layer.in_features), then .zero_() on layer.bias.",
     },
     introduces=("fan in",),
@@ -858,8 +859,8 @@ INIT3 = Exercise(
     source=INIT3_SOURCE,
     solution=INIT3_SOLUTION,
     hints={
-        "start_loss": "Inside with torch.no_grad():, take F.cross_entropy of model(x) and y, and turn it into a "
-        "plain number with .item().",
+        "start_loss": "Inside a with torch.no_grad() block, take F.cross_entropy of model(x) and y, and turn it "
+        "into a plain number with .item().",
         "start_gap": "model(x).shape[1] is the number of classes. Take math.log of it away from start_loss(model, x, "
         "y).",
         "kaiming_mlp_": "Loop over model.modules(), and call kaiming_init_ on each module that isinstance says is an "
@@ -893,6 +894,11 @@ INIT4_LESSON = prose(
     - tanh and sigmoid: Xavier. Spread 1 saturates tanh, as activations1 showed. PyTorch's `nn.init.calculate_gain("tanh")` suggests Xavier times 5/3, which held at 0.65 here.
     - no activation after the layer: `1 / sqrt(fan_in)`, from init1.
 
+    ReLU with Kaiming ends at 0.80 and not 1. Kaiming keeps the average
+    square of the numbers steady. A ReLU's outputs are never negative, so
+    their mean sits above 0 and their spread around it is smaller. It stays
+    near 0.8 at every depth, about `sqrt(1 - 1 / pi)`.
+
     GELU and tanh still shrink slowly. Normalization, two chapters on, keeps
     the spread steady however deep a model goes.
 
@@ -907,7 +913,9 @@ INIT4_LESSON = prose(
     ```
 
     With the last weights small, the model then starts at the loss of
-    guessing by the shares, never worse than `log(classes)`.
+    guessing by the shares. On the labels the shares came from, that is never
+    worse than `log(classes)`. A class missing from those labels gets bias
+    `-inf`, the log of 0.
     """,
 )
 
