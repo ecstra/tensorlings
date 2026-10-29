@@ -455,6 +455,11 @@ CASES: list[tuple[str, str, str, str]] = [
     ("dilation1", "receptive_field ignores dilation", "return 1 + sum((k - 1) * d for k, d in layers)", "return 1 + sum(k - 1 for k, d in layers)"),
     ("conv5", "sizes_through never moves on", "        n = (n + 2 * p - k) // s + 1\n        sizes.append(n)", "        sizes.append((n + 2 * p - k) // s + 1)"),
     ("conv5", "padding_for gives the largest", "for p in range(k + 1):", "for p in reversed(range(k + 1)):"),
+    ("pooling1", "max_pool takes the mean", "output[i, j] = image[i * k:(i + 1) * k, j * k:(j + 1) * k].max()", "output[i, j] = image[i * k:(i + 1) * k, j * k:(j + 1) * k].mean()"),
+    ("pooling1", "average_pool takes the largest", "return F.avg_pool2d(x, k)", "return F.max_pool2d(x, k)"),
+    ("pooling1", "global_average over the channels", "return x.mean(dim=(2, 3))", "return x.mean(dim=1)"),
+    ("pooling2", "PooledDetector averages", "return self.head(responses.amax(dim=(2, 3))).squeeze(1)", "return self.head(responses.mean(dim=(2, 3))).squeeze(1)"),
+    ("pooling2", "FlatDetector without the ReLU", "        responses = torch.relu(self.conv(x.unsqueeze(1)))\n\n        return self.head(responses.flatten(1)).squeeze(1)", "        responses = self.conv(x.unsqueeze(1))\n\n        return self.head(responses.flatten(1)).squeeze(1)"),
     ("conv5", "pointwise reshapes the wrong way", "return (weight @ x.reshape(c, -1)).reshape(-1, h, w)", "return (weight @ x.reshape(-1, c).T).reshape(-1, h, w)"),
 ]
 

@@ -32,6 +32,7 @@ from . import (
     mnist,
     names,
     normalization,
+    pooling,
     residuals,
     schedules,
     sgd,
@@ -73,6 +74,7 @@ CHAPTERS: list[Chapter] = [
     broken_training.BROKEN_TRAINING,
     convolution.CONVOLUTION,
     conv_shapes.CONV_SHAPES,
+    pooling.POOLING,
 ]
 
 EXERCISES: list[Exercise] = [
@@ -195,4 +197,6 @@ EXERCISES: list[Exercise] = [
     conv_shapes.STRIDE1,
     conv_shapes.DILATION1,
     conv_shapes.CONV5,
+    pooling.POOLING1,
+    pooling.POOLING2,
 ]
