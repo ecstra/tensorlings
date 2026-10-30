@@ -1265,7 +1265,7 @@ CASES: list[tuple[str, str, str, str]] = [
     ("probe2", "frozen_features records for autograd", "    with torch.no_grad():\n        return torch.cat", "    if True:\n        return torch.cat"),
     ("probe2", "standardize uses each set's own statistics", "return (train_features - mean) / spread, (other_features - mean) / spread", "return (train_features - mean) / spread, (other_features - other_features.mean(dim=0)) / (other_features.std(dim=0) + 1e-6)"),
     ("probe2", "train_probe uses another rate", "lr=1e-2, weight_decay=1e-4", "lr=1e-3, weight_decay=1e-4"),
-    ("probe2", "probe_accuracy compares the scores themselves", "(probe(features).argmax(dim=1) == labels)", "(probe(features).argmax(dim=1) == labels.float())"),
+    ("probe2", "probe_accuracy compares the largest score, not its place", "(probe(features).argmax(dim=1) == labels)", "(probe(features).max(dim=1).values == labels)"),
     ("masked1", "choose picks where the draw is above the rate", "return torch.rand(ids.shape, generator=generator) < rate", "return torch.rand(ids.shape, generator=generator) > rate"),
     ("masked1", "corrupt masks every chosen token", "corrupted = torch.where(chosen & (roll < 0.8), MASK, ids)", "corrupted = torch.where(chosen, MASK, ids)"),
     ("masked1", "corrupt draws the random ids first", "    roll = torch.rand(ids.shape, generator=generator)\n    random_ids = torch.randint(0, vocabulary, ids.shape, generator=generator)\n", "    random_ids = torch.randint(0, vocabulary, ids.shape, generator=generator)\n    roll = torch.rand(ids.shape, generator=generator)\n"),
