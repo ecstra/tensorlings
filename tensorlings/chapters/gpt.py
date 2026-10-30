@@ -10,17 +10,20 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
-from ..course import Chapter, Exercise
+from ..course import OPTIMIZER_IMPORTS, Chapter, Exercise
+from ..data import load_shakespeare
 from ..engine import (
     Checker,
     Described,
     Mismatch,
     check_on_inputs,
+    expect_close,
     expect_tensor,
     expect_value,
     seeded,
 )
 from ..text import prose, source_file
+from ..training import MissingCheckpoint, load_checkpoint
 from .transformer_block import SELF_ATTENTION, expect_same_layers
 
 GPT = Chapter(
@@ -696,4 +699,806 @@ GPT2 = Exercise(
     introduces=(),
     check=check_gpt2,
     time_limit=30,
+)
+
+
+# ---------------------------------------------------------------------------
+# gpt3
+# ---------------------------------------------------------------------------
+
+# gpt1's batches and gpt2's model, which gpt3 and gpt4 are handed.
+DATA_PART = '''
+def get_batch(
+    data: Tensor,
+    block_size: int,
+    batch_size: int,
+    generator: torch.Generator,
+) -> tuple[Tensor, Tensor]:
+    starts = torch.randint(0, len(data) - block_size, (batch_size,), generator=generator).tolist()
+    x = torch.stack([data[start : start + block_size] for start in starts])
+    y = torch.stack([data[start + 1 : start + block_size + 1] for start in starts])
+
+    return x, y
+
+
+def shakespeare_splits() -> tuple[list[str], Tensor, Tensor]:
+    text = load_shakespeare()
+    characters = sorted(set(text))
+    positions = {character: position for position, character in enumerate(characters)}
+    data = torch.tensor([positions[character] for character in text])
+    cut = int(0.9 * len(data))
+
+    return characters, data[:cut], data[cut:]
+'''
+
+# The size of the GPT the project trains, its checkpoint and its checks.
+GPT_SETTINGS = '''
+BLOCK_SIZE = 128
+SIZE = 128
+LAYERS = 4
+HEADS = 4
+'''
+
+TRAIN_PARTS = '''
+def learning_rate(
+    step: int,
+    max_lr: float,
+    warmup: int,
+    total: int,
+    min_lr: float,
+) -> float:
+    if step < warmup:
+        return max_lr * (step + 1) / warmup
+
+    progress = (step - warmup) / (total - warmup)
+
+    return min_lr + 0.5 * (max_lr - min_lr) * (1 + math.cos(math.pi * progress))
+
+
+def make_optimizer(
+    model: nn.Module,
+    lr: float,
+    weight_decay: float,
+) -> torch.optim.Optimizer:
+    decayed = [parameter for parameter in model.parameters() if parameter.dim() >= 2]
+    kept = [parameter for parameter in model.parameters() if parameter.dim() < 2]
+    groups = [{"params": decayed, "weight_decay": weight_decay}, {"params": kept, "weight_decay": 0.0}]
+
+    return torch.optim.AdamW(groups, lr=lr, betas=(0.9, 0.95))
+
+
+def train_step(
+    model: nn.Module,
+    optimizer: torch.optim.Optimizer,
+    x: Tensor,
+    y: Tensor,
+    lr: float,
+    clip: float,
+) -> float:
+    for group in optimizer.param_groups:
+        group["lr"] = lr
+
+    scores = model(x)
+    loss = F.cross_entropy(scores.flatten(0, 1), y.flatten())
+    optimizer.zero_grad()
+    loss.backward()
+    torch.nn.utils.clip_grad_norm_(model.parameters(), clip)
+    optimizer.step()
+
+    return loss.item()
+
+
+def validation_loss(
+    model: nn.Module,
+    data: Tensor,
+    batches: int,
+    generator: torch.Generator,
+    device: torch.device,
+) -> float:
+    model.eval()
+    losses = []
+
+    with torch.no_grad():
+        for _ in range(batches):
+            x, y = get_batch(data, model.block_size, 64, generator)
+            scores = model(x.to(device))
+            losses.append(F.cross_entropy(scores.flatten(0, 1), y.to(device).flatten()).item())
+
+    model.train()
+
+    return sum(losses) / len(losses)
+'''
+
+GPT3_MAIN = '''
+    # Run by .venv/bin/python run.py train gpt3, never by the app.
+    def main() -> None:
+        characters, train_data, validation_data = shakespeare_splits()
+        device = best_device()
+        torch.manual_seed(0)
+        model = GPT(len(characters), BLOCK_SIZE, SIZE, LAYERS, HEADS).to(device)
+        steps, warmup = 3000, 150
+        optimizer = make_optimizer(model, 1e-3, 0.1)
+        generator = torch.Generator().manual_seed(0)
+        print(f"Training on {device} for {steps} steps.")
+
+        for step in range(steps):
+            x, y = get_batch(train_data, BLOCK_SIZE, 64, generator)
+            lr = learning_rate(step, 1e-3, warmup, steps, 1e-4)
+            loss = train_step(model, optimizer, x.to(device), y.to(device), lr, 1.0)
+
+            if (step + 1) % 500 == 0:
+                checked = validation_loss(model, validation_data, 20, torch.Generator().manual_seed(1), device)
+                print(f"Step {step + 1}, training loss {loss:.3f}, validation loss {checked:.3f}")
+
+        save_checkpoint(model, "gpt3")
+        print("Saved the model in checkpoints/gpt3.pt. Save gpt3.py in the app to check it.")
+'''
+
+INDENTED_DATA = textwrap.indent(DATA_PART.strip("\n"), "    ")
+INDENTED_SETTINGS = textwrap.indent(GPT_SETTINGS.strip("\n"), "    ")
+INDENTED_TRAIN_PARTS = textwrap.indent(TRAIN_PARTS.strip("\n"), "    ")
+
+GPT3_LESSON = prose(
+    """
+    This step trains for minutes outside the app, as cifar2 and adder2 did.
+    Once the checks above the last one pass, train from the project folder
+    with `.venv/bin/python run.py train gpt3`.
+
+    It trains the way nanoGPT does, with Section 4's tools together.
+
+    - AdamW, with weight decay on the matrices and none on the biases and norms, as broken2 set it up.
+    - A rate that warms up for 150 steps, then follows a cosine down to a tenth of its peak, as in warmup1 and schedule2.
+    - Gradients clipped to a norm of 1, as clipping1 did.
+
+    The rate changes every step. `optimizer.param_groups` holds the rate of
+    each group, so setting `group["lr"]` before the step is how a loop of your
+    own drives it.
+
+    ```python
+    optimizer = torch.optim.SGD(nn.Linear(2, 2).parameters(), lr=0.1)
+    optimizer.param_groups[0]["lr"] = 0.05    # the next step uses 0.05
+    ```
+
+    Here is the run behind this project on MPS. The GPT has 4 blocks of size
+    128, reads 128 characters at a time, and holds 818,048 weights.
+
+    | Step | 0 | 500 | 1,000 | 2,000 | 3,000 |
+    |---|---|---|---|---|---|
+    | Validation loss | 4.19 | 2.02 | 1.73 | 1.57 | 1.54 |
+
+    It took about 5 minutes here, while other work shared the machine. The
+    check asks for a validation loss below 1.7. nanoGPT's own Shakespeare
+    model, 6 blocks of size 384, reaches about 1.47 on a GPU.
+    """,
+)
+
+GPT3_SOURCE = source_file(
+    '''
+    # gpt3.py
+    #
+    # Train once the checks above the last one pass, from the project folder.
+    #
+    #     .venv/bin/python run.py train gpt3
+
+    import math
+
+    import torch
+    import torch.nn as nn
+    import torch.nn.functional as F
+    from torch import Tensor
+
+    from tensorlings.data import load_shakespeare
+    from tensorlings.training import best_device, save_checkpoint
+
+    halfway = 0.5 * (1 + math.cos(math.pi * 0.5))    # 0.5, a cosine halfway down
+
+
+''' + INDENTED_SETTINGS + '''
+
+
+    # The model from gpt2.
+''' + INDENTED_GIVEN_MODEL + '''
+
+
+''' + INDENTED_INIT + '''
+
+
+''' + INDENTED_GPT_INIT + '''
+
+''' + INDENTED_GPT_FORWARD + '''
+
+
+    # get_batch from gpt1, and the training and validation tokens.
+''' + INDENTED_DATA + '''
+
+
+    # TODO: Return the rate for step, counted from 0. For the first warmup steps
+    #   it climbs in a line to max_lr, reaching it at step warmup - 1. After
+    #   that it follows half a cosine from max_lr down to min_lr at step total.
+    def learning_rate(
+        step: int,
+        max_lr: float,
+        warmup: int,
+        total: int,
+        min_lr: float,
+    ) -> float:
+        ...
+
+
+    # TODO: Return AdamW at lr with betas (0.9, 0.95), with weight_decay on the
+    #   parameters of two or more dimensions and none on the rest.
+    def make_optimizer(
+        model: nn.Module,
+        lr: float,
+        weight_decay: float,
+    ) -> torch.optim.Optimizer:
+        ...
+
+
+    # TODO: Set every group's rate to lr, take the cross entropy of model's
+    #   scores on x against y, step with the gradients clipped to a norm of
+    #   clip, and return the loss as a plain number.
+    def train_step(
+        model: nn.Module,
+        optimizer: torch.optim.Optimizer,
+        x: Tensor,
+        y: Tensor,
+        lr: float,
+        clip: float,
+    ) -> float:
+        ...
+
+
+    # TODO: Return the average loss over batches batches of 64 blocks from data,
+    #   drawn with get_batch and generator, moved to device, in eval mode and
+    #   without recording for autograd. Then put model back in training mode.
+    def validation_loss(
+        model: nn.Module,
+        data: Tensor,
+        batches: int,
+        generator: torch.Generator,
+        device: torch.device,
+    ) -> float:
+        ...
+
+''' + GPT3_MAIN,
+)
+
+GPT3_SOLUTION = source_file(
+    '''
+    # gpt3.py, a solution for comparison
+
+    import math
+
+    import torch
+    import torch.nn as nn
+    import torch.nn.functional as F
+    from torch import Tensor
+
+    from tensorlings.data import load_shakespeare
+    from tensorlings.training import best_device, save_checkpoint
+
+    halfway = 0.5 * (1 + math.cos(math.pi * 0.5))
+
+
+''' + INDENTED_SETTINGS + '''
+
+
+''' + INDENTED_GIVEN_MODEL + '''
+
+
+''' + INDENTED_INIT + '''
+
+
+''' + INDENTED_GPT_INIT + '''
+
+''' + INDENTED_GPT_FORWARD + '''
+
+
+''' + INDENTED_DATA + '''
+
+
+''' + INDENTED_TRAIN_PARTS + '''
+
+''' + GPT3_MAIN,
+)
+
+
+def train_namespace() -> dict[str, object]:
+    namespace = dict(MODEL_REFERENCE)
+    namespace["load_shakespeare"] = load_shakespeare
+    exec(GPT_SETTINGS + DATA_PART + TRAIN_PARTS, namespace)
+
+    return namespace
+
+
+TRAIN_REFERENCE = train_namespace()
+
+
+def check_learning_rate(found: object) -> None:
+    for step, max_lr, warmup, total, min_lr in ((0, 1e-3, 10, 100, 1e-4), (9, 1e-3, 10, 100, 1e-4), (55, 1e-3, 10, 100, 1e-4), (100, 1e-3, 10, 100, 1e-4), (30, 0.5, 20, 60, 0.0)):
+        expect_close(
+            call=f"learning_rate({step}, {max_lr}, {warmup}, {total}, {min_lr})",
+            actual=found(step, max_lr, warmup, total, min_lr),
+            expected=TRAIN_REFERENCE["learning_rate"](step, max_lr, warmup, total, min_lr),
+            tolerance=1e-9,
+        )
+
+
+def check_make_optimizer(found: object) -> None:
+    model = seeded_gpt(MODEL_REFERENCE["GPT"])
+    optimizer = found(model, 0.003, 0.1)
+
+    if not isinstance(optimizer, torch.optim.AdamW):
+        raise Mismatch(f"make_optimizer should give torch.optim.AdamW, but it gave {type(optimizer).__name__}.")
+
+    decay_of = {id(parameter): group["weight_decay"] for group in optimizer.param_groups for parameter in group["params"]}
+
+    for name, parameter in model.named_parameters():
+        wanted = 0.1 if parameter.dim() >= 2 else 0.0
+
+        if decay_of.get(id(parameter)) != wanted:
+            raise Mismatch(f"{name} should have a weight decay of {wanted}, but it has {decay_of.get(id(parameter))}.")
+
+    for group in optimizer.param_groups:
+        if group["lr"] != 0.003 or tuple(group["betas"]) != (0.9, 0.95):
+            raise Mismatch("Every group should have the rate lr and betas of (0.9, 0.95).")
+
+
+def check_train_step(found: object) -> None:
+    data = torch.randint(0, 20, (400,), generator=torch.Generator().manual_seed(595))
+    x, y = reference_get_batch(data, 16, 4, torch.Generator().manual_seed(596))
+    results = []
+
+    # Plain SGD, since Adam's first step comes out the same size however the gradients were clipped.
+    for step in (found, TRAIN_REFERENCE["train_step"]):
+        model = seeded_gpt(MODEL_REFERENCE["GPT"])
+        optimizer = torch.optim.SGD(model.parameters(), lr=1.0)
+        loss = step(model, optimizer, x, y, 0.5, 0.01)
+        results.append((loss, model.wte.weight.detach().clone(), optimizer.param_groups[0]["lr"]))
+
+    (loss, weight, rate), (expected_loss, expected_weight, _) = results
+
+    if rate != 0.5:
+        raise Mismatch(f"After train_step at a rate of 0.5, the optimizer's rate is {rate}. Set group[\"lr\"] for every group.")
+
+    expect_close(
+        call="train_step's loss on 4 blocks of 16",
+        actual=loss,
+        expected=expected_loss,
+        tolerance=1e-5,
+    )
+    expect_tensor(
+        call="wte's weights after one train_step with SGD, clipped to 0.01",
+        actual=weight,
+        expected=expected_weight,
+    )
+
+
+def check_validation_loss(found: object) -> None:
+    data = torch.randint(0, 20, (300,), generator=torch.Generator().manual_seed(597))
+    model = seeded_gpt(MODEL_REFERENCE["GPT"])
+    expected = TRAIN_REFERENCE["validation_loss"](model, data, 3, torch.Generator().manual_seed(598), torch.device("cpu"))
+    # This small GPT has no dropout, so its outputs can't show the mode. A hook records it on every call.
+    modes: list[tuple[bool, bool]] = []
+    hook = model.register_forward_pre_hook(lambda module, inputs: modes.append((module.training, torch.is_grad_enabled())))
+
+    try:
+        actual = found(model, data, 3, torch.Generator().manual_seed(598), torch.device("cpu"))
+    finally:
+        hook.remove()
+
+    if any(training for training, _ in modes):
+        raise Mismatch("validation_loss ran the model in training mode. Call model.eval() first.")
+
+    if any(recording for _, recording in modes):
+        raise Mismatch("validation_loss recorded for autograd. Run the batches inside torch.no_grad().")
+
+    if not model.training:
+        raise Mismatch("validation_loss left the model in eval mode. Call model.train() before returning.")
+
+    expect_close(
+        call="validation_loss over 3 batches",
+        actual=actual,
+        expected=expected,
+        tolerance=1e-5,
+    )
+
+
+def trained_gpt(found: type) -> nn.Module:
+    model = found(65, 128, 128, 4, 4)
+
+    try:
+        load_checkpoint(model, "gpt3")
+    except MissingCheckpoint as missing:
+        raise Mismatch(str(missing)) from None
+    except RuntimeError:
+        raise Mismatch(
+            "The saved model doesn't fit GPT as it is now. Train it again from the project folder.\n\n"
+            "    .venv/bin/python run.py train gpt3",
+        ) from None
+
+    return model
+
+
+def check_trained_gpt(found: type) -> None:
+    model = trained_gpt(found)
+    _, _, validation_data = TRAIN_REFERENCE["shakespeare_splits"]()
+    loss = TRAIN_REFERENCE["validation_loss"](model, validation_data, 20, torch.Generator().manual_seed(1), torch.device("cpu"))
+
+    if loss >= 1.7:
+        raise Mismatch(f"The trained model's validation loss is {loss:.3f}, but it should be below 1.7.")
+
+
+def check_gpt3(checker: Checker) -> None:
+    checker.test(
+        function="learning_rate",
+        description="warms up in a line, then follows a cosine down",
+        run=check_learning_rate,
+    )
+    checker.test(
+        function="make_optimizer",
+        description="decays the matrices and nothing else",
+        run=check_make_optimizer,
+    )
+    checker.test(
+        function="train_step",
+        description="sets the rate, clips and steps",
+        run=check_train_step,
+    )
+    checker.test(
+        function="validation_loss",
+        description="averages the loss over batches in eval mode",
+        run=check_validation_loss,
+    )
+    checker.test_method(
+        class_name="GPT",
+        method="forward",
+        description="trained, gets below a validation loss of 1.7",
+        run=check_trained_gpt,
+    )
+
+
+GPT3 = Exercise(
+    name="gpt3",
+    chapter=GPT,
+    title="Project: training the GPT",
+    lesson=GPT3_LESSON,
+    source=GPT3_SOURCE,
+    solution=GPT3_SOLUTION,
+    hints={
+        "learning_rate": "Below warmup, max_lr * (step + 1) / warmup. After it, progress = (step - warmup) / (total - "
+        "warmup), and min_lr plus half of max_lr - min_lr times 1 + math.cos(math.pi * progress).",
+        "make_optimizer": "Split model.parameters() by parameter.dim() >= 2 into two groups, each a dict with "
+        "\"params\" and \"weight_decay\", and pass the list to torch.optim.AdamW with betas=(0.9, 0.95).",
+        "train_step": "Loop over optimizer.param_groups to set \"lr\". scores.flatten(0, 1) against y.flatten() for "
+        "the loss, then zero_grad, backward, clip_grad_norm_ and step.",
+        "validation_loss": "model.eval(), then inside torch.no_grad() draw each batch with get_batch(data, "
+        "model.block_size, 64, generator), move it to device, and keep each loss.",
+    },
+    introduces=(),
+    check=check_gpt3,
+    time_limit=120,
+    imports_first=OPTIMIZER_IMPORTS,
+)
+
+
+# ---------------------------------------------------------------------------
+# gpt4
+# ---------------------------------------------------------------------------
+
+SAMPLING_PARTS = '''
+def top_k_filter(
+    scores: Tensor,
+    k: int,
+) -> Tensor:
+    kth = scores.topk(k, dim=-1).values[..., -1:]
+
+    return scores.masked_fill(scores < kth, float("-inf"))
+
+
+def next_token(
+    scores: Tensor,
+    temperature: float,
+    top_k: int,
+    generator: torch.Generator,
+) -> Tensor:
+    chances = torch.softmax(top_k_filter(scores / temperature, top_k), dim=-1)
+
+    return torch.multinomial(chances, 1, generator=generator)
+
+
+def generate(
+    model: nn.Module,
+    ids: Tensor,
+    steps: int,
+    temperature: float,
+    top_k: int,
+    generator: torch.Generator,
+) -> Tensor:
+    model.eval()
+
+    with torch.no_grad():
+        for _ in range(steps):
+            scores = model(ids[:, -model.block_size :])[:, -1]
+            ids = torch.cat([ids, next_token(scores, temperature, top_k, generator)], dim=1)
+
+    return ids
+'''
+
+INDENTED_SAMPLING = textwrap.indent(SAMPLING_PARTS.strip("\n"), "    ")
+
+GPT4_LESSON = prose(
+    """
+    A trained GPT gives scores for the next character. Writing text means
+    picking one, adding it to the end, and asking again, as decoder1 did. The
+    block only holds `block_size` characters, so the model reads the last
+    ones each time.
+
+    names3 sampled with `torch.multinomial`. Two knobs change what it picks.
+
+    - The temperature divides the scores before the softmax. Below 1 it sharpens the chances toward the likeliest characters, and above 1 it flattens them.
+    - Top k keeps only the k likeliest characters and sets every other score to minus infinity, so a rare mistake can never be picked.
+
+    ```python
+    scores = torch.tensor([2.0, 1.0, 0.5, -1.0])
+    scores.topk(2).values    # tensor([2., 1.]), the two largest, largest first
+    ```
+
+    Here is the trained model from gpt3, writing after `ROMEO:` with top k
+    of 20, the first lines of each.
+
+    ```text
+    0.5   The moon that setter of thee hath a dishonour steed
+          And given me and his honour of life,
+    1.0   Thrember it wise? for I am rather, in the strange
+          of thy hounty here hath got seemed me and him
+    1.5   Por mhose hasts:
+          Lestop thee hand, iddretcs froMech upon his:
+    ```
+
+    At 0.5 the words are real and the lines play safe. At 1.5 the spelling
+    falls apart. At 1.0 with every character allowed, rare picks slip through,
+    like `kiss solemeRoH`, which top k would have cut.
+
+    In 5 minutes and 818,048 weights the model learned spelling, line breaks
+    and the look of a speaker's name. It has not learned what the words mean.
+    GPT-2's largest model is the same kind of stack with about 1,800 times as
+    many weights, trained on 40 GB of web text.
+    """,
+)
+
+GPT4_SOURCE = source_file(
+    '''
+    # gpt4.py
+
+    import math
+
+    import torch
+    import torch.nn as nn
+    import torch.nn.functional as F
+    from torch import Tensor
+
+    from tensorlings.data import load_shakespeare
+    from tensorlings.training import load_checkpoint
+
+    largest_two = torch.tensor([2.0, 1.0, 0.5, -1.0]).topk(2).values    # tensor([2., 1.])
+
+
+''' + INDENTED_SETTINGS + '''
+
+
+    # The model from gpt2.
+''' + INDENTED_GIVEN_MODEL + '''
+
+
+''' + INDENTED_INIT + '''
+
+
+''' + INDENTED_GPT_INIT + '''
+
+''' + INDENTED_GPT_FORWARD + '''
+
+
+    # get_batch from gpt1, and the training and validation tokens.
+''' + INDENTED_DATA + '''
+
+
+    # TODO: Return scores with every entry below the k largest of its row set to
+    #   minus infinity, so only the k likeliest can be picked.
+    def top_k_filter(
+        scores: Tensor,
+        k: int,
+    ) -> Tensor:
+        ...
+
+
+    # TODO: Return one token per row of scores, of shape (batch, 1). Divide the
+    #   scores by temperature, keep the top_k, take the softmax, and draw with
+    #   torch.multinomial and generator.
+    def next_token(
+        scores: Tensor,
+        temperature: float,
+        top_k: int,
+        generator: torch.Generator,
+    ) -> Tensor:
+        ...
+
+
+    # TODO: Return ids with steps more tokens written after it. Each step, run
+    #   model on the last model.block_size tokens, take the scores at the last
+    #   position, and add next_token's pick. Use eval mode and record nothing
+    #   for autograd.
+    def generate(
+        model: nn.Module,
+        ids: Tensor,
+        steps: int,
+        temperature: float,
+        top_k: int,
+        generator: torch.Generator,
+    ) -> Tensor:
+        ...
+
+
+    characters, _, _ = shakespeare_splits()
+    model = load_checkpoint(GPT(len(characters), BLOCK_SIZE, SIZE, LAYERS, HEADS), "gpt3")
+    prompt = torch.tensor([[characters.index(character) for character in "ROMEO:"]])
+
+    # TODO: Set sample to the text of 200 tokens your model writes after the
+    #   prompt, at a temperature of 0.8 with top_k 20, drawn with a generator
+    #   seeded with 0. Spell the ids out with characters, prompt included.
+    sample = ...
+    ''',
+)
+
+GPT4_SOLUTION = source_file(
+    '''
+    # gpt4.py, a solution for comparison
+
+    import math
+
+    import torch
+    import torch.nn as nn
+    import torch.nn.functional as F
+    from torch import Tensor
+
+    from tensorlings.data import load_shakespeare
+    from tensorlings.training import load_checkpoint
+
+    largest_two = torch.tensor([2.0, 1.0, 0.5, -1.0]).topk(2).values
+
+
+''' + INDENTED_SETTINGS + '''
+
+
+''' + INDENTED_GIVEN_MODEL + '''
+
+
+''' + INDENTED_INIT + '''
+
+
+''' + INDENTED_GPT_INIT + '''
+
+''' + INDENTED_GPT_FORWARD + '''
+
+
+''' + INDENTED_DATA + '''
+
+
+''' + INDENTED_SAMPLING + '''
+
+
+    characters, _, _ = shakespeare_splits()
+    model = load_checkpoint(GPT(len(characters), BLOCK_SIZE, SIZE, LAYERS, HEADS), "gpt3")
+    prompt = torch.tensor([[characters.index(character) for character in "ROMEO:"]])
+
+    written = generate(model, prompt, 200, 0.8, 20, torch.Generator().manual_seed(0))
+    sample = "".join(characters[index] for index in written[0].tolist())
+    ''',
+)
+
+
+def sampling_namespace() -> dict[str, object]:
+    namespace = dict(TRAIN_REFERENCE)
+    exec(SAMPLING_PARTS, namespace)
+
+    return namespace
+
+
+SAMPLING_REFERENCE = sampling_namespace()
+
+
+def reference_sample(
+    model: nn.Module,
+    characters: list[str],
+    prompt_text: str,
+    steps: int,
+    temperature: float,
+    top_k: int,
+    seed: int,
+) -> str:
+    prompt = torch.tensor([[characters.index(character) for character in prompt_text]])
+    written = SAMPLING_REFERENCE["generate"](model, prompt, steps, temperature, top_k, torch.Generator().manual_seed(seed))
+
+    return "".join(characters[index] for index in written[0].tolist())
+
+
+def check_generate(found: object) -> None:
+    model = seeded_gpt(MODEL_REFERENCE["GPT"])
+    ids = torch.randint(0, 20, (2, 20), generator=torch.Generator().manual_seed(599))
+    expected = SAMPLING_REFERENCE["generate"](model, ids, 6, 0.9, 5, torch.Generator().manual_seed(600))
+    model.train()
+    actual = found(model, ids, 6, 0.9, 5, torch.Generator().manual_seed(600))
+    expect_tensor(
+        call="generate of 6 tokens after 2 rows of 20, longer than the block of 16",
+        actual=actual,
+        expected=expected,
+    )
+
+
+def check_sample(value: object) -> None:
+    characters, _, _ = TRAIN_REFERENCE["shakespeare_splits"]()
+    model = trained_gpt(MODEL_REFERENCE["GPT"])
+    expect_value(
+        call="sample",
+        actual=value,
+        expected=reference_sample(model, characters, "ROMEO:", 200, 0.8, 20, 0),
+    )
+
+
+def check_gpt4(checker: Checker) -> None:
+    check_on_inputs(
+        checker=checker,
+        function="top_k_filter",
+        description="keeps the k largest of each row",
+        inputs=(
+            (torch.tensor([[2.0, -1.0, 0.5, 3.0], [0.0, 1.0, 4.0, -2.0]]), 2),
+            (torch.tensor([[1.0, 5.0, 2.0, 0.0, 3.0]]), 3),
+        ),
+        reference=SAMPLING_REFERENCE["top_k_filter"],
+        expect=expect_tensor,
+    )
+    check_on_inputs(
+        checker=checker,
+        function="next_token",
+        description="draws from the sharpened, filtered chances",
+        inputs=(
+            (torch.tensor([[2.0, -1.0, 0.5, 3.0], [0.0, 1.0, 4.0, -2.0], [1.0, 1.0, 1.0, 1.0]]), 0.7, 3, seeded(601)),
+            (torch.tensor([[1.0, 5.0, 2.0, 0.0, 3.0]]), 1.5, 2, seeded(602)),
+        ),
+        reference=SAMPLING_REFERENCE["next_token"],
+        expect=expect_tensor,
+    )
+    checker.test(
+        function="generate",
+        description="writes token after token from the last block",
+        run=check_generate,
+    )
+    checker.check_name(
+        name="sample",
+        description="is your model writing after ROMEO:",
+        run=check_sample,
+    )
+
+
+GPT4 = Exercise(
+    name="gpt4",
+    chapter=GPT,
+    title="Project: the GPT writes",
+    lesson=GPT4_LESSON,
+    source=GPT4_SOURCE,
+    solution=GPT4_SOLUTION,
+    hints={
+        "top_k_filter": "scores.topk(k, dim=-1).values[..., -1:] is the k-th largest of each row, kept as a column. "
+        "masked_fill the scores below it with float(\"-inf\").",
+        "next_token": "torch.softmax of top_k_filter(scores / temperature, top_k) over dim=-1, then "
+        "torch.multinomial of it with 1 draw and generator=generator.",
+        "generate": "model.eval() and torch.no_grad(). Each step, scores = model(ids[:, -model.block_size :])[:, -1], "
+        "then torch.cat next_token's pick onto ids on dim=1.",
+        "sample": "generate(model, prompt, 200, 0.8, 20, torch.Generator().manual_seed(0)), then join "
+        "characters[index] for each index of its first row.",
+    },
+    introduces=(),
+    check=check_gpt4,
+    time_limit=120,
 )
