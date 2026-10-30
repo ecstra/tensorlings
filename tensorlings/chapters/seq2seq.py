@@ -1,0 +1,1389 @@
+"""43_seq2seq, an encoder into one vector and a decoder that writes step by step, why one vector struggles with long inputs, and greedy and beam search decoding."""
+
+from __future__ import annotations
+
+import math
+import textwrap
+from collections.abc import Callable
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from torch import Tensor
+
+from ..course import OPTIMIZER_IMPORTS, Chapter, Exercise
+from ..engine import (
+    Checker,
+    Described,
+    Mismatch,
+    check_on_inputs,
+    expect_close,
+    expect_tensor,
+    expect_value,
+)
+from ..text import prose, source_file
+from .linear_layers import expect_module
+
+SEQ2SEQ = Chapter(
+    folder="43_seq2seq",
+    title="Encoders and decoders",
+    readme=source_file(
+        """
+        # Encoders and decoders
+
+        Some tasks turn one sequence into another of a different length, a
+        sentence into its translation or a sum into its answer. An encoder RNN
+        reads the input into one vector, and a decoder RNN writes the output
+        from it, one symbol at a time. This chapter builds both, trains them
+        with teacher forcing, shows where one vector runs out of room, and
+        decodes greedily and with beam search.
+
+        ## Further reading
+
+        - [Sutskever, Vinyals and Le, sequence to sequence learning with neural networks](https://arxiv.org/abs/1409.3215)
+        - [Cho and colleagues, on the properties of neural machine translation](https://arxiv.org/abs/1409.1259)
+        - [Dive into Deep Learning, sequence to sequence learning](https://d2l.ai/chapter_recurrent-modern/seq2seq.html)
+        - [Dive into Deep Learning, beam search](https://d2l.ai/chapter_recurrent-modern/beam-search.html)
+        - [Wu and colleagues, Google's neural machine translation system](https://arxiv.org/abs/1609.08144)
+        """,
+    ),
+)
+
+START = 10
+END = 11
+VOCABULARY = 12
+
+# What the files after encdec1 are handed, written once so they never drift apart.
+PAIRS_PART = '''
+START = 10
+END = 11
+
+
+def decoder_pairs(target: Tensor) -> tuple[Tensor, Tensor]:
+    column = torch.full((len(target), 1), START)
+    end_column = torch.full((len(target), 1), END)
+
+    return torch.cat([column, target], dim=1), torch.cat([target, end_column], dim=1)
+'''
+
+ENCODER_DECODER_PART = '''
+class Encoder(nn.Module):
+    def __init__(
+        self,
+        vocabulary: int,
+        hidden: int,
+    ) -> None:
+        super().__init__()
+        self.embedding = nn.Embedding(vocabulary, 16)
+        self.gru = nn.GRU(16, hidden, batch_first=True)
+
+    def forward(self, symbols: Tensor) -> Tensor:
+        _, state = self.gru(self.embedding(symbols))
+
+        return state
+
+
+class Decoder(nn.Module):
+    def __init__(
+        self,
+        vocabulary: int,
+        hidden: int,
+    ) -> None:
+        super().__init__()
+        self.embedding = nn.Embedding(vocabulary, 16)
+        self.gru = nn.GRU(16, hidden, batch_first=True)
+        self.out = nn.Linear(hidden, vocabulary)
+
+    def forward(
+        self,
+        symbols: Tensor,
+        state: Tensor,
+    ) -> tuple[Tensor, Tensor]:
+        outputs, state = self.gru(self.embedding(symbols), state)
+
+        return self.out(outputs), state
+'''
+
+LOSS_PART = '''
+def sequence_loss(
+    encoder: nn.Module,
+    decoder: nn.Module,
+    source: Tensor,
+    target: Tensor,
+) -> Tensor:
+    inputs, outputs = decoder_pairs(target)
+    scores, _ = decoder(inputs, encoder(source))
+
+    return F.cross_entropy(scores.reshape(-1, scores.shape[-1]), outputs.reshape(-1))
+'''
+
+TRAIN_PART = '''
+def train_copier(
+    encoder: nn.Module,
+    decoder: nn.Module,
+    length: int,
+    steps: int,
+    generator: torch.Generator,
+) -> float:
+    optimizer = torch.optim.Adam([*encoder.parameters(), *decoder.parameters()], lr=0.01)
+
+    for _ in range(steps):
+        source = torch.randint(0, 10, (64, length), generator=generator)
+        loss = sequence_loss(encoder, decoder, source, source)
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+    return loss.item()
+'''
+
+GREEDY_PART = '''
+def greedy_decode(
+    encoder: nn.Module,
+    decoder: nn.Module,
+    source: Tensor,
+    max_length: int,
+) -> list[int]:
+    state = encoder(source.unsqueeze(0))
+    symbol = START
+    written = []
+
+    for _ in range(max_length):
+        scores, state = decoder(torch.tensor([[symbol]]), state)
+        symbol = scores[0, -1].argmax().item()
+
+        if symbol == END:
+            break
+
+        written.append(symbol)
+
+    return written
+'''
+
+
+def indented(part: str) -> str:
+    """Indented like the files around it, which source_file takes the indentation off."""
+    return textwrap.indent(part.strip("\n"), "    ")
+
+
+def reference_namespace() -> dict[str, object]:
+    """The parts run once, so the checks compare against exactly the code the learner's files hold."""
+    namespace: dict[str, object] = {
+        "torch": torch,
+        "nn": nn,
+        "F": F,
+        "Tensor": Tensor,
+    }
+
+    exec(PAIRS_PART + ENCODER_DECODER_PART + LOSS_PART + TRAIN_PART + GREEDY_PART, namespace)
+
+    return namespace
+
+
+REFERENCE = reference_namespace()
+
+
+def seeded_pair(
+    hidden: int,
+    seed: int,
+    encoder_class: type | None = None,
+    decoder_class: type | None = None,
+) -> tuple[nn.Module, nn.Module]:
+    torch.manual_seed(seed)
+    encoder = (encoder_class or REFERENCE["Encoder"])(VOCABULARY, hidden)
+    decoder = (decoder_class or REFERENCE["Decoder"])(VOCABULARY, hidden)
+
+    return encoder, decoder
+
+
+def digit_rows(
+    seed: int,
+    count: int,
+    length: int,
+) -> Tensor:
+    return torch.randint(0, 10, (count, length), generator=torch.Generator().manual_seed(seed))
+
+
+def reference_predictions(
+    encoder: nn.Module,
+    decoder: nn.Module,
+    source: Tensor,
+) -> Tensor:
+    """The decoder's best guess at each digit of a copy, reading the true digits before it."""
+    inputs, _ = REFERENCE["decoder_pairs"](source)
+
+    with torch.no_grad():
+        scores, _ = decoder(inputs, encoder(source))
+
+    return scores[:, :-1].argmax(dim=2)
+
+
+def reference_position_accuracy(
+    encoder: nn.Module,
+    decoder: nn.Module,
+    source: Tensor,
+) -> Tensor:
+    return (reference_predictions(encoder, decoder, source) == source).float().mean(dim=0)
+
+
+def reference_exact_match(
+    encoder: nn.Module,
+    decoder: nn.Module,
+    source: Tensor,
+) -> float:
+    return (reference_predictions(encoder, decoder, source) == source).all(dim=1).float().mean().item()
+
+
+def trained_copier(
+    length: int,
+    hidden: int,
+    steps: int,
+) -> tuple[nn.Module, nn.Module]:
+    """The runs the lessons quote, Adam at 0.01 on batches of 64 random rows of digits."""
+    encoder, decoder = seeded_pair(hidden, 0)
+    REFERENCE["train_copier"](encoder, decoder, length, steps, torch.Generator().manual_seed(1))
+
+    return encoder, decoder
+
+
+# ---------------------------------------------------------------------------
+# encdec1
+# ---------------------------------------------------------------------------
+
+ENCDEC1_LESSON = prose(
+    """
+    Some tasks turn one sequence into another of a different length. A
+    sentence goes into its translation, and in 46_adder a sum like `123+456`
+    goes into `579`. Sutskever, Vinyals and Le, and Cho and colleagues, both
+    in 2014, split the model for this in two.
+
+    The **encoder** is an RNN that reads the input and keeps only its last
+    hidden state. That one vector has to hold the whole input. The
+    **decoder** is a second RNN that starts from that vector and writes the
+    output one symbol at a time. Each step reads the symbol before it and
+    scores every symbol that could come next.
+
+    Two extra symbols frame the output. START opens the decoder's input,
+    since its first step has no symbol before it. END closes the target, so
+    the decoder learns when to stop. With the digits 0 to 9, START is 10 and
+    END is 11.
+
+    ```text
+    target          4      7  2
+    decoder reads   START  4  7  2
+    decoder writes  4      7  2  END
+    ```
+
+    In training the decoder reads the true symbol before each step, never its
+    own guess. This is **teacher forcing**. Every step then runs in one call
+    of the GRU, and an early mistake can't knock the later steps off course.
+    When the model writes on its own, in greedy1, it has to read its own
+    guesses instead.
+
+    The loss is cross entropy at every step the decoder writes, with the
+    scores reshaped to one row per step.
+
+    ```python
+    scores = torch.zeros(2, 4, 12)    # (batch, steps, symbols)
+    scores.reshape(-1, 12).shape      # torch.Size([8, 12])
+    ```
+
+    Both halves use `nn.GRU` with `batch_first=True`. Its last state has
+    shape (1, batch, hidden), the exact shape of the starting state the
+    decoder's GRU takes.
+    """,
+)
+
+ENCDEC1_SOURCE = source_file(
+    '''
+    # encdec1.py
+
+    import torch
+    import torch.nn as nn
+    import torch.nn.functional as F
+    from torch import Tensor
+
+    START = 10
+    END = 11
+
+    starts = torch.full((2, 1), 7)                                   # tensor([[7], [7]])
+    joined = torch.cat([starts, torch.tensor([[4], [1]])], dim=1)    # tensor([[7, 4], [7, 1]])
+
+
+    # TODO: Return the decoder's input and its target for target, of shape
+    #   (batch, length). The input is START then target, and the target is
+    #   target then END, both of shape (batch, length + 1).
+    def decoder_pairs(target: Tensor) -> tuple[Tensor, Tensor]:
+        ...
+
+
+    # TODO: Finish forward. It embeds symbols, of shape (batch, length), runs
+    #   the GRU from a state of zeros, and returns only its last state, of
+    #   shape (1, batch, hidden).
+    class Encoder(nn.Module):
+        def __init__(
+            self,
+            vocabulary: int,
+            hidden: int,
+        ) -> None:
+            super().__init__()
+            self.embedding = nn.Embedding(vocabulary, 16)
+            self.gru = nn.GRU(16, hidden, batch_first=True)
+
+        def forward(self, symbols: Tensor) -> Tensor:
+            ...
+
+
+    # TODO: Finish forward. It embeds symbols, runs the GRU from state, and
+    #   returns two things. First the scores for the next symbol at every step,
+    #   of shape (batch, length, vocabulary), from self.out. Then the GRU's
+    #   last state.
+    class Decoder(nn.Module):
+        def __init__(
+            self,
+            vocabulary: int,
+            hidden: int,
+        ) -> None:
+            super().__init__()
+            self.embedding = nn.Embedding(vocabulary, 16)
+            self.gru = nn.GRU(16, hidden, batch_first=True)
+            self.out = nn.Linear(hidden, vocabulary)
+
+        def forward(
+            self,
+            symbols: Tensor,
+            state: Tensor,
+        ) -> tuple[Tensor, Tensor]:
+            ...
+
+
+    # TODO: Return the teacher forced loss of turning source into target. The
+    #   encoder reads source, the decoder reads decoder_pairs' input from the
+    #   encoder's state, and the loss is the cross entropy of its scores
+    #   against decoder_pairs' target, over every step.
+    def sequence_loss(
+        encoder: nn.Module,
+        decoder: nn.Module,
+        source: Tensor,
+        target: Tensor,
+    ) -> Tensor:
+        ...
+    ''',
+)
+
+ENCDEC1_SOLUTION = source_file(
+    '''
+    # encdec1.py, a solution for comparison
+
+    import torch
+    import torch.nn as nn
+    import torch.nn.functional as F
+    from torch import Tensor
+
+    starts = torch.full((2, 1), 7)
+    joined = torch.cat([starts, torch.tensor([[4], [1]])], dim=1)
+
+
+''' + indented(PAIRS_PART) + '''
+
+
+''' + indented(ENCODER_DECODER_PART) + '''
+
+
+''' + indented(LOSS_PART) + '''
+    ''',
+)
+
+
+def check_decoder_pairs(found: object) -> None:
+    for seed, count, length in ((430, 2, 3), (431, 3, 5)):
+        target = digit_rows(seed, count, length)
+        call = f"decoder_pairs on {count} rows of {length} digits"
+        actual = found(target.clone())
+
+        if not isinstance(actual, tuple) or len(actual) != 2:
+            raise Mismatch(f"{call} should give two tensors in a tuple, the decoder's input and then its target.")
+
+        expected_inputs, expected_outputs = REFERENCE["decoder_pairs"](target)
+        expect_tensor(
+            call=f"the input from {call}",
+            actual=actual[0],
+            expected=expected_inputs,
+        )
+        expect_tensor(
+            call=f"the target from {call}",
+            actual=actual[1],
+            expected=expected_outputs,
+        )
+
+
+def check_encoder(found: type) -> None:
+    torch.manual_seed(432)
+    encoder = expect_module("Encoder(12, 8)", found(VOCABULARY, 8))
+    torch.manual_seed(432)
+    reference = REFERENCE["Encoder"](VOCABULARY, 8)
+    source = digit_rows(433, 3, 5)
+
+    with torch.no_grad():
+        expected = reference(source)
+
+    expect_tensor(
+        call="Encoder(12, 8) on 3 rows of 5 digits",
+        actual=encoder(source),
+        expected=expected,
+    )
+
+
+def check_decoder(found: type) -> None:
+    torch.manual_seed(434)
+    decoder = expect_module("Decoder(12, 8)", found(VOCABULARY, 8))
+    torch.manual_seed(434)
+    reference = REFERENCE["Decoder"](VOCABULARY, 8)
+    symbols = digit_rows(435, 3, 4)
+    state = torch.randn(1, 3, 8, generator=torch.Generator().manual_seed(436))
+    call = "Decoder(12, 8) on 3 rows of 4 symbols"
+    actual = decoder(symbols, state.clone())
+
+    if not isinstance(actual, tuple) or len(actual) != 2:
+        raise Mismatch(f"{call} should give two things in a tuple, the scores and then the last state.")
+
+    with torch.no_grad():
+        expected_scores, expected_state = reference(symbols, state)
+
+    expect_tensor(
+        call=f"the scores from {call}",
+        actual=actual[0],
+        expected=expected_scores,
+    )
+    expect_tensor(
+        call=f"the last state from {call}",
+        actual=actual[1],
+        expected=expected_state,
+    )
+
+
+def check_sequence_loss(found: object) -> None:
+    source = digit_rows(437, 4, 5)
+    target = digit_rows(438, 4, 3)
+    encoder, decoder = seeded_pair(8, 439)
+
+    with torch.no_grad():
+        expected = REFERENCE["sequence_loss"](encoder, decoder, source, target).item()
+        actual = found(encoder, decoder, source, target)
+
+    expect_close(
+        call="sequence_loss on 4 sources of 5 digits and targets of 3",
+        actual=actual.item() if isinstance(actual, Tensor) else actual,
+        expected=expected,
+        tolerance=1e-5,
+    )
+
+
+def check_encdec1(checker: Checker) -> None:
+    checker.test(
+        function="decoder_pairs",
+        description="puts START before the input and END after the target",
+        run=check_decoder_pairs,
+    )
+    checker.test_method(
+        class_name="Encoder",
+        method="forward",
+        description="returns the GRU's last state",
+        run=check_encoder,
+    )
+    checker.test_method(
+        class_name="Decoder",
+        method="forward",
+        description="scores every step and returns the last state",
+        run=check_decoder,
+    )
+    checker.test(
+        function="sequence_loss",
+        description="takes the teacher forced cross entropy over every step",
+        run=check_sequence_loss,
+    )
+
+
+ENCDEC1 = Exercise(
+    name="encdec1",
+    chapter=SEQ2SEQ,
+    title="An encoder and a decoder",
+    lesson=ENCDEC1_LESSON,
+    source=ENCDEC1_SOURCE,
+    solution=ENCDEC1_SOLUTION,
+    hints={
+        "decoder_pairs": "torch.full((len(target), 1), START) is a column of START. torch.cat it before target "
+        "with dim=1, and a column of END after it.",
+        "Encoder.forward": "self.gru(self.embedding(symbols)) gives the outputs and the last state. Return the "
+        "last state.",
+        "Decoder.forward": "self.gru(self.embedding(symbols), state) gives the outputs and the last state. Return "
+        "self.out(outputs) and the state.",
+        "sequence_loss": "inputs, outputs = decoder_pairs(target). scores, _ = decoder(inputs, encoder(source)). "
+        "Then F.cross_entropy of scores.reshape(-1, scores.shape[-1]) and outputs.reshape(-1).",
+    },
+    introduces=(),
+    check=check_encdec1,
+)
+
+
+# ---------------------------------------------------------------------------
+# encdec2
+# ---------------------------------------------------------------------------
+
+ENCDEC2_LESSON = prose(
+    """
+    The decoder sees the input only through the encoder's last state, a fixed
+    number of numbers however long the input is. Copying a row of digits
+    shows what that costs. Each length below trains a fresh model with a
+    hidden size of 32 for 1,500 steps, then measures on 500 new rows.
+
+    | Length | Digits right | Rows all right |
+    |---|---|---|
+    | 5 | 0.988 | 0.942 |
+    | 10 | 0.876 | 0.232 |
+    | 20 | 0.494 | 0.000 |
+    | 40 | 0.233 | 0.000 |
+
+    At 5 digits it copies almost every row. At 20 it gets under half the
+    digits and no whole row. At 40 it is barely above guessing, which gets
+    0.1 of the digits right.
+
+    More room helps. With a hidden size of 128, rows of 20 come back with
+    0.909 of their digits right, against 0.494. Whole rows still mostly fail,
+    at 12.2%, and the vector stays one fixed size however long the input
+    grows.
+
+    Cho and colleagues found the same in translation in 2014. Their encoder
+    and decoder translated short sentences well, and got worse as sentences
+    grew longer. Section 7's fix lets the decoder look back at every step of
+    the input, instead of one vector.
+
+    Measuring here reads the true digits before each guess, the way training
+    does. `.all(dim=1)` is `True` for a row whose every entry is `True`.
+
+    ```python
+    right = torch.tensor([[True, True], [True, False]])
+    right.all(dim=1)    # tensor([ True, False])
+    ```
+    """,
+)
+
+ENCDEC2_SOURCE = source_file(
+    '''
+    # encdec2.py
+
+    import torch
+    import torch.nn as nn
+    import torch.nn.functional as F
+    from torch import Tensor
+
+    right = torch.tensor([[True, True], [True, False]])
+    whole_rows = right.all(dim=1)    # tensor([ True, False])
+
+
+    # decoder_pairs, Encoder, Decoder and sequence_loss from encdec1.
+''' + indented(PAIRS_PART) + '''
+
+
+''' + indented(ENCODER_DECODER_PART) + '''
+
+
+''' + indented(LOSS_PART) + '''
+
+
+    # TODO: Finish the loop. Each step copies a fresh batch of 64 rows of length
+    #   random digits from 0 to 9, drawn with generator, so source and target
+    #   are the same rows. Take the sequence_loss and one step of optimizer.
+    #   It returns the last loss.
+    def train_copier(
+        encoder: nn.Module,
+        decoder: nn.Module,
+        length: int,
+        steps: int,
+        generator: torch.Generator,
+    ) -> float:
+        optimizer = torch.optim.Adam([*encoder.parameters(), *decoder.parameters()], lr=0.01)
+
+        for _ in range(steps):
+            ...
+
+        return loss.item()
+
+
+    # TODO: Return the decoder's guess at each digit of a copy of source, of
+    #   shape (rows, length), reading the true digits before each guess. Leave
+    #   out its last step, the one that should write END. Record nothing for
+    #   autograd.
+    def copy_guesses(
+        encoder: nn.Module,
+        decoder: nn.Module,
+        source: Tensor,
+    ) -> Tensor:
+        ...
+
+
+    # TODO: Return the share of rows of source that copy_guesses gets right at
+    #   every position, as a plain number.
+    def exact_match(
+        encoder: nn.Module,
+        decoder: nn.Module,
+        source: Tensor,
+    ) -> float:
+        ...
+    ''',
+)
+
+ENCDEC2_SOLUTION = source_file(
+    '''
+    # encdec2.py, a solution for comparison
+
+    import torch
+    import torch.nn as nn
+    import torch.nn.functional as F
+    from torch import Tensor
+
+    right = torch.tensor([[True, True], [True, False]])
+    whole_rows = right.all(dim=1)
+
+
+''' + indented(PAIRS_PART) + '''
+
+
+''' + indented(ENCODER_DECODER_PART) + '''
+
+
+''' + indented(LOSS_PART) + '''
+
+
+''' + indented(TRAIN_PART) + '''
+
+
+    def copy_guesses(
+        encoder: nn.Module,
+        decoder: nn.Module,
+        source: Tensor,
+    ) -> Tensor:
+        inputs, _ = decoder_pairs(source)
+
+        with torch.no_grad():
+            scores, _ = decoder(inputs, encoder(source))
+
+        return scores[:, :-1].argmax(dim=2)
+
+
+    def exact_match(
+        encoder: nn.Module,
+        decoder: nn.Module,
+        source: Tensor,
+    ) -> float:
+        return (copy_guesses(encoder, decoder, source) == source).all(dim=1).float().mean().item()
+    ''',
+)
+
+
+def check_train_copier(found: object) -> None:
+    runs = []
+
+    for train in (found, REFERENCE["train_copier"]):
+        encoder, decoder = seeded_pair(8, 440)
+        loss = train(encoder, decoder, 4, 5, torch.Generator().manual_seed(441))
+        runs.append((loss, decoder.out.weight.detach().clone()))
+
+    (loss, weight), (expected_loss, expected_weight) = runs
+    expect_close(
+        call="train_copier for 5 steps on rows of 4",
+        actual=loss,
+        expected=expected_loss,
+        tolerance=1e-5,
+    )
+    expect_tensor(
+        call="the decoder's output weights after train_copier for 5 steps",
+        actual=weight,
+        expected=expected_weight,
+    )
+
+
+def check_copier_learns(found: object) -> None:
+    encoder, decoder = seeded_pair(32, 0)
+    found(encoder, decoder, 4, 300, torch.Generator().manual_seed(1))
+    rows_right = reference_exact_match(encoder, decoder, digit_rows(2, 500, 4))
+
+    if rows_right < 0.8:
+        raise Mismatch(
+            f"After train_copier for 300 steps on rows of 4, the model copies {rows_right:.1%} of new rows exactly, "
+            "but it should pass 80%.",
+        )
+
+
+def check_encdec2(checker: Checker) -> None:
+    checker.test(
+        function="train_copier",
+        description="takes a step on a fresh batch of copies each time",
+        run=check_train_copier,
+    )
+    checker.test(
+        function="train_copier",
+        description="learns to copy rows of 4 digits",
+        run=check_copier_learns,
+    )
+    encoder, decoder = seeded_pair(8, 442)
+    pair = (
+        Described(encoder, "an encoder of hidden size 8"),
+        Described(decoder, "its decoder"),
+    )
+    check_on_inputs(
+        checker=checker,
+        function="copy_guesses",
+        description="guesses each digit, reading the true ones before it",
+        inputs=(
+            (*pair, digit_rows(443, 3, 4)),
+            (*pair, digit_rows(444, 5, 6)),
+        ),
+        reference=reference_predictions,
+        expect=expect_tensor,
+    )
+    trained_encoder, trained_decoder = seeded_pair(16, 445)
+    REFERENCE["train_copier"](trained_encoder, trained_decoder, 3, 60, torch.Generator().manual_seed(446))
+    check_on_inputs(
+        checker=checker,
+        function="exact_match",
+        description="gives the share of rows copied right at every position",
+        inputs=(
+            (Described(trained_encoder, "a lightly trained encoder"), Described(trained_decoder, "its decoder"), digit_rows(447, 40, 3)),
+        ),
+        reference=reference_exact_match,
+        expect=expect_close,
+    )
+
+
+ENCDEC2 = Exercise(
+    name="encdec2",
+    chapter=SEQ2SEQ,
+    title="Why one vector runs out of room",
+    lesson=ENCDEC2_LESSON,
+    source=ENCDEC2_SOURCE,
+    solution=ENCDEC2_SOLUTION,
+    hints={
+        "train_copier": "source = torch.randint(0, 10, (64, length), generator=generator). loss = sequence_loss(encoder, "
+        "decoder, source, source). Then zero the gradients, backward, and optimizer.step().",
+        "copy_guesses": "Take the input from decoder_pairs(source) and run the decoder on it from encoder(source), "
+        "inside torch.no_grad(). Then scores[:, :-1].argmax(dim=2).",
+        "exact_match": "Compare copy_guesses with source, take .all(dim=1), then the mean as floats and .item().",
+    },
+    introduces=(),
+    check=check_encdec2,
+    time_limit=30,
+    imports_first=OPTIMIZER_IMPORTS,
+)
+
+
+# ---------------------------------------------------------------------------
+# greedy1
+# ---------------------------------------------------------------------------
+
+GREEDY1_LESSON = prose(
+    """
+    Training reads the true symbol before each step. Writing on its own, the
+    decoder has no true symbols, so it reads its own guesses. Greedy decoding
+    takes the highest scoring symbol at each step and feeds it back in.
+
+    1. The encoder reads the source into the starting state.
+    2. The decoder reads START and scores the first symbol.
+    3. The highest score becomes the next symbol it reads, with the state the step left.
+    4. It stops at END, or after a maximum length so a model that never writes END still stops.
+
+    The decoder takes one symbol at a time here, as a tensor of shape (1, 1).
+    It carries its state from one step to the next.
+
+    ```python
+    scores = torch.tensor([[[0.1, 2.0, -1.0]]])    # (1 row, 1 step, 3 symbols)
+    scores[0, -1].argmax().item()                  # 1
+    ```
+
+    Teacher forcing hides a gap. Once greedy decoding writes a wrong digit,
+    every later step reads it, and the copy drifts. Here are encdec2's
+    copiers, measured both ways on the same 500 rows, position by position.
+
+    | Length | Digits right, reading true digits | Digits right, greedy | Rows of the wrong length |
+    |---|---|---|---|
+    | 10 | 0.876 | 0.703 | 4 of 500 |
+    | 20 | 0.494 | 0.226 | 125 of 500 |
+
+    Whole rows score the same both ways, 0.232 at length 10. A row is whole
+    only when every guess is right, and then greedy decoding reads exactly
+    the true digits anyway.
+    """,
+)
+
+GREEDY1_SOURCE = source_file(
+    '''
+    # greedy1.py
+
+    import torch
+    import torch.nn as nn
+    from torch import Tensor
+
+    scores = torch.tensor([[[0.1, 2.0, -1.0]]])
+    best = scores[0, -1].argmax().item()    # 1
+
+
+    # START, END and decoder_pairs, Encoder and Decoder from encdec1.
+''' + indented(PAIRS_PART) + '''
+
+
+''' + indented(ENCODER_DECODER_PART) + '''
+
+
+    # TODO: Return the symbols the decoder writes for source, of shape
+    #   (length,), as a list of ints without END. Start from the encoder's
+    #   state for source as a batch of one, read START, and feed back the
+    #   highest scoring symbol each step. Stop at END or after max_length
+    #   symbols. Record nothing for autograd.
+    def greedy_decode(
+        encoder: nn.Module,
+        decoder: nn.Module,
+        source: Tensor,
+        max_length: int,
+    ) -> list[int]:
+        ...
+
+
+    # TODO: Return the share of the digits of sources, of shape (rows, length),
+    #   that greedy_decode writes back at the same position, with a maximum
+    #   length of length + 5. A position past the end of what it writes counts
+    #   as wrong.
+    def greedy_digits(
+        encoder: nn.Module,
+        decoder: nn.Module,
+        sources: Tensor,
+    ) -> float:
+        ...
+    ''',
+)
+
+GREEDY1_SOLUTION = source_file(
+    '''
+    # greedy1.py, a solution for comparison
+
+    import torch
+    import torch.nn as nn
+    from torch import Tensor
+
+    scores = torch.tensor([[[0.1, 2.0, -1.0]]])
+    best = scores[0, -1].argmax().item()
+
+
+''' + indented(PAIRS_PART) + '''
+
+
+''' + indented(ENCODER_DECODER_PART) + '''
+
+
+    # With no_grad as a decorator, nothing inside the function is recorded.
+    @torch.no_grad()
+''' + indented(GREEDY_PART) + '''
+
+
+    def greedy_digits(
+        encoder: nn.Module,
+        decoder: nn.Module,
+        sources: Tensor,
+    ) -> float:
+        right = 0
+
+        for row in sources:
+            written = greedy_decode(encoder, decoder, row, len(row) + 5)
+            right += sum(guess == digit for guess, digit in zip(written, row.tolist()))
+
+        return right / sources.numel()
+    ''',
+)
+
+
+def reference_greedy(
+    encoder: nn.Module,
+    decoder: nn.Module,
+    source: Tensor,
+    max_length: int,
+) -> list[int]:
+    with torch.no_grad():
+        return REFERENCE["greedy_decode"](encoder, decoder, source, max_length)
+
+
+def reference_greedy_digits(
+    encoder: nn.Module,
+    decoder: nn.Module,
+    sources: Tensor,
+) -> float:
+    right = 0
+
+    for row in sources:
+        written = reference_greedy(encoder, decoder, row, len(row) + 5)
+        right += sum(guess == digit for guess, digit in zip(written, row.tolist()))
+
+    return right / sources.numel()
+
+
+def ending_decoder(
+    hidden: int,
+    seed: int,
+) -> nn.Module:
+    """A decoder whose output bias leans hard on END, so greedy decoding stops early on its own."""
+    _, decoder = seeded_pair(hidden, seed)
+
+    with torch.no_grad():
+        decoder.out.bias[END] += 4.0
+
+    return decoder
+
+
+def expect_symbols(
+    call: str,
+    actual: object,
+    expected: list[int],
+) -> None:
+    if isinstance(actual, Tensor):
+        raise Mismatch(f"{call} is a tensor. Return a list of ints, which .tolist() or .item() on each symbol gives.")
+
+    expect_value(
+        call=call,
+        actual=actual,
+        expected=expected,
+    )
+
+
+def check_greedy1(checker: Checker) -> None:
+    encoder, decoder = seeded_pair(8, 450)
+    early_encoder, _ = seeded_pair(8, 451)
+    early_decoder = ending_decoder(8, 451)
+    copier_encoder, copier_decoder = seeded_pair(16, 452)
+    REFERENCE["train_copier"](copier_encoder, copier_decoder, 3, 120, torch.Generator().manual_seed(453))
+    check_on_inputs(
+        checker=checker,
+        function="greedy_decode",
+        description="feeds back its best symbol until END or the maximum",
+        inputs=(
+            (Described(encoder, "an untrained encoder"), Described(decoder, "its decoder"), torch.tensor([3, 1, 4]), 6),
+            (Described(early_encoder, "an encoder"), Described(early_decoder, "a decoder that likes END"), torch.tensor([2, 7]), 6),
+            (Described(copier_encoder, "a lightly trained copier"), Described(copier_decoder, "its decoder"), torch.tensor([5, 0, 9]), 8),
+            (Described(copier_encoder, "a lightly trained copier"), Described(copier_decoder, "its decoder"), torch.tensor([1, 1, 6]), 2),
+        ),
+        reference=reference_greedy,
+        expect=expect_symbols,
+    )
+    check_on_inputs(
+        checker=checker,
+        function="greedy_digits",
+        description="gives the share of digits written back in place",
+        inputs=(
+            (Described(copier_encoder, "a lightly trained copier"), Described(copier_decoder, "its decoder"), digit_rows(454, 30, 3)),
+            (Described(early_encoder, "an encoder"), Described(early_decoder, "a decoder that likes END"), digit_rows(455, 4, 3)),
+        ),
+        reference=reference_greedy_digits,
+        expect=expect_close,
+    )
+
+
+GREEDY1 = Exercise(
+    name="greedy1",
+    chapter=SEQ2SEQ,
+    title="Writing greedily",
+    lesson=GREEDY1_LESSON,
+    source=GREEDY1_SOURCE,
+    solution=GREEDY1_SOLUTION,
+    hints={
+        "greedy_decode": "state = encoder(source.unsqueeze(0)). Loop max_length times, running decoder on "
+        "torch.tensor([[symbol]]) and the state, and take scores[0, -1].argmax().item(). Break on END.",
+        "greedy_digits": "For each row, zip greedy_decode(..., row, len(row) + 5) with row.tolist() and count the "
+        "pairs that match. Divide the count by sources.numel().",
+    },
+    introduces=(),
+    check=check_greedy1,
+    time_limit=30,
+    imports_first=OPTIMIZER_IMPORTS,
+)
+
+
+# ---------------------------------------------------------------------------
+# beam1
+# ---------------------------------------------------------------------------
+
+BEAM_SEARCH_GIVEN = '''
+def beam_search(
+    step: Callable[[int, object], tuple[Tensor, object]],
+    state: object,
+    width: int,
+    max_length: int,
+    alpha: float,
+) -> list[int]:
+    beams = [([START], 0.0, state)]
+    finished = []
+
+    for _ in range(max_length):
+        candidates = []
+
+        for symbols, total, state in beams:
+            log_probs, next_state = step(symbols[-1], state)
+            best = log_probs.topk(width)
+
+            for log_prob, symbol in zip(best.values.tolist(), best.indices.tolist()):
+                candidates.append((symbols + [symbol], total + log_prob, next_state))
+
+        candidates.sort(key=lambda candidate: candidate[1], reverse=True)
+        beams = []
+
+        for symbols, total, state in candidates[:width]:
+            if symbols[-1] == END:
+                finished.append((symbols, total))
+            else:
+                beams.append((symbols, total, state))
+
+        if not beams:
+            break
+
+    finished.extend((symbols, total) for symbols, total, _ in beams)
+    best_symbols, _ = max(finished, key=lambda written: sequence_score(written[1], len(written[0]) - 1, alpha))
+
+    return [symbol for symbol in best_symbols[1:] if symbol != END]
+'''
+
+BEAM1_LESSON = prose(
+    """
+    Greedy decoding keeps the best first symbol, then the best next one. The
+    best whole output can start with a weaker first symbol. Take a model with
+    two symbols, A and B, then END.
+
+    | First symbol | Its probability | Best second | Its probability | Whole output |
+    |---|---|---|---|---|
+    | A | 0.6 | END | 0.4 | 0.24 |
+    | B | 0.4 | END | 0.9 | 0.36 |
+
+    Greedy picks A and ends at 0.24. B then END is likelier at 0.36.
+
+    **Beam search** keeps the `width` best partial outputs, its beams, instead
+    of one. Each step extends every beam by its `width` likeliest next
+    symbols, and keeps the `width` best of all of them. A beam that writes END
+    is finished and set aside. With a width of 1 it is greedy decoding.
+
+    It ranks by total log probability, the sum of each step's log
+    probability, which is the log of their product. Adding logs never
+    underflows the way multiplying many small probabilities does.
+
+    Every extra symbol adds a negative log probability, so totals favour short
+    outputs. Length normalization divides each finished total by its length
+    raised to `alpha`, END included in the length. An `alpha` of 0 keeps the
+    raw total, and 1 ranks by the average per symbol. Wu and colleagues used
+    a variant of this in Google's translation system.
+
+    ```python
+    logs = torch.log(torch.tensor([0.5, 0.25, 0.25]))
+    logs.topk(2)    # values tensor([-0.6931, -1.3863]), indices tensor([0, 1])
+    ```
+
+    Here is encdec2's copier on rows of 10, on the same 500 rows.
+
+    | Decoding | Rows all right |
+    |---|---|
+    | greedy, a width of 1 | 0.232 |
+    | beam search, width 3 | 0.280 |
+    | beam search, width 5 | 0.280 |
+
+    Beam search rescues some rows where an early digit was a close call. An
+    `alpha` of 0 and of 0.7 gave the same rows here. It matters more where
+    outputs of different lengths compete, as translations do.
+    """,
+)
+
+BEAM1_SOURCE = source_file(
+    '''
+    # beam1.py
+
+    from collections.abc import Callable
+
+    import torch
+    import torch.nn as nn
+    import torch.nn.functional as F
+    from torch import Tensor
+
+    logs = torch.log(torch.tensor([0.5, 0.25, 0.25]))
+    best_two = logs.topk(2)    # values tensor([-0.6931, -1.3863]), indices tensor([0, 1])
+
+
+    # START, END and decoder_pairs, Encoder and Decoder from encdec1.
+''' + indented(PAIRS_PART) + '''
+
+
+''' + indented(ENCODER_DECODER_PART) + '''
+
+
+    # TODO: Return total divided by length raised to alpha, the score that
+    #   ranks finished outputs.
+    def sequence_score(
+        total: float,
+        length: int,
+        alpha: float,
+    ) -> float:
+        ...
+
+
+    # TODO: Finish the loop over beams. step(symbol, state) gives the log
+    #   probabilities of every next symbol and the state after it. Extend each
+    #   beam by each of its width likeliest next symbols, appending
+    #   (symbols with the new one added, total plus its log probability, the
+    #   new state) to candidates.
+    def beam_search(
+        step: Callable[[int, object], tuple[Tensor, object]],
+        state: object,
+        width: int,
+        max_length: int,
+        alpha: float,
+    ) -> list[int]:
+        beams = [([START], 0.0, state)]
+        finished = []
+
+        for _ in range(max_length):
+            candidates = []
+
+            for symbols, total, state in beams:
+                ...
+
+            candidates.sort(key=lambda candidate: candidate[1], reverse=True)
+            beams = []
+
+            for symbols, total, state in candidates[:width]:
+                if symbols[-1] == END:
+                    finished.append((symbols, total))
+                else:
+                    beams.append((symbols, total, state))
+
+            if not beams:
+                break
+
+        finished.extend((symbols, total) for symbols, total, _ in beams)
+        best_symbols, _ = max(finished, key=lambda written: sequence_score(written[1], len(written[0]) - 1, alpha))
+
+        return [symbol for symbol in best_symbols[1:] if symbol != END]
+
+
+    # TODO: Return a step function for beam_search from decoder. It runs the
+    #   decoder on one symbol as a tensor of shape (1, 1) from state, and
+    #   returns the log_softmax of its scores at that step, of shape
+    #   (vocabulary,), and the new state. Record nothing for autograd.
+    def decoder_step(decoder: nn.Module) -> Callable[[int, Tensor], tuple[Tensor, Tensor]]:
+        ...
+    ''',
+)
+
+BEAM1_SOLUTION = source_file(
+    '''
+    # beam1.py, a solution for comparison
+
+    from collections.abc import Callable
+
+    import torch
+    import torch.nn as nn
+    import torch.nn.functional as F
+    from torch import Tensor
+
+    logs = torch.log(torch.tensor([0.5, 0.25, 0.25]))
+    best_two = logs.topk(2)
+
+
+''' + indented(PAIRS_PART) + '''
+
+
+''' + indented(ENCODER_DECODER_PART) + '''
+
+
+    def sequence_score(
+        total: float,
+        length: int,
+        alpha: float,
+    ) -> float:
+        return total / length ** alpha
+
+
+''' + indented(BEAM_SEARCH_GIVEN) + '''
+
+
+    def decoder_step(decoder: nn.Module) -> Callable[[int, Tensor], tuple[Tensor, Tensor]]:
+        @torch.no_grad()
+        def step(
+            symbol: int,
+            state: Tensor,
+        ) -> tuple[Tensor, Tensor]:
+            scores, state = decoder(torch.tensor([[symbol]]), state)
+
+            return F.log_softmax(scores[0, -1], dim=0), state
+
+        return step
+    ''',
+)
+
+
+def reference_beam_namespace() -> dict[str, object]:
+    namespace: dict[str, object] = {
+        "torch": torch,
+        "Tensor": Tensor,
+        "Callable": Callable,
+        "START": START,
+        "END": END,
+        "sequence_score": lambda total, length, alpha: total / length ** alpha,
+    }
+    exec(BEAM_SEARCH_GIVEN, namespace)
+
+    return namespace
+
+
+BEAM_REFERENCE = reference_beam_namespace()
+
+
+def reference_decoder_step(decoder: nn.Module) -> Callable[[int, Tensor], tuple[Tensor, Tensor]]:
+    @torch.no_grad()
+    def step(
+        symbol: int,
+        state: Tensor,
+    ) -> tuple[Tensor, Tensor]:
+        scores, state = decoder(torch.tensor([[symbol]]), state)
+
+        return F.log_softmax(scores[0, -1], dim=0), state
+
+    return step
+
+
+def table_step(
+    table: dict[tuple[int, ...], list[float]],
+) -> Callable[[int, tuple[int, ...]], tuple[Tensor, tuple[int, ...]]]:
+    """A made up model whose next symbol's probabilities depend on everything written so far, kept as the state."""
+
+    def step(
+        symbol: int,
+        written: tuple[int, ...],
+    ) -> tuple[Tensor, tuple[int, ...]]:
+        written = (*written, symbol)
+        probabilities = torch.tensor(table.get(written[1:], [0.0] * VOCABULARY), dtype=torch.float64)
+
+        return probabilities.clamp_min(1e-12).log(), written
+
+    return step
+
+
+def table_row(**chances: float) -> list[float]:
+    """Probabilities over the 12 symbols, named like s3=0.5 or end=0.4, the rest 0."""
+    row = [0.0] * VOCABULARY
+
+    for name, chance in chances.items():
+        row[END if name == "end" else int(name[1:])] = chance
+
+    return row
+
+
+# The lesson's model, A as 1 and B as 2. Greedy writes A, beam search finds B.
+LESSON_TABLE = {
+    (): table_row(s1=0.6, s2=0.4),
+    (1,): table_row(end=0.4, s3=0.35, s4=0.25),
+    (2,): table_row(end=0.9, s3=0.1),
+    (1, 3): table_row(end=1.0),
+    (1, 4): table_row(end=1.0),
+    (2, 3): table_row(end=1.0),
+}
+
+# A short output with the better total, 5 then END, and a long one with the better average, 6 7 8 then END,
+# so alpha changes the winner.
+LENGTH_TABLE = {
+    (): table_row(s5=0.55, s6=0.45),
+    (5,): table_row(end=0.9, s9=0.1),
+    (6,): table_row(s7=0.85, end=0.15),
+    (5, 9): table_row(end=1.0),
+    (6, 7): table_row(s8=0.9, end=0.1),
+    (6, 7, 8): table_row(end=0.9, s9=0.1),
+    (6, 7, 8, 9): table_row(end=1.0),
+}
+
+
+def check_beam_search(found: object) -> None:
+    cases = (
+        (LESSON_TABLE, 1, 5, 0.0, "the lesson's model, width 1"),
+        (LESSON_TABLE, 2, 5, 0.0, "the lesson's model, width 2"),
+        (LENGTH_TABLE, 3, 6, 0.0, "a model where length matters, width 3, alpha 0"),
+        (LENGTH_TABLE, 3, 6, 1.0, "a model where length matters, width 3, alpha 1"),
+        (LENGTH_TABLE, 2, 2, 0.7, "a model where length matters, width 2, at most 2 steps"),
+    )
+
+    for table, width, max_length, alpha, name in cases:
+        expected = BEAM_REFERENCE["beam_search"](table_step(table), (), width, max_length, alpha)
+        expect_symbols(
+            call=f"beam_search on {name}",
+            actual=found(table_step(table), (), width, max_length, alpha),
+            expected=expected,
+        )
+
+
+def check_decoder_step(found: object) -> None:
+    encoder, decoder = seeded_pair(8, 460)
+    state = encoder(torch.tensor([[2, 5, 1]])).detach()
+    step = found(decoder)
+
+    if not callable(step):
+        raise Mismatch(f"decoder_step(decoder) is a {type(step).__name__}. It should return a function, step.")
+
+    actual = step(START, state.clone())
+
+    if not isinstance(actual, tuple) or len(actual) != 2:
+        raise Mismatch("step(START, state) should give two things in a tuple, the log probabilities and the new state.")
+
+    expected_log_probs, expected_state = reference_decoder_step(decoder)(START, state)
+    expect_tensor(
+        call="the log probabilities from step(START, state)",
+        actual=actual[0],
+        expected=expected_log_probs,
+    )
+    expect_tensor(
+        call="the new state from step(START, state)",
+        actual=actual[1],
+        expected=expected_state,
+    )
+
+
+def check_beam1(checker: Checker) -> None:
+    check_on_inputs(
+        checker=checker,
+        function="sequence_score",
+        description="divides the total by the length raised to alpha",
+        inputs=(
+            (-3.0, 4, 0.0),
+            (-3.0, 4, 1.0),
+            (-2.5, 6, 0.7),
+        ),
+        reference=lambda total, length, alpha: total / length ** alpha,
+        expect=expect_close,
+    )
+    checker.test(
+        function="beam_search",
+        description="keeps the width best outputs, ranked by total log probability",
+        run=check_beam_search,
+    )
+    checker.test(
+        function="decoder_step",
+        description="gives the decoder's log probabilities and its new state",
+        run=check_decoder_step,
+    )
+
+
+BEAM1 = Exercise(
+    name="beam1",
+    chapter=SEQ2SEQ,
+    title="Beam search",
+    lesson=BEAM1_LESSON,
+    source=BEAM1_SOURCE,
+    solution=BEAM1_SOLUTION,
+    hints={
+        "sequence_score": "Python's ** raises a number to a power, so divide total by length ** alpha.",
+        "beam_search": "log_probs, next_state = step(symbols[-1], state). best = log_probs.topk(width). For each pair "
+        "of best.values.tolist() and best.indices.tolist(), append (symbols + [symbol], total + log_prob, next_state).",
+        "decoder_step": "Define step(symbol, state) inside decoder_step. It runs decoder(torch.tensor([[symbol]]), "
+        "state) and returns F.log_softmax(scores[0, -1], dim=0) and the state. Return step.",
+    },
+    introduces=(),
+    check=check_beam1,
+)
