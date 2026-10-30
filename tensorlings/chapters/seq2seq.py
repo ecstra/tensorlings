@@ -22,6 +22,7 @@ from ..engine import (
     expect_value,
 )
 from ..text import prose, source_file
+from .bidirectional import expect_nothing_recorded
 from .linear_layers import expect_module
 
 SEQ2SEQ = Chapter(
@@ -545,8 +546,8 @@ ENCDEC2_LESSON = prose(
     | 40 | 0.233 | 0.000 |
 
     At 5 digits it copies almost every row. At 20 it gets under half the
-    digits and no whole row. At 40 it is barely above guessing, which gets
-    0.1 of the digits right.
+    digits and no whole row. At 40 it gets the first digit right 0.48 of the
+    time, and the last ones about 0.15, near the 0.1 a guess gets.
 
     More room helps. With a hidden size of 128, rows of 20 come back with
     0.909 of their digits right, against 0.494. Whole rows still mostly fail,
@@ -741,6 +742,15 @@ def check_encdec2(checker: Checker) -> None:
         ),
         reference=reference_predictions,
         expect=expect_tensor,
+    )
+    checker.test(
+        function="copy_guesses",
+        description="records nothing for autograd",
+        run=lambda found: expect_nothing_recorded(
+            function="copy_guesses",
+            modules=[encoder, decoder],
+            run=lambda: found(encoder, decoder, digit_rows(443, 3, 4)),
+        ),
     )
     trained_encoder, trained_decoder = seeded_pair(16, 445)
     REFERENCE["train_copier"](trained_encoder, trained_decoder, 3, 60, torch.Generator().manual_seed(446))
@@ -937,6 +947,33 @@ def ending_decoder(
     return decoder
 
 
+class ScriptedEncoder(nn.Module):
+    """Starts the step count at 0, whatever the source."""
+
+    def forward(self, symbols: Tensor) -> Tensor:
+        return torch.zeros(1, len(symbols), 1)
+
+
+class ScriptedDecoder(nn.Module):
+    """Writes the symbols of script in turn, whatever it reads, counting the steps in its state. A trained
+    decoder rarely writes on after END, so this one does it on purpose, to show whether greedy decoding stops."""
+
+    def __init__(self, script: list[int]) -> None:
+        super().__init__()
+        self.script = script
+
+    def forward(
+        self,
+        symbols: Tensor,
+        state: Tensor,
+    ) -> tuple[Tensor, Tensor]:
+        step = min(int(state.flatten()[0].item()), len(self.script) - 1)
+        scores = torch.zeros(len(symbols), symbols.shape[1], VOCABULARY)
+        scores[:, -1, self.script[step]] = 1.0
+
+        return scores, state + symbols.shape[1]
+
+
 def expect_symbols(
     call: str,
     actual: object,
@@ -967,9 +1004,19 @@ def check_greedy1(checker: Checker) -> None:
             (Described(early_encoder, "an encoder"), Described(early_decoder, "a decoder that likes END"), torch.tensor([2, 7]), 6),
             (Described(copier_encoder, "a lightly trained copier"), Described(copier_decoder, "its decoder"), torch.tensor([5, 0, 9]), 8),
             (Described(copier_encoder, "a lightly trained copier"), Described(copier_decoder, "its decoder"), torch.tensor([1, 1, 6]), 2),
+            (Described(ScriptedEncoder(), "an encoder"), Described(ScriptedDecoder([3, 8, END, 7, 2, 5]), "a decoder that writes 3, 8, END, 7, 2, 5"), torch.tensor([4, 4]), 6),
         ),
         reference=reference_greedy,
         expect=expect_symbols,
+    )
+    checker.test(
+        function="greedy_decode",
+        description="records nothing for autograd",
+        run=lambda found: expect_nothing_recorded(
+            function="greedy_decode",
+            modules=[encoder, decoder],
+            run=lambda: found(encoder, decoder, torch.tensor([3, 1, 4]), 6),
+        ),
     )
     check_on_inputs(
         checker=checker,
@@ -1108,6 +1155,9 @@ BEAM1_SOURCE = source_file(
     logs = torch.log(torch.tensor([0.5, 0.25, 0.25]))
     best_two = logs.topk(2)    # values tensor([-0.6931, -1.3863]), indices tensor([0, 1])
 
+    # The log of softmax in one call, steadier than torch.log of torch.softmax.
+    chances = F.log_softmax(torch.tensor([0.0, 1.0]), dim=0)    # tensor([-1.3133, -0.3133])
+
 
     # START, END and decoder_pairs, Encoder and Decoder from encdec1.
 ''' + indented(PAIRS_PART) + '''
@@ -1187,6 +1237,8 @@ BEAM1_SOLUTION = source_file(
 
     logs = torch.log(torch.tensor([0.5, 0.25, 0.25]))
     best_two = logs.topk(2)
+
+    chances = F.log_softmax(torch.tensor([0.0, 1.0]), dim=0)
 
 
 ''' + indented(PAIRS_PART) + '''
@@ -1342,6 +1394,11 @@ def check_decoder_step(found: object) -> None:
         call="the new state from step(START, state)",
         actual=actual[1],
         expected=expected_state,
+    )
+    expect_nothing_recorded(
+        function="decoder_step's step",
+        modules=[decoder],
+        run=lambda: step(START, state.clone()),
     )
 
 

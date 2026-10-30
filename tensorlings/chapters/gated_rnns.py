@@ -698,7 +698,7 @@ LSTM2 = Exercise(
 GRU1_LESSON = prose(
     """
     The **GRU**, from Cho and colleagues in 2014, keeps one state and two
-    gates. Each step computes this.
+    gates. Each step computes this, in PyTorch's form.
 
     ```text
     r = sigmoid(x W_r + b_r + h U_r + c_r)        how much of h the new content reads
@@ -711,10 +711,13 @@ GRU1_LESSON = prose(
     blends new content in. The reset gate `r` lets a step ignore the old state
     when it writes new content.
 
-    `nn.GRU` stacks its weights in the order r, z, n. One detail needs care.
-    `r` multiplies the hidden part of `n` with its bias `c_n` included, so the
-    parts from `x` and from `h` stay apart until then. Cut each into three
-    with `.chunk(3, dim=1)`.
+    Cho's paper puts `r` on `h` before it meets the weights, as
+    `(r * h) U_n`. PyTorch applies it after, to `h U_n + c_n`, which its
+    documentation says is on purpose, for speed. So in `nn.GRU` the parts of
+    `n` from `x` and from `h` stay apart until `r` arrives.
+
+    `nn.GRU` stacks its weights in the order r, z, n. Cut each into three with
+    `.chunk(3, dim=1)`.
 
     It has three sets of weights where the LSTM has four. With an input of 1
     and a hidden size of 16, that is 912 numbers against the LSTM's 1,216.

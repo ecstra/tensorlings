@@ -22,6 +22,7 @@ from ..engine import (
     small_tensor,
 )
 from ..text import prose, source_file
+from .bidirectional import expect_nothing_recorded
 from .linear_layers import expect_module
 
 CAUSAL_CONV = Chapter(
@@ -387,9 +388,9 @@ DILATED1_SOURCE = source_file(
             ...
 
 
-    # TODO: Set self.layers to an nn.ModuleList of layers CausalConv1d layers
-    #   from channels to channels with a kernel of 2, the first with dilation 1
-    #   and each next one doubling it. forward sets x to x + relu(layer(x)) for
+    # TODO: Set self.layers to an nn.ModuleList holding `layers` CausalConv1d
+    #   layers from channels to channels with a kernel of 2, the first with
+    #   dilation 1 and each next one doubling it. forward sets x to x + relu(layer(x)) for
     #   each layer in turn, and returns x.
     class DilatedStack(nn.Module):
         def __init__(
@@ -944,6 +945,16 @@ def check_wavenet1(checker: Checker) -> None:
             tolerance=1e-5,
         ),
     )
+    watched = seeded_shifter([1, 2])
+    checker.test(
+        function="shift_error",
+        description="records nothing for autograd",
+        run=lambda found: expect_nothing_recorded(
+            function="shift_error",
+            modules=[watched],
+            run=lambda: found(watched, small_tensor(464, 3, 12), 4),
+        ),
+    )
     checker.test(
         function="train_shifter",
         description="trains a dilated stack that shifts by 10",
@@ -989,8 +1000,7 @@ STFT1_LESSON = prose(
     strengths for both, with peaks at frequencies 128 and 256.
 
     The **short time Fourier transform**, or STFT, cuts the signal into short
-    windows and takes the spectrum of each one. Windows of 64 samples that
-    start every 32 overlap by half, so nothing falls between two cuts.
+    windows and takes the spectrum of each one.
 
     ```python
     torch.arange(6.0).unfold(0, 4, 2)    # tensor([[0., 1., 2., 3.], [2., 3., 4., 5.]])
@@ -1004,6 +1014,11 @@ STFT1_LESSON = prose(
     to 1 and falls back. `torch.hann_window(n)` gives one of n samples. Take a
     wave of 10.5 cycles in 64 samples. Its four nearest frequencies hold 90.2
     percent of its energy without the Hann window, and 99.9 percent with it.
+
+    The taper costs something. It shrinks each window's edges to near 0, so
+    windows that only touched would all but drop the samples at every cut.
+    Windows of 64 that start every 32 overlap by half. Their Hann windows add
+    up to exactly 1 at every sample, so every sample counts the same.
 
     `torch.stft` does all of this and gives one column per window. A window
     of 64 has frequencies 0 to 32, so a period of 8 is frequency 8 and a

@@ -22,6 +22,7 @@ from ..engine import (
 )
 from ..text import prose, source_file
 from ..training import MissingCheckpoint, load_checkpoint
+from .bidirectional import expect_nothing_recorded
 from .linear_layers import expect_module
 from .seq2seq import BEAM_SEARCH_GIVEN
 
@@ -529,7 +530,8 @@ ADDER2_LESSON = prose(
     question, and its final state starts the decoder.
 
     Training uses teacher forcing. The decoder reads the right answer so far,
-    `^57`, and is scored on every next token at once, `57$`. The padding after
+    `^75` for an answer of 57, and is scored on every next token at once,
+    `75$`. The padding after
     `$` says nothing about the answer, so it takes no part in the loss.
 
     ```python
@@ -1128,6 +1130,11 @@ def check_adder_step(found: object) -> None:
         call="the state it returns",
         actual=next_state,
         expected=expected_state,
+    )
+    expect_nothing_recorded(
+        function="adder_step's step",
+        modules=[model.decoder, model.head],
+        run=lambda: step(VOCABULARY.index("^"), state),
     )
 
 

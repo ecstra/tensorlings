@@ -133,9 +133,9 @@ SSM1_LESSON = prose(
 
     The weights `C @ A^j @ B`, for j = 0, 1, 2 and on, form a kernel. So `y`
     is `x` convolved with that kernel, and each output sees only the inputs
-    up to its own step. With a state of one number, `A = 0.5` and `B = C = 1`,
-    the kernel is 1, 0.5, 0.25, 0.125 and on, an average that fades into the
-    past.
+    up to its own step. Take a state of one number, `A = 0.5` and `B = C = 1`.
+    The kernel is 1, 0.5, 0.25, 0.125 and on, a weighted sum that fades into
+    the past.
 
     The same model runs two ways.
 
@@ -956,7 +956,8 @@ QUIZ8_SOURCE = source_file(
     # TODO: Return both directions' outputs for x, of shape (batch, steps,
     #   features), joined along the last dimension, forward first. forward and
     #   backward are nn.RNNs with batch_first=True, and backward reads x flipped
-    #   in time. Its outputs are flipped back so step t lines up with step t.
+    #   in time. Its outputs are flipped back, so its output for step t lines
+    #   up with the forward output at step t.
     def both_directions(
         forward: nn.RNN,
         backward: nn.RNN,

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -37,6 +39,38 @@ BIDIRECTIONAL = Chapter(
         """,
     ),
 )
+
+
+def run_watching_autograd(
+    modules: list[nn.Module],
+    run: Callable[[], object],
+) -> tuple[object, bool]:
+    """Runs run while hooks note whether any of modules was called with autograd recording. A function told
+    to record nothing gives itself away here, even when its answer is right."""
+    recorded: list[bool] = []
+    handles = [
+        module.register_forward_pre_hook(lambda _module, _inputs: recorded.append(torch.is_grad_enabled()))
+        for module in modules
+    ]
+
+    try:
+        result = run()
+    finally:
+        for handle in handles:
+            handle.remove()
+
+    return result, any(recorded)
+
+
+def expect_nothing_recorded(
+    function: str,
+    modules: list[nn.Module],
+    run: Callable[[], object],
+) -> None:
+    _, recorded = run_watching_autograd(modules, run)
+
+    if recorded:
+        raise Mismatch(f"{function} recorded for autograd. Run the model inside torch.no_grad().")
 
 
 def reference_run_rnn(
@@ -127,8 +161,8 @@ BIDIR1_SOURCE = source_file(
 
 
     # TODO: Return the backward RNN's state at every position of x, of shape
-    #   (batch, steps, input). Run run_rnn on x flipped along its steps, then
-    #   flip the states back.
+    #   (batch, steps, input), as one tensor of shape (batch, steps, hidden).
+    #   Run run_rnn on x flipped along its steps, then flip the states back.
     def run_backward(
         x: Tensor,
         weight_ih: Tensor,
@@ -577,10 +611,16 @@ def check_tagger_learns(found: type) -> None:
 def check_generate(found: object) -> None:
     prefix = small_tensor(472, 2, 5) / 3
     expected = reference_generate(seeded_tagger(ReferenceTagger, 4, False, 473), prefix, 4)
+    model = seeded_tagger(ReferenceTagger, 4, False, 473)
     expect_tensor(
         call="generate with Tagger(4, False), a prefix of shape (2, 5) and count 4",
-        actual=found(seeded_tagger(ReferenceTagger, 4, False, 473), prefix.clone(), 4),
+        actual=found(model, prefix.clone(), 4),
         expected=expected,
+    )
+    expect_nothing_recorded(
+        function="generate",
+        modules=[model],
+        run=lambda: found(model, prefix.clone(), 4),
     )
 
 
