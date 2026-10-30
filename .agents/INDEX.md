@@ -37,12 +37,12 @@ rather than this one.
 ## The trackers
 
 - [plans/INDEX.md](plans/INDEX.md), the plans: 1 open
-- [todos/INDEX.md](todos/INDEX.md), the work tracker: 16 done, 1 open
+- [todos/INDEX.md](todos/INDEX.md), the work tracker: 16 done, 2 open
 - [bugs/INDEX.md](bugs/INDEX.md), the defect tracker: empty
 - [decisions/INDEX.md](decisions/INDEX.md), the decision record: 12 standing, 6 superseded
 - [reviews/INDEX.md](reviews/INDEX.md), code review ledgers: empty
 
 ## Memory and handovers
 
-- [memory/INDEX.md](memory/INDEX.md), project facts: 3 facts
+- [memory/INDEX.md](memory/INDEX.md), project facts: 4 facts
 - handover/, 13 handovers, newest [tensorlings-waiting-for-the-owner-s-verdict-on-phase-1a](handover/tensorlings-waiting-for-the-owner-s-verdict-on-phase-1a.md)

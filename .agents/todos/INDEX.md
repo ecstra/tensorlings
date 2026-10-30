@@ -18,6 +18,7 @@ Built by the brain tool from the folder it lists.
 ### course
 
 - [TODO-017](TODO-017-phase-6-section-13.md), your own modules, combining and the design method, papers and interpretability, then the echo canceller, quant forecaster and own module projects
+- [TODO-018](TODO-018-make-every-demonstration-show-its-method-working.md), audit every lesson for a method that underdelivers behind a caveat, then research and redesign each setup until the method works
 
 ## Closed
 
