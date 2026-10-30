@@ -14,14 +14,16 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
-from ..course import OPTIMIZER_IMPORTS, Chapter, Exercise
+from ..course import OPTIMIZER_IMPORTS, QUIZZES, Chapter, Exercise
 from ..data import load_shakespeare
 from ..engine import (
     Checker,
+    Described,
     Mismatch,
     check_on_inputs,
     expect_close,
     expect_tensor,
+    small_tensor,
 )
 from ..paths import CHECKPOINTS_DIR
 from ..text import prose, source_file
@@ -1160,5 +1162,332 @@ GRPO1 = Exercise(
     },
     introduces=(),
     check=check_grpo1,
+)
+
+
+# ---------------------------------------------------------------------------
+# quiz14
+# ---------------------------------------------------------------------------
+
+QUIZ14_LESSON = prose(
+    """
+    This quiz has no examples and no new tools. Each function combines moves
+    from Section 11. If a step is unclear, the exercise in the table shows it.
+
+    | Function | Moves | Shown in |
+    |---|---|---|
+    | `trainable_share` | the numbers in parameters that need a gradient, over all the numbers | finetune2 |
+    | `merged_weight` | the update B times A, scaled by alpha over the rank, added to the weight | lora2 |
+    | `answer_only_targets` | the ids moved one along, with every target before the answer set to -100 | sft1 |
+    | `baseline_loss` | REINFORCE's loss with the batch's average reward taken off each reward | reinforce2 |
+    | `ppo_loss` | the probability ratio and its clipped copy, the smaller objective, negated | ppo1 |
+    | `dpo_loss` | each answer's log chance against the reference's, the gap times beta, then logsigmoid | dpo1 |
+    | `group_advantages` | each reward against its own group's mean and spread | grpo1 |
+    """,
+)
+
+QUIZ14_SOURCE = source_file(
+    '''
+    # quiz14.py
+    #
+    # No examples and no new tools. Each function combines moves from Section 11.
+
+    import torch
+    import torch.nn as nn
+    import torch.nn.functional as F
+    from torch import Tensor
+
+
+    # TODO: Return the share of model's numbers that will train, those in
+    #   parameters that need a gradient, as a plain number.
+    def trainable_share(model: nn.Module) -> float:
+        ...
+
+
+    # TODO: Return weight with LoRA's update folded in. A is (rank, inputs), B
+    #   is (outputs, rank), and the update is scaled by alpha over the rank.
+    def merged_weight(
+        weight: Tensor,
+        A: Tensor,
+        B: Tensor,
+        alpha: float,
+    ) -> Tensor:
+        ...
+
+
+    # TODO: Return the targets for one chat of ids, the next id at every
+    #   position, with -100 at every target before the answer. The answer's
+    #   first id sits at ids[start]. Keep the targets whole numbers.
+    def answer_only_targets(
+        ids: Tensor,
+        start: int,
+    ) -> Tensor:
+        ...
+
+
+    # TODO: Return REINFORCE's loss with the batch's average reward as the
+    #   baseline. log_probs and rewards have one entry per episode.
+    def baseline_loss(
+        log_probs: Tensor,
+        rewards: Tensor,
+    ) -> Tensor:
+        ...
+
+
+    # TODO: Return PPO's clipped loss, averaged over the actions, from the new
+    #   and old log chances of each action and its advantage.
+    def ppo_loss(
+        new_log_probs: Tensor,
+        old_log_probs: Tensor,
+        advantages: Tensor,
+        epsilon: float,
+    ) -> Tensor:
+        ...
+
+
+    # TODO: Return the DPO loss, averaged over the pairs, from the log chances
+    #   of the chosen and rejected answers under the policy and the reference.
+    def dpo_loss(
+        policy_chosen: Tensor,
+        policy_rejected: Tensor,
+        reference_chosen: Tensor,
+        reference_rejected: Tensor,
+        beta: float,
+    ) -> Tensor:
+        ...
+
+
+    # TODO: Return each reward measured against its own row, one row per group:
+    #   the row's mean taken off, then divided by the row's std plus 1e-4.
+    def group_advantages(rewards: Tensor) -> Tensor:
+        ...
+    ''',
+)
+
+QUIZ14_SOLUTION = source_file(
+    '''
+    # quiz14.py, a solution for comparison
+
+    import torch
+    import torch.nn as nn
+    import torch.nn.functional as F
+    from torch import Tensor
+
+
+    def trainable_share(model: nn.Module) -> float:
+        total = sum(parameter.numel() for parameter in model.parameters())
+        trainable = sum(parameter.numel() for parameter in model.parameters() if parameter.requires_grad)
+
+        return trainable / total
+
+
+    def merged_weight(
+        weight: Tensor,
+        A: Tensor,
+        B: Tensor,
+        alpha: float,
+    ) -> Tensor:
+        return weight + alpha / A.shape[0] * B @ A
+
+
+    def answer_only_targets(
+        ids: Tensor,
+        start: int,
+    ) -> Tensor:
+        targets = ids[1:].clone()
+        targets[: start - 1] = -100
+
+        return targets
+
+
+    def baseline_loss(
+        log_probs: Tensor,
+        rewards: Tensor,
+    ) -> Tensor:
+        return -(log_probs * (rewards - rewards.mean())).mean()
+
+
+    def ppo_loss(
+        new_log_probs: Tensor,
+        old_log_probs: Tensor,
+        advantages: Tensor,
+        epsilon: float,
+    ) -> Tensor:
+        ratio = (new_log_probs - old_log_probs).exp()
+        clipped = ratio.clamp(1 - epsilon, 1 + epsilon)
+
+        return -torch.min(ratio * advantages, clipped * advantages).mean()
+
+
+    def dpo_loss(
+        policy_chosen: Tensor,
+        policy_rejected: Tensor,
+        reference_chosen: Tensor,
+        reference_rejected: Tensor,
+        beta: float,
+    ) -> Tensor:
+        gap = (policy_chosen - reference_chosen) - (policy_rejected - reference_rejected)
+
+        return -F.logsigmoid(beta * gap).mean()
+
+
+    def group_advantages(rewards: Tensor) -> Tensor:
+        return (rewards - rewards.mean(dim=1, keepdim=True)) / (rewards.std(dim=1, keepdim=True) + 1e-4)
+    ''',
+)
+
+
+def quiz14_model(
+    seed: int,
+    frozen: tuple[int, ...],
+) -> nn.Module:
+    """A small stack of Linears with the ones at the places in frozen needing no gradient."""
+    torch.manual_seed(seed)
+    model = nn.Sequential(nn.Linear(3, 4), nn.ReLU(), nn.Linear(4, 6), nn.Linear(6, 2, bias=False))
+
+    for place in frozen:
+        model[place].requires_grad_(False)
+
+    return model
+
+
+def reference_trainable_share(model: nn.Module) -> float:
+    total = sum(parameter.numel() for parameter in model.parameters())
+
+    return sum(parameter.numel() for parameter in model.parameters() if parameter.requires_grad) / total
+
+
+def reference_answer_only_targets(
+    ids: Tensor,
+    start: int,
+) -> Tensor:
+    targets = ids[1:].clone()
+    targets[: start - 1] = -100
+
+    return targets
+
+
+def expect_whole_targets(
+    call: str,
+    actual: object,
+    expected: Tensor,
+) -> None:
+    if isinstance(actual, Tensor) and actual.dtype != torch.long:
+        raise Mismatch(f"{call} holds {actual.dtype} numbers, but F.cross_entropy wants its targets as whole numbers, torch.long, as ids are.")
+
+    expect_tensor(
+        call=call,
+        actual=actual,
+        expected=expected,
+    )
+
+
+def check_quiz14(checker: Checker) -> None:
+    check_on_inputs(
+        checker=checker,
+        function="trainable_share",
+        description="counts the numbers that will train",
+        inputs=(
+            (Described(quiz14_model(980, (0,)), "Linears 3 to 4, 4 to 6 and 6 to 2, the first frozen"),),
+            (Described(quiz14_model(981, (2, 3)), "Linears 3 to 4, 4 to 6 and 6 to 2, the last two frozen"),),
+        ),
+        reference=reference_trainable_share,
+        expect=expect_close,
+    )
+    check_on_inputs(
+        checker=checker,
+        function="merged_weight",
+        description="adds the scaled update B @ A",
+        inputs=(
+            (small_tensor(982, 4, 3), small_tensor(983, 2, 3), small_tensor(984, 4, 2), 4.0),
+            (small_tensor(985, 2, 5), small_tensor(986, 1, 5), small_tensor(987, 2, 1), 3.0),
+        ),
+        reference=lambda weight, A, B, alpha: weight + alpha / A.shape[0] * B @ A,
+        expect=expect_tensor,
+    )
+    check_on_inputs(
+        checker=checker,
+        function="answer_only_targets",
+        description="moves the ids one along and leaves the question out",
+        inputs=(
+            (torch.tensor([5, 1, 2, 7, 3, 4, 9]), 4),
+            (torch.tensor([8, 0, 6, 6, 2]), 2),
+        ),
+        reference=reference_answer_only_targets,
+        expect=expect_whole_targets,
+    )
+    check_on_inputs(
+        checker=checker,
+        function="baseline_loss",
+        description="weighs each log chance by its reward less the average",
+        inputs=(
+            (torch.tensor([-0.5, -1.2, -0.1, -2.0]), torch.tensor([1.0, 0.0, 1.0, 0.0])),
+            (torch.tensor([-0.3, -0.9, -1.5]), torch.tensor([3.0, 5.0, 4.0])),
+        ),
+        reference=lambda log_probs, rewards: -(log_probs * (rewards - rewards.mean())).mean(),
+        expect=expect_tensor,
+    )
+    check_on_inputs(
+        checker=checker,
+        function="ppo_loss",
+        description="takes the smaller of the plain and clipped objectives",
+        inputs=(
+            (torch.tensor([-0.2, -1.5, -0.7, -0.1]), torch.tensor([-0.6, -1.0, -0.7, -0.9]), torch.tensor([1.0, -2.0, 0.5, -1.0]), 0.2),
+            (torch.tensor([-1.0, -0.4, -2.2]), torch.tensor([-1.3, -0.3, -1.0]), torch.tensor([-0.5, 1.5, 2.0]), 0.1),
+        ),
+        reference=lambda new, old, advantages, epsilon: -torch.min(
+            (new - old).exp() * advantages,
+            (new - old).exp().clamp(1 - epsilon, 1 + epsilon) * advantages,
+        ).mean(),
+        expect=expect_tensor,
+    )
+    check_on_inputs(
+        checker=checker,
+        function="dpo_loss",
+        description="compares the chosen and rejected gaps from the reference",
+        inputs=(
+            (torch.tensor([-1.0, -3.0]), torch.tensor([-4.0, -2.5]), torch.tensor([-2.0, -3.5]), torch.tensor([-3.0, -2.0]), 0.1),
+            (torch.tensor([-0.5, -2.0, -1.0]), torch.tensor([-1.5, -1.0, -6.0]), torch.tensor([-0.8, -2.2, -1.0]), torch.tensor([-1.0, -1.5, -5.0]), 0.5),
+        ),
+        reference=DPO_REFERENCE["dpo_loss"],
+        expect=expect_tensor,
+    )
+    check_on_inputs(
+        checker=checker,
+        function="group_advantages",
+        description="measures each reward against its own group",
+        inputs=(
+            (torch.tensor([[1.0, 0.0, 1.0, 1.0], [0.0, 0.0, 0.0, 0.0]]),),
+            (torch.tensor([[2.0, -1.0, 0.5], [4.0, 1.0, 1.0], [0.0, 3.0, 0.0]]),),
+        ),
+        reference=DPO_REFERENCE["group_advantages"],
+        expect=expect_tensor,
+    )
+
+
+QUIZ14 = Exercise(
+    name="quiz14",
+    chapter=QUIZZES,
+    title="Post training, start to finish",
+    lesson=QUIZ14_LESSON,
+    source=QUIZ14_SOURCE,
+    solution=QUIZ14_SOLUTION,
+    hints={
+        "trainable_share": "Sum numel() over model.parameters() for the total, and again over the ones whose "
+        "requires_grad is True. Divide the second by the first.",
+        "merged_weight": "The rank is A.shape[0]. B @ A has weight's shape, so scale it by alpha over the rank and add "
+        "it to weight.",
+        "answer_only_targets": "ids[1:] gives the next id at every position. Clone it, then set every target before "
+        "place start - 1 to -100.",
+        "baseline_loss": "Take rewards.mean() off every reward, multiply by log_probs, average, and negate.",
+        "ppo_loss": "The ratio is the exp of new minus old. Clamp it to 1 - epsilon and 1 + epsilon. torch.min of the "
+        "two times the advantages, averaged and negated.",
+        "dpo_loss": "Each answer's gap is the policy's log chance less the reference's. Take chosen's gap less "
+        "rejected's, times beta, through F.logsigmoid, averaged and negated.",
+        "group_advantages": "mean(dim=1, keepdim=True) and std(dim=1, keepdim=True) keep one number per row that "
+        "broadcasts back.",
+    },
+    introduces=(),
+    check=check_quiz14,
 )
 
