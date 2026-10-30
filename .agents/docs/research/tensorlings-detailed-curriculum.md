@@ -247,7 +247,7 @@ The project follows Zaremba and Sutskever's learning to execute and the Keras ad
 | | multihead3 | why heads, a task that needs two lookups at once |
 | | gqa1 | grouped query attention, fewer key and value heads shared, and the memory it saves |
 | 51_cross_attention | cross1 | queries from one sequence, keys and values from another |
-| | cross2 | why, copying long rows of digits with cross attention in place of one vector, since long sums trained in neither form within minutes |
+| | cross2 | why, copying long rows of digits with cross attention in place of one vector |
 | 52_positions | position1 | attention alone ignores order, shown by shuffling the input |
 | | position2 | learned and sinusoidal positions |
 | | rope1 | RoPE from its paper, pairs of features rotated by position |
