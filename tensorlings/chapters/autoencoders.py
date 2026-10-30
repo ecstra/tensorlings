@@ -10,7 +10,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
-from ..course import OPTIMIZER_IMPORTS, Chapter, Exercise
+from ..course import OPTIMIZER_IMPORTS, QUIZZES, Chapter, Exercise
 from ..engine import (
     Checker,
     Described,
@@ -18,6 +18,7 @@ from ..engine import (
     check_on_inputs,
     expect_close,
     expect_tensor,
+    expect_value,
     seeded,
     small_tensor,
 )
@@ -992,4 +993,249 @@ AUTOENCODER3 = Exercise(
     check=check_autoencoder3,
     time_limit=60,
     imports_first=OPTIMIZER_IMPORTS,
+)
+
+
+# ---------------------------------------------------------------------------
+# quiz11
+# ---------------------------------------------------------------------------
+
+QUIZ11_LESSON = prose(
+    """
+    This quiz has no examples and no new tools. Each function combines moves
+    from Section 8. If a step is unclear, the exercise in the table shows it.
+
+    | Function | Moves | Shown in |
+    |---|---|---|
+    | `skipgram_pairs` | every word paired with each neighbour inside the window | word2vec1 |
+    | `sgns_loss` | the log sigmoid of the real pair's score, plus that of each negative's score turned negative | word2vec2 |
+    | `nearest` | the k rows closest to one row by cosine similarity, leaving the row itself out | word2vec3 |
+    | `info_nce` | cosine scores over a temperature, each row's partner as the right class | contrastive1 |
+    | `masked_loss` | cross entropy at the chosen positions alone | masked1 |
+    """,
+)
+
+QUIZ11_SOURCE = source_file(
+    '''
+    # quiz11.py
+    #
+    # No examples and no new tools. Each function combines moves from Section 8.
+
+    import torch
+    import torch.nn.functional as F
+    from torch import Tensor
+
+
+    # TODO: Return every (center, context) pair of ids, a context being any
+    #   other position at most window away, centers in order and contexts in
+    #   order within each, as a long tensor of shape (pairs, 2).
+    def skipgram_pairs(
+        ids: list[int],
+        window: int,
+    ) -> Tensor:
+        ...
+
+
+    # TODO: Return the mean over the batch of minus the log sigmoid of each
+    #   center's dot product with its context, minus the log sigmoids of minus
+    #   its dot products with each of its negatives. centers and contexts are
+    #   (batch, size), and negatives (batch, k, size).
+    def sgns_loss(
+        centers: Tensor,
+        contexts: Tensor,
+        negatives: Tensor,
+    ) -> Tensor:
+        ...
+
+
+    # TODO: Return the indices of the k rows of vectors with the highest cosine
+    #   similarity to row index, highest first, leaving row index out.
+    def nearest(
+        vectors: Tensor,
+        index: int,
+        k: int,
+    ) -> list[int]:
+        ...
+
+
+    # TODO: Return the InfoNCE loss of z1 against z2, each (batch, size): the
+    #   cosine similarity of every row of z1 with every row of z2, over
+    #   temperature, with row i of z2 as the right class for row i of z1.
+    def info_nce(
+        z1: Tensor,
+        z2: Tensor,
+        temperature: float,
+    ) -> Tensor:
+        ...
+
+
+    # TODO: Return the cross entropy of scores, (positions, vocabulary), against
+    #   ids, at the positions where chosen is True alone.
+    def masked_loss(
+        scores: Tensor,
+        ids: Tensor,
+        chosen: Tensor,
+    ) -> Tensor:
+        ...
+    ''',
+)
+
+QUIZ11_SOLUTION = source_file(
+    '''
+    # quiz11.py, a solution for comparison
+
+    import torch
+    import torch.nn.functional as F
+    from torch import Tensor
+
+
+    def skipgram_pairs(
+        ids: list[int],
+        window: int,
+    ) -> Tensor:
+        pairs = []
+
+        for center in range(len(ids)):
+            for context in range(max(0, center - window), min(len(ids), center + window + 1)):
+                if context != center:
+                    pairs.append((ids[center], ids[context]))
+
+        return torch.tensor(pairs, dtype=torch.long).view(-1, 2)
+
+
+    def sgns_loss(
+        centers: Tensor,
+        contexts: Tensor,
+        negatives: Tensor,
+    ) -> Tensor:
+        real = F.logsigmoid((centers * contexts).sum(dim=-1))
+        made_up = F.logsigmoid(-(negatives @ centers.unsqueeze(2)).squeeze(2)).sum(dim=-1)
+
+        return -(real + made_up).mean()
+
+
+    def nearest(
+        vectors: Tensor,
+        index: int,
+        k: int,
+    ) -> list[int]:
+        similarity = F.normalize(vectors, dim=1) @ F.normalize(vectors[index], dim=0)
+        similarity[index] = float("-inf")
+
+        return similarity.topk(k).indices.tolist()
+
+
+    def info_nce(
+        z1: Tensor,
+        z2: Tensor,
+        temperature: float,
+    ) -> Tensor:
+        scores = F.normalize(z1, dim=1) @ F.normalize(z2, dim=1).T / temperature
+
+        return F.cross_entropy(scores, torch.arange(len(z1)))
+
+
+    def masked_loss(
+        scores: Tensor,
+        ids: Tensor,
+        chosen: Tensor,
+    ) -> Tensor:
+        return F.cross_entropy(scores[chosen], ids[chosen])
+    ''',
+)
+
+
+def quiz11_reference() -> dict[str, object]:
+    namespace: dict[str, object] = {}
+    exec(QUIZ11_SOLUTION, namespace)
+
+    return namespace
+
+
+QUIZ11_REFERENCE = quiz11_reference()
+
+
+def quiz11_tensor(
+    seed: int,
+    *shape: int,
+) -> Tensor:
+    return torch.randn(*shape, generator=torch.Generator().manual_seed(seed))
+
+
+def check_quiz11(checker: Checker) -> None:
+    check_on_inputs(
+        checker=checker,
+        function="skipgram_pairs",
+        description="pairs every word with its neighbours in the window",
+        inputs=(
+            ([4, 7, 1, 9, 2], 2),
+            ([3, 3, 8], 1),
+        ),
+        reference=QUIZ11_REFERENCE["skipgram_pairs"],
+        expect=expect_tensor,
+    )
+    check_on_inputs(
+        checker=checker,
+        function="sgns_loss",
+        description="scores the real pair up and the negatives down",
+        inputs=(
+            (quiz11_tensor(1110, 4, 3), quiz11_tensor(1111, 4, 3), quiz11_tensor(1112, 4, 5, 3)),
+        ),
+        reference=QUIZ11_REFERENCE["sgns_loss"],
+        expect=expect_tensor,
+    )
+    check_on_inputs(
+        checker=checker,
+        function="nearest",
+        description="gives the closest rows by cosine, leaving the row out",
+        inputs=(
+            (quiz11_tensor(1113, 8, 4), 3, 3),
+            (quiz11_tensor(1114, 6, 5), 0, 2),
+        ),
+        reference=QUIZ11_REFERENCE["nearest"],
+        expect=expect_value,
+    )
+    check_on_inputs(
+        checker=checker,
+        function="info_nce",
+        description="takes each row's partner as the right class",
+        inputs=(
+            (quiz11_tensor(1115, 5, 4), quiz11_tensor(1116, 5, 4), 0.5),
+            (quiz11_tensor(1117, 3, 6) * 4, quiz11_tensor(1118, 3, 6), 0.1),
+        ),
+        reference=QUIZ11_REFERENCE["info_nce"],
+        expect=expect_tensor,
+    )
+    check_on_inputs(
+        checker=checker,
+        function="masked_loss",
+        description="scores the chosen positions alone",
+        inputs=(
+            (quiz11_tensor(1119, 6, 5), torch.tensor([1, 4, 0, 2, 2, 3]), torch.tensor([True, False, False, True, True, False])),
+        ),
+        reference=QUIZ11_REFERENCE["masked_loss"],
+        expect=expect_tensor,
+    )
+
+
+QUIZ11 = Exercise(
+    name="quiz11",
+    chapter=QUIZZES,
+    title="Representation learning, start to finish",
+    lesson=QUIZ11_LESSON,
+    source=QUIZ11_SOURCE,
+    solution=QUIZ11_SOLUTION,
+    hints={
+        "skipgram_pairs": "Loop over each center, then over each context from max(0, center - window) up to and "
+        "with center + window, skipping the center itself.",
+        "sgns_loss": "F.logsigmoid of the row by row dot product, plus the sum over k of F.logsigmoid of minus "
+        "negatives @ the center. Take minus the mean.",
+        "nearest": "Normalize the rows and the chosen row, multiply, set the chosen row's score to minus "
+        "infinity, then .topk(k).indices.tolist().",
+        "info_nce": "F.normalize both on dim=1, multiply z1 by z2's transpose, divide by temperature, and "
+        "F.cross_entropy against torch.arange(len(z1)).",
+        "masked_loss": "Index scores and ids with chosen, then F.cross_entropy.",
+    },
+    introduces=(),
+    check=check_quiz11,
 )
