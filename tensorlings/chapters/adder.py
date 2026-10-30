@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import textwrap
+from collections.abc import Callable
 
 import torch
 import torch.nn as nn
@@ -22,6 +23,12 @@ from ..engine import (
 from ..text import prose, source_file
 from ..training import MissingCheckpoint, load_checkpoint
 from .linear_layers import expect_module
+from .seq2seq import BEAM_SEARCH_GIVEN
+
+
+def indented_part(part: str) -> str:
+    """Indented like the files around it, which source_file takes the indentation off."""
+    return textwrap.indent(part.strip("\n"), "    ")
 
 ADDER = Chapter(
     folder="46_adder",
@@ -88,7 +95,7 @@ def reference_to_tensors(
 ) -> tuple[Tensor, Tensor]:
     width = 2 * digits + 1
     questions = torch.tensor([reference_encode(question.rjust(width, "_")) for question, _ in pairs])
-    answers = torch.tensor([reference_encode(("^" + answer + "$").ljust(digits + 3, "_")) for _, answer in pairs])
+    answers = torch.tensor([reference_encode(("^" + answer[::-1] + "$").ljust(digits + 3, "_")) for _, answer in pairs])
 
     return questions, answers
 
@@ -121,8 +128,12 @@ ADDER1_LESSON = prose(
     left makes the last step real for every sum, so the encoder's final state
     has read the whole question.
 
-    The answer comes out as `^57$`, padded on the right to the longest answer.
-    The decoder reads `^57` and learns to write `57$`, the same tokens moved
+    The answer is written backwards, units first, so 57 comes out as `^75$`,
+    padded on the right to the longest answer. That is the order you add in by
+    hand, where each carry moves from a digit to the next one written. adder2
+    measures how much that order matters.
+
+    The decoder reads `^75` and learns to write `75$`, the same tokens moved
     one step along, which is encdec1's teacher forcing.
 
     Numbers of up to 3 digits make a million different sums. One sum in 11
@@ -147,6 +158,7 @@ ADDER1_SOURCE = source_file(
     VOCABULARY = "_^$+0123456789"
     seven = VOCABULARY.index("7")       # 11
     padded = "12+45".rjust(7, "_")      # '__12+45'
+    backwards = "57"[::-1]              # '75'
 
 
     # The fixed rule that keeps one sum in 11 out of training.
@@ -183,8 +195,8 @@ ADDER1_SOURCE = source_file(
 
     # TODO: Return the questions and the answers as two tensors of ids. Each
     #   question is padded with _ on the left to 2 * digits + 1 characters. Each
-    #   answer gets ^ before it and $ after it, then _ on the right up to
-    #   digits + 3 characters.
+    #   answer is reversed, gets ^ before it and $ after it, then _ on the
+    #   right up to digits + 3 characters.
     def to_tensors(
         pairs: list[tuple[str, str]],
         digits: int,
@@ -203,6 +215,7 @@ ADDER1_SOLUTION = source_file(
     VOCABULARY = "_^$+0123456789"
     seven = VOCABULARY.index("7")
     padded = "12+45".rjust(7, "_")
+    backwards = "57"[::-1]
 
 
     def is_held_out(
@@ -245,7 +258,7 @@ ADDER1_SOLUTION = source_file(
     ) -> tuple[Tensor, Tensor]:
         width = 2 * digits + 1
         questions = torch.tensor([encode(question.rjust(width, "_")) for question, _ in pairs])
-        answers = torch.tensor([encode(("^" + answer + "$").ljust(digits + 3, "_")) for _, answer in pairs])
+        answers = torch.tensor([encode(("^" + answer[::-1] + "$").ljust(digits + 3, "_")) for _, answer in pairs])
 
         return questions, answers
     ''',
@@ -333,7 +346,7 @@ ADDER1 = Exercise(
         "take out _ and ^ with .replace.",
         "random_sums": "Loop while the list is shorter than count. Turn the two numbers into text with an f-string, "
         "and the answer with str(a + b).",
-        "to_tensors": "question.rjust(width, \"_\") pads on the left, and (\"^\" + answer + \"$\").ljust(digits + 3, "
+        "to_tensors": "question.rjust(width, \"_\") pads on the left, and (\"^\" + answer[::-1] + \"$\").ljust(digits + 3, "
         "\"_\") on the right. Encode each one and pass the lists of ids to torch.tensor.",
     },
     introduces=("token",),
@@ -390,7 +403,7 @@ def to_tensors(
 ) -> tuple[Tensor, Tensor]:
     width = 2 * digits + 1
     questions = torch.tensor([encode(question.rjust(width, "_")) for question, _ in pairs])
-    answers = torch.tensor([encode(("^" + answer + "$").ljust(digits + 3, "_")) for _, answer in pairs])
+    answers = torch.tensor([encode(("^" + answer[::-1] + "$").ljust(digits + 3, "_")) for _, answer in pairs])
 
     return questions, answers
 '''
@@ -451,7 +464,7 @@ def exact_match(
         written = greedy(model, questions, digits + 2)
 
     model.train()
-    right = [decode(ids) == answer for ids, (_, answer) in zip(written.tolist(), pairs)]
+    right = [decode(ids)[::-1] == answer for ids, (_, answer) in zip(written.tolist(), pairs)]
 
     return sum(right) / len(pairs)
 '''
@@ -468,7 +481,7 @@ ADDER2_MAIN = '''
         device = best_device()
         torch.manual_seed(0)
         model = Adder().to(device)
-        steps = ADDER_STEPS
+        steps = 4000
         optimizer = torch.optim.Adam(model.parameters(), lr=3e-3)
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=steps)
         generator = torch.Generator().manual_seed(0)
@@ -483,7 +496,7 @@ ADDER2_MAIN = '''
             optimizer.step()
             scheduler.step()
 
-            if (step + 1) % 2000 == 0:
+            if (step + 1) % 1000 == 0:
                 model.cpu()
                 print(f"Step {step + 1}, loss {loss.item():.4f}, held out sums right {exact_match(model, held_out, 3):.1%}")
                 model.to(device)
@@ -531,12 +544,21 @@ ADDER2_LESSON = prose(
     starts from `^`, takes its most likely token, and feeds it back in.
 
     Exact match is the honest score. An answer with one wrong digit is wrong,
-    however low the loss looks. Here is the run behind this project, on the
-    held out sums.
+    however low the loss looks. Here is the run behind this project on 2,000
+    held out sums. Next to it is the same model, trained the same way, on
+    answers written in the usual order.
 
-    ADDER2_TABLE
+    | Steps | 1,000 | 2,000 | 3,000 | 4,000 |
+    |---|---|---|---|---|
+    | Units first | 88.8% | 99.7% | 100.0% | 100.0% |
+    | Usual order | 4.7% | 9.9% | 21.8% | 29.8% |
 
-    ADDER2_TIME
+    In the usual order the first digit written depends on every carry below
+    it, before any of them is written. Even after 20,000 steps, five times as
+    long, the usual order gets 69.8% right. Choosing the order of the output
+    is a design decision, and here it beat a lot of training.
+
+    The run took about a minute here on MPS.
     """,
 )
 
@@ -722,24 +744,58 @@ def check_greedy(found: object) -> None:
 
 
 def check_exact_match(found: object) -> None:
-    """An untrained model gets no sum right, so 12 of the 20 pairs are given the answers it writes itself,
-    and exact_match should come out at 0.6."""
+    """The file's greedy is swapped for one that writes 12 of 20 answers right, backwards as the model
+    would, and the first digit of the rest wrong, so exact_match should come out at 0.6."""
     model = seeded_adder(ADDER_REFERENCE["Adder"], 16)
     pairs = reference_random_sums(20, 3, torch.Generator().manual_seed(465), True)
-    questions, _ = reference_to_tensors(pairs, 3)
+    calls: list[tuple[bool, bool, int]] = []
 
-    with torch.no_grad():
-        written = ADDER_REFERENCE["greedy"](model, questions, 5)
+    def scripted_greedy(
+        model: nn.Module,
+        questions: Tensor,
+        length: int,
+    ) -> Tensor:
+        calls.append((model.training, torch.is_grad_enabled(), length))
+        rows = []
 
-    own = [reference_decode(ids) for ids in written.tolist()]
-    pairs = [(question, own[index] if index < 12 else own[index] + "1") for index, (question, _) in enumerate(pairs)]
-    actual = found(model, pairs, 3)
+        for index, (_, answer) in enumerate(pairs):
+            written = answer[::-1]
+
+            if index >= 12:
+                written = str((int(written[0]) + 1) % 10) + written[1:]
+
+            rows.append(reference_encode((written + "$").ljust(length, "_")))
+
+        return torch.tensor(rows)
+
+    namespace = found.__globals__
+    original = namespace.get("greedy")
+    namespace["greedy"] = scripted_greedy
+
+    try:
+        actual = found(model, pairs, 3)
+    finally:
+        namespace["greedy"] = original
+
+    if not calls:
+        raise Mismatch("exact_match never called greedy to write the answers.")
+
+    training, recording, length = calls[0]
+
+    if training:
+        raise Mismatch("exact_match ran greedy with the model in training mode. Call model.eval() first.")
+
+    if recording:
+        raise Mismatch("exact_match ran greedy while recording for autograd. Run it inside torch.no_grad().")
+
+    if length != 5:
+        raise Mismatch(f"exact_match asked greedy for {length} steps, but it should ask for digits + 2, here 5.")
 
     if not model.training:
         raise Mismatch("exact_match left the model in eval mode. Call model.train() before returning.")
 
     expect_close(
-        call="exact_match on 20 sums, 12 of whose answers the model writes",
+        call="exact_match on 20 sums, 12 of them written right",
         actual=actual,
         expected=0.6,
     )
@@ -816,4 +872,438 @@ ADDER2 = Exercise(
     check=check_adder2,
     time_limit=120,
     imports_first=OPTIMIZER_IMPORTS,
+)
+
+
+# ---------------------------------------------------------------------------
+# adder3
+# ---------------------------------------------------------------------------
+
+# beam1's search, with the adder's own start and end tokens and the score it ranks finished answers by.
+BEAM_PARTS = '''
+START = VOCABULARY.index("^")
+END = VOCABULARY.index("$")
+
+
+def sequence_score(
+    total: float,
+    length: int,
+    alpha: float,
+) -> float:
+    return total / length ** alpha
+''' + "\n\n" + BEAM_SEARCH_GIVEN
+
+ADDER_STEP_SOLUTION = '''
+def adder_step(model: nn.Module) -> Callable[[int, Tensor], tuple[Tensor, Tensor]]:
+    @torch.no_grad()
+    def step(
+        symbol: int,
+        state: Tensor,
+    ) -> tuple[Tensor, Tensor]:
+        outputs, state = model.decoder(model.embedding(torch.tensor([[symbol]])), state)
+
+        return F.log_softmax(model.head(outputs)[0, -1], dim=0), state
+
+    return step
+'''
+
+BEAM_ANSWER_SOLUTION = '''
+def beam_answer(
+    model: nn.Module,
+    question: str,
+    width: int,
+    digits: int,
+) -> str:
+    questions = torch.tensor([encode(question.rjust(2 * digits + 1, "_"))])
+
+    with torch.no_grad():
+        _, state = model.encoder(model.embedding(questions))
+
+    ids = beam_search(adder_step(model), state, width, digits + 2, 0.0)
+
+    return decode(ids)[::-1]
+'''
+
+ADDER3_LESSON = prose(
+    """
+    Two questions about the adder from adder2. Does beam search help it, and
+    does it add numbers longer than any it trained on?
+
+    beam1's beam search keeps the few likeliest answers so far, where greedy
+    keeps only the likeliest token. It helps a model that is unsure, as on
+    beam1's copying task. Here greedy decoding already gets all 2,000 held out
+    sums right, and a beam of 3 gets the same 100%. Beam search can't fix what
+    isn't wrong, and it costs a decoder run per beam per step.
+
+    Longer numbers are another story.
+
+    | Sums | Exactly right |
+    |---|---|
+    | up to 3 digits, as in training | 100% |
+    | the same sums with two more `_` in front | 0.15% |
+    | up to 4 digits | 0% |
+    | up to 5 digits | 0% |
+
+    Two more padding tokens are enough to break it. The model never saw a
+    question of 9 tokens, so its encoder ends in a state the decoder never
+    learned to read. With 4 digit numbers it also writes at most 4 digits, the
+    longest answer it ever wrote, so `4426+7860` comes out as `1205`.
+
+    The model learned the sums it was shown, and not the method of adding. A
+    person who adds 3 digit numbers adds 30 digit numbers the same way.
+    Getting a network to do that, to work past the lengths it trained on, is
+    still studied today. Zaremba and Sutskever trained with a curriculum that
+    grew the lengths step by step.
+    """,
+)
+
+ADDER3_SOURCE = source_file(
+    '''
+    # adder3.py
+
+    from collections.abc import Callable
+
+    import torch
+    import torch.nn as nn
+    import torch.nn.functional as F
+    from torch import Tensor
+
+    chances = F.log_softmax(torch.tensor([0.0, 1.0]), dim=0)    # tensor([-1.3133, -0.3133])
+
+
+    # adder1's pieces.
+''' + INDENTED_ADDER_PARTS + '''
+
+
+    # Adder, greedy and exact_match from adder2.
+''' + INDENTED_ADDER_INIT + '''
+
+''' + INDENTED_ADDER_FORWARD + '''
+
+
+''' + INDENTED_GREEDY + '''
+
+
+''' + INDENTED_EXACT_MATCH + '''
+
+
+    # beam1's search, with the adder's start and end tokens.
+''' + indented_part(BEAM_PARTS) + '''
+
+
+    # TODO: Return a step function for beam_search from model, as beam1's
+    #   decoder_step does. It runs the decoder on one token, a tensor of shape
+    #   (1, 1), from state, and returns the log_softmax of the head's scores,
+    #   of shape (14,), and the new state. Record nothing for autograd.
+    def adder_step(model: nn.Module) -> Callable[[int, Tensor], tuple[Tensor, Tensor]]:
+        ...
+
+
+    # TODO: Return model's answer to question, a text like "123+45", from
+    #   beam_search with width, up to digits + 2 steps and an alpha of 0. Pad
+    #   and encode the question as to_tensors does, start the search from the
+    #   encoder's final state, and read the ids back as a forward answer.
+    def beam_answer(
+        model: nn.Module,
+        question: str,
+        width: int,
+        digits: int,
+    ) -> str:
+        ...
+
+
+    # TODO: Return the share of pairs whose answer beam_answer gets exactly
+    #   right with width.
+    def beam_exact_match(
+        model: nn.Module,
+        pairs: list[tuple[str, str]],
+        digits: int,
+        width: int,
+    ) -> float:
+        ...
+
+
+    # TODO: Return exact_match for count held out sums of each number of digits
+    #   in digit_counts, in order, each drawn with random_sums and generator.
+    def accuracy_by_digits(
+        model: nn.Module,
+        digit_counts: list[int],
+        count: int,
+        generator: torch.Generator,
+    ) -> list[float]:
+        ...
+    ''',
+)
+
+ADDER3_SOLUTION = source_file(
+    '''
+    # adder3.py, a solution for comparison
+
+    from collections.abc import Callable
+
+    import torch
+    import torch.nn as nn
+    import torch.nn.functional as F
+    from torch import Tensor
+
+    chances = F.log_softmax(torch.tensor([0.0, 1.0]), dim=0)
+
+
+''' + INDENTED_ADDER_PARTS + '''
+
+
+''' + INDENTED_ADDER_INIT + '''
+
+''' + INDENTED_ADDER_FORWARD + '''
+
+
+''' + INDENTED_GREEDY + '''
+
+
+''' + INDENTED_EXACT_MATCH + '''
+
+
+''' + indented_part(BEAM_PARTS) + '''
+
+
+''' + indented_part(ADDER_STEP_SOLUTION) + '''
+
+
+''' + indented_part(BEAM_ANSWER_SOLUTION) + '''
+
+
+    def beam_exact_match(
+        model: nn.Module,
+        pairs: list[tuple[str, str]],
+        digits: int,
+        width: int,
+    ) -> float:
+        right = [beam_answer(model, question, width, digits) == answer for question, answer in pairs]
+
+        return sum(right) / len(pairs)
+
+
+    def accuracy_by_digits(
+        model: nn.Module,
+        digit_counts: list[int],
+        count: int,
+        generator: torch.Generator,
+    ) -> list[float]:
+        return [exact_match(model, random_sums(count, digits, generator, True), digits) for digits in digit_counts]
+    ''',
+)
+
+
+def beam_namespace() -> dict[str, object]:
+    namespace = dict(ADDER_REFERENCE)
+    namespace["Callable"] = Callable
+    exec(BEAM_PARTS + ADDER_STEP_SOLUTION + BEAM_ANSWER_SOLUTION, namespace)
+
+    return namespace
+
+
+BEAM_REFERENCE = beam_namespace()
+
+
+def check_adder_step(found: object) -> None:
+    model = seeded_adder(ADDER_REFERENCE["Adder"], 16)
+    questions, _ = reference_to_tensors(small_sums(466), 3)
+
+    with torch.no_grad():
+        _, state = model.encoder(model.embedding(questions[:1]))
+
+    step = found(model)
+
+    if not callable(step):
+        raise Mismatch("adder_step(model) should return a function, the step that beam_search calls.")
+
+    log_probs, next_state = step(VOCABULARY.index("^"), state)
+    expected_log_probs, expected_state = BEAM_REFERENCE["adder_step"](model)(VOCABULARY.index("^"), state)
+    expect_tensor(
+        call="the log probabilities of adder_step(model)(the ^ token, the encoder's state)",
+        actual=log_probs,
+        expected=expected_log_probs,
+    )
+    expect_tensor(
+        call="the state it returns",
+        actual=next_state,
+        expected=expected_state,
+    )
+
+
+def check_beam_answer(found: object) -> None:
+    """The file's beam_search is swapped for one that records what it is given and writes 2 then 1,
+    so beam_answer should read that back as 12."""
+    model = seeded_adder(ADDER_REFERENCE["Adder"], 16)
+    calls: list[tuple[Callable[[int, Tensor], tuple[Tensor, Tensor]], Tensor, int, int, float]] = []
+
+    def scripted_beam_search(
+        step: Callable[[int, Tensor], tuple[Tensor, Tensor]],
+        state: Tensor,
+        width: int,
+        max_length: int,
+        alpha: float,
+    ) -> list[int]:
+        calls.append((step, state, width, max_length, alpha))
+
+        return reference_encode("21")
+
+    namespace = found.__globals__
+    original = namespace.get("beam_search")
+    namespace["beam_search"] = scripted_beam_search
+
+    try:
+        actual = found(model, "907+8", 2, 3)
+    finally:
+        namespace["beam_search"] = original
+
+    if not calls:
+        raise Mismatch("beam_answer never called beam_search.")
+
+    step, state, width, max_length, alpha = calls[0]
+
+    if (width, max_length, alpha) != (2, 5, 0.0):
+        raise Mismatch(
+            f"beam_answer passed beam_search a width of {width}, {max_length} steps and an alpha of {alpha}, "
+            "but for a width of 2 and 3 digits it should pass 2, 5 and 0.0.",
+        )
+
+    with torch.no_grad():
+        _, expected_state = model.encoder(model.embedding(torch.tensor([reference_encode("__907+8")])))
+
+    expect_tensor(
+        call='the state beam_answer starts the search from, for "907+8" at 3 digits',
+        actual=state,
+        expected=expected_state,
+    )
+    expect_tensor(
+        call="the log probabilities of the step function it passes, from ^",
+        actual=step(VOCABULARY.index("^"), expected_state)[0],
+        expected=BEAM_REFERENCE["adder_step"](model)(VOCABULARY.index("^"), expected_state)[0],
+    )
+    expect_value(
+        call='beam_answer when the search writes the tokens 2 then 1',
+        actual=actual,
+        expected="12",
+    )
+
+
+def check_beam_exact_match(found: object) -> None:
+    """The file's beam_answer is swapped for one that gets 12 of 20 answers right, so the share is 0.6."""
+    pairs = reference_random_sums(20, 3, torch.Generator().manual_seed(467), True)
+    answers = dict(pairs)
+    calls: list[tuple[int, int]] = []
+
+    def scripted_beam_answer(
+        model: nn.Module,
+        question: str,
+        width: int,
+        digits: int,
+    ) -> str:
+        calls.append((width, digits))
+        position = [asked for asked, _ in pairs].index(question)
+
+        return answers[question] if position < 12 else answers[question] + "0"
+
+    namespace = found.__globals__
+    original = namespace.get("beam_answer")
+    namespace["beam_answer"] = scripted_beam_answer
+
+    try:
+        actual = found(None, pairs, 3, 4)
+    finally:
+        namespace["beam_answer"] = original
+
+    if any(call != (4, 3) for call in calls):
+        raise Mismatch("beam_exact_match should pass its width and digits on to beam_answer.")
+
+    expect_close(
+        call="beam_exact_match on 20 sums, 12 of them answered right",
+        actual=actual,
+        expected=0.6,
+    )
+
+
+def check_accuracy_by_digits(found: object) -> None:
+    """The file's exact_match is swapped for one that records the sums it gets and answers digits / 10."""
+    seen: list[tuple[list[tuple[str, str]], int]] = []
+
+    def scripted_exact_match(
+        model: nn.Module,
+        pairs: list[tuple[str, str]],
+        digits: int,
+    ) -> float:
+        seen.append((pairs, digits))
+
+        return digits / 10
+
+    namespace = found.__globals__
+    original = namespace.get("exact_match")
+    namespace["exact_match"] = scripted_exact_match
+
+    try:
+        actual = found(None, [3, 5, 4], 6, torch.Generator().manual_seed(468))
+    finally:
+        namespace["exact_match"] = original
+
+    expect_value(
+        call="accuracy_by_digits(model, [3, 5, 4], 6, a generator seeded with 468)",
+        actual=actual,
+        expected=[0.3, 0.5, 0.4],
+    )
+
+    generator = torch.Generator().manual_seed(468)
+    expected_pairs = [(reference_random_sums(6, digits, generator, True), digits) for digits in (3, 5, 4)]
+
+    if seen != expected_pairs:
+        raise Mismatch(
+            "accuracy_by_digits should draw count held out sums with random_sums for each number of digits in "
+            "turn, from the one generator, and pass each batch to exact_match with its digits.",
+        )
+
+
+def check_adder3(checker: Checker) -> None:
+    checker.test(
+        function="adder_step",
+        description="gives the next token's log probabilities and the new state",
+        run=check_adder_step,
+    )
+    checker.test(
+        function="beam_answer",
+        description="answers a question with beam search, read forwards",
+        run=check_beam_answer,
+    )
+    checker.test(
+        function="beam_exact_match",
+        description="gives the share beam_answer gets right",
+        run=check_beam_exact_match,
+    )
+    checker.test(
+        function="accuracy_by_digits",
+        description="measures exact_match at each number of digits",
+        run=check_accuracy_by_digits,
+    )
+
+
+ADDER3 = Exercise(
+    name="adder3",
+    chapter=ADDER,
+    title="Project: beam search, and where it breaks",
+    lesson=ADDER3_LESSON,
+    source=ADDER3_SOURCE,
+    solution=ADDER3_SOLUTION,
+    hints={
+        "adder_step": "Inside it, define step(symbol, state) under @torch.no_grad(). Run model.decoder on "
+        "model.embedding(torch.tensor([[symbol]])) and state, and return F.log_softmax(model.head(outputs)[0, -1], "
+        "dim=0) with the new state.",
+        "beam_answer": "encode(question.rjust(2 * digits + 1, \"_\")) in a list gives a batch of one. The encoder's "
+        "final state goes to beam_search(adder_step(model), state, width, digits + 2, 0.0). Reverse decode of the ids.",
+        "beam_exact_match": "Compare beam_answer(model, question, width, digits) with each answer, and divide the "
+        "count of matches by len(pairs).",
+        "accuracy_by_digits": "For each digits in digit_counts, exact_match(model, random_sums(count, digits, "
+        "generator, True), digits).",
+    },
+    introduces=(),
+    check=check_adder3,
+    time_limit=60,
 )
