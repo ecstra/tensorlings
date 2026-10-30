@@ -19,10 +19,10 @@ Phase 4 of the plan build-tensorlings, Sections 8, 9 and 10 as [the detailed cur
 | # | Step | Points at | By | Status |
 |---|---|---|---|---|
 | 1 | Write 60_word2vec, 61_contrastive, 62_masked_modeling and 63_autoencoders | | agent | done |
-| 2 | Write quiz11 and build the probe project, 64_probe | | agent | pending |
+| 2 | Write quiz11 and build the probe project, 64_probe | | agent | done |
 | 3 | Write 65_sampling, 66_vae, 67_gan and 68_flows | | agent | done |
 | 4 | Write 69_diffusion and 70_vqvae | | agent | done |
-| 5 | Write quiz12 and build the digit diffusion project, 71_digit_diffusion | | agent | pending |
+| 5 | Write quiz12 and build the digit diffusion project, 71_digit_diffusion | | agent | done |
 | 6 | Write 72_sets, 73_graphs and 74_equivariance | | agent | done |
 | 7 | Write quiz13 and build the shortest paths project, 75_shortest_paths | | agent | done |
 | 8 | Get beginner reader reviews and fix what they find | | agent | pending |
