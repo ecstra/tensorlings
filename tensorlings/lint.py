@@ -74,6 +74,8 @@ JARGON: tuple[str, ...] = (
     "variance",
     "fan in",
     "dropout",
+    "policy",
+    "episode",
 )
 
 FILLER: tuple[str, ...] = (
