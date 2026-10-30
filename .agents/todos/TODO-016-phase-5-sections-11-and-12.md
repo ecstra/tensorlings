@@ -24,7 +24,7 @@ Phase 5 of the plan build-tensorlings, Sections 11 and 12 as [the detailed curri
 | 4 | Write quiz14 and build the post training project, 83_post_training | | agent | pending |
 | 5 | Write 84_cost, 85_profiling and 86_precision | | agent | pending |
 | 6 | Write 87_flash_attention and 88_kv_cache | | agent | done |
-| 7 | Write 89_quantization and 90_parallel | | agent | pending |
+| 7 | Write 89_quantization and 90_parallel | | agent | done |
 | 8 | Write 91_scaling and 92_data | | agent | pending |
 | 9 | Write quiz15 and build the fast GPT project, 93_fast_gpt | | agent | pending |
 | 10 | Get beginner reader reviews and fix what they find | | agent | pending |
