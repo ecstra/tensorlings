@@ -2,7 +2,7 @@
 name: decisions-index
 kind: doc
 description: index of every decision taken, newest first
-updated: 2026-10-29
+updated: 2026-10-30
 links: [INDEX.md, spec/decisions.md]
 ---
 
@@ -12,6 +12,7 @@ Every decision taken, newest first.
 Filed per [spec/decisions.md](../spec/decisions.md).
 Built by the brain tool from the folder it lists.
 
+- [DEC-018](DEC-018-a-learned-physics-project-replaces-the-echo-canceller.md), on the owner's word, Section 13's first capstone is a particle simulator that learns springs, not a toy echo canceller
 - [DEC-017](DEC-017-the-owner-s-six-gaps-added-to-the-curriculum.md), 11 exercises and a design chapter for soft relaxations, attention's why, linear attention, input dependent weights, spectra and induction
 - [DEC-016](DEC-016-training-picks-the-best-device-and-exercises-stay-on-the-cpu.md), projects that train for real run on CUDA, MPS or the CPU, whichever the machine has, while short exercises and every check run on the CPU
 - [DEC-015](DEC-015-the-course-lives-in-a-package-with-one-module-per-chapter.md), run.py becomes a thin entry point and the engine, app, lint and chapters live in the tensorlings package

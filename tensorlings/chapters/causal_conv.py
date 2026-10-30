@@ -1031,8 +1031,7 @@ STFT1_LESSON = prose(
 
     The STFT shows what and when. Its strengths form a spectrogram, an image
     of frequency against time. Most audio models read that image, or a
-    version of it, and the echo canceller project later works on STFT
-    windows too.
+    version of it.
     """,
 )
 

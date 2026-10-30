@@ -12,7 +12,7 @@ tensorlings is a rustlings style course that takes the owner from tensors to des
 
 ## The goal
 
-By the end the owner can explain any common layer four ways, what it computes, why it exists, when to use it and how to build it from plain tensors. The owner can combine layers into larger models such as a transformer, and design new modules for their own problems, such as part of an echo canceller or a small quant model.
+By the end the owner can explain any common layer four ways, what it computes, why it exists, when to use it and how to build it from plain tensors. The owner can combine layers into larger models such as a transformer, and design new modules for their own problems, such as a learned physics simulator or a small quant model.
 
 ## The curriculum
 
@@ -32,7 +32,7 @@ About 340 small exercises in 13 sections. Each section ends with a project that 
 | 10 Symmetry and graphs | Deep Sets, message passing, equivariance, structure chosen from the data's symmetries |
 | 11 Post training and RL | fine tuning, LoRA, SFT, policy gradients, PPO, reward models, DPO |
 | 12 Systems and inference | cost of each block, profiling, mixed precision, FlashAttention's tiling idea, KV cache, quantization, data parallel training, scaling laws, data cleaning |
-| 13 Your own modules | when and why to combine blocks, the design method, reproducing a paper, interpretability tools. Projects, a toy echo canceller, a toy quant forecaster with leakage traps, and a module of the owner's choice |
+| 13 Your own modules | when and why to combine blocks, the design method, reproducing a paper, interpretability tools. Projects, a learned particle simulator, a toy quant forecaster with leakage traps, and a module of the owner's choice |
 
 ## How every block is taught
 

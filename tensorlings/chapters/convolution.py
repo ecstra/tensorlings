@@ -957,8 +957,7 @@ FFT1_LESSON = prose(
 
     It keeps slow changes and mostly wipes out fast ones, so it smooths. A
     learned kernel is a filter like this one, and its spectrum says which
-    frequencies it listens to. The echo project later works on spectra like
-    these.
+    frequencies it listens to.
     """,
 )
 

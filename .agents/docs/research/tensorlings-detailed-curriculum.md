@@ -434,10 +434,10 @@ The project lands the section's main tools on one model and measures them end to
 | | interp3 | ablation and activation patching |
 | | interp4 | attribution by gradients and by integrated gradients |
 | quizzes | quiz16 | the whole course |
-| 98_echo_canceller | echo1 | the project starts, a far end signal through a room's impulse response plus near end sound, seen in time and in STFT frames |
-| | echo2 | the classic NLMS adaptive filter as the baseline, and why it converges slowly on speech |
-| | echo3 | a learned module on STFT frames, where the room becomes a product per frequency, built with the design method |
-| | echo4 | echo return loss enhancement against the baseline, and the cases each one wins |
+| 98_learned_physics | physics1 | the project starts, particles on springs stepped by a classic integrator, and the trajectories they make |
+| | physics2 | the simplest baselines, constant velocity and an MLP on every coordinate, and the diagnosis |
+| | physics3 | a learned simulator passing messages on relative positions, as in Interaction Networks and GNS, built with the design method |
+| | physics4 | rollout error and energy drift against the baselines, and the cases each one wins |
 | 99_quant_forecaster | forecast1 | the project starts, a made up price series with a weak signal of known size |
 | | forecast2 | the leaks to find, future data in the features, statistics from the whole series and a random split |
 | | forecast3 | walk forward validation with every leak fixed |
@@ -453,7 +453,7 @@ These are details the table does not name. Each sits inside its section's topic,
 - Grouped query attention and QK norm in Section 7, part of the GPT-2 to Llama path in [Raschka's comparison](https://magazine.sebastianraschka.com/p/the-big-llm-architecture-comparison), updated April 2026.
 - GRPO in Section 11, the policy gradient method behind DeepSeek R1 and the RL stage of [nanochat](https://github.com/karpathy/nanochat/discussions/1).
 - The online softmax in Section 12, the step FlashAttention's tiling rests on.
-- The NLMS filter in the echo canceller, the classic method a learned one has to beat.
+- The classic integrator in the learned physics project, which makes the data and gives the true motion a learned simulator is measured against.
 
 ## Phases
 
