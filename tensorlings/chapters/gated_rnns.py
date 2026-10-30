@@ -2,16 +2,21 @@
 
 from __future__ import annotations
 
+import textwrap
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
-from ..course import Chapter, Exercise
+from ..course import OPTIMIZER_IMPORTS, Chapter, Exercise
 from ..engine import (
+    NOT_STARTED,
     Checker,
     Described,
+    Mismatch,
     check_on_inputs,
+    expect_close,
     expect_tensor,
     expect_value,
     small_tensor,
@@ -28,8 +33,8 @@ GATED_RNNS = Chapter(
         A plain RNN rewrites its whole state at every step, and its gradient
         fades over long spans. Gated RNNs let the input decide, step by step,
         what to keep and what to write. This chapter builds the LSTM and the
-        GRU, matches them with PyTorch's, and names the idea under both, a
-        weight computed from the input.
+        GRU, matches them with PyTorch's, measures when each one beats a plain
+        RNN, and names the idea under both, a weight computed from the input.
 
         ## Further reading
 
@@ -38,6 +43,7 @@ GATED_RNNS = Chapter(
         - [Dive into Deep Learning, the GRU](https://d2l.ai/chapter_recurrent-modern/gru.html)
         - [Cho and colleagues, the paper that introduced the GRU](https://arxiv.org/abs/1406.1078)
         - [Greff and colleagues, LSTM: a search space odyssey](https://arxiv.org/abs/1503.04069)
+        - [Jozefowicz, Zaremba and Sutskever, an empirical exploration of recurrent network architectures](https://proceedings.mlr.press/v37/jozefowicz15.pdf)
         - [Dauphin and colleagues, gated linear units](https://arxiv.org/abs/1612.08083)
         """,
     ),
@@ -328,6 +334,360 @@ LSTM1 = Exercise(
     },
     introduces=(),
     check=check_lstm1,
+)
+
+
+# ---------------------------------------------------------------------------
+# lstm2
+# ---------------------------------------------------------------------------
+
+RECURRENT_LAYERS: dict[str, type] = {
+    "rnn": nn.RNN,
+    "gru": nn.GRU,
+    "lstm": nn.LSTM,
+}
+
+
+def marked_values(
+    count: int,
+    steps: int,
+    generator: torch.Generator,
+) -> tuple[Tensor, Tensor]:
+    """derive1's marked value stretched out. Each step holds a value from -1 to 1 and a mark, one of the
+    first 5 steps is marked, and the answer is its value."""
+    values = 2 * torch.rand(count, steps, generator=generator) - 1
+    where = torch.randint(0, 5, (count,), generator=generator)
+    rows = torch.arange(count)
+    marks = torch.zeros(count, steps)
+    marks[rows, where] = 1.0
+
+    return torch.stack([values, marks], dim=2), values[rows, where]
+
+
+def reference_set_forget_bias_(
+    lstm: nn.LSTM,
+    value: float,
+) -> None:
+    hidden_size = lstm.hidden_size
+
+    with torch.no_grad():
+        lstm.bias_ih_l0[hidden_size : 2 * hidden_size] = value
+        lstm.bias_hh_l0[hidden_size : 2 * hidden_size] = 0.0
+
+
+class ReferenceRecaller(nn.Module):
+    def __init__(
+        self,
+        layer: nn.Module,
+        hidden_size: int,
+    ) -> None:
+        super().__init__()
+        self.layer = layer
+        self.head = nn.Linear(hidden_size, 1)
+
+    def forward(self, x: Tensor) -> Tensor:
+        outputs, _ = self.layer(x)
+
+        return self.head(outputs[:, -1]).squeeze(1)
+
+
+def seeded_recaller(
+    kind: str,
+    hidden_size: int,
+    seed: int,
+    forget_bias: float | None = None,
+) -> nn.Module:
+    torch.manual_seed(seed)
+    model = ReferenceRecaller(RECURRENT_LAYERS[kind](2, hidden_size, batch_first=True), hidden_size)
+
+    if forget_bias is not None:
+        reference_set_forget_bias_(model.layer, forget_bias)
+
+    return model
+
+
+def recall_error(
+    model: nn.Module,
+    steps: int,
+    seed: int,
+    train_steps: int,
+) -> float:
+    """The run the lessons' tables come from, Adam at 0.01 on batches of 64, then the mean squared error on
+    1,000 new sequences."""
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
+    generator = torch.Generator().manual_seed(seed + 1)
+
+    for _ in range(train_steps):
+        x, y = marked_values(64, steps, generator)
+        loss = F.mse_loss(model(x), y)
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+    x, y = marked_values(1000, steps, torch.Generator().manual_seed(77))
+
+    with torch.no_grad():
+        return F.mse_loss(model(x), y).item()
+
+
+LSTM2_LESSON = prose(
+    """
+    bptt3 showed a plain RNN's gradient fading over a long span, and lstm1
+    built a cell whose update has no squash. Here is what that buys, measured,
+    and the catch that comes with it.
+
+    The task is derive1's marked value, stretched out. Each step holds a value
+    from -1 to 1 and a mark of 0 or 1. One of the first 5 steps is marked, and
+    the model gives back its value at the very end. Always guessing 0 scores a
+    mean squared error of 0.333.
+
+    Every model has 16 hidden units and trains for 1,500 Adam steps, three
+    times with different seeds. A run counts as solved below an error of 0.01.
+
+    | Model | Length 10 | Length 20 | Length 40 |
+    |---|---|---|---|
+    | RNN | 3 of 3 | 0 of 3 | 0 of 3 |
+    | LSTM, forget bias 0 | 3 of 3 | 0 of 3 | 0 of 3 |
+    | LSTM, forget bias 1 | 3 of 3 | 3 of 3 | 0 of 3 |
+    | LSTM, forget bias 3 | 3 of 3 | 3 of 3 | 3 of 3 |
+    | GRU | 3 of 3 | 3 of 3 | 1 of 3 |
+
+    At length 10 every model solves it. A plain RNN is fine for short gaps, and
+    for answers that build up over the whole sequence, like rnn3's vote.
+
+    The LSTM as PyTorch builds it fails exactly where the RNN does. PyTorch
+    starts every bias near 0, so the forget gate starts near sigmoid(0), 0.5.
+    The cell then halves at every step, and so does its gradient.
+
+    | Forget bias | Forget gate at the start | Left after 20 steps | Left after 40 steps |
+    |---|---|---|---|
+    | 0 | 0.50 | 1e-6 | 9e-13 |
+    | 1 | 0.73 | 0.0019 | 3.6e-6 |
+    | 3 | 0.95 | 0.38 | 0.14 |
+
+    Start the forget gate's bias higher, and the cell carries the value and
+    its gradient across the gap from the first step of training. Training can
+    still close the gate later. Gers, Schmidhuber and Cummins proposed this in
+    2000. In 2015 Jozefowicz, Zaremba and Sutskever found the GRU beating the
+    LSTM on nearly every task without it. With a bias of 1, the LSTM nearly
+    matched the GRU.
+
+    So the LSTM's edge is real, and it lives in two places, a cell with no
+    squash and a forget gate that starts open.
+    """,
+)
+
+LSTM2_SOURCE = source_file(
+    '''
+    # lstm2.py
+
+    import torch
+    import torch.nn as nn
+    from torch import Tensor
+
+    gate = torch.sigmoid(torch.tensor(1.0))    # tensor(0.7311), a forget gate's start at a bias of 1
+
+
+    # TODO: Return the share of a cell's value left after steps steps, when its
+    #   forget gate stays at its start, the sigmoid of bias, and nothing new
+    #   goes in. Return a plain number.
+    def forget_fraction(
+        bias: float,
+        steps: int,
+    ) -> float:
+        ...
+
+
+    second_quarter = torch.arange(8)[2:4]    # tensor([2, 3]), the second quarter of 8 rows
+
+
+    # TODO: Set the forget gate's part of lstm.bias_ih_l0 to value and its part
+    #   of lstm.bias_hh_l0 to 0, in place, without recording for autograd. In
+    #   the order i, f, g, o, the forget gate's part is the second quarter.
+    def set_forget_bias_(
+        lstm: nn.LSTM,
+        value: float,
+    ) -> None:
+        ...
+
+
+    last = torch.zeros(2, 5, 16)[:, -1]    # shape (2, 16), each sequence's last step
+
+
+    # TODO: Finish forward. x has shape (batch, steps, 2). Run self.layer, then
+    #   self.head on the last step's output, and return one guess per sequence,
+    #   of shape (batch,).
+    class Recaller(nn.Module):
+        def __init__(
+            self,
+            layer: nn.Module,
+            hidden_size: int,
+        ) -> None:
+            super().__init__()
+            self.layer = layer
+            self.head = nn.Linear(hidden_size, 1)
+
+        def forward(self, x: Tensor) -> Tensor:
+            ...
+    ''',
+)
+
+LSTM2_SOLUTION = source_file(
+    '''
+    # lstm2.py, a solution for comparison
+
+    import torch
+    import torch.nn as nn
+    from torch import Tensor
+
+    gate = torch.sigmoid(torch.tensor(1.0))
+
+
+    def forget_fraction(
+        bias: float,
+        steps: int,
+    ) -> float:
+        return torch.sigmoid(torch.tensor(bias)).item() ** steps
+
+
+    second_quarter = torch.arange(8)[2:4]
+
+
+    def set_forget_bias_(
+        lstm: nn.LSTM,
+        value: float,
+    ) -> None:
+        hidden_size = lstm.hidden_size
+
+        with torch.no_grad():
+            lstm.bias_ih_l0[hidden_size : 2 * hidden_size] = value
+            lstm.bias_hh_l0[hidden_size : 2 * hidden_size] = 0.0
+
+
+    last = torch.zeros(2, 5, 16)[:, -1]
+
+
+    class Recaller(nn.Module):
+        def __init__(
+            self,
+            layer: nn.Module,
+            hidden_size: int,
+        ) -> None:
+            super().__init__()
+            self.layer = layer
+            self.head = nn.Linear(hidden_size, 1)
+
+        def forward(self, x: Tensor) -> Tensor:
+            outputs, _ = self.layer(x)
+
+            return self.head(outputs[:, -1]).squeeze(1)
+    ''',
+)
+
+
+def check_set_forget_bias(found: object) -> None:
+    for hidden_size, value in ((4, 3.0), (6, 1.0)):
+        call = f"set_forget_bias_ on nn.LSTM(2, {hidden_size}) with {value}"
+        lstm = seeded_layer(nn.LSTM, 2, hidden_size, 450)
+        expected = seeded_layer(nn.LSTM, 2, hidden_size, 450)
+        reference_set_forget_bias_(expected, value)
+        before = lstm.bias_ih_l0.detach().clone()
+        found(lstm, value)
+
+        if torch.equal(lstm.bias_ih_l0.detach(), before):
+            raise Mismatch(f"After {call}, bias_ih_l0 is unchanged, so set_forget_bias_ is {NOT_STARTED}.")
+
+        for name in ("bias_ih_l0", "bias_hh_l0"):
+            expect_tensor(
+                call=f"{name} after {call}",
+                actual=getattr(lstm, name).detach(),
+                expected=getattr(expected, name).detach(),
+            )
+
+
+def check_recaller_forward(found: type) -> None:
+    torch.manual_seed(451)
+    model = found(nn.LSTM(2, 4, batch_first=True), 4)
+    torch.manual_seed(451)
+    reference = ReferenceRecaller(nn.LSTM(2, 4, batch_first=True), 4)
+    x, _ = marked_values(3, 6, torch.Generator().manual_seed(452))
+
+    with torch.no_grad():
+        expected = reference(x)
+
+    expect_tensor(
+        call="Recaller(nn.LSTM(2, 4, batch_first=True), 4) on 3 sequences of 6 steps",
+        actual=model(x),
+        expected=expected,
+    )
+
+
+def check_recall_across_40(found: object) -> None:
+    model = seeded_recaller("lstm", 16, 0)
+    found(model.layer, 3.0)
+    error = recall_error(
+        model=model,
+        steps=40,
+        seed=0,
+        train_steps=500,
+    )
+
+    if error > 0.05:
+        raise Mismatch(
+            f"An LSTM given set_forget_bias_(lstm, 3.0) and trained for 500 steps scores an error of {error:.3f} "
+            "at length 40, but it should be below 0.05.",
+        )
+
+
+def check_lstm2(checker: Checker) -> None:
+    check_on_inputs(
+        checker=checker,
+        function="forget_fraction",
+        description="gives the share left after many steps",
+        inputs=(
+            (2.0, 10),
+            (-1.0, 3),
+            (0.5, 25),
+        ),
+        reference=lambda bias, steps: torch.sigmoid(torch.tensor(bias)).item() ** steps,
+        expect=expect_close,
+    )
+    checker.test(
+        function="set_forget_bias_",
+        description="sets the forget gate's bias and nothing else",
+        run=check_set_forget_bias,
+    )
+    checker.test_method(
+        class_name="Recaller",
+        method="forward",
+        description="gives one guess per sequence from the last step",
+        run=check_recaller_forward,
+    )
+    checker.test(
+        function="set_forget_bias_",
+        description="lets an LSTM recall a value 40 steps back",
+        run=check_recall_across_40,
+    )
+
+
+LSTM2 = Exercise(
+    name="lstm2",
+    chapter=GATED_RNNS,
+    title="Why the LSTM, and its forget bias",
+    lesson=LSTM2_LESSON,
+    source=LSTM2_SOURCE,
+    solution=LSTM2_SOLUTION,
+    hints={
+        "forget_fraction": "torch.sigmoid(torch.tensor(bias)).item() is the gate. Raise it to the power steps.",
+        "set_forget_bias_": "With h = lstm.hidden_size, the forget part is [h : 2 * h]. Inside torch.no_grad(), "
+        "assign value to that slice of lstm.bias_ih_l0 and 0.0 to that slice of lstm.bias_hh_l0.",
+        "Recaller.forward": "self.layer(x) returns the outputs at every step first. Take outputs[:, -1], run "
+        "self.head, then .squeeze(1).",
+    },
+    introduces=(),
+    check=check_lstm2,
+    time_limit=30,
+    imports_first=OPTIMIZER_IMPORTS,
 )
 
 
@@ -696,4 +1056,280 @@ GATING1 = Exercise(
     },
     introduces=(),
     check=check_gating1,
+)
+
+
+# ---------------------------------------------------------------------------
+# lstm3
+# ---------------------------------------------------------------------------
+
+WEIGHT_SETS: dict[str, int] = {
+    "rnn": 1,
+    "gru": 3,
+    "lstm": 4,
+}
+
+LSTM3_LESSON = prose(
+    """
+    Which recurrent layer to reach for, from what this chapter measured.
+
+    First, is the LSTM winning only because it has four times the weights?
+    Give each model about 1,150 weights instead, which buys the RNN 32 hidden
+    units, the GRU 18 and the LSTM 15. Here is lstm2's task again, three seeds
+    each.
+
+    | Model | Weights | Length 20 | Length 40 |
+    |---|---|---|---|
+    | RNN, 32 units | 1,152 | 0 of 3 | 0 of 3 |
+    | GRU, 18 units | 1,188 | 3 of 3 | 1 of 3 |
+    | LSTM, 15 units, forget bias 1 | 1,140 | 3 of 3 | 0 of 3 |
+    | LSTM, 15 units, forget bias 3 | 1,140 | 3 of 3 | 3 of 3 |
+
+    More units don't save the RNN. Its trouble is the squash at every step,
+    not its size. Speed goes the other way. A training step at length 40 took
+    about 1 ms for the RNN here, and about 2.5 ms or more for the gated ones.
+
+    - A plain RNN suits short gaps, and answers that build up over the whole sequence. It is the smallest and the fastest.
+    - A GRU is a good first choice with nothing to tune, at three quarters of an LSTM's weights.
+    - An LSTM reached the longest gaps here, once its forget gate started open. Set that bias every time you make one.
+
+    All three run one step after another, which a GPU can't spread out.
+    44_causal_conv and 45_state_space train on every step at once, and
+    Section 7's models replaced RNNs for most text. An RNN still fits where
+    its fixed size state matters, like reading a stream one step at a time on
+    a small device.
+    """,
+)
+
+SET_FORGET_BIAS = '''
+# set_forget_bias_ from lstm2.
+def set_forget_bias_(
+    lstm: nn.LSTM,
+    value: float,
+) -> None:
+    hidden_size = lstm.hidden_size
+
+    with torch.no_grad():
+        lstm.bias_ih_l0[hidden_size : 2 * hidden_size] = value
+        lstm.bias_hh_l0[hidden_size : 2 * hidden_size] = 0.0
+'''
+
+# Indented like the files around it, which source_file takes the indentation off.
+INDENTED_SET_FORGET_BIAS = textwrap.indent(SET_FORGET_BIAS.strip("\n"), "    ")
+
+LSTM3_SOURCE = source_file(
+    '''
+    # lstm3.py
+
+    import torch
+    import torch.nn as nn
+
+
+''' + INDENTED_SET_FORGET_BIAS + '''
+
+
+    # How many sets of weights each layer learns, one per gate or content.
+    WEIGHT_SETS = {"rnn": 1, "gru": 3, "lstm": 4}
+
+    sets = WEIGHT_SETS["gru"]    # 3, the GRU's r, z and n
+
+
+    # TODO: Return how many numbers a one layer nn.RNN, nn.GRU or nn.LSTM
+    #   learns, with kind "rnn", "gru" or "lstm", from its sets of weights,
+    #   without building one.
+    def recurrent_size(
+        kind: str,
+        input_size: int,
+        hidden_size: int,
+    ) -> int:
+        ...
+
+
+    fits = [h for h in range(1, 6) if h * h <= 10]    # [1, 2, 3], so 3 is the largest that fits
+
+
+    # TODO: Return the largest hidden size whose recurrent_size, for kind and
+    #   input_size, is at most budget.
+    def hidden_for_budget(
+        kind: str,
+        input_size: int,
+        budget: int,
+    ) -> int:
+        ...
+
+
+    layer = nn.GRU(2, 18, batch_first=True)    # batch first, like every layer in this chapter
+
+
+    # TODO: Return a one layer nn.RNN, nn.GRU or nn.LSTM for kind, with
+    #   batch_first=True. Start an LSTM's forget bias at forget_bias with
+    #   set_forget_bias_.
+    def make_recurrent(
+        kind: str,
+        input_size: int,
+        hidden_size: int,
+        forget_bias: float = 1.0,
+    ) -> nn.Module:
+        ...
+    ''',
+)
+
+LSTM3_SOLUTION = source_file(
+    '''
+    # lstm3.py, a solution for comparison
+
+    import torch
+    import torch.nn as nn
+
+
+''' + INDENTED_SET_FORGET_BIAS + '''
+
+
+    WEIGHT_SETS = {"rnn": 1, "gru": 3, "lstm": 4}
+
+    sets = WEIGHT_SETS["gru"]
+
+
+    # Each set has a weight on the input, a weight on h and two biases.
+    def recurrent_size(
+        kind: str,
+        input_size: int,
+        hidden_size: int,
+    ) -> int:
+        return WEIGHT_SETS[kind] * (hidden_size * input_size + hidden_size * hidden_size + 2 * hidden_size)
+
+
+    fits = [h for h in range(1, 6) if h * h <= 10]
+
+
+    def hidden_for_budget(
+        kind: str,
+        input_size: int,
+        budget: int,
+    ) -> int:
+        hidden_size = 1
+
+        while recurrent_size(kind, input_size, hidden_size + 1) <= budget:
+            hidden_size += 1
+
+        return hidden_size
+
+
+    layer = nn.GRU(2, 18, batch_first=True)
+
+
+    def make_recurrent(
+        kind: str,
+        input_size: int,
+        hidden_size: int,
+        forget_bias: float = 1.0,
+    ) -> nn.Module:
+        layer = {"rnn": nn.RNN, "gru": nn.GRU, "lstm": nn.LSTM}[kind](input_size, hidden_size, batch_first=True)
+
+        if kind == "lstm":
+            set_forget_bias_(layer, forget_bias)
+
+        return layer
+    ''',
+)
+
+
+def reference_hidden_for_budget(
+    kind: str,
+    input_size: int,
+    budget: int,
+) -> int:
+    hidden_size = 1
+
+    while WEIGHT_SETS[kind] * ((hidden_size + 1) * input_size + (hidden_size + 1) ** 2 + 2 * (hidden_size + 1)) <= budget:
+        hidden_size += 1
+
+    return hidden_size
+
+
+def check_make_recurrent(found: object) -> None:
+    for kind, input_size, hidden_size in (("rnn", 3, 5), ("gru", 2, 4), ("lstm", 2, 6)):
+        call = f'make_recurrent("{kind}", {input_size}, {hidden_size}, forget_bias=2.0)'
+        layer = found(kind, input_size, hidden_size, forget_bias=2.0)
+
+        if type(layer) is not RECURRENT_LAYERS[kind]:
+            raise Mismatch(f"{call} is a {type(layer).__name__}, but it should be an nn.{RECURRENT_LAYERS[kind].__name__}.")
+
+        shape = (layer.input_size, layer.hidden_size, layer.num_layers, layer.batch_first)
+
+        if shape != (input_size, hidden_size, 1, True):
+            raise Mismatch(f"{call} should take {input_size} inputs to {hidden_size} hidden units, in one layer, with batch_first=True.")
+
+        if kind != "lstm":
+            continue
+
+        forget = (layer.bias_ih_l0 + layer.bias_hh_l0)[hidden_size : 2 * hidden_size].detach()
+        expect_tensor(
+            call=f"the forget gate's two biases added, after {call}",
+            actual=forget,
+            expected=torch.full((hidden_size,), 2.0),
+        )
+
+    layer = found("lstm", 2, 4)
+    expect_tensor(
+        call='the forget gate\'s two biases added, after make_recurrent("lstm", 2, 4)',
+        actual=(layer.bias_ih_l0 + layer.bias_hh_l0)[4:8].detach(),
+        expected=torch.ones(4),
+    )
+
+
+def check_lstm3(checker: Checker) -> None:
+    check_on_inputs(
+        checker=checker,
+        function="recurrent_size",
+        description="counts each layer's weights",
+        inputs=(
+            ("rnn", 2, 32),
+            ("gru", 2, 18),
+            ("lstm", 2, 15),
+            ("lstm", 10, 7),
+            ("gru", 1, 16),
+        ),
+        reference=lambda kind, input_size, hidden_size: sum(
+            parameter.numel() for parameter in RECURRENT_LAYERS[kind](input_size, hidden_size).parameters()
+        ),
+        expect=expect_value,
+    )
+    check_on_inputs(
+        checker=checker,
+        function="hidden_for_budget",
+        description="gives the largest hidden size that fits the budget",
+        inputs=(
+            ("rnn", 2, 1200),
+            ("gru", 2, 1200),
+            ("lstm", 2, 1200),
+            ("lstm", 10, 5000),
+            ("gru", 3, 100),
+        ),
+        reference=reference_hidden_for_budget,
+        expect=expect_value,
+    )
+    checker.test(
+        function="make_recurrent",
+        description="builds the layer, an LSTM with its forget gate open",
+        run=check_make_recurrent,
+    )
+
+
+LSTM3 = Exercise(
+    name="lstm3",
+    chapter=GATED_RNNS,
+    title="An RNN, an LSTM or a GRU",
+    lesson=LSTM3_LESSON,
+    source=LSTM3_SOURCE,
+    solution=LSTM3_SOLUTION,
+    hints={
+        "recurrent_size": "Each set holds hidden_size * input_size, hidden_size * hidden_size and two biases of "
+        "hidden_size. Multiply by WEIGHT_SETS[kind].",
+        "hidden_for_budget": "Start at 1 and step up while recurrent_size of one more unit still fits the budget.",
+        "make_recurrent": "Pick nn.RNN, nn.GRU or nn.LSTM by kind and build it with batch_first=True. When kind is "
+        'lstm, call set_forget_bias_(layer, forget_bias) before returning it.',
+    },
+    introduces=(),
+    check=check_lstm3,
 )
