@@ -409,7 +409,7 @@ BPTT2_SOURCE = source_file(
 
 
     # TODO: Finish the loop, one pass of truncated backprop through time over x
-    #   and y, both of shape (batch, steps, 1), in chunks of length steps. Each
+    #   and y, both of shape (batch, steps, 1), in chunks of `length` steps. Each
     #   chunk starts from the state the chunk before ended in, cut from its
     #   history, and takes one step of optimizer on its mean squared error.
     #   Return the last chunk's loss.
@@ -651,8 +651,8 @@ BPTT3_LESSON = prose(
     """
     bptt1 multiplied factors on a one number state. A real RNN has a vector
     state and a matrix `W_hh`, and the same thing happens. Here is
-    `gradient_by_distance` below on a default `nn.RNN` with a state of 32, over
-    16 sequences of 60 random steps.
+    `gradient_by_distance` below on an `nn.RNN` with a state of 32 and
+    `batch_first=True`, over 16 sequences of 60 random steps.
 
     | Steps back | 0 | 1 | 5 | 10 | 20 | 30 | 50 |
     |---|---|---|---|---|---|---|---|
@@ -735,10 +735,10 @@ BPTT3_SOURCE = source_file(
 ''' + INDENTED_VOTES + '''
 
 
-    # TODO: Return how strongly the last state of rnn depends on each step of x,
-    #   of shape (batch, steps, 1). Take the gradient of the sum of the last
+    # TODO: Return how strongly the last state of rnn depends on each step of x.
+    #   x has shape (batch, steps, 1). Take the gradient of the sum of the last
     #   state with respect to x, and its norm over the batch for each step.
-    #   Order the norms by distance from the end, the last step first.
+    #   Return one norm per step, shape (steps,), the last step first.
     def gradient_by_distance(
         rnn: nn.RNN,
         x: Tensor,

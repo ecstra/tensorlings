@@ -126,9 +126,10 @@ CIFAR1_LESSON = prose(
     untouched until cifar3. The validation set comes out of the 50,000.
 
     Look at the data before training on it, the first step of Karpathy's
-    recipe. Even the average color of each class says something. Airplanes
-    and ships average bluer than red, 0.063 and 0.064 on a scale of 0 to 1,
-    sky and sea. Frogs are the least blue, at -0.125.
+    recipe. Even the average color of each class says something. Take each
+    class's average blue minus its average red, with pixels from 0 to 1.
+    Airplanes and ships come out at 0.063 and 0.064, sky and sea. Frogs come
+    out lowest, at -0.125.
 
     Each channel then gets its own normalization. Take the channel's mean away
     and divide by its spread, over every image and every pixel.
@@ -878,8 +879,8 @@ CIFAR3_LESSON = prose(
     photos it has never seen.
 
     The test images get the training images' treatment, scaled to 0 to 1 and
-    normalized with the training part's mean and spread. The test set's own
-    statistics would leak a little of it into the model.
+    normalized with the training part's mean and spread. The model learned on
+    inputs scaled exactly that way, so the test images have to match.
 
     mnist3 built a confusion matrix with a loop. names1's trick builds it in
     one go. Each pair of a true class and a predicted class becomes one number,
@@ -889,6 +890,9 @@ CIFAR3_LESSON = prose(
     pairs = torch.tensor([0, 1, 1]) * 2 + torch.tensor([0, 0, 1])    # tensor([0, 2, 3])
     torch.bincount(pairs, minlength=4).reshape(2, 2)                  # tensor([[1, 0], [1, 1]])
     ```
+
+    `bincount` stops at the largest number it sees. `minlength` keeps a slot
+    for every pair, even one that never happened, so the reshape always fits.
 
     `.topk(k)` gives the k largest entries, largest first, and where they sit.
 
@@ -1146,6 +1150,7 @@ def check_cifar3(checker: Checker) -> None:
         inputs=(
             (torch.tensor([0, 2, 1, 1, 2, 0]), torch.tensor([0, 1, 1, 2, 2, 0]), 3),
             (torch.tensor([3, 0, 1, 1, 2, 3, 0]), torch.tensor([3, 1, 1, 0, 2, 2, 0]), 4),
+            (torch.tensor([0, 1, 1, 2]), torch.tensor([0, 1, 2, 1]), 4),
         ),
         reference=reference_confusion,
         expect=expect_tensor,

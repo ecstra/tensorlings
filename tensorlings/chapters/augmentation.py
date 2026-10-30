@@ -70,7 +70,7 @@ AUGMENT1_LESSON = prose(
     **Data augmentation** makes new training examples by changing old ones in
     ways that keep their labels. A cat shifted a few pixels is still a cat,
     and so is a cat seen in a mirror. The changes are drawn fresh at every
-    step, so the model never sees exactly the same image twice.
+    step, so the model rarely sees the same version of an image twice.
 
     - a flip: the image mirrored left to right. `.flip(-1)` reverses the last dimension, the width.
     - a padded crop: zeros added around, then a crop of the original size taken from a random place in it.

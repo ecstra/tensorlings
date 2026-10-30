@@ -84,8 +84,10 @@ TRANSFER1_LESSON = prose(
     Only the new head learns. Fine tuning goes one step further, training
     everything afterwards at a small learning rate.
 
-    An optimizer should get only the parameters that train, which a filter on
-    `.requires_grad` gives.
+    A frozen parameter never gets a `.grad`, so an optimizer leaves it alone
+    even when it is handed every parameter. Handing it only the ones that
+    train, with a filter on `.requires_grad`, saves it keeping state for
+    weights that never move.
     """,
 )
 
@@ -228,6 +230,17 @@ def check_transfer(found: object) -> None:
     call = "transfer(a trained Net(10), 5)"
     target = expect_module(call, found(source, 5))
 
+    if target is source:
+        raise Mismatch(f"{call} gave back the source itself. Build a new Net and copy the body's weights into it.")
+
+    source_parameters = {id(parameter) for parameter in source.parameters()}
+
+    if any(id(parameter) in source_parameters for parameter in target.parameters()):
+        raise Mismatch(f"{call} shares weights with the source, so training one would change the other. Copy them with load_state_dict.")
+
+    if not all(parameter.requires_grad for parameter in source.parameters()):
+        raise Mismatch(f"{call} froze the source's weights too. Freeze only the new model's body.")
+
     if not isinstance(getattr(target, "head", None), nn.Linear) or target.head.out_features != 5:
         raise Mismatch(f"{call} should have a new head, an nn.Linear to 5 classes.")
 
@@ -320,7 +333,8 @@ TRANSFER2_SOURCE = source_file(
     from torch import Tensor
 
     y = torch.tensor([3, 7, 5, 0])
-    low = y < 5                                      # tensor([ True, False, False,  True])
+    below = y < 5                                    # tensor([ True, False, False,  True])
+    rest = ~below                                    # tensor([False,  True,  True, False]), ~ flips each one
 
 
     # TODO: Split x and y into the examples whose label is below low and the
@@ -365,7 +379,8 @@ TRANSFER2_SOLUTION = source_file(
     from torch import Tensor
 
     y = torch.tensor([3, 7, 5, 0])
-    low = y < 5
+    below = y < 5
+    rest = ~below
 
 
     def split_by_label(

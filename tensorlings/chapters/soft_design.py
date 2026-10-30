@@ -373,10 +373,15 @@ DERIVE2_LESSON = prose(
     answer is the weighted sum of the values.
 
     The model has to learn what "matches" means. Here each key id gets a row
-    of numbers from one `nn.Embedding`, and each query id a row from a second,
-    separate one. The score is the dot product of the two rows. Both tables
-    start out random, so at first a query matches its own key no better than
-    any other.
+    of 4 numbers from one `nn.Embedding`, and each query id a row from a
+    second, separate one. The score is the dot product of the two rows. Both
+    tables start out random, so at first a query matches its own key no better
+    than any other.
+
+    One shared table would match equal ids from the start, since a row's dot
+    product with itself is large. Two tables leave "match" for training to
+    define, which is what later lets a query match something other than an
+    equal id.
 
     Trained for 300 steps on sequences of 6 pairs, with ids from 0 to 9, it
     gives this.
