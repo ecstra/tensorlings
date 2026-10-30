@@ -42,6 +42,10 @@ DATASETS: dict[str, tuple[RemoteFile, ...]] = {
     "names": (
         RemoteFile("https://raw.githubusercontent.com/karpathy/makemore/master/names.txt", "401b3c4cac9e28a586ed15e81256680d"),
     ),
+    # Karpathy's tiny Shakespeare, about a million characters of the plays in one file.
+    "shakespeare": (
+        RemoteFile("https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt", "6fb458f1232090904fb40fe944165e91"),
+    ),
     # The binary version from Krizhevsky's own page, read straight out of the archive, so no pickle is ever loaded.
     "cifar10": (
         RemoteFile("https://www.cs.toronto.edu/~kriz/cifar-10-binary.tar.gz", "c32a1d4ab5d03f1284b67883e8d87530"),
@@ -198,6 +202,16 @@ def load_cifar10(split: str) -> tuple[Tensor, Tensor]:
     images, labels = read_cifar10(split)
 
     return images.clone(), labels.clone()
+
+
+@functools.cache
+def read_shakespeare() -> str:
+    return dataset_file("shakespeare", "input.txt").read_text()
+
+
+def load_shakespeare() -> str:
+    """Tiny Shakespeare as one string, 1,115,394 characters of the plays."""
+    return read_shakespeare()
 
 
 @functools.cache
