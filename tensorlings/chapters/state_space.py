@@ -9,9 +9,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
-from ..course import OPTIMIZER_IMPORTS, Chapter, Exercise
+from ..course import OPTIMIZER_IMPORTS, QUIZZES, Chapter, Exercise
 from ..engine import (
     Checker,
+    Described,
     Mismatch,
     check_on_inputs,
     expect_tensor,
@@ -893,4 +894,279 @@ SSM3 = Exercise(
     check=check_ssm3,
     time_limit=30,
     imports_first=OPTIMIZER_IMPORTS,
+)
+
+
+# ---------------------------------------------------------------------------
+# quiz8
+# ---------------------------------------------------------------------------
+
+QUIZ8_LESSON = prose(
+    """
+    This quiz has no examples and no new tools. Each function combines moves
+    from Section 6. If a step is unclear, the exercise in the table shows it.
+
+    | Function | Moves | Shown in |
+    |---|---|---|
+    | `gru_step` | the reset gate, the update gate and the candidate state of one GRU step | gru1, gating1 |
+    | `causal_dilated_conv` | zeros on the left only, then a dilated convolution | causal1, dilated1 |
+    | `both_directions` | one RNN over the sequence, one over it flipped, flipped back and joined | bidir1 |
+    | `diagonal_scan` | a diagonal linear recurrence run as a loop, read out at every step | ssm1, ssm2 |
+    """,
+)
+
+QUIZ8_SOURCE = source_file(
+    '''
+    # quiz8.py
+    #
+    # No examples and no new tools. Each function combines moves from Section 6.
+
+    import torch
+    import torch.nn as nn
+    import torch.nn.functional as F
+    from torch import Tensor
+
+
+    # TODO: Return the next hidden state of a GRU without biases, for x of shape
+    #   (batch, inputs) and h of shape (batch, hidden). W and U stack the reset,
+    #   update and candidate weights in that order, of shapes (3 * hidden,
+    #   inputs) and (3 * hidden, hidden). r = sigmoid(x W_r^T + h U_r^T), z the
+    #   same with W_z and U_z, n = tanh(x W_n^T + r * (h U_n^T)), and the result
+    #   is (1 - z) * n + z * h.
+    def gru_step(
+        x: Tensor,
+        h: Tensor,
+        W: Tensor,
+        U: Tensor,
+    ) -> Tensor:
+        ...
+
+
+    # TODO: Return the causal convolution of x, of shape (batch, channels,
+    #   length), with weight, of shape (out channels, channels, k), at the given
+    #   dilation. The output keeps the length, and no output sees a later input.
+    def causal_dilated_conv(
+        x: Tensor,
+        weight: Tensor,
+        dilation: int,
+    ) -> Tensor:
+        ...
+
+
+    # TODO: Return both directions' outputs for x, of shape (batch, steps,
+    #   features), joined along the last dimension, forward first. forward and
+    #   backward are nn.RNNs with batch_first=True, and backward reads x flipped
+    #   in time. Its outputs are flipped back so step t lines up with step t.
+    def both_directions(
+        forward: nn.RNN,
+        backward: nn.RNN,
+        x: Tensor,
+    ) -> Tensor:
+        ...
+
+
+    # TODO: Return the outputs of the recurrence h_t = a * h_(t-1) + b * x_t,
+    #   y_t = the sum of c * h_t, for x of shape (batch, steps). a, b and c hold
+    #   one number per state. The state starts at 0, and the result has the
+    #   shape of x.
+    def diagonal_scan(
+        a: Tensor,
+        b: Tensor,
+        c: Tensor,
+        x: Tensor,
+    ) -> Tensor:
+        ...
+    ''',
+)
+
+QUIZ8_SOLUTION = source_file(
+    '''
+    # quiz8.py, a solution for comparison
+
+    import torch
+    import torch.nn as nn
+    import torch.nn.functional as F
+    from torch import Tensor
+
+
+    def gru_step(
+        x: Tensor,
+        h: Tensor,
+        W: Tensor,
+        U: Tensor,
+    ) -> Tensor:
+        W_r, W_z, W_n = W.chunk(3)
+        U_r, U_z, U_n = U.chunk(3)
+        r = torch.sigmoid(x @ W_r.T + h @ U_r.T)
+        z = torch.sigmoid(x @ W_z.T + h @ U_z.T)
+        n = torch.tanh(x @ W_n.T + r * (h @ U_n.T))
+
+        return (1 - z) * n + z * h
+
+
+    def causal_dilated_conv(
+        x: Tensor,
+        weight: Tensor,
+        dilation: int,
+    ) -> Tensor:
+        k = weight.shape[2]
+
+        return F.conv1d(F.pad(x, (dilation * (k - 1), 0)), weight, dilation=dilation)
+
+
+    def both_directions(
+        forward: nn.RNN,
+        backward: nn.RNN,
+        x: Tensor,
+    ) -> Tensor:
+        ahead, _ = forward(x)
+        behind, _ = backward(x.flip(1))
+
+        return torch.cat([ahead, behind.flip(1)], dim=2)
+
+
+    def diagonal_scan(
+        a: Tensor,
+        b: Tensor,
+        c: Tensor,
+        x: Tensor,
+    ) -> Tensor:
+        h = torch.zeros(len(x), len(a))
+        outputs = []
+
+        for t in range(x.shape[1]):
+            h = a * h + b * x[:, t : t + 1]
+            outputs.append((c * h).sum(dim=1))
+
+        return torch.stack(outputs, dim=1)
+    ''',
+)
+
+
+def reference_gru_step(
+    x: Tensor,
+    h: Tensor,
+    W: Tensor,
+    U: Tensor,
+) -> Tensor:
+    """nn.GRUCell with its biases at zero is the same step, so the quiz is held to PyTorch's own GRU."""
+    cell = nn.GRUCell(x.shape[1], h.shape[1])
+
+    with torch.no_grad():
+        cell.weight_ih.copy_(W)
+        cell.weight_hh.copy_(U)
+        cell.bias_ih.zero_()
+        cell.bias_hh.zero_()
+
+        return cell(x, h)
+
+
+def reference_causal_dilated_conv(
+    x: Tensor,
+    weight: Tensor,
+    dilation: int,
+) -> Tensor:
+    k = weight.shape[2]
+
+    return F.conv1d(F.pad(x, (dilation * (k - 1), 0)), weight, dilation=dilation)
+
+
+def reference_both_directions(
+    forward: nn.RNN,
+    backward: nn.RNN,
+    x: Tensor,
+) -> Tensor:
+    with torch.no_grad():
+        ahead, _ = forward(x)
+        behind, _ = backward(x.flip(1))
+
+    return torch.cat([ahead, behind.flip(1)], dim=2)
+
+
+def reference_diagonal_scan(
+    a: Tensor,
+    b: Tensor,
+    c: Tensor,
+    x: Tensor,
+) -> Tensor:
+    h = torch.zeros(len(x), len(a))
+    outputs = []
+
+    for t in range(x.shape[1]):
+        h = a * h + b * x[:, t : t + 1]
+        outputs.append((c * h).sum(dim=1))
+
+    return torch.stack(outputs, dim=1)
+
+
+def seeded_rnn(seed: int) -> nn.RNN:
+    torch.manual_seed(seed)
+
+    return nn.RNN(3, 4, batch_first=True)
+
+
+def check_quiz8(checker: Checker) -> None:
+    check_on_inputs(
+        checker=checker,
+        function="gru_step",
+        description="gives the GRU's next hidden state",
+        inputs=(
+            (small_tensor(880, 2, 3) / 3, small_tensor(881, 2, 4) / 3, small_tensor(882, 12, 3) / 3, small_tensor(883, 12, 4) / 3),
+        ),
+        reference=reference_gru_step,
+        expect=expect_tensor,
+    )
+    check_on_inputs(
+        checker=checker,
+        function="causal_dilated_conv",
+        description="keeps the length and never reads ahead",
+        inputs=(
+            (small_tensor(884, 2, 3, 9), small_tensor(885, 4, 3, 2), 3),
+            (small_tensor(886, 1, 2, 7), small_tensor(887, 2, 2, 3), 1),
+        ),
+        reference=reference_causal_dilated_conv,
+        expect=expect_tensor,
+    )
+    check_on_inputs(
+        checker=checker,
+        function="both_directions",
+        description="joins the forward outputs with the backward ones flipped back",
+        inputs=(
+            (Described(seeded_rnn(888), "an nn.RNN from 3 to 4"), Described(seeded_rnn(889), "another"), small_tensor(890, 2, 5, 3) / 3),
+        ),
+        reference=reference_both_directions,
+        expect=expect_tensor,
+    )
+    check_on_inputs(
+        checker=checker,
+        function="diagonal_scan",
+        description="runs the recurrence and reads it out at every step",
+        inputs=(
+            (torch.tensor([0.9, 0.5]), torch.tensor([1.0, -0.5]), torch.tensor([0.3, 2.0]), small_tensor(891, 2, 6)),
+            (torch.tensor([0.2, 0.99, -0.6]), torch.tensor([0.5, 0.1, 1.0]), torch.tensor([1.0, 1.0, -1.0]), small_tensor(892, 3, 4)),
+        ),
+        reference=reference_diagonal_scan,
+        expect=expect_tensor,
+    )
+
+
+QUIZ8 = Exercise(
+    name="quiz8",
+    chapter=QUIZZES,
+    title="Sequences, start to finish",
+    lesson=QUIZ8_LESSON,
+    source=QUIZ8_SOURCE,
+    solution=QUIZ8_SOLUTION,
+    hints={
+        "gru_step": "W.chunk(3) and U.chunk(3) give the reset, update and candidate weights. Then follow the "
+        "formulas in the TODO in order.",
+        "causal_dilated_conv": "F.pad(x, (dilation * (k - 1), 0)) adds the zeros on the left only, then F.conv1d "
+        "with dilation=dilation.",
+        "both_directions": "Run backward on x.flip(1), flip its outputs back with .flip(1), and torch.cat both "
+        "outputs on dim=2.",
+        "diagonal_scan": "Start h at torch.zeros(len(x), len(a)). Each step, h = a * h + b * x[:, t : t + 1], and "
+        "keep (c * h).sum(dim=1). torch.stack the outputs on dim=1.",
+    },
+    introduces=(),
+    check=check_quiz8,
 )
