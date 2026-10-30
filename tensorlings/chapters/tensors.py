@@ -6,7 +6,16 @@ import torch
 from torch import Tensor
 
 from ..course import Chapter, Exercise
-from ..engine import Checker, check_on_inputs, expect_shape, expect_tensor, expect_value
+from ..engine import (
+    Checker,
+    Mismatch,
+    check_on_inputs,
+    expect_shape,
+    expect_tensor,
+    expect_value,
+    reject_missing_return,
+    value_text,
+)
 from ..text import prose, source_file
 
 TENSORS = Chapter(
@@ -18,8 +27,8 @@ TENSORS = Chapter(
 
         Every number a model reads, stores or produces lives in a tensor. This
         chapter covers making tensors, reading parts of them, math on whole
-        tensors, broadcasting and reductions. Every task is an operation that
-        real models run.
+        tensors, broadcasting and reductions. Every later chapter builds its
+        models from these operations.
 
         ## Further reading
 
@@ -32,10 +41,11 @@ TENSORS = Chapter(
 
 TENSORS1_LESSON = prose(
     """
-    A **tensor** is a grid of numbers. PyTorch keeps every number a model
-    reads, learns and outputs in tensors. A **model** is a program that turns
-    input numbers into output numbers, and **training** adjusts the numbers
-    inside it until its outputs come out right.
+    A **tensor** is a grid of numbers. PyTorch, the Python library that
+    `import torch` loads, keeps every number a model reads, learns and outputs
+    in tensors. A **model** is a program that turns input numbers into output
+    numbers, and **training** adjusts the numbers inside it until its outputs
+    come out right.
 
     `torch.tensor` builds a tensor from a list, or from a list of lists with
     one inner list per row.
@@ -80,7 +90,7 @@ TENSORS1_SOURCE = source_file(
     d = ...
 
     # TODO: This line crashes. Save the file, read the error in the Result tab,
-    #   then fix the line.
+    #   then fix the line so e keeps its two rows.
     e = torch.tensor([[1, 2], [3, 4, 5]])
     ''',
 )
@@ -163,16 +173,16 @@ INDEXING1_LESSON = prose(
     If you looped over the rows, that works. Square brackets on a tensor do it
     in one step, and the TODOs after it use them.
 
-    Give one position per dimension, separated by commas. Positions start at
-    0, and negative positions count from the end. Give fewer positions than
-    the tensor has dimensions, and the rest come whole, so `x[0]` is all of
-    row 0.
-
     ```python
     x = torch.tensor([[1, 2, 3],
                       [4, 5, 6],
                       [7, 8, 9]])
     ```
+
+    Give one position per dimension, separated by commas. Positions start at
+    0, and negative positions count from the end. Give fewer positions than
+    the tensor has dimensions, and the rest come whole, so `x[0]` is all of
+    row 0.
 
     | Code | Result | Picks |
     |---|---|---|
@@ -188,6 +198,10 @@ INDEXING1_LESSON = prose(
     takes the positions from `start` up to, but not including, `stop`. Leave
     out `start` to begin at 0, or `stop` to run to the end, so `x[1:]` is
     every row after the first.
+
+    Models pick parts of tensors this way all the time. When `images` holds
+    ten images of shape `(10, 28, 28)`, `images[0]` is the first image and
+    `images[0:4]` the first four.
     """,
 )
 
@@ -253,11 +267,13 @@ INDEXING1_SOLUTION = source_file(
     ''',
 )
 
-# Grids of three shapes, so an answer typed in for the grid in the file fails.
+# Grids of four shapes, so an answer typed in for the grid in the file fails. In the last one the
+# bottom right entry is the smallest, so taking the largest entry fails too.
 INDEXING_GRIDS: tuple[tuple[Tensor], ...] = (
     (torch.tensor([[1, 2, 3], [4, 5, 6], [7, 8, 9]]),),
     (torch.arange(20).reshape(4, 5),),
     (torch.tensor([[7, -1, 4], [0, 2, 9]]),),
+    (torch.tensor([[5, 9], [3, 1]]),),
 )
 
 
@@ -274,13 +290,13 @@ def check_indexing1(checker: Checker) -> None:
             reference=reference,
         )
 
+    # The shape is checked too, so a 1 by 1 slice of the corner fails.
     check_on_inputs(
         checker=checker,
         function="bottom_right",
         description="gives the entry in the last row and column",
         inputs=INDEXING_GRIDS,
         reference=lambda grid: grid[-1, -1],
-        expect=expect_value,
     )
     check_on_inputs(
         checker=checker,
@@ -322,6 +338,9 @@ MATH1_LESSON = prose(
     a * 2     # tensor([2., 4., 6.])
     ```
 
+    These numbers have a decimal point, as in `1.0`, which makes a float
+    tensor, one that holds decimals. The math inside models runs on floats.
+
     Comparisons work entry by entry too. Each one gives a tensor of `True` and
     `False`, one per entry.
 
@@ -337,6 +356,10 @@ MATH1_LESSON = prose(
     ```python
     torch.where(c > 1, 1.0, c)    # tensor([-2.0000,  0.5000, -1.0000,  1.0000])
     ```
+
+    Models run steps like these on every number they hold. Replacing the
+    negative entries with 0, the last TODO, is one of the most common steps
+    inside a model.
     """,
 )
 
@@ -385,7 +408,7 @@ MATH1_SOURCE = source_file(
 
     # torch.where(condition, x, y) takes each entry from x where the condition is
     # True, and from y where it is False.
-    capped = torch.where(c > 1, 1.0, c)         # tensor([-2.0, 0.5, 1.0])
+    capped = torch.where(c > 1, 1.0, c)         # tensor([-2.0000,  0.5000,  1.0000])
 
 
     # TODO: Return c with its negative entries replaced by 0.0, and the rest kept.
@@ -445,6 +468,56 @@ MATH_TENSORS: tuple[tuple[Tensor], ...] = (
 )
 
 
+def expect_true_false(
+    call: str,
+    actual: object,
+    expected: Tensor,
+) -> None:
+    expect_tensor(
+        call=call,
+        actual=actual,
+        expected=expected,
+    )
+
+    if actual.dtype != torch.bool:
+        raise Mismatch(f"{call} holds {actual.dtype} numbers, but a comparison gives True and False. Return the comparison itself.")
+
+
+def expect_positions(
+    call: str,
+    actual: object,
+    expected: Tensor,
+) -> None:
+    expect_tensor(
+        call=call,
+        actual=actual,
+        expected=expected,
+    )
+
+    if actual.dtype.is_floating_point:
+        raise Mismatch(
+            f"{call} holds {actual.dtype} numbers, but positions are whole numbers, as argmax gives them. "
+            "Return argmax's result as it comes.",
+        )
+
+
+def check_leaves_input(found: object) -> None:
+    """Each call of a check gets a fresh copy, so a function that writes into its input passes the others."""
+    for (c,) in MATH_TENSORS:
+        given = c.clone()
+        result = found(given)
+        reject_missing_return(
+            call=f"zero_negatives({value_text(c)})",
+            actual=result,
+        )
+
+        if not torch.equal(given, c):
+            raise Mismatch(
+                f"zero_negatives({value_text(c)}) changed the tensor it was given to {value_text(given)}. "
+                "Build a new tensor with torch.where, and leave c as it came.",
+            )
+
+
 def check_math1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
@@ -456,19 +529,33 @@ def check_math1(checker: Checker) -> None:
         ),
         reference=lambda a, b: a * b,
     )
-
-    for function, description, reference in (
-        ("square", "squares every entry", lambda c: c ** 2),
-        ("below_zero", "gives True for the entries below 0", lambda c: c < 0),
-        ("zero_negatives", "replaces the negative entries with 0", lambda c: torch.where(c < 0, 0.0, c)),
-    ):
-        check_on_inputs(
-            checker=checker,
-            function=function,
-            description=description,
-            inputs=MATH_TENSORS,
-            reference=reference,
-        )
+    check_on_inputs(
+        checker=checker,
+        function="square",
+        description="squares every entry",
+        inputs=MATH_TENSORS,
+        reference=lambda c: c ** 2,
+    )
+    check_on_inputs(
+        checker=checker,
+        function="below_zero",
+        description="gives True for the entries below 0",
+        inputs=MATH_TENSORS,
+        reference=lambda c: c < 0,
+        expect=expect_true_false,
+    )
+    check_on_inputs(
+        checker=checker,
+        function="zero_negatives",
+        description="replaces the negative entries with 0",
+        inputs=MATH_TENSORS,
+        reference=lambda c: torch.where(c < 0, 0.0, c),
+    )
+    checker.test(
+        function="zero_negatives",
+        description="leaves the tensor it was given unchanged",
+        run=check_leaves_input,
+    )
 
 
 MATH1 = Exercise(
@@ -524,6 +611,9 @@ BROADCASTING1_LESSON = prose(
     `(3,)`, `s / t` runs without an error. The `(3,)` lines up with the
     columns, so each column gets its own number, when each row was meant to
     get one. The numbers are wrong and nothing says so.
+
+    Models broadcast all the time. When each row of a grid holds one example,
+    adding a single row of numbers shifts every example the same way.
     """,
 )
 
@@ -554,9 +644,9 @@ BROADCASTING1_SOURCE = source_file(
     scaled = grid * torch.tensor([1.0, 2.0]).unsqueeze(1)   # tensor([[1., 2., 3.], [8., 10., 12.]])
 
 
-    # TODO: This crashes when the checker calls it. Read the error in the Result
-    #   tab, then fix it so each row of grid gets its own number from numbers
-    #   added.
+    # TODO: numbers holds one number per row of grid, and each row should get
+    #   its own number added. This crashes when the checker calls it. Read the
+    #   error in the Result tab, then fix it.
     def add_per_row(
         grid: Tensor,
         numbers: Tensor,
@@ -656,10 +746,11 @@ REDUCTIONS1_LESSON = prose(
 
     `.mean()` takes `dim` the same way, so `x.mean(dim=0)` is
     `tensor([2.5000, 3.5000, 4.5000])`. It only works on floats. `.argmax()`
-    gives the position of the largest entry, and with `dim` it gives one
-    position per row or per column.
+    gives the position of the largest entry. Without `dim` it reads a grid as
+    one long row, and with `dim` it gives one position per row or per column.
 
     ```python
+    x.argmax()         # tensor(5), counted along one long row of 6
     x.argmax(dim=1)    # tensor([2, 2]), the column of the largest entry in each row
     ```
 
@@ -667,6 +758,9 @@ REDUCTIONS1_LESSON = prose(
     **reductions**. `keepdim=True` keeps the reduced dimension with size 1, so
     `x.sum(dim=1, keepdim=True)` has shape `(2, 1)`. That shape broadcasts
     against the rows of `x`, as broadcasting1 showed.
+
+    Models reduce all the time. A model often gives one score per possible
+    answer, and argmax picks the answer with the highest score.
     """,
 )
 
@@ -704,7 +798,8 @@ REDUCTIONS1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the mean of each column of grid.
+    # TODO: Return the mean of each column of grid, one mean per column. For
+    #   grid that is tensor([2.5000, 3.5000, 4.5000]), of shape (3,).
     def column_means(grid: Tensor) -> Tensor:
         ...
 
@@ -801,11 +896,11 @@ def check_reductions1(checker: Checker) -> None:
         expect=expect_value,
     )
 
-    for function, description, reference in (
-        ("row_totals", "gives one total per row", lambda grid: grid.sum(dim=1)),
-        ("column_means", "gives one mean per column", lambda grid: grid.mean(dim=0)),
-        ("best_in_each_column", "gives the position of each column's largest entry", lambda grid: grid.argmax(dim=0)),
-        ("rows_to_fractions", "divides each row by its own total", lambda grid: grid / grid.sum(dim=1, keepdim=True)),
+    for function, description, reference, expect in (
+        ("row_totals", "gives one total per row", lambda grid: grid.sum(dim=1), expect_tensor),
+        ("column_means", "gives one mean per column", lambda grid: grid.mean(dim=0), expect_tensor),
+        ("best_in_each_column", "gives the position of each column's largest entry", lambda grid: grid.argmax(dim=0), expect_positions),
+        ("rows_to_fractions", "divides each row by its own total", lambda grid: grid / grid.sum(dim=1, keepdim=True), expect_tensor),
     ):
         check_on_inputs(
             checker=checker,
@@ -813,6 +908,7 @@ def check_reductions1(checker: Checker) -> None:
             description=description,
             inputs=REDUCTION_GRIDS,
             reference=reference,
+            expect=expect,
         )
 
 
@@ -829,8 +925,8 @@ REDUCTIONS1 = Exercise(
         "row_totals": "dim=1 is the dimension that runs across each row. Adding along it leaves one total per row.",
         "column_means": ".mean takes dim the same way .sum does in the line that sets column_totals.",
         "best_in_each_column": "Use argmax as the line that sets best_in_each_row does, along the other dimension.",
-        "rows_to_fractions": "The totals need shape (rows, 1) to line up with the rows. The line that sets "
-        "kept_totals shows how.",
+        "rows_to_fractions": "Each row's total needs shape (rows, 1) to line up with the rows. The lesson shows a "
+        ".sum option that keeps the added up dimension with size 1.",
     },
     introduces=("reduction",),
     check=check_reductions1,

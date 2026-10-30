@@ -607,7 +607,8 @@ def reject_values_and_positions(
     if type(actual).__module__ == "torch.return_types":
         raise Mismatch(
             f"{call} is the pair that .max or .min with a dim gives, the values and their positions. "
-            "Use .amax or .amin for the values alone.",
+            "For positions alone use .argmax or .argmin, or take .indices of the pair. For values alone take "
+            ".values.",
         )
 
 
@@ -689,6 +690,10 @@ def expect_value(
         call=call,
         actual=actual,
     )
+    reject_values_and_positions(
+        call=call,
+        actual=actual,
+    )
 
     if isinstance(actual, Tensor) and isinstance(expected, list):
         raise Mismatch(
@@ -700,7 +705,7 @@ def expect_value(
         call=call,
         actual=actual,
         expected=expected,
-        expected_text=value_text(expected),
+        expected_text=value_text(expected.item() if isinstance(expected, Tensor) and expected.numel() == 1 else expected),
     )
 
     if isinstance(expected, Tensor):

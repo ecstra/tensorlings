@@ -8,6 +8,7 @@ from torch import Tensor
 from ..course import QUIZZES, Chapter, Exercise
 from ..engine import Checker, check_on_inputs, expect_value
 from ..text import prose, source_file
+from .tensors import expect_positions
 
 MATMUL = Chapter(
     folder="02_matmul",
@@ -62,11 +63,12 @@ MATMUL1_LESSON = prose(
     ```
 
     `.T` swaps the two dimensions of a matrix, so its rows become columns and
-    `b.T` has shape `(3, 2)`.
+    `b.T` has shape `(3, 2)`. It is for matrices only, and PyTorch warns when
+    it meets a flat tensor.
 
-    Most of the work inside a model is matrix multiplication. A later chapter
-    builds the main building block of models from it, and shows why it is
-    built that way.
+    Most of the work inside a model is matrix multiplication. A model's inputs
+    often form a matrix with one example per row. One `@` with a matrix of
+    weights then gives every example many weighted sums at once.
     """,
 )
 
@@ -80,11 +82,11 @@ MATMUL1_SOURCE = source_file(
 
     # TODO: Try this before reading the lesson, with what you already know.
     #   Multiply each entry of v by the matching entry of w, then add up the
-    #   results. For v = [2., 3.] and w = [10., 100.] that is 320.
+    #   results. For v = [2., 3.] and w = [10., 100.] that is tensor(320.).
     def weighted_sum(
         v: Tensor,
         w: Tensor,
-    ) -> float:
+    ) -> Tensor:
         ...
 
 
@@ -116,12 +118,13 @@ MATMUL1_SOURCE = source_file(
     product = a @ b                               # tensor([[1., 20., 4.], [3., 40., 10.]])
 
     # .T swaps rows and columns, so b.T has shape (3, 2).
-    b_turned = b.T
+    b_turned = b.T                                # tensor([[ 1.,  0.], [ 0., 10.], [ 2.,  1.]])
 
 
     # TODO: This crashes when the checker calls it. It should return the dot
-    #   product of every row of a with every row of b. Read the error in the
-    #   Result tab, then fix it.
+    #   product of every row of a with every row of b, one row per row of a,
+    #   holding one number per row of b. Read the error in the Result tab, then
+    #   fix it.
     def row_pairs(
         a: Tensor,
         b: Tensor,
@@ -155,8 +158,8 @@ MATMUL1_SOLUTION = source_file(
     def weighted_sum(
         v: Tensor,
         w: Tensor,
-    ) -> float:
-        return (v @ w).item()
+    ) -> Tensor:
+        return v @ w
 
 
     v = torch.tensor([2.0, 3.0])
@@ -211,7 +214,7 @@ def check_matmul1(checker: Checker) -> None:
             (torch.tensor([1.0, 2.0, 3.0]), torch.tensor([4.0, 5.0, 6.0])),
             (torch.tensor([0.5, -1.0]), torch.tensor([4.0, 2.0])),
         ),
-        reference=lambda v, w: (v * w).sum().item(),
+        reference=lambda v, w: (v * w).sum(),
         expect=expect_value,
     )
     # A square matrix among them, where w @ matrix runs but gives other numbers.
@@ -271,8 +274,8 @@ MATMUL1 = Exercise(
 QUIZ1_LESSON = prose(
     """
     This quiz has no examples and no new tools. Each function combines moves
-    from the earlier exercises, the way a rustlings quiz does. If a step is
-    unclear, the exercise in the table shows it.
+    from the earlier exercises. If a step is unclear, the exercise in the
+    table shows it.
 
     | Function | Moves | Shown in |
     |---|---|---|
@@ -295,16 +298,16 @@ QUIZ1_SOURCE = source_file(
 
 
     # TODO: Return the position of the row of grid with the largest total. For
-    #   [[1., 2., 3.], [4., 5., 6.]] that is 1.
-    def biggest_row(grid: Tensor) -> int:
+    #   [[1., 2., 3.], [4., 5., 6.]] that is tensor(1).
+    def biggest_row(grid: Tensor) -> Tensor:
         ...
 
 
-    # TODO: The first line already replaces the negative entries of grid with
-    #   0.0. Finish the second line, so each row of cleaned gets divided by its
-    #   own total and every row adds up to 1.
+    # TODO: Fill in both lines. The first replaces the negative entries of grid
+    #   with 0.0. The second divides each row of cleaned by its own total, so
+    #   every row adds up to 1.
     def clean_fractions(grid: Tensor) -> Tensor:
-        cleaned = torch.where(grid < 0, 0.0, grid)
+        cleaned = ...
 
         return ...
 
@@ -336,8 +339,8 @@ QUIZ1_SOLUTION = source_file(
     from torch import Tensor
 
 
-    def biggest_row(grid: Tensor) -> int:
-        return grid.sum(dim=1).argmax().item()
+    def biggest_row(grid: Tensor) -> Tensor:
+        return grid.sum(dim=1).argmax()
 
 
     def clean_fractions(grid: Tensor) -> Tensor:
@@ -364,6 +367,7 @@ QUIZ1_SOLUTION = source_file(
 
 def check_quiz1(checker: Checker) -> None:
     # In the square grid the row totals and the column totals have their largest in different places.
+    # In the last grid row 0 holds the largest single entry, but row 1 has the largest total.
     check_on_inputs(
         checker=checker,
         function="biggest_row",
@@ -372,9 +376,10 @@ def check_quiz1(checker: Checker) -> None:
             (torch.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]),),
             (torch.tensor([[1.0, 1.0, 1.0], [0.0, 0.0, 9.0], [5.0, 0.0, 0.0]]),),
             (torch.tensor([[1.0, 7.0], [3.0, 3.0], [8.0, 2.0], [0.0, 4.0]]),),
+            (torch.tensor([[9.0, 0.0, 0.0], [4.0, 4.0, 4.0]]),),
         ),
-        reference=lambda grid: grid.sum(dim=1).argmax().item(),
-        expect=expect_value,
+        reference=lambda grid: grid.sum(dim=1).argmax(),
+        expect=expect_positions,
     )
     check_on_inputs(
         checker=checker,
@@ -420,8 +425,9 @@ QUIZ1 = Exercise(
     hints={
         "biggest_row": "Add up each row, as row_totals does in reductions1, then find the position of the largest "
         "total with argmax.",
-        "clean_fractions": "Divide cleaned by its row totals, kept with size 1 so they line up with the rows, as "
-        "rows_to_fractions does in reductions1.",
+        "clean_fractions": "Replace the negatives with torch.where, as zero_negatives does in math1. Then divide "
+        "cleaned by its row totals, kept with size 1 so they line up with the rows, as rows_to_fractions does in "
+        "reductions1.",
         "center_columns": "Take the mean of each column, as column_means does in reductions1. Its shape lines up "
         "with every row, so take it away from grid.",
         "weighted_first_columns": "Slice the first two columns, as in indexing1. Then put first_two on the left of @ "
