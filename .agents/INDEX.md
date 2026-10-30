@@ -37,7 +37,7 @@ rather than this one.
 ## The trackers
 
 - [plans/INDEX.md](plans/INDEX.md), the plans: 1 open
-- [todos/INDEX.md](todos/INDEX.md), the work tracker: 14 done, 1 open
+- [todos/INDEX.md](todos/INDEX.md), the work tracker: 15 done
 - [bugs/INDEX.md](bugs/INDEX.md), the defect tracker: empty
 - [decisions/INDEX.md](decisions/INDEX.md), the decision record: 11 standing, 6 superseded
 - [reviews/INDEX.md](reviews/INDEX.md), code review ledgers: empty
@@ -45,4 +45,4 @@ rather than this one.
 ## Memory and handovers
 
 - [memory/INDEX.md](memory/INDEX.md), project facts: 3 facts
-- handover/, 11 handovers, newest [tensorlings-waiting-for-the-owner-s-verdict-on-phase-1a](handover/tensorlings-waiting-for-the-owner-s-verdict-on-phase-1a.md)
+- handover/, 12 handovers, newest [tensorlings-waiting-for-the-owner-s-verdict-on-phase-1a](handover/tensorlings-waiting-for-the-owner-s-verdict-on-phase-1a.md)

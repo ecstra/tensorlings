@@ -29,7 +29,7 @@ The curriculum, the app and the writing rules are in [the course design](../docs
 | 4 | Phase 1b, the rest of parts 1 and 2 | | owner | done |
 | 5 | Phase 2, parts 3 and 4 | | owner | done |
 | 6 | Phase 3, parts 5 to 7, with the GPT project | | owner | done |
-| 7 | Phase 4, parts 8 to 10 | | owner | pending |
+| 7 | Phase 4, parts 8 to 10 | | owner | done |
 | 8 | Phase 5, parts 11 and 12 | | owner | pending |
 | 9 | Phase 6, part 13, with the echo canceller, quant and own module projects | | owner | pending |
 

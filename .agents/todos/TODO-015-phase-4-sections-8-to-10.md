@@ -4,10 +4,11 @@ kind: todo
 description: representation learning with the probe project, generative models with the digit diffusion project, then symmetry and graphs with the shortest paths project
 updated: 2026-10-30
 links: []
-status: open
+status: done
 by: agent
 area: course
 born: 2026-10-30
+done: 2026-10-30
 ---
 
 ## What
@@ -26,8 +27,10 @@ Phase 4 of the plan build-tensorlings, Sections 8, 9 and 10 as [the detailed cur
 | 6 | Write 72_sets, 73_graphs and 74_equivariance | | agent | done |
 | 7 | Write quiz13 and build the shortest paths project, 75_shortest_paths | | agent | done |
 | 8 | Get beginner reader reviews and fix what they find | | agent | done |
-| 9 | Run the full dev check, every wrong answer and the screen driver, set up the owner's folder, then write the handover | | agent | pending |
+| 9 | Run the full dev check, every wrong answer and the screen driver, set up the owner's folder, then write the handover | | agent | done |
 
 ## Done when
 
 Every exercise of Sections 8 to 10 in the detailed curriculum exists, the dev check reports each one healthy, every new exercise has wrong answers that fail, every review finding is fixed, and a handover says where it stands.
+
+Closed on 2026-10-30 by the commits up to the handover tensorlings-phase-4-built-sections-8-to-10. All 52 exercises exist, the dev check reported all 267 healthy, all 1,349 wrong answers fail, and the 51 review findings are fixed.
