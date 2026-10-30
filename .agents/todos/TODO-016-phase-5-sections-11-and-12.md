@@ -19,7 +19,7 @@ Phase 5 of the plan build-tensorlings, Sections 11 and 12 as [the detailed curri
 | # | Step | Points at | By | Status |
 |---|---|---|---|---|
 | 1 | Write 76_finetuning and 77_lora | | agent | done |
-| 2 | Write 78_sft, 81_reward_models and 82_dpo | | agent | pending |
+| 2 | Write 78_sft, 81_reward_models and 82_dpo | | agent | done |
 | 3 | Write 79_policy_gradients and 80_ppo | | agent | done |
 | 4 | Write quiz14 and build the post training project, 83_post_training | | agent | pending |
 | 5 | Write 84_cost, 85_profiling and 86_precision | | agent | done |
