@@ -5,13 +5,19 @@ from __future__ import annotations
 import re
 import textwrap
 
-from ..course import Chapter, Exercise
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from torch import Tensor
+
+from ..course import QUIZZES, Chapter, Exercise
 from ..engine import (
     Checker,
     Described,
     Mismatch,
     check_on_inputs,
     expect_close,
+    expect_tensor,
     expect_value,
 )
 from ..text import prose, source_file
@@ -924,4 +930,558 @@ BPE4 = Exercise(
     },
     introduces=(),
     check=check_bpe4,
+)
+
+
+# ---------------------------------------------------------------------------
+# quiz9
+# ---------------------------------------------------------------------------
+
+QUIZ9_LESSON = prose(
+    """
+    This quiz has no examples and no new tools. Each function combines moves
+    from the attention chapters of Section 7. If a step is unclear, the
+    exercise in the table shows it.
+
+    | Function | Moves | Shown in |
+    |---|---|---|
+    | `causal_attention` | scores scaled by the square root of the size, the future masked, a softmax, the values mixed | attention3, attention2, mask1 |
+    | `multi_head_causal` | heads split, causal attention in each, heads merged | multihead1 |
+    | `rotate_pairs` | each pair of features turned by its own angle | rope1 |
+    | `rms_norm` | each row divided by the root of its mean square, then scaled | rmsnorm1, llama1 |
+    """,
+)
+
+QUIZ9_SOURCE = source_file(
+    '''
+    # quiz9.py
+    #
+    # No examples and no new tools. Each function combines moves from Section 7.
+
+    import math
+
+    import torch
+    from torch import Tensor
+
+
+    # TODO: Return causal attention of q, k and v, of shape (..., steps, size),
+    #   by hand. Scale the scores by the square root of size, mask every later
+    #   position, take the softmax and mix the values.
+    def causal_attention(
+        q: Tensor,
+        k: Tensor,
+        v: Tensor,
+    ) -> Tensor:
+        ...
+
+
+    # TODO: Return causal attention of q, k and v, of shape (batch, steps,
+    #   size), run in heads heads, each of size // heads features, then merged
+    #   back to (batch, steps, size). Use causal_attention.
+    def multi_head_causal(
+        q: Tensor,
+        k: Tensor,
+        v: Tensor,
+        heads: int,
+    ) -> Tensor:
+        ...
+
+
+    # TODO: Return x, of shape (steps, size), with each adjacent pair of
+    #   features (0 and 1, 2 and 3, and so on) turned by its angle. angles has
+    #   shape (steps, size // 2). A pair (a, b) turned by phi becomes
+    #   (a cos phi - b sin phi, a sin phi + b cos phi).
+    def rotate_pairs(
+        x: Tensor,
+        angles: Tensor,
+    ) -> Tensor:
+        ...
+
+
+    # TODO: Return each row of x divided by the square root of its mean square
+    #   plus eps, then multiplied by weight.
+    def rms_norm(
+        x: Tensor,
+        weight: Tensor,
+        eps: float,
+    ) -> Tensor:
+        ...
+    ''',
+)
+
+QUIZ9_SOLUTION = source_file(
+    '''
+    # quiz9.py, a solution for comparison
+
+    import math
+
+    import torch
+    from torch import Tensor
+
+
+    def causal_attention(
+        q: Tensor,
+        k: Tensor,
+        v: Tensor,
+    ) -> Tensor:
+        steps = q.shape[-2]
+        scores = q @ k.transpose(-2, -1) / math.sqrt(q.shape[-1])
+        future = torch.triu(torch.ones(steps, steps, dtype=torch.bool), diagonal=1)
+
+        return torch.softmax(scores.masked_fill(future, float("-inf")), dim=-1) @ v
+
+
+    def multi_head_causal(
+        q: Tensor,
+        k: Tensor,
+        v: Tensor,
+        heads: int,
+    ) -> Tensor:
+        batch, steps, size = q.shape
+        q, k, v = (part.view(batch, steps, heads, size // heads).transpose(1, 2) for part in (q, k, v))
+
+        return causal_attention(q, k, v).transpose(1, 2).reshape(batch, steps, size)
+
+
+    def rotate_pairs(
+        x: Tensor,
+        angles: Tensor,
+    ) -> Tensor:
+        a, b = x[..., 0::2], x[..., 1::2]
+        cos, sin = torch.cos(angles), torch.sin(angles)
+
+        return torch.stack([a * cos - b * sin, a * sin + b * cos], dim=-1).flatten(-2)
+
+
+    def rms_norm(
+        x: Tensor,
+        weight: Tensor,
+        eps: float,
+    ) -> Tensor:
+        return x / torch.sqrt((x**2).mean(dim=-1, keepdim=True) + eps) * weight
+    ''',
+)
+
+
+def reference_quiz9_attention(
+    q: Tensor,
+    k: Tensor,
+    v: Tensor,
+) -> Tensor:
+    return F.scaled_dot_product_attention(q, k, v, is_causal=True)
+
+
+def reference_multi_head_causal(
+    q: Tensor,
+    k: Tensor,
+    v: Tensor,
+    heads: int,
+) -> Tensor:
+    batch, steps, size = q.shape
+    q, k, v = (part.view(batch, steps, heads, size // heads).transpose(1, 2) for part in (q, k, v))
+
+    return F.scaled_dot_product_attention(q, k, v, is_causal=True).transpose(1, 2).reshape(batch, steps, size)
+
+
+def reference_rotate_pairs(
+    x: Tensor,
+    angles: Tensor,
+) -> Tensor:
+    turned = torch.view_as_complex(x.reshape(*x.shape[:-1], -1, 2).contiguous()) * torch.polar(torch.ones_like(angles), angles)
+
+    return torch.view_as_real(turned).flatten(-2)
+
+
+def quiz_tensor(
+    seed: int,
+    *shape: int,
+) -> Tensor:
+    return torch.randn(*shape, generator=torch.Generator().manual_seed(seed))
+
+
+def check_quiz9(checker: Checker) -> None:
+    check_on_inputs(
+        checker=checker,
+        function="causal_attention",
+        description="matches PyTorch's causal attention",
+        inputs=(
+            (quiz_tensor(930, 2, 5, 4), quiz_tensor(931, 2, 5, 4), quiz_tensor(932, 2, 5, 3)),
+            (quiz_tensor(933, 2, 3, 6, 8), quiz_tensor(934, 2, 3, 6, 8), quiz_tensor(935, 2, 3, 6, 8)),
+        ),
+        reference=reference_quiz9_attention,
+        expect=expect_tensor,
+    )
+    check_on_inputs(
+        checker=checker,
+        function="multi_head_causal",
+        description="runs causal attention in each head and merges them",
+        inputs=(
+            (quiz_tensor(936, 2, 5, 8), quiz_tensor(937, 2, 5, 8), quiz_tensor(938, 2, 5, 8), 2),
+            (quiz_tensor(939, 1, 4, 12), quiz_tensor(940, 1, 4, 12), quiz_tensor(941, 1, 4, 12), 3),
+        ),
+        reference=reference_multi_head_causal,
+        expect=expect_tensor,
+    )
+    check_on_inputs(
+        checker=checker,
+        function="rotate_pairs",
+        description="turns each adjacent pair by its angle",
+        inputs=(
+            (quiz_tensor(942, 3, 4), quiz_tensor(943, 3, 2)),
+            (quiz_tensor(944, 5, 6), quiz_tensor(945, 5, 3)),
+        ),
+        reference=reference_rotate_pairs,
+        expect=expect_tensor,
+    )
+    check_on_inputs(
+        checker=checker,
+        function="rms_norm",
+        description="matches nn.RMSNorm",
+        inputs=(
+            (quiz_tensor(946, 3, 4), quiz_tensor(947, 4), 1e-6),
+            (quiz_tensor(948, 2, 3, 5) * 10, quiz_tensor(949, 5), 1e-5),
+        ),
+        reference=lambda x, weight, eps: F.rms_norm(x, (x.shape[-1],), weight, eps),
+        expect=expect_tensor,
+    )
+
+
+QUIZ9 = Exercise(
+    name="quiz9",
+    chapter=QUIZZES,
+    title="Attention, start to finish",
+    lesson=QUIZ9_LESSON,
+    source=QUIZ9_SOURCE,
+    solution=QUIZ9_SOLUTION,
+    hints={
+        "causal_attention": "Use k.transpose(-2, -1) so any leading dimensions work. torch.triu of a square of True "
+        "with diagonal=1 marks the future, which masked_fill sets to float(\"-inf\").",
+        "multi_head_causal": "view each of q, k and v as (batch, steps, heads, size // heads) and transpose(1, 2). "
+        "After causal_attention, transpose back and reshape to (batch, steps, size).",
+        "rotate_pairs": "x[..., 0::2] and x[..., 1::2] are the pairs' halves. torch.stack the two turned halves on "
+        "dim=-1, then .flatten(-2) zips them back.",
+        "rms_norm": "(x**2).mean(dim=-1, keepdim=True) is each row's mean square. Add eps, take torch.sqrt, divide, "
+        "then multiply by weight.",
+    },
+    introduces=(),
+    check=check_quiz9,
+)
+
+
+# ---------------------------------------------------------------------------
+# quiz10
+# ---------------------------------------------------------------------------
+
+QUIZ10_LESSON = prose(
+    """
+    This quiz has no examples and no new tools. Each function combines moves
+    from the transformer chapters of Section 7. If a step is unclear, the
+    exercise in the table shows it.
+
+    | Function | Moves | Shown in |
+    |---|---|---|
+    | `pre_norm_block` | a norm before each part, each part added back to the stream | block1 |
+    | `swiglu` | a SiLU gate times an up projection, then a down projection | llama2 |
+    | `route` | the top k scores of each token, their softmax and where they sit | moe1 |
+    | `patchify` | an image cut into square patches, each flattened into a row | vit1 |
+    | `merge` | every place a pair of tokens sits side by side replaced by one new token | bpe2 |
+    """,
+)
+
+QUIZ10_SOURCE = source_file(
+    '''
+    # quiz10.py
+    #
+    # No examples and no new tools. Each function combines moves from Section 7.
+
+    import torch
+    import torch.nn as nn
+    import torch.nn.functional as F
+    from torch import Tensor
+
+
+    # TODO: Return x after a pre norm block: attention reads norm1 of x and its
+    #   output is added to x, then mlp reads norm2 of that and its output is
+    #   added too.
+    def pre_norm_block(
+        x: Tensor,
+        norm1: nn.Module,
+        attention: nn.Module,
+        norm2: nn.Module,
+        mlp: nn.Module,
+    ) -> Tensor:
+        ...
+
+
+    # TODO: Return the SwiGLU MLP of x: F.silu(x W_gate^T) times x W_up^T,
+    #   then times W_down^T.
+    def swiglu(
+        x: Tensor,
+        W_gate: Tensor,
+        W_up: Tensor,
+        W_down: Tensor,
+    ) -> Tensor:
+        ...
+
+
+    # TODO: Return the weights and the experts for each row of scores, of shape
+    #   (tokens, experts). Keep each row's k largest scores, largest first, and
+    #   return their softmax and their positions, each of shape (tokens, k).
+    def route(
+        scores: Tensor,
+        k: int,
+    ) -> tuple[Tensor, Tensor]:
+        ...
+
+
+    # TODO: Return images, of shape (batch, channels, height, width), as rows of
+    #   patches, of shape (batch, patches, channels * patch * patch). Patches go
+    #   row by row across the image, and each flattens its channels first, then
+    #   its rows, then its columns.
+    def patchify(
+        images: Tensor,
+        patch: int,
+    ) -> Tensor:
+        ...
+
+
+    # TODO: Return ids with every place pair sits, from left to right and
+    #   without overlaps, replaced by new_id.
+    def merge(
+        ids: list[int],
+        pair: tuple[int, int],
+        new_id: int,
+    ) -> list[int]:
+        ...
+    ''',
+)
+
+QUIZ10_SOLUTION = source_file(
+    '''
+    # quiz10.py, a solution for comparison
+
+    import torch
+    import torch.nn as nn
+    import torch.nn.functional as F
+    from torch import Tensor
+
+
+    def pre_norm_block(
+        x: Tensor,
+        norm1: nn.Module,
+        attention: nn.Module,
+        norm2: nn.Module,
+        mlp: nn.Module,
+    ) -> Tensor:
+        x = x + attention(norm1(x))
+
+        return x + mlp(norm2(x))
+
+
+    def swiglu(
+        x: Tensor,
+        W_gate: Tensor,
+        W_up: Tensor,
+        W_down: Tensor,
+    ) -> Tensor:
+        return (F.silu(x @ W_gate.T) * (x @ W_up.T)) @ W_down.T
+
+
+    def route(
+        scores: Tensor,
+        k: int,
+    ) -> tuple[Tensor, Tensor]:
+        best = scores.topk(k, dim=-1)
+
+        return torch.softmax(best.values, dim=-1), best.indices
+
+
+    def patchify(
+        images: Tensor,
+        patch: int,
+    ) -> Tensor:
+        batch, channels, height, width = images.shape
+        cells = images.reshape(batch, channels, height // patch, patch, width // patch, patch)
+
+        return cells.permute(0, 2, 4, 1, 3, 5).reshape(batch, -1, channels * patch * patch)
+
+
+    def merge(
+        ids: list[int],
+        pair: tuple[int, int],
+        new_id: int,
+    ) -> list[int]:
+        merged = []
+        position = 0
+
+        while position < len(ids):
+            if position + 1 < len(ids) and (ids[position], ids[position + 1]) == pair:
+                merged.append(new_id)
+                position += 2
+                continue
+
+            merged.append(ids[position])
+            position += 1
+
+        return merged
+    ''',
+)
+
+
+def quiz_module(
+    seed: int,
+    module: nn.Module,
+) -> nn.Module:
+    torch.manual_seed(seed)
+
+    for parameter in module.parameters():
+        nn.init.normal_(parameter, std=0.5)
+
+    return module
+
+
+def reference_pre_norm_block(
+    x: Tensor,
+    norm1: nn.Module,
+    attention: nn.Module,
+    norm2: nn.Module,
+    mlp: nn.Module,
+) -> Tensor:
+    with torch.no_grad():
+        x = x + attention(norm1(x))
+
+        return x + mlp(norm2(x))
+
+
+def reference_route(
+    scores: Tensor,
+    k: int,
+) -> tuple[Tensor, Tensor]:
+    best = scores.topk(k, dim=-1)
+
+    return torch.softmax(best.values, dim=-1), best.indices
+
+
+def expect_route(
+    call: str,
+    actual: object,
+    expected: tuple[Tensor, Tensor],
+) -> None:
+    if not isinstance(actual, tuple) or len(actual) != 2:
+        raise Mismatch(f"{call} should give the weights and the experts as two tensors in a tuple.")
+
+    expect_tensor(
+        call=f"the weights of {call}",
+        actual=actual[0],
+        expected=expected[0],
+    )
+    expect_tensor(
+        call=f"the experts of {call}",
+        actual=actual[1],
+        expected=expected[1],
+    )
+
+
+def reference_merge(
+    ids: list[int],
+    pair: tuple[int, int],
+    new_id: int,
+) -> list[int]:
+    merged: list[int] = []
+    position = 0
+
+    while position < len(ids):
+        if position + 1 < len(ids) and (ids[position], ids[position + 1]) == pair:
+            merged.append(new_id)
+            position += 2
+            continue
+
+        merged.append(ids[position])
+        position += 1
+
+    return merged
+
+
+def check_quiz10(checker: Checker) -> None:
+    check_on_inputs(
+        checker=checker,
+        function="pre_norm_block",
+        description="adds each part's output back after its norm",
+        inputs=(
+            (
+                quiz_tensor(950, 2, 3, 4),
+                Described(quiz_module(951, nn.LayerNorm(4)), "a LayerNorm"),
+                Described(quiz_module(952, nn.Linear(4, 4)), "a Linear standing in for attention"),
+                Described(quiz_module(953, nn.LayerNorm(4)), "another LayerNorm"),
+                Described(quiz_module(954, nn.Sequential(nn.Linear(4, 8), nn.GELU(), nn.Linear(8, 4))), "an MLP"),
+            ),
+        ),
+        reference=reference_pre_norm_block,
+        expect=expect_tensor,
+    )
+    check_on_inputs(
+        checker=checker,
+        function="swiglu",
+        description="gates the up projection with SiLU, then projects down",
+        inputs=(
+            (quiz_tensor(955, 3, 4), quiz_tensor(956, 6, 4), quiz_tensor(957, 6, 4), quiz_tensor(958, 4, 6)),
+        ),
+        reference=lambda x, W_gate, W_up, W_down: (F.silu(x @ W_gate.T) * (x @ W_up.T)) @ W_down.T,
+        expect=expect_tensor,
+    )
+    check_on_inputs(
+        checker=checker,
+        function="route",
+        description="keeps each token's top k experts and their softmax",
+        inputs=(
+            (quiz_tensor(959, 4, 6), 2),
+            (quiz_tensor(960, 3, 8), 3),
+        ),
+        reference=reference_route,
+        expect=expect_route,
+    )
+    check_on_inputs(
+        checker=checker,
+        function="patchify",
+        description="matches F.unfold's order of patches",
+        inputs=(
+            (quiz_tensor(961, 2, 3, 4, 6), 2),
+            (quiz_tensor(962, 1, 1, 6, 6), 3),
+        ),
+        reference=lambda images, patch: F.unfold(images, kernel_size=patch, stride=patch).transpose(1, 2),
+        expect=expect_tensor,
+    )
+    check_on_inputs(
+        checker=checker,
+        function="merge",
+        description="replaces the pair from left to right",
+        inputs=(
+            ([1, 2, 3, 1, 2, 2, 1, 2], (1, 2), 9),
+            ([4, 4, 4, 4, 4], (4, 4), 7),
+            ([5, 6], (6, 5), 8),
+        ),
+        reference=reference_merge,
+        expect=expect_value,
+    )
+
+
+QUIZ10 = Exercise(
+    name="quiz10",
+    chapter=QUIZZES,
+    title="Transformers, start to finish",
+    lesson=QUIZ10_LESSON,
+    source=QUIZ10_SOURCE,
+    solution=QUIZ10_SOLUTION,
+    hints={
+        "pre_norm_block": "x = x + attention(norm1(x)), then return x plus mlp of norm2 of it.",
+        "swiglu": "F.silu(x @ W_gate.T) times (x @ W_up.T), and the product @ W_down.T.",
+        "route": "scores.topk(k, dim=-1) gives values and indices, largest first. Take the softmax of the values over "
+        "dim=-1.",
+        "patchify": "Reshape to (batch, channels, height // patch, patch, width // patch, patch). Then permute to "
+        "(0, 2, 4, 1, 3, 5) and reshape to (batch, -1, channels * patch * patch).",
+        "merge": "Walk a position along ids. Where ids[position] and ids[position + 1] make pair, append new_id and "
+        "step 2, and otherwise append the id and step 1.",
+    },
+    introduces=(),
+    check=check_quiz10,
 )
