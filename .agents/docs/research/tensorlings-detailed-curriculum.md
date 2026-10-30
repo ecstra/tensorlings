@@ -76,9 +76,9 @@ The project finishes the engine of `05_autograd`, as Karpathy's micrograd does, 
 | | decay1 | weight decay, the squared size of the weights added to the loss, and the pull toward zero it adds to each step |
 | | decay2 | choosing the decay strength on the validation set, then measuring once on the test set |
 | quizzes | quiz3 | Section 2 together |
-| 14_mnist | mnist1 | the project starts, the MNIST digits loaded, flattened and scaled, with a validation set split off |
-| | mnist2 | softmax regression trained with minibatches and weight decay past 90 percent validation accuracy |
-| | mnist3 | the decay picked on validation, test accuracy measured once, and the digit pairs it confuses most |
+| 14_exoplanets | planets1 | the project starts, NASA's Kepler candidates loaded, the label leaking flags left out, standardized with a validation set split off |
+| | planets2 | softmax regression trained with minibatches, telling real planets from false alarms |
+| | planets3 | products of every pair of measurements on a few signals, weight decay picked on validation, test measured once, and the false alarms that fool it |
 
 The project is CS231n's first assignment, a softmax classifier on real images with its strength of regularization tuned on validation. It beat the same pipeline on generated data, whose result means less, and curve fitting, which `13_generalization` already covers.
 
@@ -185,9 +185,9 @@ The project comes from the section's last topic, the recipe, since a broken run 
 | 36_transfer | transfer1 | loading weights, freezing the body and training a new head |
 | | transfer2 | why, a hundred labeled images where a body trained on another task beats training from scratch |
 | quizzes | quiz7 | Section 5 together |
-| 37_cifar | cifar1 | the project starts, CIFAR-10 loaded and normalized with a validation set split off |
-| | cifar2 | a small ResNet with augmentation, trained by running the file, past 80 percent on validation |
-| | cifar3 | test accuracy measured once, and the classes it confuses |
+| 37_dna | dna1 | the project starts, real splice junction DNA one hot encoded as 4 channels, with a validation set split off |
+| | dna2 | a 1D conv net with residual blocks, trained by running the file, past 93 percent on validation |
+| | dna3 | test accuracy measured once, the first kernels read as the GT and AG motifs, and the net against position weights and an MLP |
 
 The project is the small image classifier of the section table, in the style of CS231n's convolutional net assignment.
 
@@ -295,9 +295,9 @@ The project is the GPT on real text of the section table, as in Karpathy's GPT l
 | | autoencoder2 | why the bottleneck matters, and the denoising autoencoder |
 | | autoencoder3 | a linear autoencoder finds what PCA finds, checked against `torch.pca_lowrank` |
 | quizzes | quiz11 | Section 8 together |
-| 64_probe | probe1 | the project starts, SimCLR style training on CIFAR-10 images with no labels |
-| | probe2 | a linear probe on the frozen features with a few labels |
-| | probe3 | the probe against random features and a supervised model given the same labels |
+| 64_paper_topics | topics1 | the project starts, the Cora citation graph, random walks and skip gram embeddings with no labels, as DeepWalk does |
+| | topics2 | a linear probe on the frozen embeddings with 140 labels |
+| | topics3 | the probe against words, random vectors and words with embeddings, and the papers nearest a chosen one |
 
 The project comes from contrastive learning, since its features can be measured, and follows SimCLR's linear evaluation.
 
