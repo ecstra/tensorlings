@@ -30,6 +30,7 @@ Phase 5 of the plan build-tensorlings, Sections 11 and 12 as [the detailed curri
 | 10 | Get beginner reader reviews and fix what they find | | agent | pending |
 | 11 | Run the full dev check, every wrong answer and the screen driver, set up the owner's folder, then write the handover | | agent | pending |
 | 12 | Rerun the timing tables of flash2, kvcache2, profile1 and profile2 on a quiet machine and update their ranges | | agent | pending |
+| 13 | Review the phase 1a exercises again to today's standards and fix what the review finds | | agent | pending |
 
 ## Done when
 
