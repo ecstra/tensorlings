@@ -3,16 +3,18 @@
 from __future__ import annotations
 
 import math
+import textwrap
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
-from ..course import Chapter, Exercise
+from ..course import OPTIMIZER_IMPORTS, Chapter, Exercise
 from ..engine import (
     Checker,
     Described,
+    Mismatch,
     check_on_inputs,
     expect_tensor,
     small_tensor,
@@ -363,4 +365,393 @@ CROSS1 = Exercise(
     },
     introduces=(),
     check=check_cross1,
+)
+
+
+# ---------------------------------------------------------------------------
+# cross2
+# ---------------------------------------------------------------------------
+
+START = 10
+END = 11
+
+CROSS_PART = '''
+class CrossAttention(nn.Module):
+    def __init__(
+        self,
+        features: int,
+        size: int,
+    ) -> None:
+        super().__init__()
+        self.query = nn.Linear(features, size, bias=False)
+        self.key = nn.Linear(features, size, bias=False)
+        self.value = nn.Linear(features, size, bias=False)
+        self.out = nn.Linear(size, features)
+
+    def forward(
+        self,
+        x: Tensor,
+        memory: Tensor,
+        blocked: Tensor,
+    ) -> Tensor:
+        scores = self.query(x) @ self.key(memory).transpose(1, 2) / math.sqrt(self.query.out_features)
+        weights = torch.softmax(scores.masked_fill(blocked.unsqueeze(1), float("-inf")), dim=-1)
+
+        return self.out(weights @ self.value(memory))
+'''
+
+COPIER_INIT = '''
+class Copier(nn.Module):
+    def __init__(
+        self,
+        hidden: int = 64,
+    ) -> None:
+        super().__init__()
+        self.embedding = nn.Embedding(12, 16)
+        self.encoder = nn.GRU(16, hidden, batch_first=True)
+        self.decoder = nn.GRU(16, hidden, batch_first=True)
+        self.cross = CrossAttention(hidden, hidden)
+        self.head = nn.Linear(2 * hidden, 12)
+'''
+
+COPIER_SOLUTION = '''
+    def read(
+        self,
+        outputs: Tensor,
+        memory: Tensor,
+    ) -> Tensor:
+        nothing_blocked = torch.zeros(memory.shape[:2], dtype=torch.bool)
+        found = self.cross(outputs, memory, nothing_blocked)
+
+        return self.head(torch.cat([outputs, found], dim=-1))
+
+    def forward(
+        self,
+        source: Tensor,
+        so_far: Tensor,
+    ) -> Tensor:
+        memory, state = self.encoder(self.embedding(source))
+        outputs, _ = self.decoder(self.embedding(so_far), state)
+
+        return self.read(outputs, memory)
+'''
+
+GREEDY_COPY_SOLUTION = '''
+def greedy_copy(
+    model: nn.Module,
+    source: Tensor,
+) -> Tensor:
+    memory, state = model.encoder(model.embedding(source))
+    symbol = torch.full((len(source), 1), START)
+    written = []
+
+    for _ in range(source.shape[1]):
+        outputs, state = model.decoder(model.embedding(symbol), state)
+        symbol = model.read(outputs, memory).argmax(dim=2)
+        written.append(symbol)
+
+    return torch.cat(written, dim=1)
+'''
+
+TRAIN_COPIER_PART = '''
+def train_copier(
+    model: nn.Module,
+    length: int,
+    steps: int,
+    generator: torch.Generator,
+) -> nn.Module:
+    optimizer = torch.optim.Adam(model.parameters(), lr=3e-3)
+
+    for _ in range(steps):
+        source = torch.randint(0, 10, (64, length), generator=generator)
+        so_far = torch.cat([torch.full((64, 1), START), source], dim=1)
+        target = torch.cat([source, torch.full((64, 1), END)], dim=1)
+        loss = F.cross_entropy(model(source, so_far).reshape(-1, 12), target.reshape(-1))
+        optimizer.zero_grad()
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+        optimizer.step()
+
+    return model
+'''
+
+
+def indented_part(part: str) -> str:
+    """Indented like the files around it, which source_file takes the indentation off."""
+    return textwrap.indent(part.strip("\n"), "    ")
+
+
+CROSS2_LESSON = prose(
+    """
+    encdec2 showed one vector failing to copy long rows of digits. The
+    encoder squeezes the whole row into its last state, and the decoder has
+    to unpack it from there. Cross attention lets the decoder read the
+    encoder's output at every position instead, so step 7 of the copy can
+    look straight at position 7.
+
+    The model here keeps encdec1's GRUs. At each step the decoder's output
+    queries every encoder output with cross1's `CrossAttention`. The head
+    reads the decoder's output and what it found, side by side.
+
+    ```python
+    torch.cat([torch.ones(2, 3, 4), torch.zeros(2, 3, 4)], dim=-1).shape    # torch.Size([2, 3, 8])
+    ```
+
+    Here is copying after 1,500 steps of training, hidden size 64, on 500
+    rows it never saw.
+
+    | Length | One vector, digits | Rows | Cross attention, digits | Rows |
+    |---|---|---|---|---|
+    | 20 | 27.0% | 0% | 99.9% | 99.4% |
+    | 40 | 12.2% | 0% | 98.4% | 94.4% |
+
+    The curriculum planned this on long sums from the adder. On sums of 5 and
+    8 digits neither model learned anything in 3,000 steps here, with or
+    without positions and zero padding. Training them is a harder problem
+    than reading the question, so copying shows the difference cleanly.
+
+    This is Bahdanau, Cho and Bengio's fix of 2014 for translating long
+    sentences. Three years later the same reading became the whole model.
+    """,
+)
+
+CROSS2_SOURCE = source_file(
+    '''
+    # cross2.py
+
+    import math
+
+    import torch
+    import torch.nn as nn
+    import torch.nn.functional as F
+    from torch import Tensor
+
+    START = 10
+    END = 11
+
+    side_by_side = torch.cat([torch.ones(2, 3, 4), torch.zeros(2, 3, 4)], dim=-1)    # shape (2, 3, 8)
+
+
+    # CrossAttention from cross1.
+''' + indented_part(CROSS_PART) + '''
+
+
+    # TODO: Finish read and forward. read gives cross the decoder's outputs and
+    #   the encoder's outputs, memory, with nothing blocked, and runs the head
+    #   on the outputs and what cross found, joined on the last dimension.
+    #   forward runs the encoder on the source and the decoder on so_far from
+    #   the encoder's final state, then returns read of the two.
+''' + indented_part(COPIER_INIT) + '''
+
+        def read(
+            self,
+            outputs: Tensor,
+            memory: Tensor,
+        ) -> Tensor:
+            ...
+
+        def forward(
+            self,
+            source: Tensor,
+            so_far: Tensor,
+        ) -> Tensor:
+            ...
+
+
+    # TODO: Return model's copy of source, of shape (batch, steps), one symbol
+    #   at a time. Start every row from START, run the decoder one step from
+    #   its state, read with model.read, and feed the likeliest symbol back in.
+    def greedy_copy(
+        model: nn.Module,
+        source: Tensor,
+    ) -> Tensor:
+        ...
+
+
+    # Training as in encdec2, with the gradients clipped.
+''' + indented_part(TRAIN_COPIER_PART) + '''
+    ''',
+)
+
+CROSS2_SOLUTION = source_file(
+    '''
+    # cross2.py, a solution for comparison
+
+    import math
+
+    import torch
+    import torch.nn as nn
+    import torch.nn.functional as F
+    from torch import Tensor
+
+    START = 10
+    END = 11
+
+    side_by_side = torch.cat([torch.ones(2, 3, 4), torch.zeros(2, 3, 4)], dim=-1)
+
+
+''' + indented_part(CROSS_PART) + '''
+
+
+''' + indented_part(COPIER_INIT) + '''
+
+''' + indented_part(COPIER_SOLUTION) + '''
+
+
+''' + indented_part(GREEDY_COPY_SOLUTION) + '''
+
+
+''' + indented_part(TRAIN_COPIER_PART) + '''
+    ''',
+)
+
+
+def copier_namespace() -> dict[str, object]:
+    namespace: dict[str, object] = {
+        "math": math,
+        "torch": torch,
+        "nn": nn,
+        "F": F,
+        "Tensor": Tensor,
+        "START": START,
+        "END": END,
+    }
+    exec(CROSS_PART + COPIER_INIT + COPIER_SOLUTION + GREEDY_COPY_SOLUTION + TRAIN_COPIER_PART, namespace)
+
+    return namespace
+
+
+COPIER_REFERENCE = copier_namespace()
+
+
+class OneVectorCopier(nn.Module):
+    """encdec1's model, the head reading the decoder's output alone, for the lesson's comparison."""
+
+    def __init__(
+        self,
+        hidden: int = 64,
+    ) -> None:
+        super().__init__()
+        self.embedding = nn.Embedding(12, 16)
+        self.encoder = nn.GRU(16, hidden, batch_first=True)
+        self.decoder = nn.GRU(16, hidden, batch_first=True)
+        self.head = nn.Linear(hidden, 12)
+
+    def read(
+        self,
+        outputs: Tensor,
+        memory: Tensor,
+    ) -> Tensor:
+        return self.head(outputs)
+
+    def forward(
+        self,
+        source: Tensor,
+        so_far: Tensor,
+    ) -> Tensor:
+        memory, state = self.encoder(self.embedding(source))
+        outputs, _ = self.decoder(self.embedding(so_far), state)
+
+        return self.read(outputs, memory)
+
+
+def copy_scores(
+    model: nn.Module,
+    length: int,
+    rows: int = 500,
+) -> tuple[float, float]:
+    """The share of digits and of whole rows model copies right, on rows it never saw."""
+    source = torch.randint(0, 10, (rows, length), generator=torch.Generator().manual_seed(1))
+
+    with torch.no_grad():
+        written = COPIER_REFERENCE["greedy_copy"](model, source)
+
+    right = written == source
+
+    return right.float().mean().item(), right.all(dim=1).float().mean().item()
+
+
+def seeded_copier(make: type) -> nn.Module:
+    torch.manual_seed(0)
+
+    return make()
+
+
+def check_copier_forward(found: type) -> None:
+    model = expect_module("Copier()", seeded_copier(found))
+    source = torch.randint(0, 10, (3, 6), generator=torch.Generator().manual_seed(520))
+    so_far = torch.cat([torch.full((3, 1), START), source], dim=1)
+
+    with torch.no_grad():
+        expected = seeded_copier(COPIER_REFERENCE["Copier"])(source, so_far)
+
+    expect_tensor(
+        call="Copier() on 3 rows of 6 digits",
+        actual=model(source, so_far),
+        expected=expected,
+    )
+
+
+def check_greedy_copy(found: object) -> None:
+    model = seeded_copier(COPIER_REFERENCE["Copier"])
+    source = torch.randint(0, 10, (4, 7), generator=torch.Generator().manual_seed(521))
+
+    with torch.no_grad():
+        expected = COPIER_REFERENCE["greedy_copy"](model, source)
+        actual = found(model, source)
+
+    expect_tensor(
+        call="greedy_copy of an untrained Copier() on 4 rows of 7",
+        actual=actual,
+        expected=expected,
+    )
+
+
+def check_copier_learns(found: type) -> None:
+    model = COPIER_REFERENCE["train_copier"](seeded_copier(found), 12, 300, torch.Generator().manual_seed(0))
+    _, rows = copy_scores(model, 12, 200)
+
+    if rows < 0.5:
+        raise Mismatch(f"After 300 steps on rows of 12, Copier copies {rows:.1%} of new rows exactly, but it should pass 50%.")
+
+
+def check_cross2(checker: Checker) -> None:
+    checker.test_method(
+        class_name="Copier",
+        method="forward",
+        description="reads the encoder's outputs at every step",
+        run=check_copier_forward,
+    )
+    checker.test(
+        function="greedy_copy",
+        description="copies one symbol at a time, reading as it goes",
+        run=check_greedy_copy,
+    )
+    checker.test_method(
+        class_name="Copier",
+        method="forward",
+        description="learns to copy rows of 12 exactly",
+        run=check_copier_learns,
+    )
+
+
+CROSS2 = Exercise(
+    name="cross2",
+    chapter=CROSS_ATTENTION,
+    title="Why read the input at every step",
+    lesson=CROSS2_LESSON,
+    source=CROSS2_SOURCE,
+    solution=CROSS2_SOLUTION,
+    hints={
+        "Copier.read": "torch.zeros(memory.shape[:2], dtype=torch.bool) blocks nothing. Pass outputs, memory and it to "
+        "self.cross, torch.cat the outputs with the result on dim=-1, and run self.head.",
+        "Copier.forward": "memory, state = self.encoder(self.embedding(source)). The decoder's outputs come from "
+        "self.embedding(so_far) and state. Return self.read(outputs, memory).",
+        "greedy_copy": "torch.full((len(source), 1), START) starts it. Each step, run model.decoder on the embedded "
+        "symbol and the state, take model.read(outputs, memory).argmax(dim=2), keep it, and torch.cat at the end.",
+    },
+    introduces=(),
+    check=check_cross2,
+    time_limit=60,
+    imports_first=OPTIMIZER_IMPORTS,
 )
