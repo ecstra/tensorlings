@@ -271,6 +271,10 @@ TRANSPOSED1_LESSON = prose(
     by the kernel. That is the stamp. Some call it deconvolution, though it
     undoes nothing.
 
+    To hand a chosen gradient `g` to outputs `y`, call `.backward()` on
+    `(y * g).sum()`. The derivative of that sum by each output is its entry of
+    `g`, so exactly `g` flows back from the outputs.
+
     `nn.ConvTranspose2d(in, out, k, stride=2)` is the layer. With a kernel
     that the stride doesn't divide, like 3 at stride 2, the stamps overlap
     unevenly and leave a checkerboard pattern. So many models upsample with
@@ -318,7 +322,7 @@ TRANSPOSED1_SOURCE = source_file(
 
     # TODO: Return the gradient of a convolution of x with w, at stride 1, with
     #   respect to x, when the gradient handed down to the outputs is grad.
-    #   Work it out with autograd, as backprop4 did with a sum.
+    #   Work it out with autograd and the sum the lesson shows.
     def conv_input_gradient(
         x: Tensor,
         w: Tensor,
@@ -449,9 +453,11 @@ UNET1_LESSON = prose(
     The way down learns what is in the image but loses where exactly. The
     skips hand the exact places back to the way up.
 
-    Joining is concatenating along the channels, so a skip of 16 channels and
-    an upsampled map of 32 give 48. `torch.cat([a, b], dim=1)` does that for
-    tensors of shape `(batch, channels, h, w)`.
+    Joining is concatenating along the channels, so an upsampled map of 32
+    channels and a skip of 16 give 48. `torch.cat([upsampled, skip], dim=1)`
+    does that for tensors of shape `(batch, channels, h, w)`, the upsampled
+    channels first. The order matters, since the next block's weights expect
+    each channel in its place.
 
     The paper used convolutions without padding, so its maps shrank a little
     in each block. A skip's map was then larger than the map it joined, and
@@ -468,9 +474,9 @@ UNET1_SOURCE = source_file(
     import torch.nn.functional as F
     from torch import Tensor
 
-    a = torch.zeros(1, 16, 8, 8)
-    b = torch.zeros(1, 32, 8, 8)
-    joined = torch.cat([a, b], dim=1)                # shape (1, 48, 8, 8)
+    upsampled = torch.zeros(1, 32, 8, 8)
+    skip = torch.zeros(1, 16, 8, 8)
+    joined = torch.cat([upsampled, skip], dim=1)     # shape (1, 48, 8, 8), the upsampled channels first
 
 
     # TODO: Return the middle size by size part of x, of shape
@@ -497,8 +503,9 @@ UNET1_SOURCE = source_file(
 
     # TODO: Finish forward. a is down1 of x. b is down2 of a after a max pool of
     #   2, and c is bottom of b after another. The way up upsamples c by 2 with
-    #   F.interpolate, joins b onto it, and runs up2. It then upsamples that,
-    #   joins a, runs up1, and returns out of it.
+    #   F.interpolate in its default nearest mode, joins b after it with
+    #   torch.cat([upsampled, b], dim=1), and runs up2. It then upsamples that
+    #   the same way, joins a after it, runs up1, and returns out of it.
     class TinyUNet(nn.Module):
         def __init__(self) -> None:
             super().__init__()
@@ -523,9 +530,9 @@ UNET1_SOLUTION = source_file(
     import torch.nn.functional as F
     from torch import Tensor
 
-    a = torch.zeros(1, 16, 8, 8)
-    b = torch.zeros(1, 32, 8, 8)
-    joined = torch.cat([a, b], dim=1)
+    upsampled = torch.zeros(1, 32, 8, 8)
+    skip = torch.zeros(1, 16, 8, 8)
+    joined = torch.cat([upsampled, skip], dim=1)
 
 
     def center_crop(
@@ -687,8 +694,8 @@ UNET2_SOURCE = source_file(
 
 
     # TODO: Finish forward like TinyUNet's in unet1, with no skips. The way up
-    #   upsamples c and runs up2, then upsamples that and runs up1, and nothing
-    #   is joined on.
+    #   upsamples c by 2 with F.interpolate in its default nearest mode and runs
+    #   up2, then upsamples that the same way and runs up1. Nothing is joined on.
     class NoSkipUNet(nn.Module):
         def __init__(self) -> None:
             super().__init__()
@@ -704,7 +711,8 @@ UNET2_SOURCE = source_file(
 
 
     # TODO: Return the IoU of the mask the model marks, where logits are above 0,
-    #   against masks of 0 and 1, as a plain number.
+    #   against masks of 0 and 1, as a plain number. Count the pixels over the
+    #   whole batch at once, not image by image.
     def iou(
         logits: Tensor,
         masks: Tensor,

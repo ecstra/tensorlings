@@ -128,7 +128,7 @@ LENET1_LESSON = prose(
 
     Trained with Adam at 0.001 on minibatches of 64, it reached 92.4% on
     MNIST's validation images after 300 steps and 97.2% after 1500. Section 2's
-    softmax regression reached about 92%.
+    softmax regression reached about 91%, near the best a linear model does.
     """,
 )
 
@@ -346,8 +346,8 @@ LENET1 = Exercise(
 
 VGG1_LESSON = prose(
     """
-    VGG, from Simonyan and Zisserman in 2014, used one kernel size only, 3 by
-    3. Two of them stacked see a 5 by 5 patch, as dilation1 counted, and
+    VGG-16, from Simonyan and Zisserman in 2014, used one kernel size only, 3
+    by 3. Two of them stacked see a 5 by 5 patch, as dilation1 counted, and
     three see 7 by 7.
 
     A stack is cheaper than one big kernel. With `c` channels in and out,
@@ -691,7 +691,7 @@ def shortcut_text(shortcut: object) -> str:
 
 
 def check_shortcut(found: type) -> None:
-    for in_channels, out_channels, stride in ((8, 8, 1), (8, 16, 2), (4, 8, 1)):
+    for in_channels, out_channels, stride in ((8, 8, 1), (8, 16, 2), (4, 8, 1), (8, 8, 2)):
         call = f"BasicBlock({in_channels}, {out_channels}, {stride})"
         block = expect_module(call, found(in_channels, out_channels, stride))
         wanted = ReferenceBasicBlock(in_channels, out_channels, stride).shortcut
@@ -767,9 +767,9 @@ RESNET1 = Exercise(
 RESNET2_LESSON = prose(
     """
     He and others found something odd about depth. On CIFAR-10, a plain net of
-    56 layers had a higher training error than one of 20, BatchNorm and all.
-    The training error was worse too, so it was not overfitting. They called
-    it degradation.
+    56 layers had a higher test error than one of 20, BatchNorm and all. The
+    training error was worse too, so it was not overfitting. They called it
+    degradation.
 
     Here small nets of width 8 learned MNIST shrunk to 14 by 14, from 5000
     images, in 800 steps of SGD with momentum.
@@ -781,13 +781,16 @@ RESNET2_LESSON = prose(
     | ResNet, 24 layers in 12 basic blocks | 0.203 | 93.8% |
 
     The 24 layer plain net could copy the 4 layer one, its extra layers
-    handing their input on. Training doesn't find that. A residual block
-    starts close to handing its input on, so depth stops hurting.
+    handing their input on. Training doesn't find that. A residual block hands
+    its input on as soon as its own branch gives 0, which is far easier to
+    reach, so depth stops hurting.
 
-    These ResNet blocks had the scale of their second BatchNorm set to 0, so
-    each began as `relu(x)`, which Goyal and others use. In an earlier run of
-    300 steps without that, the ResNet got 68.6% against the plain net's
-    62.8%. So here the zero start mattered as much as the skip.
+    These ResNet blocks also had the scale of their second BatchNorm set to 0,
+    which Goyal and others use. Then each block starts out as `relu(x)`,
+    handing its input on from the first step. With the default start a fresh
+    block of width 8 changes its input by about 1.1 times the input's own
+    size. The skip makes handing on possible, and the zero scale makes it the
+    starting point.
 
     On ImageNet, ResNet-18, 34, 50, 101 and 152 got better with every step of
     depth.
@@ -984,15 +987,23 @@ def check_zero_with_learner_blocks(found: object) -> None:
     if not isinstance(block_class, type):
         raise Mismatch("resnet2.py should keep its BasicBlock class, which zero_last_norms_ looks for.")
 
+    # Blocks sit at different depths, as they do inside a residual_stack, so only a walk over every module finds them all.
     torch.manual_seed(797)
-    model = nn.Sequential(block_class(4, 4, 1), nn.ReLU(), block_class(4, 8, 2))
+    model = nn.Sequential(
+        block_class(4, 4, 1),
+        nn.ReLU(),
+        nn.Sequential(block_class(4, 8, 2), block_class(8, 8, 1)),
+        nn.Sequential(nn.Sequential(block_class(8, 8, 1))),
+    )
     found(model)
+    blocks = [module for module in model.modules() if isinstance(module, block_class)]
 
-    for position in (0, 2):
-        block = model[position]
-
+    for index, block in enumerate(blocks):
         if block.bn2.weight.detach().abs().max().item() != 0:
-            raise Mismatch(f"After zero_last_norms_, the scale of bn2 in the block at position {position} is not all 0.")
+            raise Mismatch(
+                f"After zero_last_norms_, the scale of bn2 in block {index} of {len(blocks)} is not all 0. "
+                "Some blocks sit inside other Sequentials, and model.modules() reaches every one.",
+            )
 
         if not torch.all(block.bn1.weight.detach() == 1):
             raise Mismatch("zero_last_norms_ should leave bn1 alone and set only bn2's scale to 0.")

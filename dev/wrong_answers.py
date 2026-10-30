@@ -1016,6 +1016,9 @@ CASES: list[tuple[str, str, str, str]] = [
     ("gpt3", "train_step sets only the first group's rate", "    for group in optimizer.param_groups:\n        group[\"lr\"] = lr\n", "    optimizer.param_groups[0][\"lr\"] = lr\n"),
     ("gpt4", "generate runs in training mode", "    model.eval()\n", ""),
     ("gpt4", "generate records for autograd", "    with torch.no_grad():\n", "    if True:\n"),
+    ("resnet1", "BasicBlock picks the shortcut on channels alone", "if stride == 1 and in_channels == out_channels:", "if in_channels == out_channels:"),
+    ("resnet2", "zero_last_norms_ looks only one level down", "for module in model.modules():", "for module in model.children():"),
+    ("conv4", "accuracy records for autograd", "    with torch.no_grad():\n        return ((model(x) > 0).float() == y).float().mean().item()", "    return ((model(x) > 0).float() == y).float().mean().item()"),
     ("conv5", "pointwise reshapes the wrong way", "return (weight @ x.reshape(c, -1)).reshape(-1, h, w)", "return (weight @ x.reshape(-1, c).T).reshape(-1, h, w)"),
 ]
 

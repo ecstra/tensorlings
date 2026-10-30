@@ -594,8 +594,9 @@ DILATION1_LESSON = prose(
     adds `k - 1` more, times its dilation, at stride 1. So three layers of 3
     see 7 places, and three layers of 3 with dilations 1, 2 and 4 see 15.
 
-    Dilation widens the view without more weights or a smaller output. Models
-    of sound and of long sequences lean on it, as Section 6 shows.
+    Dilation widens the view without more weights, and without the shrinking
+    a stride brings. Models of sound and of long sequences lean on it, as
+    Section 6 shows.
 
     `x[::2]` takes every second entry, starting at the first.
     `F.conv1d(x, w, dilation=2)` and `nn.Conv2d(..., dilation=2)` take it as

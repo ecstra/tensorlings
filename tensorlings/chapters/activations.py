@@ -951,9 +951,10 @@ SOFT1_LESSON = prose(
     The number `t` is the **temperature**. A small one makes the soft version
     nearly hard, and a large one blurs it.
 
-    `fit_scores` below learns which row of `values` to pick. It runs gradient
-    descent on scores that start out favouring row 0, while the target is row
-    1. Here are 100 steps at three temperatures.
+    `fit_scores` below learns which row of `values` to pick. Here the rows are
+    `[1, 0]`, `[0, 1]` and `[1, 1]`, and the target is `[0, 1]`, row 1. The
+    scores start at `[1, 0, 0.5]`, favouring row 0. Here are 100 steps of
+    gradient descent at a rate of 0.5, at three temperatures.
 
     | Temperature | Weights on the rows at the end | Loss |
     |---|---|---|
@@ -962,8 +963,10 @@ SOFT1_LESSON = prose(
     | 0.01 | 1.000, 0.000, 0.000 | 2.0 |
 
     At 0.01 the softmax sits entirely on row 0. Its gradient rounds to 0, so
-    the scores never move, the hard step's problem back again. At 0.1 the
-    weights slide onto row 2 and stick there. At 1 they find row 1.
+    the scores never move, the hard step's problem back again. At 0.1 row 1
+    starts with a weight of 0.00005, so it gets almost no gradient. Row 2 is
+    nearer the target than row 0, so the weights slide onto row 2 and stick
+    there. At 1 they find row 1.
 
     So a soft step trades exactness for a gradient, and the temperature sets
     the trade. Gates in Section 6 and lookups in Section 7 are built from these

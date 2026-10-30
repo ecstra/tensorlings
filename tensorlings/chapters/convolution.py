@@ -10,7 +10,6 @@ from torch import Tensor
 from ..course import OPTIMIZER_IMPORTS, Chapter, Exercise
 from ..engine import (
     Checker,
-    Described,
     Mismatch,
     check_on_inputs,
     expect_close,
@@ -634,14 +633,15 @@ CONV4_LESSON = prose(
 
     | Model | Weights | Training | Pattern where it was | Pattern moved |
     |---|---|---|---|---|
-    | MLP, 32 to 64 to 1 | 2177 | 100% | 100% | 47.9% |
+    | MLP, 32 to 64 to 1 | 2177 | 100% | 100% | 47.3% |
     | convolution of 4 kernels of 3, then the largest response | 21 | 100% | 100% | 100% |
 
     Both learned. The MLP has a separate weight for every position, and the
-    weights at the right never saw the pattern, so there it guesses. The
-    convolution slides the same kernel everywhere, so it answers to the
-    pattern wherever it sits. The largest response over all positions then
-    says whether it showed up anywhere.
+    weights at the right never saw the pattern. So for a moved pattern it says
+    "no" every time. Its 47.3% is the share of moved signals that had no
+    pattern at all. The convolution slides the same kernel everywhere,
+    so it answers to the pattern wherever it sits. The largest response over
+    all positions then says whether it showed up anywhere.
 
     That is the idea of Section 5. A cat is a cat anywhere in a picture, and a
     convolution doesn't have to learn that again for every place.
@@ -827,6 +827,33 @@ def check_finds_moved_patterns(found: object) -> None:
         raise Mismatch(f"After train_detector for 500 steps, the detector finds {moved:.1%} of the moved patterns, but it should find over 95%.")
 
 
+def check_accuracy(
+    found: object,
+    x: Tensor,
+    y: Tensor,
+) -> None:
+    model = seeded_detector(724)
+    recording: list[bool] = []
+    hook = model.register_forward_pre_hook(lambda module, inputs: recording.append(torch.is_grad_enabled()))
+
+    try:
+        actual = found(model, x, y)
+    finally:
+        hook.remove()
+
+    if any(recording):
+        raise Mismatch("accuracy ran the model while recording for autograd. Run it inside torch.no_grad().")
+
+    with torch.no_grad():
+        expected = ((model(x) > 0).float() == y).float().mean().item()
+
+    expect_close(
+        call="accuracy(a fresh detector, 50 signals, their labels)",
+        actual=actual,
+        expected=expected,
+    )
+
+
 def check_conv4(checker: Checker) -> None:
     checker.test_method(
         class_name="Detector",
@@ -835,19 +862,10 @@ def check_conv4(checker: Checker) -> None:
         run=check_detector,
     )
     x, y = pattern_signals(50, 16, 0, 13, torch.Generator().manual_seed(723))
-    check_on_inputs(
-        checker=checker,
+    checker.test(
         function="accuracy",
-        description="gives the share labelled right",
-        inputs=(
-            (Described(seeded_detector(724), "a fresh detector"), Described(x, "50 signals"), Described(y, "their labels")),
-        ),
-        reference=lambda model, x, y: ((model(x) > 0).float() == y).float().mean().item(),
-        expect=lambda call, actual, expected: expect_close(
-            call=call,
-            actual=actual,
-            expected=expected,
-        ),
+        description="gives the share labelled right, recording nothing",
+        run=lambda found: check_accuracy(found, x, y),
     )
     checker.test(
         function="train_detector",
@@ -882,7 +900,7 @@ CONV4 = Exercise(
     },
     introduces=(),
     check=check_conv4,
-    time_limit=30,
+    time_limit=90,
     imports_first=OPTIMIZER_IMPORTS,
 )
 
@@ -915,8 +933,8 @@ FFT1_LESSON = prose(
     The convolution theorem says that convolving two signals multiplies their
     spectra. Take both spectra, multiply them frequency by frequency, and turn
     the product back with `irfft`. That costs about n log n. For 100,000
-    samples and a kernel of 10,000, `F.conv1d` took about 6 seconds here, and
-    the spectra 0.1.
+    samples and a kernel of 10,000, the spectra were 9 to 13 times faster than
+    `F.conv1d` here, over five runs.
 
     Two details make it match `F.conv1d`.
 
