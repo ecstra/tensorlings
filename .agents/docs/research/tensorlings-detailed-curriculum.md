@@ -360,7 +360,7 @@ The project follows Xu and colleagues' algorithmic alignment. It shows structure
 | | finetune2 | freezing layers, and which ones to freeze |
 | 77_lora | lora1 | LoRA from its paper, a low rank update that starts at zero |
 | | lora2 | the parameters it saves, and merging the update back |
-| | lora3 | why, close to full fine tuning with a hundredth of the parameters |
+| | lora3 | how close it comes to full fine tuning with a hundredth of the parameters, which on the course GPT is about two thirds of the gain |
 | 78_sft | sft1 | a chat format with special tokens, and a loss on the answer tokens only |
 | | sft2 | the GPT taught a question and answer format |
 | 79_policy_gradients | rl1 | policy, action, reward and episode on a bandit |
