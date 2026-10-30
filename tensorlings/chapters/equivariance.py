@@ -11,7 +11,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
-from ..course import OPTIMIZER_IMPORTS, Chapter, Exercise
+from ..course import OPTIMIZER_IMPORTS, QUIZZES, Chapter, Exercise
 from ..engine import (
     Checker,
     Described,
@@ -1327,4 +1327,244 @@ EQUIVARIANCE4 = Exercise(
     },
     introduces=(),
     check=check_equivariance4,
+)
+
+
+# ---------------------------------------------------------------------------
+# quiz13
+# ---------------------------------------------------------------------------
+
+QUIZ13_LESSON = prose(
+    """
+    This quiz has no examples and no new tools. Each function combines moves
+    from Section 10. If a step is unclear, the exercise in the table shows it.
+
+    | Function | Moves | Shown in |
+    |---|---|---|
+    | `deep_set` | a network on each element, a sum over the set, a network on the sum | sets1 |
+    | `messages_in` | the messages along every edge summed at the node they reach, with `index_add_` | message1 |
+    | `gcn_step` | self loops, the GCN's two sided normalization, then the features mixed and weighted | message2 |
+    | `pairwise_distances` | the distance between every two points, unchanged by any turn or shift | equivariance2 |
+    | `invariance_gap` | the largest change in a function's output when its input is transformed | equivariance1 |
+    """,
+)
+
+QUIZ13_SOURCE = source_file(
+    '''
+    # quiz13.py
+    #
+    # No examples and no new tools. Each function combines moves from Section 10.
+
+    from collections.abc import Callable
+
+    import torch
+    import torch.nn as nn
+    from torch import Tensor
+
+
+    # TODO: Return the Deep Set of x, of shape (sets, elements, features): phi
+    #   on every element, the sum over each set's elements, then rho.
+    def deep_set(
+        x: Tensor,
+        phi: nn.Module,
+        rho: nn.Module,
+    ) -> Tensor:
+        ...
+
+
+    # TODO: Return each node's sum of the messages that reach it, of shape
+    #   (nodes, features). messages has one row per edge, and edges, of shape
+    #   (2, edges), holds each edge's source in row 0 and target in row 1.
+    def messages_in(
+        messages: Tensor,
+        edges: Tensor,
+        nodes: int,
+    ) -> Tensor:
+        ...
+
+
+    # TODO: Return one GCN step, the adjacency with self loops added, scaled on
+    #   both sides by one over the square root of each node's degree, times h,
+    #   times weight. adjacency is (nodes, nodes), h (nodes, features) and
+    #   weight (features, out).
+    def gcn_step(
+        adjacency: Tensor,
+        h: Tensor,
+        weight: Tensor,
+    ) -> Tensor:
+        ...
+
+
+    # TODO: Return the distance between every two of points, of shape
+    #   (n, dims), as an (n, n) tensor.
+    def pairwise_distances(points: Tensor) -> Tensor:
+        ...
+
+
+    # TODO: Return the largest absolute change in f's output when its input x
+    #   goes through transform first, as a plain number.
+    def invariance_gap(
+        f: Callable[[Tensor], Tensor],
+        transform: Callable[[Tensor], Tensor],
+        x: Tensor,
+    ) -> float:
+        ...
+    ''',
+)
+
+QUIZ13_SOLUTION = source_file(
+    '''
+    # quiz13.py, a solution for comparison
+
+    from collections.abc import Callable
+
+    import torch
+    import torch.nn as nn
+    from torch import Tensor
+
+
+    def deep_set(
+        x: Tensor,
+        phi: nn.Module,
+        rho: nn.Module,
+    ) -> Tensor:
+        return rho(phi(x).sum(dim=1))
+
+
+    def messages_in(
+        messages: Tensor,
+        edges: Tensor,
+        nodes: int,
+    ) -> Tensor:
+        return torch.zeros(nodes, messages.shape[1]).index_add_(0, edges[1], messages)
+
+
+    def gcn_step(
+        adjacency: Tensor,
+        h: Tensor,
+        weight: Tensor,
+    ) -> Tensor:
+        looped = adjacency + torch.eye(len(adjacency))
+        scale = looped.sum(dim=1) ** -0.5
+
+        return scale.unsqueeze(1) * looped * scale.unsqueeze(0) @ h @ weight
+
+
+    def pairwise_distances(points: Tensor) -> Tensor:
+        return (points.unsqueeze(1) - points.unsqueeze(0)).norm(dim=-1)
+
+
+    def invariance_gap(
+        f: Callable[[Tensor], Tensor],
+        transform: Callable[[Tensor], Tensor],
+        x: Tensor,
+    ) -> float:
+        return (f(transform(x)) - f(x)).abs().max().item()
+    ''',
+)
+
+
+def quiz13_module(
+    seed: int,
+    module: nn.Module,
+) -> nn.Module:
+    torch.manual_seed(seed)
+
+    return module
+
+
+def reference_gcn_step(
+    adjacency: Tensor,
+    h: Tensor,
+    weight: Tensor,
+) -> Tensor:
+    looped = adjacency + torch.eye(len(adjacency))
+    scale = looped.sum(dim=1) ** -0.5
+
+    return scale.unsqueeze(1) * looped * scale.unsqueeze(0) @ h @ weight
+
+
+QUIZ13_EDGES = torch.tensor([[0, 1, 2, 2, 3], [1, 2, 0, 3, 1]])
+QUIZ13_ADJACENCY = torch.tensor([[0.0, 1.0, 1.0, 0.0], [1.0, 0.0, 1.0, 1.0], [1.0, 1.0, 0.0, 1.0], [0.0, 1.0, 1.0, 0.0]])
+
+
+def check_quiz13(checker: Checker) -> None:
+    phi = quiz13_module(960, nn.Sequential(nn.Linear(3, 8), nn.ReLU()))
+    rho = quiz13_module(961, nn.Linear(8, 2))
+    check_on_inputs(
+        checker=checker,
+        function="deep_set",
+        description="sums phi over each set, then runs rho",
+        inputs=(
+            (small_tensor(962, 2, 5, 3) / 3, Described(phi, "a Linear from 3 to 8 and a ReLU"), Described(rho, "a Linear from 8 to 2")),
+        ),
+        reference=lambda x, phi, rho: rho(phi(x).sum(dim=1)),
+        expect=expect_tensor,
+    )
+    check_on_inputs(
+        checker=checker,
+        function="messages_in",
+        description="sums each edge's message at its target",
+        inputs=(
+            (small_tensor(963, 5, 3), QUIZ13_EDGES, 4),
+            (small_tensor(964, 5, 2), QUIZ13_EDGES, 6),
+        ),
+        reference=lambda messages, edges, nodes: torch.zeros(nodes, messages.shape[1]).index_add_(0, edges[1], messages),
+        expect=expect_tensor,
+    )
+    check_on_inputs(
+        checker=checker,
+        function="gcn_step",
+        description="normalizes with self loops on both sides, then mixes",
+        inputs=(
+            (QUIZ13_ADJACENCY, small_tensor(965, 4, 3), small_tensor(966, 3, 2)),
+        ),
+        reference=reference_gcn_step,
+        expect=expect_tensor,
+    )
+    check_on_inputs(
+        checker=checker,
+        function="pairwise_distances",
+        description="gives the distance between every two points",
+        inputs=(
+            (small_tensor(967, 4, 2),),
+            (small_tensor(968, 3, 3),),
+        ),
+        reference=lambda points: torch.cdist(points, points),
+        expect=expect_tensor,
+    )
+    turn = torch.tensor([[0.0, -1.0], [1.0, 0.0]])
+    check_on_inputs(
+        checker=checker,
+        function="invariance_gap",
+        description="gives the largest change in the output",
+        inputs=(
+            (Described(lambda x: x.sum(dim=0), "a sum over the rows"), Described(lambda x: x.flip(0), "a reversal of the rows"), small_tensor(969, 4, 2)),
+            (Described(lambda x: x[0], "the first row"), Described(lambda x: x @ turn.T, "a quarter turn"), small_tensor(970, 3, 2)),
+            (Described(lambda x: x, "the input itself"), Described(lambda x: x.flip(0), "a reversal of the rows"), small_tensor(971, 4, 3)),
+        ),
+        reference=lambda f, transform, x: (f(transform(x)) - f(x)).abs().max().item(),
+        expect=expect_close,
+    )
+
+
+QUIZ13 = Exercise(
+    name="quiz13",
+    chapter=QUIZZES,
+    title="Symmetry and graphs, start to finish",
+    lesson=QUIZ13_LESSON,
+    source=QUIZ13_SOURCE,
+    solution=QUIZ13_SOLUTION,
+    hints={
+        "deep_set": "Run phi on x, sum over dim=1, the elements of each set, and run rho on the sums.",
+        "messages_in": "Start from torch.zeros(nodes, messages.shape[1]) and index_add_ the messages along dim 0 at "
+        "their targets, edges[1].",
+        "gcn_step": "Add torch.eye to the adjacency and take each row's sum to the power -0.5. Scale the rows and the "
+        "columns by it, then @ h @ weight.",
+        "pairwise_distances": "points.unsqueeze(1) - points.unsqueeze(0) gives every difference. Take .norm over the "
+        "last dimension.",
+        "invariance_gap": "f(transform(x)) minus f(x), then .abs().max().item().",
+    },
+    introduces=(),
+    check=check_quiz13,
 )
