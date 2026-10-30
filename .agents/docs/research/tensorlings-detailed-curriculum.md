@@ -2,7 +2,7 @@
 name: tensorlings-detailed-curriculum
 kind: doc
 description: the 13 sections expanded into chapters, exercises and projects, about 340 exercises, with the projects the table left open
-updated: 2026-10-29
+updated: 2026-10-30
 links: [docs/research/tensorlings-course-design.md]
 ---
 
