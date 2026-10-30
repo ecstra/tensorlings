@@ -26,7 +26,8 @@ from ..text import prose, source_file
 from .dropout import labelled_points
 from .initialization import bell_curve, expect_numbers, relative
 from .linear_layers import expect_module, expect_parameter
-from .normalization import with_random_affine
+from .mnist import mnist_sets
+from .normalization import kaiming_, pinned_threads, train_on_mnist, with_random_affine
 
 RESIDUALS = Chapter(
     folder="22_residuals",
@@ -327,32 +328,29 @@ RESIDUAL1 = Exercise(
 
 RESIDUAL2_LESSON = prose(
     """
-    Here MLPs of width 64 learned MNIST from 10,000 images for 3 epochs, at a
-    learning rate of 0.05. The plain ones started from Kaiming, their best
-    start. The residual ones had a first layer, then blocks of two Linear
-    layers like residual1's, from PyTorch's default start.
+    Here MLPs of width 64 learned MNIST from 50,000 images for 2 epochs, at a
+    learning rate of 0.05, over three seeds. The plain ones started from
+    Kaiming, their best start. The residual ones had a first layer, then blocks
+    of two Linear layers like residual1's, from PyTorch's default start.
 
     | Hidden layers | Plain | Residual |
     |---|---|---|
-    | 5 | 79.7% | 84.8% |
-    | 17 | 72.1% | 86.1% |
-    | 51 | 11.0%, never learned | 79.5% |
+    | 17 | 93.2% to 93.6% | 94.0% to 94.5% |
+    | 51 | 10% to 21%, never learned | 95.1% to 95.4% |
 
-    In init3 the plain MLP of 8 layers got 85.9%, at a learning rate of 0.1
-    against the 0.05 here.
-
-    The plain MLP gets worse with depth, and its training loss rises with it,
-    0.56 at 5 layers and 0.79 at 17. So this isn't overfitting. He and others
-    found the same, deeper plain models training worse, which is what led them
-    to residual connections.
+    The residual MLP gets better with depth, and the plain one falls apart.
+    The plain one's training loss rises with depth too, 0.22 to 0.24 at 17
+    layers and 1.8 to 2.3 at 51, so this isn't overfitting. He and others
+    found the same on ImageNet. Their 34 residual layers beat 18, with 25.0%
+    error against 27.9%, while 34 plain layers lost to 18.
 
     With PyTorch's default start, the average gradient at the first layer of
-    51 layers was about `5e-24` plain and 0.002 residual.
+    51 layers was about `6e-24` plain and 0.002 residual.
 
     The cost is that each block adds to the main path. Its spread grew from
-    0.14 to 0.74 over 25 default blocks. With Kaiming in both layers of every
-    block, it grew past 100,000 and the loss turned `nan`. residual3 fixes
-    that.
+    0.14 to 0.53 over 25 default blocks. With Kaiming in both layers of every
+    block, it grew to about 59,000, and training turned `nan` on every seed.
+    residual3 fixes that.
 
     `.abs().mean()` gives the average size of the numbers in a tensor.
     """,
@@ -679,15 +677,18 @@ RESIDUAL3_LESSON = prose(
     The main path is never normalized inside the stack, so pre norm models
     put one more norm after the last block, before the head.
 
-    From Kaiming starts with zeroed last layers, pre norm MLPs trained to
-    84.4%, 78.9% and 81.2% at 5, 17 and 51 hidden layers. That was in the
-    same setup as residual2, where the plain MLP of 51 layers never learned.
+    Here is residual2's setup at 51 hidden layers over three seeds, with
+    residual2's blocks against pre norm blocks with a zero start from Kaiming.
 
-    Those scores are no better than residual2's residual MLPs, and worse at 17
-    layers. Three epochs are too few to show an accuracy gain, and the differences
-    between residual versions are within noise. What the fixes buy here is a
-    safe start from Kaiming. The main path's spread stays steady with no
-    `nan`, where Kaiming in both layers of residual2's blocks blew up.
+    | Blocks | Rate 0.05 | Rate 0.2 |
+    |---|---|---|
+    | residual2's, default start | 95.1% to 95.4% | `nan` on every seed |
+    | pre norm, zero start | 94.4% to 95.4% | 95.2% to 95.7% |
+
+    At 0.05 both reach about 95%. At four times the step, residual2's main
+    path blows up. Pre norm blocks with a zero start train to the best scores
+    in the table. That is what the fixes buy: a start that is safe at any
+    depth, and room for larger steps.
 
     A zeroed layer still learns. Its gradient isn't zero, since the layer
     before it gives it nonzero inputs.
@@ -1721,3 +1722,145 @@ QUIZ5 = Exercise(
     introduces=(),
     check=check_quiz5,
 )
+
+
+# ---------------------------------------------------------------------------
+# The runs behind the lessons
+# ---------------------------------------------------------------------------
+
+
+def plain_mnist_mlp(hidden: int) -> nn.Sequential:
+    layers: list[nn.Module] = []
+
+    for inputs in [784] + [64] * (hidden - 1):
+        layers.extend([nn.Linear(inputs, 64), nn.ReLU()])
+
+    return nn.Sequential(*layers, nn.Linear(64, 10))
+
+
+class StackedMLP(nn.Module):
+    def __init__(
+        self,
+        blocks: list[nn.Module],
+        final_norm: bool,
+    ) -> None:
+        super().__init__()
+        self.stem = nn.Linear(784, 64)
+        self.blocks = nn.ModuleList(blocks)
+        self.norm = nn.LayerNorm(64) if final_norm else nn.Identity()
+        self.head = nn.Linear(64, 10)
+
+    def forward(self, x: Tensor) -> Tensor:
+        x = torch.relu(self.stem(x))
+
+        for block in self.blocks:
+            x = block(x)
+
+        return self.head(self.norm(x))
+
+
+def depth_model(
+    kind: str,
+    hidden: int,
+) -> nn.Module:
+    """An MLP of width 64 for MNIST with hidden layers in all.
+
+    - plain: Linear and ReLU layers from Kaiming, their best start.
+    - plain_default: the same from PyTorch's default start.
+    - residual: residual2's blocks from PyTorch's default start.
+    - kaiming_both: residual2's blocks with Kaiming in both layers.
+    - pre_norm: residual3's blocks, up from Kaiming and down at zero, then one norm before the head."""
+    if kind == "plain":
+        return kaiming_(plain_mnist_mlp(hidden))
+
+    if kind == "plain_default":
+        return plain_mnist_mlp(hidden)
+
+    blocks = (hidden - 1) // 2
+
+    if kind == "residual":
+        return StackedMLP([ReferenceResidualBlock(64) for _ in range(blocks)], final_norm=False)
+
+    if kind == "kaiming_both":
+        return StackedMLP([kaiming_(ReferenceResidualBlock(64)) for _ in range(blocks)], final_norm=False)
+
+    model = StackedMLP([ReferencePreNormBlock(64) for _ in range(blocks)], final_norm=True)
+    kaiming_(model.stem)
+
+    for block in model.blocks:
+        kaiming_(block.up)
+
+    return model
+
+
+def depth_run(
+    kind: str,
+    hidden: int,
+    rate: float,
+    seed: int,
+) -> dict[str, float]:
+    torch.manual_seed(seed)
+
+    return train_on_mnist(depth_model(kind, hidden), rate, seed)
+
+
+DEPTH_RUNS: tuple[tuple[str, int, float], ...] = (
+    ("plain", 17, 0.05),
+    ("residual", 17, 0.05),
+    ("plain", 51, 0.05),
+    ("residual", 51, 0.05),
+    ("kaiming_both", 51, 0.05),
+    ("pre_norm", 51, 0.05),
+    ("residual", 51, 0.2),
+    ("pre_norm", 51, 0.2),
+)
+
+
+def measure_depths(
+    runs: tuple[tuple[str, int, float], ...] = DEPTH_RUNS,
+    seeds: range = range(3),
+) -> dict[tuple[str, int, float, int], dict[str, float]]:
+    """residual2's and residual3's tables, keyed by kind, hidden layers, rate and seed. Each run is 2 epochs of plain
+    SGD at batch 128 on MNIST's 50,000 training images."""
+    with pinned_threads():
+        return {(kind, hidden, rate, seed): depth_run(kind, hidden, rate, seed) for kind, hidden, rate in runs for seed in seeds}
+
+
+def measure_first_gradients() -> dict[str, float]:
+    """residual2's first layer gradients, the average size after one backward pass on 128 MNIST images, for 51 hidden
+    layers from PyTorch's default start."""
+    sets = mnist_sets()
+    x, y = sets["train_x"][:128], sets["train_y"][:128]
+    results = {}
+
+    with pinned_threads():
+        for kind in ("plain_default", "residual"):
+            torch.manual_seed(0)
+            model = depth_model(kind, 51)
+            F.cross_entropy(model(x), y).backward()
+            first = model[0] if kind == "plain_default" else model.stem
+            results[kind] = first.weight.grad.abs().mean().item()
+
+    return results
+
+
+def measure_spreads() -> dict[str, list[float]]:
+    """residual2's main path, its spread after each of 25 blocks on 128 MNIST images, from PyTorch's default start and
+    with Kaiming in both layers of every block."""
+    x = mnist_sets()["train_x"][:128]
+    results = {}
+
+    with pinned_threads(), torch.no_grad():
+        for kind in ("residual", "kaiming_both"):
+            torch.manual_seed(0)
+            model = depth_model(kind, 51)
+            path = torch.relu(model.stem(x))
+            spreads = []
+
+            for block in model.blocks:
+                path = block(path)
+                spreads.append(path.std().item())
+
+            results[kind] = spreads
+
+    return results

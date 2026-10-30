@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import contextlib
+import math
+from collections.abc import Iterator
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -21,6 +25,7 @@ from ..engine import (
 from ..text import prose, source_file
 from .initialization import bell_curve, expect_numbers
 from .linear_layers import expect_module, expect_parameter
+from .mnist import mnist_sets
 
 NORMALIZATION = Chapter(
     folder="21_normalization",
@@ -126,7 +131,8 @@ BATCHNORM1_LESSON = prose(
     The paper said it helps by keeping each layer's inputs steady while the
     layers before them change. Later work by Santurkar and others doubted
     that, and pointed to a smoother loss that tolerates larger steps. The
-    effect is real either way, and norm1 measures it.
+    effect is real either way, and norm1 measures it, in faster training and
+    larger steps.
     """,
 )
 
@@ -974,24 +980,30 @@ RMSNORM1 = Exercise(
 
 NORM1_LESSON = prose(
     """
-    Here MLPs with 8 hidden layers of 64 learned MNIST from 10,000 images for
-    3 epochs. Each hidden layer was Linear, then the norm, then ReLU. The table
-    gives the validation accuracy at the best of the learning rates 0.03, 0.1
-    and 0.3, over three seeds.
+    Here MLPs with 8 hidden layers of 64 learned MNIST from PyTorch's default
+    start, over three seeds. Each hidden layer was Linear, then the norm, then
+    ReLU. The first two columns train on 50,000 images for 2 epochs in batches
+    of 128. Each norm gets its best rate of 0.03, 0.1, 0.3 and 1.0. The last
+    column trains on 10,000 images for 1 epoch in batches of 4, at 0.01.
 
-    | Normalization | PyTorch's default start | Kaiming start |
-    |---|---|---|
-    | none | 11% | 84% to 91% |
-    | BatchNorm | 90% to 94% | 89% to 93% |
-    | LayerNorm | 70% to 84% | 89% to 91% |
-    | RMSNorm | 81% to 86% | 84% to 89% |
+    | Normalization | 128, after 100 steps | 128, after 2 epochs | 4, after 1 epoch |
+    |---|---|---|---|
+    | none | 11% | 11% | 11% |
+    | BatchNorm | 90% to 92% | 96.5% to 96.8% | 53% to 56% |
+    | LayerNorm | 66% to 84% | 94.6% to 95.4% | 76% to 89% |
+    | RMSNorm | 78% to 86% | 94.8% to 95.3% | 88% to 89% |
 
-    With PyTorch's default start the plain MLP never learned, as init3 found.
-    Every norm rescued it. From the Kaiming start the gains were smaller, and
-    RMSNorm gained nothing at all. BatchNorm did best. From the default start, LayerNorm and RMSNorm fell
-    apart at 0.3 in every run, so a norm doesn't make every step size safe. In
-    one run with 16 hidden layers, every version did worse than with 8, which
-    the next chapter fixes.
+    The plain MLP never learned, as init3 found, and every norm rescued it.
+    Each norm then did what its paper claims.
+
+    - BatchNorm: the fastest, past 90% in 100 steps, and safe at large steps.
+    - LayerNorm and RMSNorm: independent of the batch, since each example is normalized on its own.
+
+    BatchNorm reached 95.6% or more at every rate from 0.03 to 1.0. From the
+    Kaiming start the plain MLP turned `nan` at 1.0, while BatchNorm still
+    reached 96% at 3.0. In batches of 4, BatchNorm's statistics come from 4
+    examples, and it fell to about half. LayerNorm and RMSNorm kept most of
+    their accuracy there. They train best at small rates, 0.03 here.
 
     Which one, then?
 
@@ -1282,3 +1294,137 @@ NORM1 = Exercise(
     introduces=(),
     check=check_norm1,
 )
+
+
+# ---------------------------------------------------------------------------
+# The runs behind the lessons
+# ---------------------------------------------------------------------------
+
+MEASURE_THREADS = 4
+NORM_KINDS = ("none", "batch", "layer", "rms")
+
+
+@contextlib.contextmanager
+def pinned_threads() -> Iterator[None]:
+    threads = torch.get_num_threads()
+    torch.set_num_threads(MEASURE_THREADS)
+
+    try:
+        yield
+    finally:
+        torch.set_num_threads(threads)
+
+
+def validation_accuracy(model: nn.Module) -> float:
+    sets = mnist_sets()
+    was_training = model.training
+    model.eval()
+
+    with torch.no_grad():
+        right = (model(sets["validation_x"]).argmax(dim=1) == sets["validation_y"]).float().mean().item()
+
+    model.train(was_training)
+
+    return right
+
+
+def train_on_mnist(
+    model: nn.Module,
+    rate: float,
+    seed: int,
+    images: int = 50000,
+    epochs: int = 2,
+    batch: int = 128,
+    early_step: int = 100,
+) -> dict[str, float]:
+    """Plain SGD on the first images of MNIST's training split, the runs behind Section 3's tables. Gives the validation
+    accuracy after early_step steps and at the end, and the training loss at the end, all nan once a loss stops being
+    finite. A last batch shorter than batch is left out, since BatchNorm can't take a batch of one."""
+    sets = mnist_sets()
+    x, y = sets["train_x"][:images], sets["train_y"][:images]
+    optimizer = torch.optim.SGD(model.parameters(), lr=rate)
+    generator = torch.Generator().manual_seed(seed + 100)
+    early = math.nan
+    step = 0
+
+    for _ in range(epochs):
+        order = torch.randperm(len(x), generator=generator)
+
+        for start in range(0, len(x) - batch + 1, batch):
+            rows = order[start : start + batch]
+            loss = F.cross_entropy(model(x[rows]), y[rows])
+
+            if not math.isfinite(loss.item()):
+                return {"early": math.nan, "final": math.nan, "loss": math.nan}
+
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            step += 1
+
+            if step == early_step:
+                early = validation_accuracy(model)
+
+    model.eval()
+
+    with torch.no_grad():
+        training_loss = F.cross_entropy(model(x[:10000]), y[:10000]).item()
+
+    model.train()
+
+    return {"early": early, "final": validation_accuracy(model), "loss": training_loss}
+
+
+def kaiming_(model: nn.Module) -> nn.Module:
+    for layer in model.modules():
+        if isinstance(layer, nn.Linear):
+            nn.init.kaiming_normal_(layer.weight, nonlinearity="relu")
+            nn.init.zeros_(layer.bias)
+
+    return model
+
+
+def norm_run(
+    kind: str,
+    start: str,
+    rate: float,
+    seed: int,
+    images: int = 50000,
+    epochs: int = 2,
+    batch: int = 128,
+) -> dict[str, float]:
+    torch.manual_seed(seed)
+    model = reference_normed_mlp([784] + [64] * 8 + [10], kind)
+
+    if start == "kaiming":
+        kaiming_(model)
+
+    return train_on_mnist(model, rate, seed, images, epochs, batch)
+
+
+def measure_norms(
+    kinds: tuple[str, ...] = NORM_KINDS,
+    seeds: range = range(3),
+) -> dict[tuple[str, str, float, int, int], dict[str, float]]:
+    """norm1's table, keyed by start, kind, rate, batch and seed. An MLP of 8 hidden layers of 64 learns MNIST from
+    PyTorch's default start at batch 128 over a range of rates, then at batch 4 on 10,000 images for one epoch. No norm
+    and BatchNorm also train from the Kaiming start at large rates."""
+    results = {}
+
+    with pinned_threads():
+        for kind in kinds:
+            for rate in (0.03, 0.1, 0.3, 1.0):
+                for seed in seeds:
+                    results[("default", kind, rate, 128, seed)] = norm_run(kind, "default", rate, seed)
+
+            for seed in seeds:
+                results[("default", kind, 0.01, 4, seed)] = norm_run(kind, "default", 0.01, seed, 10000, 1, 4)
+
+            if kind not in ("none", "batch"):
+                continue
+
+            for rate in (0.3, 1.0, 3.0):
+                for seed in seeds:
+                    results[("kaiming", kind, rate, 128, seed)] = norm_run(kind, "kaiming", rate, seed)
+
+    return results
