@@ -1713,6 +1713,11 @@ CASES: list[tuple[str, str, str, str]] = [
 def main() -> int:
     accepted: list[str] = []
     only = set(sys.argv[1:])
+    unknown = sorted(name for name in only if exercise_named(name) is None)
+
+    if unknown:
+        raise SystemExit(f"No exercise is named {', '.join(unknown)}.")
+
     cases = [case for case in CASES if not only or case[0] in only]
 
     with tempfile.TemporaryDirectory() as folder:

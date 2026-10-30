@@ -124,6 +124,11 @@ def dev_check(
     console = Console()
     problems = 0
     introduced: set[str] = set()
+    unknown = [name for name in names if exercise_named(name) is None]
+
+    if unknown:
+        print(f"No exercise is named {', '.join(unknown)}.")
+        return 1
 
     with tempfile.TemporaryDirectory() as folder:
         for exercise in EXERCISES:
