@@ -9,9 +9,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
-from ..course import OPTIMIZER_IMPORTS, Chapter, Exercise
+from ..course import OPTIMIZER_IMPORTS, QUIZZES, Chapter, Exercise
 from ..engine import (
     Checker,
+    Described,
     Mismatch,
     check_on_inputs,
     expect_close,
@@ -593,4 +594,233 @@ VQ2 = Exercise(
     introduces=(),
     check=check_vq2,
     imports_first=OPTIMIZER_IMPORTS,
+)
+
+
+# ---------------------------------------------------------------------------
+# quiz12
+# ---------------------------------------------------------------------------
+
+QUIZ12_LESSON = prose(
+    """
+    This quiz has no examples and no new tools. Each function combines moves
+    from Section 9. If a step is unclear, the exercise in the table shows it.
+
+    | Function | Moves | Shown in |
+    |---|---|---|
+    | `reparameterize` | a Gaussian sample as the mean plus the spread times noise | sampling3 |
+    | `kl_to_standard` | the KL divergence from a diagonal Gaussian to the standard one, in closed form | vae1 |
+    | `discriminator_loss` | binary cross entropy that calls real samples 1 and generated ones 0 | gan1 |
+    | `noise_to` | a clean sample noised to its step in one jump | diffusion1 |
+    | `nearest_codes` | each vector's closest codebook row by squared distance | vq1 |
+    """,
+)
+
+QUIZ12_SOURCE = source_file(
+    '''
+    # quiz12.py
+    #
+    # No examples and no new tools. Each function combines moves from Section 9.
+
+    import torch
+    import torch.nn.functional as F
+    from torch import Tensor
+
+
+    # TODO: Return a sample of a Gaussian with mean and log_variance, given its
+    #   standard normal noise of the same shape.
+    def reparameterize(
+        mean: Tensor,
+        log_variance: Tensor,
+        noise: Tensor,
+    ) -> Tensor:
+        ...
+
+
+    # TODO: Return the KL divergence of each row's diagonal Gaussian, with mean
+    #   and log_variance, from the standard normal, one number per row.
+    def kl_to_standard(
+        mean: Tensor,
+        log_variance: Tensor,
+    ) -> Tensor:
+        ...
+
+
+    # TODO: Return the discriminator's loss for its scores, logits, on real
+    #   samples and on generated ones, summed over the two kinds.
+    def discriminator_loss(
+        real_scores: Tensor,
+        fake_scores: Tensor,
+    ) -> Tensor:
+        ...
+
+
+    # TODO: Return x0 noised to step t in one jump, for x0 of any shape whose
+    #   first dimension is the batch. alpha_bars holds every step's alpha bar,
+    #   t one step per sample, and noise is the shape of x0.
+    def noise_to(
+        x0: Tensor,
+        t: Tensor,
+        alpha_bars: Tensor,
+        noise: Tensor,
+    ) -> Tensor:
+        ...
+
+
+    # TODO: Return the index of each row of z's closest codebook row by squared
+    #   distance.
+    def nearest_codes(
+        z: Tensor,
+        codebook: Tensor,
+    ) -> Tensor:
+        ...
+    ''',
+)
+
+QUIZ12_SOLUTION = source_file(
+    '''
+    # quiz12.py, a solution for comparison
+
+    import torch
+    import torch.nn.functional as F
+    from torch import Tensor
+
+
+    def reparameterize(
+        mean: Tensor,
+        log_variance: Tensor,
+        noise: Tensor,
+    ) -> Tensor:
+        return mean + torch.exp(0.5 * log_variance) * noise
+
+
+    def kl_to_standard(
+        mean: Tensor,
+        log_variance: Tensor,
+    ) -> Tensor:
+        return 0.5 * (mean**2 + log_variance.exp() - log_variance - 1).sum(dim=-1)
+
+
+    def discriminator_loss(
+        real_scores: Tensor,
+        fake_scores: Tensor,
+    ) -> Tensor:
+        real = F.binary_cross_entropy_with_logits(real_scores, torch.ones_like(real_scores))
+        fake = F.binary_cross_entropy_with_logits(fake_scores, torch.zeros_like(fake_scores))
+
+        return real + fake
+
+
+    def noise_to(
+        x0: Tensor,
+        t: Tensor,
+        alpha_bars: Tensor,
+        noise: Tensor,
+    ) -> Tensor:
+        kept = alpha_bars[t].reshape(len(t), *[1] * (x0.dim() - 1))
+
+        return kept.sqrt() * x0 + (1 - kept).sqrt() * noise
+
+
+    def nearest_codes(
+        z: Tensor,
+        codebook: Tensor,
+    ) -> Tensor:
+        return ((z.unsqueeze(1) - codebook.unsqueeze(0)) ** 2).sum(dim=-1).argmin(dim=1)
+    ''',
+)
+
+
+def quiz12_reference() -> dict[str, object]:
+    namespace: dict[str, object] = {}
+    exec(QUIZ12_SOLUTION, namespace)
+
+    return namespace
+
+
+QUIZ12_REFERENCE = quiz12_reference()
+
+
+def quiz12_tensor(
+    seed: int,
+    *shape: int,
+) -> Tensor:
+    return torch.randn(*shape, generator=torch.Generator().manual_seed(seed))
+
+
+def check_quiz12(checker: Checker) -> None:
+    check_on_inputs(
+        checker=checker,
+        function="reparameterize",
+        description="adds the spread times the noise to the mean",
+        inputs=(
+            (quiz12_tensor(1210, 3, 2), quiz12_tensor(1211, 3, 2), quiz12_tensor(1212, 3, 2)),
+        ),
+        reference=QUIZ12_REFERENCE["reparameterize"],
+        expect=expect_tensor,
+    )
+    check_on_inputs(
+        checker=checker,
+        function="kl_to_standard",
+        description="gives each row's KL in closed form",
+        inputs=(
+            (quiz12_tensor(1213, 4, 3), quiz12_tensor(1214, 4, 3)),
+        ),
+        reference=QUIZ12_REFERENCE["kl_to_standard"],
+        expect=expect_tensor,
+    )
+    check_on_inputs(
+        checker=checker,
+        function="discriminator_loss",
+        description="calls the real samples 1 and the generated ones 0",
+        inputs=(
+            (quiz12_tensor(1215, 5), quiz12_tensor(1216, 5) - 1),
+        ),
+        reference=QUIZ12_REFERENCE["discriminator_loss"],
+        expect=expect_tensor,
+    )
+    alpha_bars = torch.cumprod(1 - torch.linspace(1e-4, 0.02, 1000), dim=0)
+    check_on_inputs(
+        checker=checker,
+        function="noise_to",
+        description="noises each sample to its own step",
+        inputs=(
+            (quiz12_tensor(1217, 3, 2), torch.tensor([0, 400, 999]), Described(alpha_bars, "DDPM's 1,000 alpha bars"), quiz12_tensor(1218, 3, 2)),
+            (quiz12_tensor(1219, 2, 1, 3, 3), torch.tensor([100, 700]), Described(alpha_bars, "DDPM's 1,000 alpha bars"), quiz12_tensor(1220, 2, 1, 3, 3)),
+        ),
+        reference=QUIZ12_REFERENCE["noise_to"],
+        expect=expect_tensor,
+    )
+    check_on_inputs(
+        checker=checker,
+        function="nearest_codes",
+        description="picks each vector's closest code",
+        inputs=(
+            (quiz12_tensor(1221, 6, 3), quiz12_tensor(1222, 4, 3)),
+        ),
+        reference=QUIZ12_REFERENCE["nearest_codes"],
+        expect=expect_tensor,
+    )
+
+
+QUIZ12 = Exercise(
+    name="quiz12",
+    chapter=QUIZZES,
+    title="Generative models, start to finish",
+    lesson=QUIZ12_LESSON,
+    source=QUIZ12_SOURCE,
+    solution=QUIZ12_SOLUTION,
+    hints={
+        "reparameterize": "The spread is torch.exp(0.5 * log_variance). Add the spread times the noise to the mean.",
+        "kl_to_standard": "Half of mean squared plus the variance minus the log variance minus 1, summed over the last "
+        "dimension.",
+        "discriminator_loss": "F.binary_cross_entropy_with_logits of the real scores against ones, plus that of the "
+        "fake scores against zeros.",
+        "noise_to": "alpha_bars[t] reshaped to (len(t), 1, ...) lines each sample up with its step. Then the square "
+        "root of it times x0 plus the square root of 1 minus it times the noise.",
+        "nearest_codes": "z.unsqueeze(1) - codebook.unsqueeze(0) gives every difference. Square, sum over the last "
+        "dimension, and argmin over the codes.",
+    },
+    introduces=(),
+    check=check_quiz12,
 )
