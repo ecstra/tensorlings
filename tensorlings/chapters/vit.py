@@ -474,9 +474,9 @@ VIT2_LESSON = prose(
     is given, and that takes examples.
 
     The ViT paper found the same at scale. Trained on ImageNet's 1.3 million
-    images, ViTs came out a few points below ResNets of their size. Pre-trained
-    on JFT's 303 million images, its large ViT beat a ResNet pre-trained on the
-    same images on every task the paper compared.
+    images, ViTs came out a few points below ResNets of their size. Then they
+    were pre-trained on JFT's 303 million images. There its largest ViT,
+    ViT-H/14, beat a ResNet given the same images on every task of Table 2.
     """,
 )
 

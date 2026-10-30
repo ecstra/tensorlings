@@ -639,14 +639,15 @@ LLAMA3_LESSON = prose(
     dot product stopped it. OLMo 2 and Qwen3 use RMSNorm there for the same
     reason.
 
-    The table below scales random queries and keys of size 64, as weights that
-    grow during training would. The largest weight is averaged over 16 queries.
+    The table below scales 16 random queries and 16 keys of size 64, as
+    weights that grow during training would. The largest weight is averaged
+    over the 16 queries.
 
     | Scale | Largest score | Largest weight | With QK norm |
     |---|---|---|---|
-    | 1 | 3.07 | 0.232 | 2.79, 0.219 |
-    | 4 | 49.09 | 0.921 | 2.79, 0.219 |
-    | 16 | 785.5 | 0.997 | 2.79, 0.219 |
+    | 1 | 3.27 | 0.248 | 3.15, 0.249 |
+    | 4 | 52.37 | 0.917 | 3.15, 0.249 |
+    | 16 | 837.9 | 0.998 | 3.15, 0.249 |
 
     After an RMSNorm every query and key has the same size, so no scale can
     blow the scores up. The norms' own learned weights can still sharpen the

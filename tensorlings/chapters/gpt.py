@@ -463,11 +463,13 @@ GPT2_LESSON = prose(
     The head shares its weight with `wte`, as in GPT-2. A token's row reads it
     in and also scores it on the way out, which saves a whole table.
 
-    GPT-2 starts every weight from a normal spread of 0.02 and every bias at
-    0. Then it shrinks the layers that write into the residual stream, the
-    `c_proj` of each attention and each MLP. It divides them by the square
-    root of how many there are. Here is why, the spread of the residual stream
-    after the last block, as a multiple of its spread going in.
+    nanoGPT starts every weight from a normal spread of 0.02 and every bias at
+    0. GPT-2's released code does the same, except that it draws `wpe` at
+    0.01. Then, as the GPT-2 paper describes, nanoGPT shrinks the layers that
+    write into the residual stream, the `c_proj` of each attention and each
+    MLP. It divides them by the square root of how many there are. Here is
+    why, the spread of the residual stream after the last block, as a
+    multiple of its spread going in.
 
     | Blocks | 4 | 12 | 24 | 48 |
     |---|---|---|---|---|
@@ -475,8 +477,9 @@ GPT2_LESSON = prose(
     | `c_proj` scaled down | 2.2 | 2.3 | 2.3 | 2.3 |
 
     Every block adds its output to the stream. Without the scaling the stream
-    grows like the square root of the depth, the growth residual2 measured. With it, the stream's size stays the same however deep the
-    model, much as residual3's fix did.
+    grows like the square root of the depth, the growth residual2 measured.
+    With it, the stream's size stays the same however deep the model, much as
+    residual3's fix did.
 
     `model.apply(fn)` calls `fn` on every module inside `model`, which is how
     one function sets up every layer.
@@ -508,7 +511,7 @@ GPT2_SOURCE = source_file(
 ''' + INDENTED_GIVEN_MODEL + '''
 
 
-    # TODO: Start module as GPT-2 does, when it is an nn.Linear or an
+    # TODO: Start module as nanoGPT does, when it is an nn.Linear or an
     #   nn.Embedding. Its weight is drawn from a normal spread of 0.02 around 0,
     #   and a Linear's bias, when it has one, is set to 0.
     def init_weights(module: nn.Module) -> None:
@@ -935,9 +938,9 @@ GPT3_SOURCE = source_file(
         ...
 
 
-    # TODO: Set every group's rate to lr, take the cross entropy of model's
-    #   scores on x against y, step with the gradients clipped to a norm of
-    #   clip, and return the loss as a plain number.
+    # TODO: Set every group's rate to lr and take the cross entropy of model's
+    #   scores on x against y. Zero the old gradients, backpropagate, clip the
+    #   gradients to a norm of clip, step, and return the loss as a number.
     def train_step(
         model: nn.Module,
         optimizer: torch.optim.Optimizer,
@@ -950,8 +953,9 @@ GPT3_SOURCE = source_file(
 
 
     # TODO: Return the average loss over batches batches of 64 blocks from data,
-    #   drawn with get_batch and generator, moved to device, in eval mode and
-    #   without recording for autograd. Then put model back in training mode.
+    #   each model.block_size tokens long, drawn with get_batch and generator
+    #   and moved to device. Run in eval mode without recording for autograd,
+    #   then put model back in training mode.
     def validation_loss(
         model: nn.Module,
         data: Tensor,
@@ -1046,32 +1050,43 @@ def check_make_optimizer(found: object) -> None:
 
 
 def check_train_step(found: object) -> None:
+    """Plain SGD, since Adam's first step comes out the same size however the gradients were clipped. Its two
+    groups catch a rate set on the first group alone, and the two steps catch gradients never zeroed."""
     data = torch.randint(0, 20, (400,), generator=torch.Generator().manual_seed(595))
-    x, y = reference_get_batch(data, 16, 4, torch.Generator().manual_seed(596))
+    batches = [reference_get_batch(data, 16, 4, torch.Generator().manual_seed(seed)) for seed in (596, 597)]
     results = []
 
-    # Plain SGD, since Adam's first step comes out the same size however the gradients were clipped.
     for step in (found, TRAIN_REFERENCE["train_step"]):
         model = seeded_gpt(MODEL_REFERENCE["GPT"])
-        optimizer = torch.optim.SGD(model.parameters(), lr=1.0)
-        loss = step(model, optimizer, x, y, 0.5, 0.01)
-        results.append((loss, model.wte.weight.detach().clone(), optimizer.param_groups[0]["lr"]))
+        matrices = [parameter for parameter in model.parameters() if parameter.dim() >= 2]
+        others = [parameter for parameter in model.parameters() if parameter.dim() < 2]
+        optimizer = torch.optim.SGD([{"params": matrices}, {"params": others}], lr=1.0)
+        losses = [step(model, optimizer, x, y, 0.5, 0.01) for x, y in batches]
+        rates = [group["lr"] for group in optimizer.param_groups]
+        results.append((losses, model.wte.weight.detach().clone(), model.ln_f.bias.detach().clone(), rates))
 
-    (loss, weight, rate), (expected_loss, expected_weight, _) = results
+    (losses, weight, bias, rates), (expected_losses, expected_weight, expected_bias, _) = results
 
-    if rate != 0.5:
-        raise Mismatch(f"After train_step at a rate of 0.5, the optimizer's rate is {rate}. Set group[\"lr\"] for every group.")
+    if rates != [0.5, 0.5]:
+        raise Mismatch(f"After train_step at a rate of 0.5, the two groups' rates are {rates}. Set group[\"lr\"] for every group.")
 
-    expect_close(
-        call="train_step's loss on 4 blocks of 16",
-        actual=loss,
-        expected=expected_loss,
-        tolerance=1e-5,
-    )
+    for number, (loss, expected_loss) in enumerate(zip(losses, expected_losses), start=1):
+        expect_close(
+            call=f"train_step's loss on step {number}, 4 blocks of 16",
+            actual=loss,
+            expected=expected_loss,
+            tolerance=1e-5,
+        )
+
     expect_tensor(
-        call="wte's weights after one train_step with SGD, clipped to 0.01",
+        call="wte's weights after two train_steps with SGD, clipped to 0.01",
         actual=weight,
         expected=expected_weight,
+    )
+    expect_tensor(
+        call="ln_f's bias, in the second group, after two train_steps",
+        actual=bias,
+        expected=expected_bias,
     )
 
 
@@ -1428,7 +1443,21 @@ def check_generate(found: object) -> None:
     ids = torch.randint(0, 20, (2, 20), generator=torch.Generator().manual_seed(599))
     expected = SAMPLING_REFERENCE["generate"](model, ids, 6, 0.9, 5, torch.Generator().manual_seed(600))
     model.train()
-    actual = found(model, ids, 6, 0.9, 5, torch.Generator().manual_seed(600))
+    # This small GPT has no dropout, so its outputs can't show the mode. A hook records it on every call.
+    modes: list[tuple[bool, bool]] = []
+    hook = model.register_forward_pre_hook(lambda module, inputs: modes.append((module.training, torch.is_grad_enabled())))
+
+    try:
+        actual = found(model, ids, 6, 0.9, 5, torch.Generator().manual_seed(600))
+    finally:
+        hook.remove()
+
+    if any(training for training, _ in modes):
+        raise Mismatch("generate ran the model in training mode. Call model.eval() first.")
+
+    if any(recording for _, recording in modes):
+        raise Mismatch("generate recorded for autograd. Write the tokens inside torch.no_grad().")
+
     expect_tensor(
         call="generate of 6 tokens after 2 rows of 20, longer than the block of 16",
         actual=actual,

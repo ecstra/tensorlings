@@ -743,20 +743,21 @@ BPE4_LESSON = prose(
     """
     Why bytes and merges, and not characters or words? Here is tiny
     Shakespeare. Each tokenizer learned from its first 100,000 characters and
-    was measured on the next 50,000.
+    was measured on the next 50,000. A word here is a run of letters, as
+    `re.findall(r"[A-Za-z]+", text)` finds them.
 
     | Tokens | Vocabulary | Tokens for the 50,000 characters |
     |---|---|---|
     | bytes | 256 | 50,000 |
     | BPE, 256 merges | 512 | 24,446, 2.05 bytes each |
     | BPE, 768 merges | 1,024 | 18,643, 2.68 bytes each |
-    | words | 3,472 | 9,090 words, 12.7% of them unknown |
+    | words | 3,290 | 9,307 words, 11.7% of them unknown |
 
     Bytes make the longest sequences, and a model's cost grows with length,
     the cost of comparing every pair of positions with its square. Words make
-    the shortest, but 12.7% of the words in the later text never appeared in
+    the shortest, but 11.7% of the words in the later text never appeared in
     the first part. A model has no id for them. All of tiny Shakespeare holds
-    14,554 different words, and real text holds far more.
+    13,320 different words, and real text holds far more.
 
     BPE sits between. Common words become single tokens, rare ones split into
     pieces, and nothing is ever unknown, since the bytes are always there.

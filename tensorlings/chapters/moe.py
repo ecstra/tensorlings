@@ -861,33 +861,37 @@ MOE3_LESSON = prose(
     them and a router with a bias hold 2,312, yet each token runs one expert
     and the router, 352. A dense MLP 128 wide holds 2,184 and runs every one.
 
-    Here are the three, trained 1,000 steps on two tasks. In the regions task
-    the input falls near one of 16 centres, and each region has its own linear
-    map. The smooth task is moe2's target, one function everywhere.
+    Here they are, trained 1,000 steps on two tasks, 3 seeds each. In the
+    regions task the input falls near one of 16 centres, and each region has
+    its own linear map. The smooth task is moe2's target, one function
+    everywhere. The experts ran twice, with no capacity limit and at moe2's
+    capacity factor of 1.25.
 
-    | Model | Parameters | Run per token | Regions error | Smooth error |
-    |---|---|---|---|---|
-    | dense, 16 wide | 280 | 280 | 1.417 | 0.0156 |
-    | 8 experts of 16, top 1 | 2,312 | 352 | 0.161 | 0.0154 |
-    | dense, 128 wide | 2,184 | 2,184 | 0.335 | 0.0016 |
+    | Model | Run per token | Regions error | Smooth error |
+    |---|---|---|---|
+    | dense, 16 wide | 280 | 1.42 to 1.49 | 0.0156 to 0.0161 |
+    | 8 experts, no limit | 352 | 0.16 to 0.26 | 0.0140 to 0.0168 |
+    | 8 experts, factor 1.25 | 352 | 1.05 to 1.73 | 0.028 to 0.038 |
+    | dense, 128 wide | 2,184 | 0.33 to 0.38 | 0.0016 to 0.0019 |
 
-    On the regions task the router learned to send 98.5% of each region's
-    inputs to a single expert. Each expert came to own a couple of regions
-    and learned their maps, and the experts beat even the dense layer with as
-    many parameters.
+    With no limit, the router sent 92% to 99% of each region's inputs to one
+    expert. Each expert came to own a couple of regions and learned their
+    maps, and the experts beat even the dense layer with as many parameters.
+
+    At a factor of 1.25 the router still picked well, but 9% to 16% of the
+    inputs found their expert full. The layer gives a dropped token 0, and
+    the experts then lost even to the small dense layer. In a transformer the
+    residual carries a dropped token past the layer, which softens this.
 
     So a mixture of experts pays when the work splits into parts that
-    different experts can own. A language model meets many topics and
-    languages, which is such work. For one smooth job, the experts add nothing
-    over a dense layer that runs as much. A dense layer with as many
-    parameters does far better there.
+    different experts can own. It also needs room in each expert for what is
+    sent to it. A language model meets many topics and languages, which is
+    such work. For one smooth job the experts add nothing, and a dense layer with
+    as many parameters does far better.
 
-    It costs memory for every expert, a router to keep balanced, and on small
-    sizes it costs time. Here 1,000 steps of the experts took about 1.5
-    seconds against about 0.5 for the dense layer 128 wide. A Python loop over
-    8 small experts costs more than one bigger multiplication. The saving is
-    in multiplications, and it shows in large models with experts spread
-    across many GPUs.
+    They also cost memory for every expert and a router to keep balanced. The
+    saving is in multiplications per token, and it shows in large models with
+    experts spread across many GPUs.
     """,
 )
 
@@ -907,8 +911,9 @@ MOE3_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the parameters of a mixture of experts experts of them, plus
-    #   a router with a bias, a Linear from features to experts.
+    # TODO: Return the parameters of a mixture of experts, experts copies of
+    #   that expert, plus a router with a bias, a Linear from features to
+    #   experts.
     def moe_parameters(
         features: int,
         hidden: int,
@@ -1075,6 +1080,16 @@ DYNAMIC1_LESSON = prose(
     It is a design tool too. When a model must choose, look something up or
     switch between paths, make the choice a weight computed from the input.
     Make it soft so it passes a gradient, as 38_soft_design did, and train it.
+
+    Routing needs one more tool. `.scatter(dim, index, values)` writes each
+    value of a row into the column that `index` names for it, leaving every
+    other column as it was. On a row of zeros it turns the top k into a full
+    row of weights, 0 for each expert left out.
+
+    ```python
+    torch.zeros(2, 4).scatter(1, torch.tensor([[3, 0], [1, 2]]), torch.tensor([[0.6, 0.4], [0.9, 0.1]]))
+    # tensor([[0.4000, 0.0000, 0.0000, 0.6000], [0.0000, 0.9000, 0.1000, 0.0000]])
+    ```
     """,
 )
 
@@ -1090,7 +1105,7 @@ DYNAMIC1_SOURCE = source_file(
 
     W_g = torch.tensor([[1.0, -1.0]])
     gate = torch.sigmoid(torch.tensor([[2.0, 0.0]]) @ W_g.T)    # tensor([[0.8808]])
-    picked = torch.zeros(2, 3).scatter(1, torch.tensor([[2], [0]]), 1.0)    # tensor([[0., 0., 1.], [1., 0., 0.]])
+    picked = torch.zeros(2, 3).scatter(1, torch.tensor([[2], [0]]), torch.tensor([[0.7], [0.4]]))    # tensor([[0.0, 0.0, 0.7], [0.4, 0.0, 0.0]])
 
 
     # TODO: Return each feature of x @ W_value.T times its gate,
@@ -1151,7 +1166,7 @@ DYNAMIC1_SOLUTION = source_file(
 
     W_g = torch.tensor([[1.0, -1.0]])
     gate = torch.sigmoid(torch.tensor([[2.0, 0.0]]) @ W_g.T)
-    picked = torch.zeros(2, 3).scatter(1, torch.tensor([[2], [0]]), 1.0)
+    picked = torch.zeros(2, 3).scatter(1, torch.tensor([[2], [0]]), torch.tensor([[0.7], [0.4]]))
 
 
     def gate_layer(

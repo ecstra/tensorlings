@@ -1188,8 +1188,8 @@ INDUCTION1_LESSON = prose(
     torch.diag(torch.full((2,), 5.0), diagonal=-1)    # tensor([[0., 0., 0.], [5., 0., 0.], [0., 5., 0.]])
     ```
 
-    Trained on the task instead, with 32 tokens in sequences of 24, layers of
-    attention alone got this far on new sequences.
+    Trained on the task instead for 3,000 steps, with 32 tokens in sequences
+    of 24, layers of attention alone got this far on new sequences.
 
     | Layers | Right answers |
     |---|---|
@@ -1252,9 +1252,10 @@ INDUCTION1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the answer for each sequence of tokens, of shape
-    #   (batch, steps), as ids. Turn the tokens into one hot rows of size
-    #   vocabulary, run induction_head, and read its last position.
+    # TODO: Return one answer id for each sequence of tokens, which has shape
+    #   (batch, steps), so a result of shape (batch,). Turn the tokens into one
+    #   hot rows of size vocabulary, run induction_head, and read its last
+    #   position.
     def answers(
         tokens: Tensor,
         vocabulary: int,
