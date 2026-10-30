@@ -90,7 +90,7 @@ def time_features(
     steps: int,
     size: int = 16,
 ) -> Tensor:
-    frequencies = torch.arange(1, size // 2 + 1).float()
+    frequencies = torch.arange(1, size // 2 + 1, device=t.device).float()
     angles = (t.float() / steps).unsqueeze(1) * frequencies * math.pi
 
     return torch.cat([torch.sin(angles), torch.cos(angles)], dim=1)
