@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch import Tensor
 
-from ..course import Chapter, Exercise
+from ..course import OPTIMIZER_IMPORTS, Chapter, Exercise
 from ..engine import (
     Checker,
     Described,
+    Mismatch,
     check_on_inputs,
     expect_tensor,
     small_tensor,
@@ -259,4 +261,379 @@ BIDIR1 = Exercise(
     },
     introduces=(),
     check=check_bidir1,
+)
+
+
+# ---------------------------------------------------------------------------
+# bidir2
+# ---------------------------------------------------------------------------
+
+
+def reference_peak_tags(x: Tensor) -> Tensor:
+    lowest = torch.full_like(x[:, :1], float("-inf"))
+    left = torch.cat([lowest, x[:, :-1]], dim=1)
+    right = torch.cat([x[:, 1:], lowest], dim=1)
+
+    return ((x > left) & (x > right)).float()
+
+
+class ReferenceTagger(nn.Module):
+    def __init__(
+        self,
+        hidden_size: int,
+        bidirectional: bool,
+    ) -> None:
+        super().__init__()
+        self.layer = nn.GRU(1, hidden_size, batch_first=True, bidirectional=bidirectional)
+        self.head = nn.Linear(2 * hidden_size if bidirectional else hidden_size, 1)
+
+    def forward(self, x: Tensor) -> Tensor:
+        outputs, _ = self.layer(x.unsqueeze(2))
+
+        return self.head(outputs).squeeze(2)
+
+
+def reference_generate(
+    model: nn.Module,
+    prefix: Tensor,
+    count: int,
+) -> Tensor:
+    sequence = prefix
+
+    with torch.no_grad():
+        for _ in range(count):
+            sequence = torch.cat([sequence, model(sequence)[:, -1:]], dim=1)
+
+    return sequence[:, prefix.shape[1] :]
+
+
+def seeded_tagger(
+    make: type,
+    hidden_size: int,
+    bidirectional: bool,
+    seed: int,
+) -> nn.Module:
+    torch.manual_seed(seed)
+
+    return make(hidden_size, bidirectional)
+
+
+def tagging_accuracy(
+    model: nn.Module,
+    seed: int,
+    train_steps: int,
+) -> float:
+    """The run behind the lesson's first table, Adam at 0.01 on batches of 64 sequences of 20 numbers."""
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
+    generator = torch.Generator().manual_seed(seed + 1)
+
+    for _ in range(train_steps):
+        x = torch.randn(64, 20, generator=generator)
+        loss = F.binary_cross_entropy_with_logits(model(x), reference_peak_tags(x))
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+    x = torch.randn(1000, 20, generator=torch.Generator().manual_seed(77))
+
+    with torch.no_grad():
+        return ((model(x) > 0).float() == reference_peak_tags(x)).float().mean().item()
+
+
+def noisy_waves(
+    count: int,
+    steps: int,
+    generator: torch.Generator,
+) -> tuple[Tensor, Tensor]:
+    """Sine waves of random speed and start, with a little noise on top, and the waves without it."""
+    speed = 0.2 + 0.4 * torch.rand(count, 1, generator=generator)
+    start = 2 * torch.pi * torch.rand(count, 1, generator=generator)
+    clean = torch.sin(speed * torch.arange(steps) + start)
+
+    return clean + 0.1 * torch.randn(count, steps, generator=generator), clean
+
+
+def leak_errors(
+    model: nn.Module,
+    seed: int,
+    train_steps: int,
+) -> tuple[float, float]:
+    """The run behind the lesson's second table. It trains on the next value of noisy waves, then measures
+    that error and the error of 20 steps the model writes itself after 20 real ones."""
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
+    generator = torch.Generator().manual_seed(seed + 1)
+
+    for _ in range(train_steps):
+        x, _ = noisy_waves(64, 30, generator)
+        loss = F.mse_loss(model(x[:, :-1]), x[:, 1:])
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+    x, clean = noisy_waves(500, 40, torch.Generator().manual_seed(77))
+
+    with torch.no_grad():
+        teacher = F.mse_loss(model(x[:, :-1]), x[:, 1:]).item()
+
+    written = reference_generate(model, x[:, :20], 20)
+
+    return teacher, F.mse_loss(written, clean[:, 20:]).item()
+
+
+BIDIR2_LESSON = prose(
+    """
+    A bidirectional RNN sees the whole sequence at every position. Whether
+    that is fair depends on the job.
+
+    Tagging labels every position of a sequence that already exists in full,
+    like marking each word of a sentence as a noun or a verb. Reading ahead is
+    fair there, since the end is already written. Here each of 20 random
+    numbers is tagged 1 when it is larger than both its neighbours, a peak. A
+    GRU of 16 units trains for 300 steps.
+
+    | Reads | Tags right |
+    |---|---|
+    | forward only | 86.3% |
+    | both ways | 98.2% |
+
+    Tagging nothing as a peak already gets 64.9%. Reading forward only, a
+    step can't see whether the next number is smaller, so it guesses from its
+    own size.
+
+    Generating writes a sequence one step at a time, each new step from the
+    steps before it. The future doesn't exist yet, so a model that needs it
+    can't run. Worse, it looks better in training. Train each model to give
+    the next value of a noisy wave, the target being the input moved one step.
+
+    ```python
+    x = torch.tensor([[1.0, 2.0, 3.0, 4.0]])
+    x[:, :-1], x[:, 1:]    # (tensor([[1., 2., 3.]]), tensor([[2., 3., 4.]]))
+    ```
+
+    | Reads | Error on the next value in training | Error on 20 steps it wrote itself |
+    |---|---|---|
+    | forward only | 0.021 | 0.052 |
+    | both ways | 0.0025 | 0.555 |
+
+    The backward RNN reads the very value it is asked to give, so its error
+    in training is 8 times lower. When it writes its own steps that value
+    isn't there yet, and it does worse than a flat line at 0, which scores
+    0.500.
+
+    So read both ways when the whole input exists before any output is
+    needed. Tagging is one case, and so is an encoder that reads a whole
+    sentence before 43_seq2seq's decoder writes. Read forward only when the
+    model writes its own next step. Section 7 meets this same leak again.
+    """,
+)
+
+BIDIR2_SOURCE = source_file(
+    '''
+    # bidir2.py
+
+    import torch
+    import torch.nn as nn
+    from torch import Tensor
+
+    x = torch.tensor([[1.0, 3.0, 2.0]])
+    rises = x[:, 1:] > x[:, :-1]    # tensor([[ True, False]]), each step against the one before
+
+
+    # TODO: Return 1.0 at every position of x, of shape (batch, steps), whose
+    #   number is larger than both its neighbours, and 0.0 elsewhere. The
+    #   first and last steps have one neighbour each.
+    def peak_tags(x: Tensor) -> Tensor:
+        ...
+
+
+    both = nn.GRU(1, 16, batch_first=True, bidirectional=True)
+    width = both(torch.zeros(2, 20, 1))[0].shape    # torch.Size([2, 20, 32]), both directions joined
+
+
+    # TODO: Finish Tagger. self.head turns each step's output of self.layer
+    #   into one score, so its input size depends on bidirectional. forward
+    #   takes x of shape (batch, steps) and returns one score per step, of
+    #   shape (batch, steps).
+    class Tagger(nn.Module):
+        def __init__(
+            self,
+            hidden_size: int,
+            bidirectional: bool,
+        ) -> None:
+            super().__init__()
+            self.layer = nn.GRU(1, hidden_size, batch_first=True, bidirectional=bidirectional)
+            self.head = ...
+
+        def forward(self, x: Tensor) -> Tensor:
+            ...
+
+
+    longer = torch.cat([torch.zeros(2, 3), torch.ones(2, 1)], dim=1)    # shape (2, 4), one step longer
+
+
+    # TODO: Return count steps that model writes after prefix, of shape
+    #   (batch, steps), as one tensor of shape (batch, count). At each step,
+    #   run model on the sequence so far, take its score at the last position
+    #   as the next value, and add it on. Record nothing for autograd.
+    def generate(
+        model: nn.Module,
+        prefix: Tensor,
+        count: int,
+    ) -> Tensor:
+        ...
+    ''',
+)
+
+BIDIR2_SOLUTION = source_file(
+    '''
+    # bidir2.py, a solution for comparison
+
+    import torch
+    import torch.nn as nn
+    from torch import Tensor
+
+    x = torch.tensor([[1.0, 3.0, 2.0]])
+    rises = x[:, 1:] > x[:, :-1]
+
+
+    # Each step's neighbours, with -inf past the ends so the ends compare with one neighbour only.
+    def peak_tags(x: Tensor) -> Tensor:
+        lowest = torch.full_like(x[:, :1], float("-inf"))
+        left = torch.cat([lowest, x[:, :-1]], dim=1)
+        right = torch.cat([x[:, 1:], lowest], dim=1)
+
+        return ((x > left) & (x > right)).float()
+
+
+    both = nn.GRU(1, 16, batch_first=True, bidirectional=True)
+    width = both(torch.zeros(2, 20, 1))[0].shape
+
+
+    class Tagger(nn.Module):
+        def __init__(
+            self,
+            hidden_size: int,
+            bidirectional: bool,
+        ) -> None:
+            super().__init__()
+            self.layer = nn.GRU(1, hidden_size, batch_first=True, bidirectional=bidirectional)
+            self.head = nn.Linear(2 * hidden_size if bidirectional else hidden_size, 1)
+
+        def forward(self, x: Tensor) -> Tensor:
+            outputs, _ = self.layer(x.unsqueeze(2))
+
+            return self.head(outputs).squeeze(2)
+
+
+    longer = torch.cat([torch.zeros(2, 3), torch.ones(2, 1)], dim=1)
+
+
+    def generate(
+        model: nn.Module,
+        prefix: Tensor,
+        count: int,
+    ) -> Tensor:
+        sequence = prefix
+
+        with torch.no_grad():
+            for _ in range(count):
+                sequence = torch.cat([sequence, model(sequence)[:, -1:]], dim=1)
+
+        return sequence[:, prefix.shape[1] :]
+    ''',
+)
+
+
+def check_tagger_forward(found: type) -> None:
+    for bidirectional in (False, True):
+        call = f"Tagger(4, {bidirectional})"
+        model = seeded_tagger(found, 4, bidirectional, 470)
+        reference = seeded_tagger(ReferenceTagger, 4, bidirectional, 470)
+        x = small_tensor(471, 3, 6) / 2
+
+        with torch.no_grad():
+            expected = reference(x)
+
+        expect_tensor(
+            call=f"{call} on 3 sequences of 6 steps",
+            actual=model(x),
+            expected=expected,
+        )
+
+
+def check_tagger_learns(found: type) -> None:
+    accuracy = tagging_accuracy(
+        model=seeded_tagger(found, 16, True, 0),
+        seed=0,
+        train_steps=300,
+    )
+
+    if accuracy < 0.95:
+        raise Mismatch(
+            f"Tagger(16, True) trained for 300 steps tags {accuracy:.1%} of new steps right, but it should pass 95%.",
+        )
+
+
+def check_generate(found: object) -> None:
+    prefix = small_tensor(472, 2, 5) / 3
+    expected = reference_generate(seeded_tagger(ReferenceTagger, 4, False, 473), prefix, 4)
+    expect_tensor(
+        call="generate with Tagger(4, False), a prefix of shape (2, 5) and count 4",
+        actual=found(seeded_tagger(ReferenceTagger, 4, False, 473), prefix.clone(), 4),
+        expected=expected,
+    )
+
+
+def check_bidir2(checker: Checker) -> None:
+    check_on_inputs(
+        checker=checker,
+        function="peak_tags",
+        description="tags each number larger than both neighbours",
+        inputs=(
+            (torch.tensor([[1.0, 3.0, 2.0, 5.0], [4.0, 1.0, 2.0, 0.0]]),),
+            (torch.tensor([[2.0, 2.0, 1.0, 3.0, 3.0]]),),
+            (small_tensor(474, 3, 7) + torch.linspace(0.0, 0.1, 7),),
+        ),
+        reference=reference_peak_tags,
+        expect=expect_tensor,
+    )
+    checker.test_method(
+        class_name="Tagger",
+        method="forward",
+        description="gives one score per step, reading one way or both",
+        run=check_tagger_forward,
+    )
+    checker.test_method(
+        class_name="Tagger",
+        method="forward",
+        description="reading both ways, learns to tag the peaks",
+        run=check_tagger_learns,
+    )
+    checker.test(
+        function="generate",
+        description="writes each next step from the steps before it",
+        run=check_generate,
+    )
+
+
+BIDIR2 = Exercise(
+    name="bidir2",
+    chapter=BIDIRECTIONAL,
+    title="When reading ahead is fair",
+    lesson=BIDIR2_LESSON,
+    source=BIDIR2_SOURCE,
+    solution=BIDIR2_SOLUTION,
+    hints={
+        "peak_tags": "Build each step's left and right neighbour by shifting x one step with torch.cat, putting "
+        "float('-inf') past the ends. A peak is larger than both, as floats.",
+        "Tagger.forward": "In __init__, the head is nn.Linear(2 * hidden_size, 1) when bidirectional and "
+        "nn.Linear(hidden_size, 1) when not. forward runs self.layer on x.unsqueeze(2), then the head, then "
+        ".squeeze(2).",
+        "generate": "Inside torch.no_grad(), repeat count times: model(sequence)[:, -1:] is the next value, so "
+        "torch.cat it onto sequence along dim=1. Return the part after the prefix.",
+    },
+    introduces=(),
+    check=check_bidir2,
+    time_limit=30,
+    imports_first=OPTIMIZER_IMPORTS,
 )
