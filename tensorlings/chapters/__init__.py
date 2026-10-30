@@ -37,6 +37,7 @@ from . import (
     dropout,
     embeddings,
     equivariance,
+    fast_gpt,
     finetuning,
     flash_attention,
     flows,
@@ -193,6 +194,7 @@ CHAPTERS: list[Chapter] = [
     parallel.PARALLEL,
     scaling.SCALING,
     data_quality.DATA_QUALITY,
+    fast_gpt.FAST_GPT,
 ]
 
 EXERCISES: list[Exercise] = [
@@ -502,4 +504,8 @@ EXERCISES: list[Exercise] = [
     scaling.SCALING3,
     data_quality.DATA1,
     data_quality.DATA2,
+    data_quality.QUIZ15,
+    fast_gpt.FAST1,
+    fast_gpt.FAST2,
+    fast_gpt.FAST3,
 ]

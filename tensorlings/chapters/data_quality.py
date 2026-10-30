@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import math
 import random
 import statistics
 
-from ..course import Chapter, Exercise
+import torch
+import torch.nn as nn
+from torch import Tensor
+
+from ..course import QUIZZES, Chapter, Exercise
 from ..data import load_shakespeare
 from ..engine import (
     Checker,
@@ -15,6 +20,8 @@ from ..engine import (
     expect_value,
 )
 from ..text import prose, source_file
+from .cost import tied_pair
+from .scaling import expect_relative
 
 DATA_QUALITY = Chapter(
     folder="92_data",
@@ -826,4 +833,339 @@ DATA2 = Exercise(
     },
     introduces=("stop word",),
     check=check_data2,
+)
+
+
+# ---------------------------------------------------------------------------
+# quiz15
+# ---------------------------------------------------------------------------
+
+QUIZ15_LESSON = prose(
+    """
+    This quiz has no examples and no new tools. Each function combines moves
+    from Section 12. If a step is unclear, the exercise in the table shows it.
+
+    | Function | Moves | Shown in |
+    |---|---|---|
+    | `budget_tokens` | a model's parameters counted once each, then 6 FLOPs per parameter per token | cost1, cost2 |
+    | `linear_bound` | a Linear's FLOPs and the bytes it reads and writes, then whichever takes longer | cost1, profile2 |
+    | `cache_bytes_for` | a key and a value per layer for every token, times the bytes of one number | kvcache2, precision1 |
+    | `roundtrip_error` | a scale per row, rounded to whole numbers and back, then the relative error | quant1, quant2 |
+    | `fit_and_predict` | a straight line fitted to the logs, then the power law it gives, followed out | scaling1 |
+    | `near_duplicate` | each text's word shingles, then their Jaccard similarity against a threshold | data1 |
+    """,
+)
+
+QUIZ15_SOURCE = source_file(
+    '''
+    # quiz15.py
+    #
+    # No examples and no new tools. Each function combines moves from Section 12.
+
+    import math
+
+    import torch
+    import torch.nn as nn
+    from torch import Tensor
+
+
+    # TODO: Return how many tokens a training budget of flops buys for model, at
+    #   6 FLOPs per parameter per token, rounded down to a whole number. Count
+    #   each parameter of model once.
+    def budget_tokens(
+        model: nn.Module,
+        flops: float,
+    ) -> int:
+        ...
+
+
+    # TODO: Return "memory" or "compute", whichever takes longer for linear's
+    #   forward pass on rows rows. Each multiply and add is 2 FLOPs. It reads
+    #   its input and its weight and writes its output, bytes_per_number bytes
+    #   a number. Leave the bias out. Return "compute" when the two are equal.
+    def linear_bound(
+        linear: nn.Linear,
+        rows: int,
+        bytes_per_number: int,
+        flops_per_second: float,
+        bytes_per_second: float,
+    ) -> str:
+        ...
+
+
+    # TODO: Return the bytes a KV cache holds for one text of tokens tokens. Each
+    #   of layers layers keeps a key and a value of width numbers for every
+    #   token, each number of type dtype.
+    def cache_bytes_for(
+        layers: int,
+        width: int,
+        tokens: int,
+        dtype: torch.dtype,
+    ) -> int:
+        ...
+
+
+    # TODO: Quantize weights to bits bits with absmax and a scale per row, turn
+    #   them back into floats, and return the norm of the difference over the
+    #   norm of weights, as a plain number.
+    def roundtrip_error(
+        weights: Tensor,
+        bits: int,
+    ) -> float:
+        ...
+
+
+    # TODO: Fit loss = scale * n ** -alpha by least squares on the logs, and
+    #   return the loss it gives at target, as a plain number.
+    def fit_and_predict(
+        n: Tensor,
+        loss: Tensor,
+        target: float,
+    ) -> float:
+        ...
+
+
+    # TODO: Return whether a and b are near duplicates, which is when the
+    #   Jaccard similarity of their sets of n word shingles is at least
+    #   threshold. Take the words from text.lower().split(), and take the
+    #   similarity as 0 when both sets are empty.
+    def near_duplicate(
+        a: str,
+        b: str,
+        n: int,
+        threshold: float,
+    ) -> bool:
+        ...
+    ''',
+)
+
+QUIZ15_PARTS = '''
+def budget_tokens(
+    model: nn.Module,
+    flops: float,
+) -> int:
+    parameters = sum(parameter.numel() for parameter in model.parameters())
+
+    return int(flops // (6 * parameters))
+
+
+def linear_bound(
+    linear: nn.Linear,
+    rows: int,
+    bytes_per_number: int,
+    flops_per_second: float,
+    bytes_per_second: float,
+) -> str:
+    inputs, outputs = linear.in_features, linear.out_features
+    flops = 2 * rows * inputs * outputs
+    numbers = rows * inputs + inputs * outputs + rows * outputs
+
+    if numbers * bytes_per_number / bytes_per_second > flops / flops_per_second:
+        return "memory"
+
+    return "compute"
+
+
+def cache_bytes_for(
+    layers: int,
+    width: int,
+    tokens: int,
+    dtype: torch.dtype,
+) -> int:
+    return 2 * layers * tokens * width * torch.zeros(0, dtype=dtype).element_size()
+
+
+def roundtrip_error(
+    weights: Tensor,
+    bits: int,
+) -> float:
+    levels = 2 ** (bits - 1) - 1
+    scales = weights.abs().amax(dim=1, keepdim=True) / levels
+    restored = (weights / scales).round() * scales
+
+    return ((weights - restored).norm() / weights.norm()).item()
+
+
+def fit_and_predict(
+    n: Tensor,
+    loss: Tensor,
+    target: float,
+) -> float:
+    with_ones = torch.stack([torch.log(n), torch.ones_like(n)], dim=1)
+    slope, intercept = torch.linalg.lstsq(with_ones, torch.log(loss)).solution.tolist()
+
+    return math.exp(intercept) * target**slope
+
+
+def near_duplicate(
+    a: str,
+    b: str,
+    n: int,
+    threshold: float,
+) -> bool:
+    sets = []
+
+    for text in (a, b):
+        words = text.lower().split()
+        sets.append({tuple(words[start : start + n]) for start in range(len(words) - n + 1)})
+
+    first, second = sets
+    union = first | second
+    similarity = len(first & second) / len(union) if union else 0.0
+
+    return similarity >= threshold
+'''
+
+QUIZ15_SOLUTION = source_file(
+    '''
+    # quiz15.py, a solution for comparison
+
+    import math
+
+    import torch
+    import torch.nn as nn
+    from torch import Tensor
+
+
+''' + indented(QUIZ15_PARTS) + '''
+    ''',
+)
+
+QUIZ15_REFERENCE = namespace_of("import math\nimport torch\nimport torch.nn as nn\nfrom torch import Tensor\n" + QUIZ15_PARTS)
+
+
+def seeded_layers(
+    seed: int,
+    *layers: nn.Module,
+) -> nn.Module:
+    torch.manual_seed(seed)
+
+    return nn.Sequential(*layers)
+
+
+def rows_of_scales(
+    seed: int,
+    scales: list[float],
+    columns: int,
+) -> Tensor:
+    """Weights whose rows run at different sizes, so one scale for the whole tensor shows."""
+    weights = torch.randn(len(scales), columns, generator=torch.Generator().manual_seed(seed))
+
+    return weights * torch.tensor(scales).unsqueeze(1)
+
+
+def power_law_points(
+    seed: int,
+    scale: float,
+    alpha: float,
+) -> tuple[Tensor, Tensor]:
+    n = torch.tensor([1e3, 3e3, 1e4, 3e4, 1e5])
+    noise = 1 + 0.02 * torch.randn(len(n), generator=torch.Generator().manual_seed(seed))
+
+    return n, scale * n**-alpha * noise
+
+
+def check_quiz15(checker: Checker) -> None:
+    check_on_inputs(
+        checker=checker,
+        function="budget_tokens",
+        description="divides the FLOPs by 6 per parameter per token",
+        inputs=(
+            (Described(seeded_layers(990, nn.Linear(10, 5)), "nn.Linear(10, 5)"), 6000.0),
+            (Described(seeded_layers(991, nn.Linear(4, 8), nn.ReLU(), nn.Linear(8, 2)), "a Linear from 4 to 8, a ReLU, a Linear from 8 to 2"), 1e6),
+            (Described(tied_pair(), "an Embedding(10, 4) and a Linear sharing its weight"), 5000.0),
+        ),
+        reference=QUIZ15_REFERENCE["budget_tokens"],
+        expect=expect_value,
+    )
+    check_on_inputs(
+        checker=checker,
+        function="linear_bound",
+        description="compares the time for the FLOPs with the time for the bytes",
+        inputs=(
+            (Described(nn.Linear(512, 512), "nn.Linear(512, 512)"), 1, 4, 1e12, 1e11),
+            (Described(nn.Linear(64, 64), "nn.Linear(64, 64)"), 30, 4, 1e12, 1e11),
+            (Described(nn.Linear(256, 256), "nn.Linear(256, 256)"), 32, 4, 1e12, 1e11),
+            (Described(nn.Linear(512, 512), "nn.Linear(512, 512)"), 4096, 4, 1e12, 1e11),
+        ),
+        reference=QUIZ15_REFERENCE["linear_bound"],
+        expect=expect_value,
+    )
+    check_on_inputs(
+        checker=checker,
+        function="cache_bytes_for",
+        description="counts a key and a value per layer per token",
+        inputs=(
+            (4, 128, 128, torch.float32),
+            (8, 512, 1024, torch.float16),
+            (2, 64, 10, torch.bfloat16),
+        ),
+        reference=QUIZ15_REFERENCE["cache_bytes_for"],
+        expect=expect_value,
+    )
+    check_on_inputs(
+        checker=checker,
+        function="roundtrip_error",
+        description="quantizes with a scale per row and measures what is lost",
+        inputs=(
+            (rows_of_scales(992, [0.1, 1.0, 5.0], 6), 8),
+            (rows_of_scales(993, [2.0, 0.05, 0.5, 1.0], 5), 4),
+        ),
+        reference=QUIZ15_REFERENCE["roundtrip_error"],
+        expect=expect_close,
+    )
+    check_on_inputs(
+        checker=checker,
+        function="fit_and_predict",
+        description="fits a power law on the logs and follows it out",
+        inputs=(
+            (*power_law_points(994, 6.0, 0.12), 1e7),
+            (*power_law_points(995, 2.5, 0.3), 1e6),
+        ),
+        reference=QUIZ15_REFERENCE["fit_and_predict"],
+        expect=lambda call, actual, expected: expect_relative(
+            call=call,
+            actual=actual,
+            expected=expected,
+            share=1e-4,
+        ),
+    )
+    check_on_inputs(
+        checker=checker,
+        function="near_duplicate",
+        description="compares the shingles' Jaccard similarity with the threshold",
+        inputs=(
+            ("the quick brown fox jumps over the lazy dog", "The quick brown fox jumps over the lazy cat", 2, 0.7),
+            ("the quick brown fox jumps over the lazy dog", "the quick brown fox jumps over the lazy cat", 3, 0.8),
+            ("x y z", "x y w", 1, 0.5),
+            ("to be", "or not", 3, 0.5),
+        ),
+        reference=QUIZ15_REFERENCE["near_duplicate"],
+        expect=expect_value,
+    )
+
+
+QUIZ15 = Exercise(
+    name="quiz15",
+    chapter=QUIZZES,
+    title="Systems and inference, start to finish",
+    lesson=QUIZ15_LESSON,
+    source=QUIZ15_SOURCE,
+    solution=QUIZ15_SOLUTION,
+    hints={
+        "budget_tokens": "model.parameters() lists a shared tensor once. Add up numel(), then floor divide flops by 6 "
+        "times that count.",
+        "linear_bound": "The FLOPs are 2 * rows * in_features * out_features. The numbers moved are the input, the "
+        "weight and the output added up. Compare bytes over bytes_per_second with FLOPs over flops_per_second.",
+        "cache_bytes_for": "2 for the key and the value, times layers, tokens and width, times the element_size() of "
+        "an empty tensor of that dtype.",
+        "roundtrip_error": "Each row's largest absolute value over 2 ** (bits - 1) - 1 is its scale. Divide, round, "
+        "multiply back, then compare the norms.",
+        "fit_and_predict": "Stack log(n) with a column of ones and solve for log(loss) with torch.linalg.lstsq. The "
+        "slope is minus alpha and the exponent of the intercept is the scale.",
+        "near_duplicate": "Build a set of word tuples for each text. The similarity is the size of the overlap over "
+        "the size of the union.",
+    },
+    introduces=(),
+    check=check_quiz15,
 )
