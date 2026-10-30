@@ -620,15 +620,27 @@ DIFFUSION2_LESSON = prose(
     The step goes in as sine and cosine features, as position2 did for
     positions, so the model can tell step 10 from step 900.
 
-    Why guess the noise, and not the data? The noise has a spread of 1 at
-    every step, so one loss treats every step alike. DDPM's authors found
-    that guessing `x_0` gave worse samples on images. Guessing the noise
-    reached a score of 3.17 on CIFAR-10, the best at the time.
+    Why guess the noise, and not the data? Either guess gives the other, by
+    the formula above. The two differ in how the loss weighs the steps.
 
-    That edge is about images. This chapter trains on points of a 2D ring.
-    There, after 12,000 steps of training, guessing `x_0` came closer to the
-    ring than guessing the noise, 0.035 against 0.065. Which target trains
-    best depends on the data.
+    ```text
+    guess - noise = sqrt(alpha_bar_t / (1 - alpha_bar_t)) * (x_0 - x_0 guess)
+    ```
+
+    So scoring the noise is scoring `x_0` with each step weighted by
+    `alpha_bar_t / (1 - alpha_bar_t)`. That weight is large at early steps
+    and near 0 at late ones. DDPM's authors found this weighting gave better
+    samples on images than guessing `x_0`. Guessing the noise reached an FID
+    of 3.17 on CIFAR-10, the best at the time. FID measures how far a batch
+    of generated images sits from real ones, so lower is better.
+
+    That edge is about images. This chapter trains on points of a 2D ring,
+    and scores 2,000 drawn points by their average distance from the ring.
+    The data itself scores 0.039, since its points sit a little off the ring.
+    After 12,000 steps of training, guessing `x_0` scored 0.035 and guessing
+    the noise 0.065. The first hugs the ring a little tighter than the data,
+    and the second strays further. Here guessing `x_0` came closer to the
+    data, so which target trains best depends on the data.
     """,
 )
 
@@ -1223,12 +1235,13 @@ def check_guided_noise(found: object) -> None:
 
 def check_guided_sample(found: object) -> None:
     """The file's ddim_sample is swapped for one that records what it was given, so guided_sample is held to
-    passing the right shape and steps, and a guess of the noise that is the guided one."""
+    passing the right shape, steps and generator, and a guess of the noise that is the guided one."""
     model = seeded_model(REFERENCE["ConditionalDenoiser"], STEPS, 4)
     labels = torch.tensor([3, 0, 2])
     _, alpha_bars = schedule()
-    calls: list[tuple[Callable[[Tensor, Tensor], Tensor], tuple[int, ...], int]] = []
+    calls: list[tuple[Callable[[Tensor, Tensor], Tensor], tuple[int, ...], int, torch.Generator]] = []
     marker = torch.full((3, 2), 7.0)
+    given_generator = torch.Generator().manual_seed(710)
 
     def scripted_ddim_sample(
         predict_noise: Callable[[Tensor, Tensor], Tensor],
@@ -1237,7 +1250,7 @@ def check_guided_sample(found: object) -> None:
         steps: int,
         generator: torch.Generator,
     ) -> Tensor:
-        calls.append((predict_noise, tuple(shape), steps))
+        calls.append((predict_noise, tuple(shape), steps, generator))
 
         return marker
 
@@ -1246,17 +1259,20 @@ def check_guided_sample(found: object) -> None:
     namespace["ddim_sample"] = scripted_ddim_sample
 
     try:
-        actual = found(model, labels, 4, alpha_bars, 25, 3.0, torch.Generator().manual_seed(710))
+        actual = found(model, labels, 4, alpha_bars, 25, 3.0, given_generator)
     finally:
         namespace["ddim_sample"] = original
 
     if not calls:
         raise Mismatch("guided_sample never called ddim_sample.")
 
-    predict_noise, shape, steps = calls[0]
+    predict_noise, shape, steps, generator = calls[0]
 
     if shape != (3, 2) or steps != 25:
         raise Mismatch(f"guided_sample passed ddim_sample the shape {shape} and {steps} steps, but it should pass (3, 2) and 25.")
+
+    if generator is not given_generator:
+        raise Mismatch("guided_sample should hand ddim_sample the generator it was given, so the samples repeat.")
 
     x = small_tensor(711, 3, 2) / 3
     t = torch.full((3,), 600)

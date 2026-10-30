@@ -212,9 +212,9 @@ SETS1_SOURCE = source_file(
 
 
     # TODO: Return the largest change, as a plain number, between model's
-    #   answers for x and for x with every set's elements listed in order.
-    #   order is a tensor of positions, like tensor([2, 0, 1]). Record nothing
-    #   for autograd.
+    #   answers for x and for x with every set's elements taken in the order
+    #   that order gives. order is a tensor of positions, like
+    #   tensor([2, 0, 1]). Record nothing for autograd.
     def order_gap(
         model: nn.Module,
         x: Tensor,
@@ -470,7 +470,7 @@ SETS2_LESSON = prose(
 
     `.argsort()` gives the positions that would sort a tensor. Sorting random
     numbers that way gives a random order. Two index tensors pick one element
-    per pair of positions, as adder1's sums did.
+    per pair of positions, as masked2's patches did.
 
     ```python
     torch.tensor([0.7, 0.1, 0.4]).argsort()    # tensor([1, 2, 0])

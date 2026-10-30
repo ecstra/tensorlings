@@ -508,7 +508,8 @@ EQUIVARIANCE2_LESSON = prose(
     | EGNN | 7.5e-8 | 2.4e-7 |
     | an MLP on features and coordinates | 0.64 | 0.68 |
 
-    The same EGNN layer, with the points mirrored, gives gaps of exactly 0.
+    The same EGNN layer, with the points mirrored by flipping one coordinate,
+    gives gaps of exactly 0.
     With the points shuffled, its outputs shuffle the same way, to within
     3e-8. The paper points out that it needs none of the spherical harmonics
     that earlier equivariant networks were built on.
@@ -834,14 +835,16 @@ EQUIVARIANCE3_LESSON = prose(
     answers. It has every angle times 720 orders of the points to learn, and
     an MLP of 64 units doesn't manage it.
 
-    Teaching does as well when the symmetry is small. With the points always
-    in their template's order and only the turn to learn, both models got
-    100% at 1,000 sets.
+    Teaching does as well when the symmetry is small. Keep each set's points
+    in their template's order, so only the turn is left to learn. At 1,000
+    sets the taught model then got 100%, and so did an MLP on the same
+    distances unsorted. The sorted distances stayed at 96.7%, since sorting
+    throws away which pair each distance belongs to.
 
     Building in more symmetry than the task has loses information for good.
-    Distances can't tell a shape from its mirror image. On telling one shape
-    from its mirror, the built in model got 50.1%, a coin flip, and the taught
-    one 100%.
+    Distances can't tell a shape from its mirror image. Here the task is one
+    shape against its mirror, with only the turn to learn. Both distance
+    models got 50%, a coin flip, and the taught one 100%.
 
     So build in the symmetries the data has for sure, and no more. Teach the
     ones that only hold roughly, or that the structure can't express.
@@ -1174,8 +1177,8 @@ EQUIVARIANCE4_LESSON = prose(
 
     Here is the recipe for cyclic shifts. A circular convolution and a ReLU,
     a max pool of 2, another convolution and ReLU, then the mean over the
-    positions. The gaps below are the largest change of 32 outputs after each
-    shift of their signals of 16.
+    positions. Each gap below is the largest change in any output, over 32
+    random signals of length 16 and every even or every odd shift.
 
     | Model | Even shifts | Odd shifts |
     |---|---|---|
@@ -1344,7 +1347,7 @@ QUIZ13_LESSON = prose(
     | `deep_set` | a network on each element, a sum over the set, a network on the sum | sets1 |
     | `messages_in` | the messages along every edge summed at the node they reach, with `index_add_` | message1 |
     | `gcn_step` | self loops, the GCN's two sided normalization, then the features mixed and weighted | message2 |
-    | `pairwise_distances` | the distance between every two points, unchanged by any turn or shift | equivariance2 |
+    | `pairwise_distances` | every difference of two points, as squared_distances made them, then each one's length with `.norm` | equivariance2, equivariance3 |
     | `invariance_gap` | the largest change in a function's output when its input is transformed | equivariance1 |
     """,
 )

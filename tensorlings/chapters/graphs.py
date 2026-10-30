@@ -611,6 +611,11 @@ MESSAGE2_LESSON = prose(
     H' = ReLU(D^(-1/2) (A + I) D^(-1/2) H W)
     ```
 
+    Kipf and Welling wrote this for undirected graphs. There a row's sum
+    equals graph1's degree, the edges arriving at a node. On a one way graph
+    a row's sum counts the edges leaving a node instead. This chapter takes
+    the row's sum.
+
     Without the division, a node with 100 neighbours adds 100 messages and a
     node with 2 adds 2. Features grow with degree, and stacking layers makes
     them grow without end. The self loop keeps a node's own features in its

@@ -1315,6 +1315,8 @@ CASES: list[tuple[str, str, str, str]] = [
     ("digits3", "clipped_ddim never clamps", "/ alpha_bars[t].sqrt()).clamp(-1, 1)", "/ alpha_bars[t].sqrt())"),
     ("digits3", "guided_digits ignores the strength", "guided_noise(model, x, t, labels, NULL, w)", "guided_noise(model, x, t, labels, NULL, 0.0)"),
     ("digits3", "share_right records for autograd", "    with torch.no_grad():\n        return (classifier", "    if True:\n        return (classifier"),
+    ("diffusion4", "guided_sample draws from a fresh generator", "(len(labels), 2), alpha_bars, steps, generator)", "(len(labels), 2), alpha_bars, steps, torch.Generator().manual_seed(0))"),
+    ("vq1", "straight_through lets quantized have a gradient", "return z + (quantized - z).detach()", "return quantized + z - z.detach()"),
     ("masked1", "choose gives the comparison as floats", "return torch.rand(ids.shape, generator=generator) < rate", "return (torch.rand(ids.shape, generator=generator) < rate).float()"),
     ("masked1", "corrupt gives the ids as floats", "return torch.where(chosen & (roll >= 0.8) & (roll < 0.9), random_ids, corrupted)", "return torch.where(chosen & (roll >= 0.8) & (roll < 0.9), random_ids, corrupted).float()"),
     ("masked1", "copy_scores typed in from a failing check", "return right.float().mean().item(), right[chosen].float().mean().item()", "return 0.66, 0.0810811"),

@@ -286,7 +286,7 @@ VQ1_SOURCE = source_file(
 
 
     # TODO: Return a tensor whose value is quantized, but whose gradient goes
-    #   to z unchanged, as if the swap weren't there.
+    #   to z unchanged, as if the swap weren't there, and none to quantized.
     def straight_through(
         z: Tensor,
         quantized: Tensor,
