@@ -2,7 +2,7 @@
 name: TODO-017-phase-6-section-13
 kind: todo
 description: your own modules, combining and the design method, papers and interpretability, then the echo canceller, quant forecaster and own module projects
-updated: 2026-10-30
+updated: 2026-10-31
 links: []
 status: open
 by: agent
@@ -20,7 +20,7 @@ Phase 6 of the plan build-tensorlings, Section 13 as [the detailed curriculum](.
 |---|---|---|---|---|
 | 1 | Write 94_combining | | agent | done |
 | 2 | Write 95_design_method | | agent | done |
-| 3 | Write 96_papers and 97_interpretability | | agent | pending |
+| 3 | Write 96_papers and 97_interpretability | | agent | done |
 | 4 | Build the echo canceller project, 98_echo_canceller | | agent | done |
 | 5 | Build the quant forecaster project, 99_quant_forecaster | | agent | done |
 | 6 | Write quiz16 and build the own module project, 100_own_module | | agent | done |
