@@ -263,7 +263,9 @@ DATA1_LESSON = prose(
     Comparing every pair takes time that grows with the square of the
     documents. Broder's MinHash shrinks each set to a short signature. Two
     sets share their smallest hash with a chance equal to their similarity,
-    so a few hundred hashes estimate it.
+    so a few hundred hashes estimate it, and each comparison gets cheap.
+    Skipping most pairs takes one more step, locality sensitive hashing,
+    which buckets signatures by their parts so only likely pairs meet.
     """,
 )
 
@@ -619,8 +621,9 @@ DATA2_LESSON = prose(
 
     A test set the model has read measures memory. GPT-3's authors flagged a
     test example when a run of 13 of its words, lowercased and without
-    punctuation, also sat in the training data. For short examples they went
-    down to 8, since shorter runs matched by chance.
+    punctuation, also sat in the training data. For benchmarks of short
+    examples they used shorter runs, down to 8, since shorter ones matched
+    by chance.
 
     Here the training text is the first 90% of the play, as gpt1 cut it. The
     test is the 421 speeches of 13 words or more after it. Then 40 test
@@ -733,17 +736,24 @@ def made_document(
 
 HARBOUR = "The ship sailed to the harbour with all of its crew and cargo."
 
-# Each passes or breaks one rule, so a rule left out shows.
+# Each passes or breaks one rule, so a rule left out shows. The last five pass while sitting exactly on a
+# threshold, 50 words, a mean length of 3, 2 stop words, 80% with a letter and one # per 10 words, so a rule
+# written one step off shows too.
 QUALITY_DOCUMENTS = (
     made_document(HARBOUR, 6),
     made_document(HARBOUR, 3),
     made_document(HARBOUR, 7693),
     made_document("buy cheap shoes online best price free shipping sale today", 6),
     made_document("#sun #sea #sand and the #surf with #friends", 8),
-    made_document("Supercalifragilistic extraordinarily incomprehensibilities notwithstanding the", 12),
+    made_document("Supercalifragilistic extraordinarily incomprehensibilities notwithstanding of the", 12),
     made_document("A b c d e f to the of and", 6),
     made_document("Wait for it... and then the... rest of it... with more...", 6),
     made_document("1234 5678 91011 the and of to", 8),
+    made_document("The sailors rowed to the harbour with their heavy cargo", 5),
+    made_document("Cat sat the dog ran far and hid big box", 6),
+    made_document("Sailors rowed the heavy boats toward distant harbours with patience", 6),
+    made_document("Sailors rowed 1234 heavy boats with 5678 the distant harbours", 6),
+    made_document("Sailors rowed the heavy #boats with distant harbours and patience", 6),
 )
 
 LEAK_TRAIN = [

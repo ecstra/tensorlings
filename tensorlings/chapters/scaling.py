@@ -20,6 +20,7 @@ from ..engine import (
     expect_close,
     expect_tensor,
     expect_value,
+    value_text,
 )
 from ..text import prose, source_file
 from .gpt import DATA_PART, GIVEN_MODEL, GPT_FORWARD, GPT_INIT, INIT_SOLUTION
@@ -43,6 +44,7 @@ SCALING = Chapter(
         - [Kaplan and colleagues, scaling laws for neural language models](https://arxiv.org/abs/2001.08361)
         - [Hoffmann and colleagues, training compute optimal large language models](https://arxiv.org/abs/2203.15556)
         - [Besiroglu and colleagues, Chinchilla scaling, a replication attempt](https://arxiv.org/abs/2404.10102)
+        - [Pearce and Song, reconciling Kaplan and Chinchilla scaling laws](https://arxiv.org/abs/2406.12907)
         """,
     ),
 )
@@ -63,6 +65,24 @@ def expect_relative(
     )
 
 
+# A least squares fit in float32 lands a few millionths away from one in float64. The fitted points are noisy by
+# percents, so any precision is a right answer, and the fits are checked to a ten thousandth of their size.
+FIT_SHARE = 1e-4
+
+
+def expect_fit(
+    call: str,
+    actual: object,
+    expected: float,
+) -> None:
+    expect_relative(
+        call=call,
+        actual=actual,
+        expected=expected,
+        share=FIT_SHARE,
+    )
+
+
 def expect_relative_pair(*names: str) -> Callable[..., None]:
     def expect(
         call: str,
@@ -76,7 +96,7 @@ def expect_relative_pair(*names: str) -> Callable[..., None]:
             raise Mismatch(f"{call} should give 2 things, {names[0]} and {names[1]}, but it gives {actual!r}.")
 
         for name, part, wanted in zip(names, actual, expected):
-            expect_relative(
+            expect_fit(
                 call=f"{name} from {call}",
                 actual=part,
                 expected=wanted,
@@ -229,7 +249,7 @@ SCALING1_SOURCE = source_file(
     sizes = torch.tensor([1e6, 1e7, 1e8])
     logs = torch.log(sizes)                                  # tensor([13.8155, 16.1181, 18.4207])
     with_ones = torch.stack([logs, torch.ones(3)], dim=1)    # shape (3, 2), as linreg3 built it
-    back = math.exp(2.0)                                     # 7.389..., what torch.log(7.389) undoes
+    back = math.exp(2.0)                                     # 7.389..., the number whose log is 2.0
 
 
     # TODO: Return scale * n ** -alpha for every size in n.
@@ -736,8 +756,10 @@ def fit_parabola(points: list[tuple[int, float]]) -> float:
 SWEEP_REFERENCE = namespace_of(GIVEN_MODEL + INIT_SOLUTION + GPT_INIT + GPT_FORWARD + DATA_PART + SWEEP_GIVEN + SWEEP_SOLUTION)
 
 # Each budget's widths sit around its valley, since a parabola only fits near its bottom. The first row is the
-# sweep the learner's file runs, kept to four widths since it runs on every check.
+# sweep the learner's file runs on every check, the smallest budget and four widths, about 20 seconds on a busy
+# laptop CPU, so a slower machine still finishes well inside the time limit.
 SWEEPS: tuple[tuple[float, tuple[int, ...]], ...] = (
+    (1e10, (6, 8, 12, 16)),
     (3e10, (8, 12, 16, 24)),
     (1e11, (8, 12, 16, 24, 32)),
     (3e11, (12, 16, 24, 32, 48)),
@@ -808,20 +830,24 @@ SCALING3_LESSON = prose(
 
     | Budget in FLOPs | Widths | Lowest loss, at width | Fitted best N | Its tokens per parameter |
     |---|---|---|---|---|
+    | 1e10 | 6 to 16 | 2.687 at 8 | 1,322 | 953 |
     | 3e10 | 8 to 24 | 2.513 at 12 | 2,797 | 639 |
     | 1e11 | 8 to 32 | 2.306 at 16 | 5,948 | 471 |
     | 3e11 | 12 to 48 | 2.054 at 24 | 10,857 | 424 |
     | 1e12 | 16 to 64 | 1.847 at 32 | 28,100 | 211 |
 
     The best size grows with the budget, as scaling2 said it should.
-    scaling1's power law through these four sizes grows N as C to the 0.65.
+    scaling1's power law through these five sizes grows N as C to the 0.65.
     The Chinchilla paper puts Kaplan's exponent at 0.73 and its own near 0.5.
+    Kaplan counted N without the embeddings, as here, and Chinchilla counted
+    every parameter. Pearce and Song traced much of that gap to this choice,
+    made at small sizes.
 
     The ratio is nowhere near Chinchilla's 20, and it falls as the budget
     grows. This toy is far below the sizes those laws were fitted on. It
-    reads characters in place of words, and goes over the same play up to
-    seven times. Measure your own setting before trusting a law fitted on
-    someone else's.
+    reads characters in place of words. At the largest budget it goes over
+    the same play up to 25 times, about 6 at its best size. Measure your own
+    setting before trusting a law fitted on someone else's.
 
     The last lines of your file run the first row's sweep each time the file
     is checked, four small models on the CPU. Its numbers show in the result.
@@ -904,8 +930,8 @@ SCALING3_SOURCE = source_file(
     # Your own sweep, the lesson's first row. It trains four models each time
     # the file is checked.
     characters, train_data, validation_data = shakespeare_splits()
-    WIDTHS = [8, 12, 16, 24]
-    points = [isoflop_point(width, 3e10, train_data, validation_data) for width in WIDTHS]
+    WIDTHS = [6, 8, 12, 16]
+    points = [isoflop_point(width, 1e10, train_data, validation_data) for width in WIDTHS]
     best = fit_parabola(points)
     ''',
 )
@@ -949,13 +975,13 @@ SCALING3_SOLUTION = source_file(
 
 
     characters, train_data, validation_data = shakespeare_splits()
-    WIDTHS = [8, 12, 16, 24]
-    points = [isoflop_point(width, 3e10, train_data, validation_data) for width in WIDTHS]
+    WIDTHS = [6, 8, 12, 16]
+    points = [isoflop_point(width, 1e10, train_data, validation_data) for width in WIDTHS]
     best = fit_parabola(points)
     ''',
 )
 
-OWN_WIDTHS = (8, 12, 16, 24)
+OWN_WIDTHS = (6, 8, 12, 16)
 
 
 def seeded_sweep_gpt(width: int) -> nn.Module:
@@ -985,12 +1011,37 @@ def repeating_text(
     return pattern.repeat(length // 37 + 1)[:length]
 
 
+def with_reference_helpers(
+    found: Callable[..., object],
+    run: Callable[[], object],
+) -> object:
+    """isoflop_point runs with the reference non_embedding_parameters and steps_for_budget in place of the
+    learner's, so a mistake in one of those shows in its own row, and a step count far too large can't stall
+    this one."""
+    globals_ = found.__globals__
+    names = ("non_embedding_parameters", "steps_for_budget")
+    learners = {name: globals_.get(name) for name in names}
+
+    for name in names:
+        globals_[name] = SWEEP_REFERENCE[name]
+
+    try:
+        return run()
+    finally:
+        for name in names:
+            globals_[name] = learners[name]
+
+
 def check_isoflop_point(found: object) -> None:
     for width, budget, seed in ((8, 1e9, 931), (12, 2e9, 932)):
         train_data = repeating_text(seed, 3000)
-        validation_data = repeating_text(seed, 1500)
-        call = f"isoflop_point({width}, {budget:g}, a repeating text of 3,000 characters, one of 1,500)"
-        actual = found(width, budget, train_data.clone(), validation_data.clone())
+        # Another pattern than training's, so scoring the training text gives a very different loss.
+        validation_data = repeating_text(seed + 100, 1500)
+        call = f"isoflop_point({width}, {budget:g}, a repeating text of 3,000 characters, another of 1,500)"
+        actual = with_reference_helpers(
+            found=found,
+            run=lambda: found(width, budget, train_data.clone(), validation_data.clone()),
+        )
         expected = SWEEP_REFERENCE["isoflop_point"](width, budget, train_data, validation_data)
 
         if actual is None:
@@ -1004,11 +1055,12 @@ def check_isoflop_point(found: object) -> None:
             actual=actual[0],
             expected=expected[0],
         )
+        # Both sides train the same model with the same seeds on the CPU, so a right loss matches closely.
         expect_close(
             call=f"the loss from {call}",
             actual=actual[1],
             expected=expected[1],
-            tolerance=1e-4,
+            tolerance=1e-5,
         )
 
 
@@ -1056,11 +1108,21 @@ def check_best(
     except Mismatch:
         raise Mismatch("best is fitted to points, which isn't right yet. Fix points first.") from None
 
-    expect_relative(
-        call="best",
-        actual=value,
-        expected=SWEEP_REFERENCE["fit_parabola"](points),
-    )
+    expected = SWEEP_REFERENCE["fit_parabola"](points)
+
+    try:
+        expect_fit(
+            call="best",
+            actual=value,
+            expected=expected,
+        )
+    except Mismatch:
+        # Rounded far coarser than the check's tolerance, so a number copied from the message fails.
+        rounded = float(f"{expected:.2g}")
+        raise Mismatch(
+            f"best is {value_text(value)}, but it should be the bottom of the parabola through your points, "
+            f"about {rounded:,.0f}. Set it with fit_parabola(points).",
+        ) from None
 
 
 def check_scaling3(checker: Checker) -> None:
@@ -1101,7 +1163,7 @@ def check_scaling3(checker: Checker) -> None:
             (parabola_points(3000.0, 0.15, (1700.0, 3800.0, 6600.0, 14500.0), 934),),
         ),
         reference=SWEEP_REFERENCE["fit_parabola"],
-        expect=expect_relative,
+        expect=expect_fit,
     )
     checker.check_name(
         name="points",

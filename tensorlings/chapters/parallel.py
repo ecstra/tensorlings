@@ -234,7 +234,8 @@ DDP1_LESSON = prose(
     `DistributedDataParallel`. It averages the gradients with an **all
     reduce**, where every worker hands in its gradients and gets the combined
     result back. It starts that bucket by bucket while the backward pass still
-    runs. This Mac has one GPU, so here the workers run one after another.
+    runs. Here the workers are a loop in one process, so they run one after
+    another on any machine.
     """,
 )
 
@@ -407,12 +408,15 @@ def run_with_reference_parts(
             globals_[name] = learners[name]
 
 
+# With BatchNorm the shards' average differs from the whole batch's gradient, as ddp1's table shows, so a step
+# that trains every replica on the whole batch can't match the reference. Only parameters are compared, so each
+# replica's own running statistics don't matter.
 def train_replicas(
     step: Callable[..., object],
     workers: int,
     steps: int,
 ) -> list[nn.Module]:
-    model = small_classifier(911)
+    model = small_classifier(911, normalized=True)
     replicas = [copy.deepcopy(model) for _ in range(workers)]
     optimizers = [torch.optim.SGD(replica.parameters(), lr=0.5) for replica in replicas]
     x, y = labelled_points(912, 16 * steps, 6, 3)
@@ -440,7 +444,7 @@ def check_data_parallel_step(found: object) -> None:
         expected = train_replicas(PARALLEL_REFERENCE["data_parallel_step"], workers, 2)
         call = f"2 steps of data_parallel_step with {workers} replicas"
 
-        if all(same_weights(replica, small_classifier(911)) for replica in replicas):
+        if all(same_weights(replica, small_classifier(911, normalized=True)) for replica in replicas):
             raise Mismatch(f"After {call}, every replica is as it started, so data_parallel_step is not written yet.")
 
         if not all(same_weights(replicas[0], replica) for replica in replicas[1:]):
@@ -576,7 +580,7 @@ DDP2_SOURCE = source_file(
 
 
     # TODO: Return how many micro batches each worker runs per step, so that
-    #   workers of them together cover batch_size examples.
+    #   all the workers together cover batch_size examples in one step.
     def accumulation_steps(
         batch_size: int,
         micro_batch_size: int,

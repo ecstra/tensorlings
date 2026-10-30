@@ -266,7 +266,7 @@ QUANT1_LESSON = prose(
     nearly every weight rounds to 0, since most sit far below the largest.
 
     int8 holds -128 too. Absmax leaves it out, so the levels sit evenly around
-    0 and 0 stays exactly 0.
+    0, as many on each side.
     """,
 )
 
@@ -435,9 +435,12 @@ QUANT2_LESSON = prose(
     Dettmers and colleagues found outliers in large language models, in the
     hidden states that go into each Linear. From around 6.7B weights, a few
     dimensions, at most 7, grow up to 20 times larger than the rest. Plain
-    int8 then rounds many small values to 0, and the models get worse. Their
-    LLM.int8() keeps those dimensions in 16 bits and multiplies more than 99.9%
-    of the values in 8 bits.
+    int8 then rounds many small values to 0, and the models get worse.
+
+    Such a dimension is a column of the hidden states, so it runs through
+    nearly every row. A scale per row can't fence it in, and the paper found
+    row by row scales fall short there. So LLM.int8() keeps those columns in
+    16 bits and multiplies more than 99.9% of the values in 8 bits.
     """,
 )
 
@@ -587,8 +590,9 @@ QUANT3_LESSON = prose(
     """
     Now the whole model. `Int8Linear` takes a trained `nn.Linear` and keeps its
     weight as int8 whole numbers with a scale per row. Both are **buffers**,
-    tensors a module keeps that training never changes. `.to(device)` and
-    `state_dict()` take buffers along, as they take the parameters.
+    tensors a module keeps that no gradient trains, as batchnorm2's running
+    averages were. `.to(device)` and `state_dict()` take buffers along, as
+    they take the parameters.
 
     ```python
     counter = nn.Module()
@@ -939,6 +943,32 @@ def reference_measures() -> dict[str, float]:
     return measures
 
 
+# Both sides run the same code on the CPU, so a right loss matches to many digits, and int8's own change of
+# about 2e-4 stands well clear of the tolerance.
+LOSS_TOLERANCE = 1e-5
+
+
+def expect_loss(
+    call: str,
+    actual: object,
+    expected: float,
+) -> None:
+    """A loss measured on the learner's own model. The message rounds the expected loss coarser than the
+    tolerance, so a number copied from it fails."""
+    if isinstance(actual, Tensor):
+        raise Mismatch(f"{call} is {value_text(actual)}, a tensor, but it should be a plain number, as validation_loss gives.")
+
+    if isinstance(actual, bool) or not isinstance(actual, (int, float)):
+        raise Mismatch(f"{call} is {value_text(actual)}, but it should be the plain number validation_loss gives.")
+
+    # Written this way round so a nan fails too.
+    if not abs(actual - expected) <= LOSS_TOLERANCE:
+        raise Mismatch(
+            f"{call} is {actual:.6g}, but it should be within {LOSS_TOLERANCE:g} of what validation_loss gives "
+            f"your model here, about {expected:.3g}.",
+        )
+
+
 def check_measure(name: str) -> Callable[[object], None]:
     def check(value: object) -> None:
         if value is None and name.endswith("_bytes"):
@@ -946,6 +976,8 @@ def check_measure(name: str) -> Callable[[object], None]:
 
         expected = reference_measures()[name]
 
+        # Every GPT of this size has the same byte count, which the lesson's table prints, so the bytes are
+        # compared exactly. model_bytes itself is checked on hidden inputs above.
         if isinstance(expected, int):
             expect_value(
                 call=name,
@@ -954,11 +986,10 @@ def check_measure(name: str) -> Callable[[object], None]:
             )
             return
 
-        expect_close(
+        expect_loss(
             call=name,
             actual=value,
             expected=expected,
-            tolerance=1e-4,
         )
 
     return check

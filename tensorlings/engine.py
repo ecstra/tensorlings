@@ -231,9 +231,11 @@ def load_module(
     if not path.exists():
         raise Problem(f"{relative(path)} is missing. Press x to bring back the original.")
 
+    source = path.read_text()
+
     try:
         tree = ast.parse(
-            path.read_text(),
+            source,
             filename=str(path),
         )
     except SyntaxError as error:
@@ -242,6 +244,7 @@ def load_module(
     module = ModuleType(f"tensorlings_{name}_{time.monotonic_ns()}")
     module.__file__ = str(path)
     crashes: list[Crash] = []
+    lines = source.splitlines()
 
     for statement in tree.body:
         code = compile(
@@ -255,8 +258,20 @@ def load_module(
                 run=lambda: exec(code, module.__dict__),
                 seconds=seconds,
             )
+        # A line that runs too long fails only the names it sets, as a crash does, so the tests of the
+        # functions it calls still run and can show the mistake that made it slow.
         except TookTooLong:
-            raise Problem(f"{path.name} was still running after {seconds:g} seconds while loading. Look for a loop that never ends.") from None
+            crashes.append(
+                Crash(
+                    names=assigned_names(statement),
+                    text=(
+                        f"{path.name}, line {statement.lineno}\n"
+                        f"    {lines[statement.lineno - 1].strip()}\n"
+                        f"This line was still running after {seconds:g} seconds. Slow work does that, such as "
+                        "a step count far larger than it should be, and so does a loop that never ends."
+                    ),
+                ),
+            )
         except Exception as error:
             crashes.append(
                 Crash(
