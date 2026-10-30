@@ -708,12 +708,17 @@ DIGITS3_LESSON = prose(
 
     | Sampler | w = 0 | w = 1 | w = 2 | w = 4 |
     |---|---|---|---|---|
-    | `clipped_ddim` | W0 | W1 | W2 | W4 |
-    | Clamped, noise not worked out again | C0 | C1 | C2 | C4 |
-    | diffusion3's `ddim_sample`, no clamp | D0 | D1 | D2 | D4 |
+    | `clipped_ddim` | 72.0% | 92.0% | 95.5% | 97.5% |
+    | Clamped, noise not worked out again | 74.0% | 31.5% | 5.0% | 1.5% |
+    | diffusion3's `ddim_sample`, no clamp | 47.5% | 65.0% | 74.5% | 81.0% |
 
-    GUIDANCE_SENTENCE Ho and Salimans found the same trade, guidance buys
-    samples that look more like their class at the cost of variety.
+    Guidance lifts `clipped_ddim` from 72% to 97.5%. At w = 4 the LeNet reads
+    the samples better than real test digits, so they look more typical than
+    real handwriting. The clamp without its second line falls apart as w
+    grows, down to 1.5%. With no clamp, guidance helps but stays well behind.
+
+    Ho and Salimans found the same trade. Guidance buys samples that look
+    more like their class, at the cost of variety.
     """,
 )
 

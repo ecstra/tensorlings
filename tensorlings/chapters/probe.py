@@ -550,8 +550,8 @@ PROBE2_LESSON = prose(
     ```
 
     `labelled_photos` picks 2,500 labelled photos, 1 in 18 of the training
-    part. With them, the probe on the trained encoder labels PROBE_SCORE of
-    the validation set right. The check asks for more than 45%. probe3 says
+    part. With them, the probe on the trained encoder labels 53.7% of the
+    validation set right. The check asks for more than 45%. probe3 says
     what that number is worth.
     """,
 )
@@ -894,9 +894,16 @@ PROBE3_LESSON = prose(
 
     | Labelled photos | SimCLR probe | Random probe | Supervised |
     |---|---|---|---|
-    SWEEP_ROWS
+    | 100 | 37.2% | 21.6% | 28.7% |
+    | 500 | 44.6% | 27.4% | 45.5% |
+    | 2,500 | 53.7% | 38.7% | 65.8% |
+    | 10,000 | 57.9% | 42.7% | 75.2% |
 
-    SWEEP_SENTENCE
+    SimCLR's features beat the random ones by 15 to 17 points at every
+    count, so its training taught the encoder something real. Labels still
+    win once there are enough of them. SimCLR leads only at 100 labelled
+    photos, and the two are about even at 500. From 2,500 on, the supervised
+    model leads by 12 to 17 points.
 
     This is the honest picture at this size. SimCLR's own paper reached 76.5%
     on ImageNet with a probe, at batches of 4,096 and hundreds of epochs. The
