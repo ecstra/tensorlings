@@ -21,7 +21,7 @@ Phase 7 of the plan build-tensorlings, the Modalities section the owner asked fo
 | 1 | Write 94_tables and 95_time_series | | owner | pending |
 | 2 | Write 96_audio and 97_video | | owner | done |
 | 3 | Write 98_tokens_for_everything and 99_shared_space | | owner | done |
-| 4 | Write 100_fusion and 102_outputs | | owner | pending |
+| 4 | Write 100_fusion and 102_outputs | | owner | done |
 | 5 | Write 101_reading_a_new_modality and build the signal reader project, 103_signal_reader | | owner | pending |
 | 6 | Write quiz16, Section 13 together | | owner | pending |
 | 7 | Get beginner reader reviews and fix what they find | | owner | pending |
