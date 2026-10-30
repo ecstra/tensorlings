@@ -27,15 +27,15 @@ The same day the owner's gap review added steps 14 to 16, per [DEC-017](../decis
 | 5 | Write 38_rnn, 39_bptt and 40_gated_rnns | | agent | done |
 | 6 | Write 41_bidirectional, 42_seq2seq, 43_causal_conv, 44_state_space and quiz8 | | agent | done |
 | 7 | Build the adder project | | agent | done |
-| 8 | Write 46_attention to 50_positions | | agent | pending |
-| 9 | Write 51_transformer_block to 56_bpe, quiz9 and quiz10 | | agent | pending |
-| 10 | Build the GPT project with tiny Shakespeare | | agent | pending |
+| 8 | Write 46_attention to 50_positions | | agent | done |
+| 9 | Write 51_transformer_block to 56_bpe, quiz9 and quiz10 | | agent | done |
+| 10 | Build the GPT project with tiny Shakespeare | | agent | done |
 | 11 | Add the wrong answers for every new exercise | | agent | pending |
 | 12 | Get beginner reader reviews and fix what they find | | agent | pending |
 | 13 | Run the dev check and the screen driver, then write the handover | | agent | pending |
 | 14 | Add soft1 and soft2 to 16_activations and fft1 to 30_convolution, per DEC-017 | | agent | done |
 | 15 | Write 38_soft_design, derive1 and derive2, per DEC-017 | | agent | done |
-| 16 | Add stft1, attention6, 48_linear_attention, induction1 and dynamic1 with their chapters, per DEC-017 | | agent | pending |
+| 16 | Add stft1, attention6, 48_linear_attention, induction1 and dynamic1 with their chapters, per DEC-017 | | agent | done |
 
 ## Done when
 
