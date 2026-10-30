@@ -4,10 +4,11 @@ kind: todo
 description: convolutional nets with the CIFAR-10 project, sequences with the adder project, then attention and transformers with the GPT project
 updated: 2026-10-30
 links: []
-status: open
+status: done
 by: agent
 area: course
 born: 2026-10-29
+done: 2026-10-30
 ---
 
 ## What
@@ -32,7 +33,7 @@ The same day the owner's gap review added steps 14 to 16, per [DEC-017](../decis
 | 10 | Build the GPT project with tiny Shakespeare | | agent | done |
 | 11 | Add the wrong answers for every new exercise | | agent | done |
 | 12 | Get beginner reader reviews and fix what they find | | agent | done |
-| 13 | Run the dev check and the screen driver, then write the handover | | agent | pending |
+| 13 | Run the dev check and the screen driver, then write the handover | | agent | done |
 | 14 | Add soft1 and soft2 to 16_activations and fft1 to 30_convolution, per DEC-017 | | agent | done |
 | 15 | Write 38_soft_design, derive1 and derive2, per DEC-017 | | agent | done |
 | 16 | Add stft1, attention6, 48_linear_attention, induction1 and dynamic1 with their chapters, per DEC-017 | | agent | done |
@@ -40,3 +41,5 @@ The same day the owner's gap review added steps 14 to 16, per [DEC-017](../decis
 ## Done when
 
 Every exercise of Sections 5 to 7 in the detailed curriculum exists, the dev check reports each one healthy, every new exercise has wrong answers that fail, the beginner reader reviews found nothing left to fix, and a handover says where it stands.
+
+Closed on 2026-10-30. All 105 exercises of phase 3 exist, the dev check reported all 215 healthy, the 995 wrong answers all fail, every one of the five reviews' 54 findings is fixed, and [the handover](../handover/tensorlings-phase-3-built-sections-5-to-7.md) says where it stands.

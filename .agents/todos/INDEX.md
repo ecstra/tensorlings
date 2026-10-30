@@ -2,7 +2,7 @@
 name: todos-index
 kind: doc
 description: the work tracker's index, open items first
-updated: 2026-10-29
+updated: 2026-10-30
 links: [INDEX.md, spec/todos.md]
 ---
 
@@ -15,10 +15,8 @@ Built by the brain tool from the folder it lists.
 
 ## Open
 
-### course
-
-- [TODO-014](TODO-014-phase-3-sections-5-to-7.md), convolutional nets with the CIFAR-10 project, sequences with the adder project, then attention and transformers with the GPT project
+Nothing open.
 
 ## Closed
 
-- course: 13 done, 0 dropped
+- course: 14 done, 0 dropped
