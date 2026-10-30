@@ -1,0 +1,882 @@
+"""75_shortest_paths, Section 10's project, a network shaped like Bellman-Ford against a generic one and an MLP, on graphs bigger than training had."""
+
+from __future__ import annotations
+
+import textwrap
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from torch import Tensor
+
+from ..course import OPTIMIZER_IMPORTS, Chapter, Exercise
+from ..engine import (
+    Checker,
+    Described,
+    Mismatch,
+    check_on_inputs,
+    expect_close,
+    expect_tensor,
+    expect_value,
+)
+from ..text import prose, source_file
+from .linear_layers import expect_module
+
+SHORTEST_PATHS = Chapter(
+    folder="75_shortest_paths",
+    title="Project: shortest paths",
+    readme=source_file(
+        """
+        # Project: shortest paths
+
+        Section 10's project. Three networks learn the length of the
+        shortest path from one node to every other in a weighted graph. One
+        is shaped like the Bellman-Ford algorithm, one is a generic message
+        passing network, and one is an MLP that reads the whole graph at once.
+        Then all three meet graphs bigger than any they trained on.
+
+        ## Further reading
+
+        - [Xu and colleagues, what can neural networks reason about?](https://arxiv.org/abs/1905.13211)
+        - [Xu and colleagues, how neural networks extrapolate](https://arxiv.org/abs/2009.11848)
+        - [Veličković and colleagues, neural execution of graph algorithms](https://arxiv.org/abs/1910.10593)
+        """,
+    ),
+)
+
+GRAPHS_PART = '''
+# Weighted graphs as weight matrices, 0 where there is no edge, with weights from 0.1 to 1.
+# A random path through every node keeps each graph connected.
+def random_graphs(
+    count: int,
+    nodes: int,
+    generator: torch.Generator,
+    chance: float = 0.3,
+) -> Tensor:
+    weights = torch.rand(count, nodes, nodes, generator=generator) * 0.9 + 0.1
+    edges = torch.rand(count, nodes, nodes, generator=generator) < chance
+
+    for graph in range(count):
+        order = torch.randperm(nodes, generator=generator)
+        edges[graph, order[:-1], order[1:]] = True
+
+    edges = (edges | edges.transpose(1, 2)) & ~torch.eye(nodes, dtype=torch.bool)
+
+    return torch.where(edges, torch.minimum(weights, weights.transpose(1, 2)), torch.zeros(()))
+'''
+
+COSTS_SOLUTION = '''
+def edge_costs(weights: Tensor) -> Tensor:
+    return torch.where(weights > 0, weights, torch.full_like(weights, float("inf")))
+
+
+def relax(
+    distance: Tensor,
+    costs: Tensor,
+) -> Tensor:
+    offers = (distance.unsqueeze(2) + costs).min(dim=1).values
+
+    return torch.minimum(distance, offers)
+
+
+def shortest_paths(weights: Tensor) -> Tensor:
+    count, nodes, _ = weights.shape
+    distance = torch.full((count, nodes), float("inf"))
+    distance[:, 0] = 0
+    costs = edge_costs(weights)
+
+    for _ in range(nodes - 1):
+        distance = relax(distance, costs)
+
+    return distance
+'''
+
+INDENTED_GRAPHS = textwrap.indent(GRAPHS_PART.strip("\n"), "    ")
+INDENTED_COSTS = textwrap.indent(COSTS_SOLUTION.strip("\n"), "    ")
+
+
+def namespace_of(code: str) -> dict[str, object]:
+    namespace: dict[str, object] = {
+        "torch": torch,
+        "nn": nn,
+        "F": F,
+        "Tensor": Tensor,
+    }
+    exec(code, namespace)
+
+    return namespace
+
+
+PATHS_REFERENCE = namespace_of(GRAPHS_PART + COSTS_SOLUTION)
+
+
+# ---------------------------------------------------------------------------
+# paths1
+# ---------------------------------------------------------------------------
+
+PATHS1_LESSON = prose(
+    """
+    This is Section 10's project. Each graph has weighted edges, and the task
+    is the length of the shortest path from node 0 to every other node.
+    message3 ran Bellman-Ford as message passing on one graph's edge list.
+    Here many graphs come at once, each a weight matrix as graph1 showed,
+    with 0 where there is no edge.
+
+    A round is the same as in message3. Every node takes the best offer from
+    its neighbours, each neighbour's distance plus the edge's weight, if that
+    beats what it has.
+
+    ```text
+    d[v] = min(d[v], min over neighbours u of d[u] + w(u, v))
+    ```
+
+    On a matrix, one round is a min down each column of `d[u] + w(u, v)` for
+    the whole batch at once. A shortest path has at most n - 1 edges, so
+    n - 1 rounds find them all. paths2 builds a network on exactly this shape.
+
+    Missing edges get a cost of infinity, so their offers never win.
+
+    ```python
+    torch.tensor([3.0, float("inf")]).min()    # tensor(3.)
+    ```
+    """,
+)
+
+PATHS1_SOURCE = source_file(
+    '''
+    # paths1.py
+
+    import torch
+    from torch import Tensor
+
+    smallest = torch.tensor([3.0, float("inf")]).min()    # tensor(3.)
+
+
+''' + INDENTED_GRAPHS + '''
+
+
+    # TODO: Return weights with every 0, a missing edge, replaced by infinity,
+    #   so a missing edge's offer never wins.
+    def edge_costs(weights: Tensor) -> Tensor:
+        ...
+
+
+    # TODO: Return the distances after one round of Bellman-Ford. distance has
+    #   shape (graphs, nodes), and costs[g, u, v] is the cost of the edge from
+    #   u to v. Each node v keeps the smaller of distance[v] and the best
+    #   distance[u] + costs[u, v] over every u.
+    def relax(
+        distance: Tensor,
+        costs: Tensor,
+    ) -> Tensor:
+        ...
+
+
+    # TODO: Return the shortest distance from node 0 to every node of each graph
+    #   of weights, of shape (graphs, nodes, nodes). Start node 0 at 0 and every
+    #   other node at infinity, then run nodes - 1 rounds of relax.
+    def shortest_paths(weights: Tensor) -> Tensor:
+        ...
+    ''',
+)
+
+PATHS1_SOLUTION = source_file(
+    '''
+    # paths1.py, a solution for comparison
+
+    import torch
+    from torch import Tensor
+
+    smallest = torch.tensor([3.0, float("inf")]).min()
+
+
+''' + INDENTED_GRAPHS + '''
+
+
+''' + INDENTED_COSTS + '''
+    ''',
+)
+
+LINE_GRAPH = torch.tensor(
+    [
+        [
+            [0.0, 0.2, 0.0, 0.9],
+            [0.2, 0.0, 0.3, 0.0],
+            [0.0, 0.3, 0.0, 0.1],
+            [0.9, 0.0, 0.1, 0.0],
+        ],
+    ],
+)
+
+
+def check_paths1(checker: Checker) -> None:
+    check_on_inputs(
+        checker=checker,
+        function="edge_costs",
+        description="turns every missing edge into infinity",
+        inputs=(
+            (LINE_GRAPH,),
+        ),
+        reference=PATHS_REFERENCE["edge_costs"],
+        expect=expect_tensor,
+    )
+    costs = PATHS_REFERENCE["edge_costs"](LINE_GRAPH)
+    start = torch.tensor([[0.0, float("inf"), float("inf"), float("inf")]])
+    check_on_inputs(
+        checker=checker,
+        function="relax",
+        description="takes the best offer from every neighbour, once",
+        inputs=(
+            (start, Described(costs, "the costs of a graph of 4 nodes")),
+            (torch.tensor([[0.0, 0.2, float("inf"), 0.9]]), Described(costs, "the costs of a graph of 4 nodes")),
+        ),
+        reference=PATHS_REFERENCE["relax"],
+        expect=expect_tensor,
+    )
+    check_on_inputs(
+        checker=checker,
+        function="shortest_paths",
+        description="finds every shortest distance from node 0",
+        inputs=(
+            (LINE_GRAPH,),
+            (Described(PATHS_REFERENCE["random_graphs"](5, 7, torch.Generator().manual_seed(750)), "5 random graphs of 7 nodes"),),
+        ),
+        reference=PATHS_REFERENCE["shortest_paths"],
+        expect=expect_tensor,
+    )
+
+
+PATHS1 = Exercise(
+    name="paths1",
+    chapter=SHORTEST_PATHS,
+    title="Project: Bellman-Ford",
+    lesson=PATHS1_LESSON,
+    source=PATHS1_SOURCE,
+    solution=PATHS1_SOLUTION,
+    hints={
+        "edge_costs": "torch.where picks from weights where weights > 0, and elsewhere from a tensor of weights' shape "
+        "full of float(\"inf\"), which torch.full_like makes.",
+        "relax": "distance.unsqueeze(2) + costs puts each u's offer to each v along dim 1. Take .min(dim=1).values, "
+        "then torch.minimum with distance.",
+        "shortest_paths": "torch.full((count, nodes), float(\"inf\")) with distance[:, 0] = 0. Then loop nodes - 1 "
+        "times over relax with edge_costs of weights.",
+    },
+    introduces=(),
+    check=check_paths1,
+)
+
+
+# ---------------------------------------------------------------------------
+# paths2
+# ---------------------------------------------------------------------------
+
+# A node no path has reached yet starts this far away, much farther than any real path.
+FAR = 100.0
+
+MIN_PASSING_INIT = '''
+class MinPassing(nn.Module):
+    def __init__(
+        self,
+        hidden: int = 16,
+    ) -> None:
+        super().__init__()
+        self.offer = nn.Sequential(
+            nn.Linear(2, hidden),
+            nn.ReLU(),
+            nn.Linear(hidden, 1),
+        )
+'''
+
+MIN_PASSING_FORWARD = '''
+    def forward(self, weights: Tensor) -> Tensor:
+        count, nodes, _ = weights.shape
+        distance = torch.full((count, nodes), FAR)
+        distance[:, 0] = 0
+        edges = weights > 0
+
+        for _ in range(nodes):
+            pairs = torch.stack([distance.unsqueeze(2).expand(count, nodes, nodes), weights], dim=3)
+            offers = self.offer(pairs).squeeze(3).masked_fill(~edges, float("inf"))
+            distance = torch.minimum(distance, offers.min(dim=1).values)
+
+        return distance
+'''
+
+FLAT_MLP_PART = '''
+# An MLP that reads a graph's whole weight matrix at once, padded with zeros to 20 nodes.
+class FlatMLP(nn.Module):
+    def __init__(
+        self,
+        nodes: int = 20,
+        hidden: int = 256,
+    ) -> None:
+        super().__init__()
+        self.nodes = nodes
+        self.net = nn.Sequential(
+            nn.Linear(nodes * nodes, hidden),
+            nn.ReLU(),
+            nn.Linear(hidden, hidden),
+            nn.ReLU(),
+            nn.Linear(hidden, nodes),
+        )
+
+    def forward(self, weights: Tensor) -> Tensor:
+        nodes = weights.shape[1]
+        padded = F.pad(weights, (0, self.nodes - nodes, 0, self.nodes - nodes))
+
+        return self.net(padded.flatten(1))[:, :nodes]
+'''
+
+TRAINING_SOLUTION = '''
+def within(
+    guess: Tensor,
+    truth: Tensor,
+    tolerance: float,
+) -> float:
+    close = (guess - truth).abs()[:, 1:] <= tolerance
+
+    return close.float().mean().item()
+
+
+def train_paths(
+    model: nn.Module,
+    steps: int,
+    nodes: int,
+    generator: torch.Generator,
+) -> nn.Module:
+    optimizer = torch.optim.Adam(model.parameters(), lr=3e-3)
+
+    for _ in range(steps):
+        weights = random_graphs(32, nodes, generator)
+        loss = F.mse_loss(model(weights), shortest_paths(weights))
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+    return model
+'''
+
+INDENTED_MIN_INIT = textwrap.indent(MIN_PASSING_INIT.strip("\n"), "    ")
+INDENTED_MIN_FORWARD = textwrap.indent(MIN_PASSING_FORWARD.strip("\n"), "    ")
+INDENTED_FLAT = textwrap.indent(FLAT_MLP_PART.strip("\n"), "    ")
+INDENTED_TRAINING = textwrap.indent(TRAINING_SOLUTION.strip("\n"), "    ")
+
+PATHS2_LESSON = prose(
+    """
+    Two networks learn the same distances. The first is shaped like
+    Bellman-Ford. Each node holds one number, its distance so far, starting at
+    0 for node 0 and `FAR` everywhere else. Each round, every neighbour makes
+    an offer from its own distance and the edge's weight. The node keeps the
+    smallest offer if it beats what it has.
+
+    The algorithm's offer is `d[u] + w(u, v)`. Here a small MLP makes the
+    offer, and it has to learn that sum from examples. Everything else, the
+    min and the rounds, is built in. It has 65 weights.
+
+    The second is an MLP that reads the graph's whole weight matrix at once
+    and gives every distance, with 173,588 weights. It reads 20 nodes, so a
+    graph of 10 is padded with zeros.
+
+    `torch.minimum(a, b)` keeps the smaller of each pair of entries.
+
+    ```python
+    torch.minimum(torch.tensor([3.0, 1.0]), torch.tensor([2.0, 5.0]))    # tensor([2., 1.])
+    ```
+
+    Trained for 1,500 steps on graphs of 10 nodes, here is the share of
+    distances each gets within 0.05 on new graphs of 10.
+
+    | Network | Weights | Within 0.05 |
+    |---|---|---|
+    | Shaped like Bellman-Ford | 65 | 100% |
+    | MLP on the whole matrix | 173,588 | 43.4% |
+
+    The MLP has to discover from examples that distances add along paths and
+    that the shortest one wins. The other network was handed both facts in
+    its shape, and only learned the sum.
+    """,
+)
+
+PATHS2_SOURCE = source_file(
+    '''
+    # paths2.py
+
+    import torch
+    import torch.nn as nn
+    import torch.nn.functional as F
+    from torch import Tensor
+
+    smaller = torch.minimum(torch.tensor([3.0, 1.0]), torch.tensor([2.0, 5.0]))    # tensor([2., 1.])
+
+    FAR = 100.0
+
+
+    # random_graphs and the Bellman-Ford of paths1.
+''' + INDENTED_GRAPHS + '''
+
+
+''' + INDENTED_COSTS + '''
+
+
+''' + INDENTED_FLAT + '''
+
+
+    # TODO: Finish forward, shaped like Bellman-Ford. distance starts at FAR,
+    #   with node 0 at 0. Each of nodes rounds, self.offer reads every pair
+    #   (distance[u], weights[u, v]), stacked on a last dimension of 2. Offers
+    #   along missing edges become infinity, and each node v keeps the smaller
+    #   of its distance and its best offer. Return the distances, of shape
+    #   (graphs, nodes).
+''' + INDENTED_MIN_INIT + '''
+
+        def forward(self, weights: Tensor) -> Tensor:
+            ...
+
+
+    # TODO: Return the share of distances in guess within tolerance of truth,
+    #   both of shape (graphs, nodes), leaving out node 0, whose distance is 0
+    #   by construction.
+    def within(
+        guess: Tensor,
+        truth: Tensor,
+        tolerance: float,
+    ) -> float:
+        ...
+
+
+    # TODO: Train model with Adam at a rate of 0.003 for steps steps. Each step
+    #   draws 32 graphs of nodes nodes with random_graphs and generator, and
+    #   takes the mean squared error against shortest_paths.
+    def train_paths(
+        model: nn.Module,
+        steps: int,
+        nodes: int,
+        generator: torch.Generator,
+    ) -> nn.Module:
+        ...
+    ''',
+)
+
+PATHS2_SOLUTION = source_file(
+    '''
+    # paths2.py, a solution for comparison
+
+    import torch
+    import torch.nn as nn
+    import torch.nn.functional as F
+    from torch import Tensor
+
+    smaller = torch.minimum(torch.tensor([3.0, 1.0]), torch.tensor([2.0, 5.0]))
+
+    FAR = 100.0
+
+
+''' + INDENTED_GRAPHS + '''
+
+
+''' + INDENTED_COSTS + '''
+
+
+''' + INDENTED_FLAT + '''
+
+
+''' + INDENTED_MIN_INIT + '''
+
+''' + INDENTED_MIN_FORWARD + '''
+
+
+''' + INDENTED_TRAINING + '''
+    ''',
+)
+
+MODELS_REFERENCE = namespace_of("FAR = 100.0\n" + GRAPHS_PART + COSTS_SOLUTION + FLAT_MLP_PART + MIN_PASSING_INIT + MIN_PASSING_FORWARD + TRAINING_SOLUTION)
+
+
+def seeded_model(
+    make: type,
+    seed: int = 0,
+) -> nn.Module:
+    torch.manual_seed(seed)
+
+    return make()
+
+
+def check_min_forward(found: type) -> None:
+    model = expect_module("MinPassing()", seeded_model(found))
+    weights = PATHS_REFERENCE["random_graphs"](3, 6, torch.Generator().manual_seed(751))
+
+    with torch.no_grad():
+        expected = seeded_model(MODELS_REFERENCE["MinPassing"])(weights)
+
+    expect_tensor(
+        call="MinPassing() on 3 random graphs of 6 nodes",
+        actual=model(weights),
+        expected=expected,
+    )
+
+
+def check_min_learns(found: type) -> None:
+    model = MODELS_REFERENCE["train_paths"](seeded_model(found), 300, 8, torch.Generator().manual_seed(0))
+    weights = PATHS_REFERENCE["random_graphs"](100, 10, torch.Generator().manual_seed(752))
+
+    with torch.no_grad():
+        share = MODELS_REFERENCE["within"](model(weights), PATHS_REFERENCE["shortest_paths"](weights), 0.05)
+
+    if share < 0.9:
+        raise Mismatch(f"After 300 steps on graphs of 8, MinPassing gets {share:.1%} of distances within 0.05 on new graphs of 10, but it should pass 90%.")
+
+
+def check_train_paths(found: object) -> None:
+    results = []
+
+    for train in (found, MODELS_REFERENCE["train_paths"]):
+        model = seeded_model(MODELS_REFERENCE["MinPassing"])
+        train(model, 5, 6, torch.Generator().manual_seed(753))
+        results.append(model.offer[0].weight.detach().clone())
+
+    expect_tensor(
+        call="the offer's first weights after train_paths for 5 steps on graphs of 6",
+        actual=results[0],
+        expected=results[1],
+    )
+
+
+def check_paths2(checker: Checker) -> None:
+    checker.test_method(
+        class_name="MinPassing",
+        method="forward",
+        description="runs rounds of learned offers, keeping the smallest",
+        run=check_min_forward,
+    )
+    truth = torch.tensor([[0.0, 0.5, 0.9, 1.2], [0.0, 0.3, 0.6, 0.7]])
+    check_on_inputs(
+        checker=checker,
+        function="within",
+        description="gives the share of distances close enough, node 0 left out",
+        inputs=(
+            (torch.tensor([[0.3, 0.52, 1.0, 1.2], [0.0, 0.3, 0.64, 0.5]]), truth, 0.05),
+            (torch.tensor([[9.0, 0.5, 0.9, 1.0], [0.0, 0.4, 0.6, 0.7]]), truth, 0.15),
+        ),
+        reference=MODELS_REFERENCE["within"],
+        expect=expect_close,
+    )
+    checker.test(
+        function="train_paths",
+        description="trains with Adam on the mean squared error",
+        run=check_train_paths,
+    )
+    checker.test_method(
+        class_name="MinPassing",
+        method="forward",
+        description="learns distances within 0.05",
+        run=check_min_learns,
+    )
+
+
+PATHS2 = Exercise(
+    name="paths2",
+    chapter=SHORTEST_PATHS,
+    title="Project: a network shaped like the algorithm",
+    lesson=PATHS2_LESSON,
+    source=PATHS2_SOURCE,
+    solution=PATHS2_SOLUTION,
+    hints={
+        "MinPassing.forward": "torch.stack([distance.unsqueeze(2).expand(count, nodes, nodes), weights], dim=3) makes "
+        "the pairs. self.offer(pairs).squeeze(3), masked_fill with infinity where there is no edge, then the min "
+        "over dim=1 and torch.minimum with distance.",
+        "within": "Take (guess - truth).abs() from column 1 on, compare with tolerance, and average as floats.",
+        "train_paths": "Each step, weights = random_graphs(32, nodes, generator). Then F.mse_loss of model(weights) and "
+        "shortest_paths(weights), zero_grad, backward, step.",
+    },
+    introduces=(),
+    check=check_paths2,
+    time_limit=60,
+    imports_first=OPTIMIZER_IMPORTS,
+)
+
+
+# ---------------------------------------------------------------------------
+# paths3
+# ---------------------------------------------------------------------------
+
+GENERIC_PART = '''
+# A generic message passing network, as message2 built it: a vector per node, a learned message
+# along each edge, the smallest of them gathered, and a residual update, for as many rounds as nodes.
+class MessagePassing(nn.Module):
+    def __init__(
+        self,
+        size: int = 32,
+    ) -> None:
+        super().__init__()
+        self.start = nn.Linear(1, size)
+        self.message = nn.Sequential(nn.Linear(size + 1, size), nn.ReLU(), nn.Linear(size, size))
+        self.update = nn.Sequential(nn.Linear(2 * size, size), nn.ReLU(), nn.Linear(size, size))
+        self.read = nn.Linear(size, 1)
+
+    def forward(self, weights: Tensor) -> Tensor:
+        count, nodes, _ = weights.shape
+        source = torch.zeros(count, nodes, 1)
+        source[:, 0] = 1
+        state = self.start(source)
+        edges = weights > 0
+
+        for _ in range(nodes):
+            pairs = torch.cat([state.unsqueeze(2).expand(count, nodes, nodes, -1), weights.unsqueeze(3)], dim=3)
+            messages = self.message(pairs).masked_fill(~edges.unsqueeze(3), float("inf"))
+            state = state + self.update(torch.cat([state, messages.min(dim=1).values], dim=2))
+
+        return self.read(state).squeeze(2)
+'''
+
+SIZES_SOLUTION = '''
+def scores_by_size(
+    model: nn.Module,
+    sizes: list[int],
+    count: int,
+    generator: torch.Generator,
+) -> list[float]:
+    scores = []
+
+    with torch.no_grad():
+        for nodes in sizes:
+            weights = random_graphs(count, nodes, generator)
+            scores.append(within(model(weights), shortest_paths(weights), 0.05))
+
+    return scores
+
+
+def offer_gap(
+    model: nn.Module,
+    distance: Tensor,
+    weight: Tensor,
+) -> Tensor:
+    with torch.no_grad():
+        offers = model.offer(torch.stack([distance, weight], dim=-1)).squeeze(-1)
+
+    return offers - (distance + weight)
+'''
+
+INDENTED_GENERIC = textwrap.indent(GENERIC_PART.strip("\n"), "    ")
+INDENTED_SIZES = textwrap.indent(SIZES_SOLUTION.strip("\n"), "    ")
+
+PATHS3_LESSON = prose(
+    """
+    Now all three networks meet graphs bigger than any they trained on. The
+    third is a generic message passing network, as message2 built it. Each
+    node holds a vector of 32 numbers, a learned message runs along every
+    edge, and a residual update takes the smallest messages in. It gets one
+    round per node, so it runs longer on a bigger graph, as Bellman-Ford does.
+
+    Each trained for 1,500 steps on graphs of 10 nodes. Here is the share of
+    distances within 0.05 on new graphs of each size.
+
+    | Network | Weights | 10 nodes | 20 nodes | 40 nodes |
+    |---|---|---|---|---|
+    | Shaped like Bellman-Ford | 65 | 100% | 100% | 100% |
+    | Generic message passing | 5,377 | 99.5% | 0% | 0% |
+    | MLP on the whole matrix | 173,588 | 43.4% | 9.2% | can't read it |
+
+    The generic network fits graphs of 10 and fails on everything bigger. Its
+    vectors run for more rounds than it ever trained on, and drift. The MLP
+    can't even read a graph bigger than its input.
+
+    The network shaped like the algorithm works on every size, and its offer
+    is the only learned part. `offer_gap` shows what it learned. On the edges
+    of shortest paths, the offers that decide each answer, it is within 0.011
+    of the true sum. Elsewhere it is off by as much as 0.28, which never
+    matters, since the min throws those offers away.
+
+    Xu and colleagues call this algorithmic alignment. A network learns from
+    few examples when its structure matches the steps of the algorithm, so
+    only a simple piece is left to learn. Section 13 asks you to design
+    modules this way.
+    """,
+)
+
+PATHS3_SOURCE = source_file(
+    '''
+    # paths3.py
+
+    import torch
+    import torch.nn as nn
+    import torch.nn.functional as F
+    from torch import Tensor
+
+    FAR = 100.0
+
+    pairs = torch.stack([torch.tensor([0.5, 2.0]), torch.tensor([0.3, 0.1])], dim=-1)    # shape (2, 2)
+
+
+    # The pieces of paths1 and paths2.
+''' + INDENTED_GRAPHS + '''
+
+
+''' + INDENTED_COSTS + '''
+
+
+''' + INDENTED_FLAT + '''
+
+
+''' + INDENTED_MIN_INIT + '''
+
+''' + INDENTED_MIN_FORWARD + '''
+
+
+''' + INDENTED_TRAINING + '''
+
+
+''' + INDENTED_GENERIC + '''
+
+
+    # TODO: Return model's share of distances within 0.05 for count graphs of
+    #   each size in sizes, in order, each drawn with random_graphs and
+    #   generator. Record nothing for autograd.
+    def scores_by_size(
+        model: nn.Module,
+        sizes: list[int],
+        count: int,
+        generator: torch.Generator,
+    ) -> list[float]:
+        ...
+
+
+    # TODO: Return how far a MinPassing model's offer is from the true sum,
+    #   model.offer of each pair (distance, weight) minus distance + weight,
+    #   for distance and weight of the same shape. Record nothing for autograd.
+    def offer_gap(
+        model: nn.Module,
+        distance: Tensor,
+        weight: Tensor,
+    ) -> Tensor:
+        ...
+    ''',
+)
+
+PATHS3_SOLUTION = source_file(
+    '''
+    # paths3.py, a solution for comparison
+
+    import torch
+    import torch.nn as nn
+    import torch.nn.functional as F
+    from torch import Tensor
+
+    FAR = 100.0
+
+    pairs = torch.stack([torch.tensor([0.5, 2.0]), torch.tensor([0.3, 0.1])], dim=-1)
+
+
+''' + INDENTED_GRAPHS + '''
+
+
+''' + INDENTED_COSTS + '''
+
+
+''' + INDENTED_FLAT + '''
+
+
+''' + INDENTED_MIN_INIT + '''
+
+''' + INDENTED_MIN_FORWARD + '''
+
+
+''' + INDENTED_TRAINING + '''
+
+
+''' + INDENTED_GENERIC + '''
+
+
+''' + INDENTED_SIZES + '''
+    ''',
+)
+
+SIZES_REFERENCE = namespace_of(
+    "FAR = 100.0\n" + GRAPHS_PART + COSTS_SOLUTION + FLAT_MLP_PART + MIN_PASSING_INIT + MIN_PASSING_FORWARD
+    + TRAINING_SOLUTION + GENERIC_PART + SIZES_SOLUTION,
+)
+
+
+def check_scores_by_size(found: object) -> None:
+    """The file's within is swapped for one that records the graphs it scores and answers by their size,
+    so the check sees which graphs scores_by_size drew and in what order."""
+    seen: list[tuple[int, int]] = []
+
+    def scripted_within(
+        guess: Tensor,
+        truth: Tensor,
+        tolerance: float,
+    ) -> float:
+        seen.append((truth.shape[0], truth.shape[1]))
+
+        if tolerance != 0.05:
+            raise Mismatch(f"scores_by_size used a tolerance of {tolerance}, but it should use 0.05.")
+
+        return truth.shape[1] / 100
+
+    namespace = found.__globals__
+    original = namespace.get("within")
+    namespace["within"] = scripted_within
+    modes: list[bool] = []
+    model = seeded_model(SIZES_REFERENCE["MinPassing"])
+    hook = model.register_forward_pre_hook(lambda module, inputs: modes.append(torch.is_grad_enabled()))
+
+    try:
+        actual = found(model, [6, 9, 4], 5, torch.Generator().manual_seed(754))
+    finally:
+        namespace["within"] = original
+        hook.remove()
+
+    if any(modes):
+        raise Mismatch("scores_by_size ran the model while recording for autograd. Run it inside torch.no_grad().")
+
+    expect_value(
+        call="scores_by_size(model, [6, 9, 4], 5, a generator seeded with 754)",
+        actual=actual,
+        expected=[0.06, 0.09, 0.04],
+    )
+
+    if seen != [(5, 6), (5, 9), (5, 4)]:
+        raise Mismatch("scores_by_size should draw count graphs of each size in turn and score each batch with within.")
+
+
+def check_offer_gap(found: object) -> None:
+    model = seeded_model(SIZES_REFERENCE["MinPassing"])
+    distance = torch.tensor([[0.0, 0.5, 2.0], [4.0, 1.5, 0.2]])
+    weight = torch.tensor([[0.3, 0.9, 0.1], [0.5, 0.2, 0.7]])
+    expect_tensor(
+        call="offer_gap of an untrained MinPassing on 2 rows of 3 pairs",
+        actual=found(model, distance, weight),
+        expected=SIZES_REFERENCE["offer_gap"](model, distance, weight),
+    )
+
+
+def check_paths3(checker: Checker) -> None:
+    checker.test(
+        function="scores_by_size",
+        description="scores each size of graph in turn, without autograd",
+        run=check_scores_by_size,
+    )
+    checker.test(
+        function="offer_gap",
+        description="gives how far each offer is from distance plus weight",
+        run=check_offer_gap,
+    )
+
+
+PATHS3 = Exercise(
+    name="paths3",
+    chapter=SHORTEST_PATHS,
+    title="Project: graphs bigger than training had",
+    lesson=PATHS3_LESSON,
+    source=PATHS3_SOURCE,
+    solution=PATHS3_SOLUTION,
+    hints={
+        "scores_by_size": "Inside torch.no_grad(), for each nodes in sizes draw random_graphs(count, nodes, generator) "
+        "and append within(model(weights), shortest_paths(weights), 0.05).",
+        "offer_gap": "torch.stack([distance, weight], dim=-1) gives the pairs. Run model.offer, .squeeze(-1), and take "
+        "away distance + weight, all inside torch.no_grad().",
+    },
+    introduces=(),
+    check=check_paths3,
+    time_limit=30,
+)
