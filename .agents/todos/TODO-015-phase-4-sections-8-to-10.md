@@ -25,7 +25,7 @@ Phase 4 of the plan build-tensorlings, Sections 8, 9 and 10 as [the detailed cur
 | 5 | Write quiz12 and build the digit diffusion project, 71_digit_diffusion | | agent | done |
 | 6 | Write 72_sets, 73_graphs and 74_equivariance | | agent | done |
 | 7 | Write quiz13 and build the shortest paths project, 75_shortest_paths | | agent | done |
-| 8 | Get beginner reader reviews and fix what they find | | agent | pending |
+| 8 | Get beginner reader reviews and fix what they find | | agent | done |
 | 9 | Run the full dev check, every wrong answer and the screen driver, set up the owner's folder, then write the handover | | agent | pending |
 
 ## Done when
