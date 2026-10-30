@@ -31,7 +31,7 @@ The same day the owner's gap review added steps 14 to 16, per [DEC-017](../decis
 | 9 | Write 51_transformer_block to 56_bpe, quiz9 and quiz10 | | agent | done |
 | 10 | Build the GPT project with tiny Shakespeare | | agent | done |
 | 11 | Add the wrong answers for every new exercise | | agent | done |
-| 12 | Get beginner reader reviews and fix what they find | | agent | pending |
+| 12 | Get beginner reader reviews and fix what they find | | agent | done |
 | 13 | Run the dev check and the screen driver, then write the handover | | agent | pending |
 | 14 | Add soft1 and soft2 to 16_activations and fft1 to 30_convolution, per DEC-017 | | agent | done |
 | 15 | Write 38_soft_design, derive1 and derive2, per DEC-017 | | agent | done |
