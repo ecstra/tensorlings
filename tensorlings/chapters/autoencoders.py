@@ -25,6 +25,7 @@ from ..engine import (
 from ..text import prose, source_file
 from .linear_layers import expect_module
 from .mnist import mnist_sets
+from .word2vec import expect_pairs
 
 AUTOENCODERS = Chapter(
     folder="63_autoencoders",
@@ -330,6 +331,7 @@ def check_autoencoder1(checker: Checker) -> None:
         description="gives the mean squared error of the rebuild",
         inputs=(
             (Described(seeded_autoencoder(REFERENCE["Autoencoder"], 4), "Autoencoder(4)"), Described(digit_rows("validation_x", 3), "3 digits")),
+            (Described(seeded_autoencoder(REFERENCE["Autoencoder"], 8), "Autoencoder(8)"), Described(digit_rows("validation_x", 5), "5 digits")),
         ),
         reference=lambda model, x: REFERENCE["reconstruction_loss"](model, x),
         expect=expect_tensor,
@@ -507,8 +509,8 @@ AUTOENCODER2_LESSON = prose(
     | ReLU, code 1,024 | 0.0030 | 0.022 | 82.6% |
     | ReLU, code 1,024, denoising | 0.0074 | 0.013 | 87.6% |
 
-    The wide linear one rebuilds clean digits almost perfectly and passes the
-    noise straight through. It learned to copy. With a code of 32 it can't
+    The wide linear one rebuilds clean digits almost perfectly and passes
+    most of the noise through. It learned to copy. With a code of 32 it can't
     copy, so it keeps what digits share and drops most of the noise. The wide
     ReLU one copied less in its 1,500 steps, but its code probes no better
     than the narrow one's. The pixels alone probe at 81.5%.
@@ -587,32 +589,33 @@ AUTOENCODER2_SOLUTION = source_file(
 
 
 def check_noisy_error(found: object) -> None:
-    model = seeded_autoencoder(REFERENCE["Autoencoder"], 8)
-    x = digit_rows("validation_x", 6)
-    expected = NOISE_REFERENCE["noisy_error"](model, x, 0.3, torch.Generator().manual_seed(472))
-    modes: list[tuple[bool, bool]] = []
-    hook = model.register_forward_pre_hook(lambda module, inputs: modes.append((module.training, torch.is_grad_enabled())))
+    for code, count, std, seed in ((8, 6, 0.3, 472), (4, 9, 0.7, 489)):
+        model = seeded_autoencoder(REFERENCE["Autoencoder"], code)
+        x = digit_rows("validation_x", count)
+        expected = NOISE_REFERENCE["noisy_error"](model, x, std, torch.Generator().manual_seed(seed))
+        modes: list[tuple[bool, bool]] = []
+        hook = model.register_forward_pre_hook(lambda module, inputs: modes.append((module.training, torch.is_grad_enabled())))
 
-    try:
-        actual = found(model, x, 0.3, torch.Generator().manual_seed(472))
-    finally:
-        hook.remove()
+        try:
+            actual = found(model, x, std, torch.Generator().manual_seed(seed))
+        finally:
+            hook.remove()
 
-    if any(training for training, _ in modes):
-        raise Mismatch("noisy_error ran the model in training mode. Call model.eval() first.")
+        if any(training for training, _ in modes):
+            raise Mismatch("noisy_error ran the model in training mode. Call model.eval() first.")
 
-    if any(recording for _, recording in modes):
-        raise Mismatch("noisy_error recorded for autograd. Run the model inside torch.no_grad().")
+        if any(recording for _, recording in modes):
+            raise Mismatch("noisy_error recorded for autograd. Run the model inside torch.no_grad().")
 
-    if not model.training:
-        raise Mismatch("noisy_error left the model in eval mode. Call model.train() before returning.")
+        if not model.training:
+            raise Mismatch("noisy_error left the model in eval mode. Call model.train() before returning.")
 
-    expect_close(
-        call="noisy_error of Autoencoder(8) on 6 digits, noise of spread 0.3",
-        actual=actual,
-        expected=expected,
-        tolerance=1e-6,
-    )
+        expect_close(
+            call=f"noisy_error of Autoencoder({code}) on {count} digits, noise of spread {std}",
+            actual=actual,
+            expected=expected,
+            tolerance=1e-6,
+        )
 
 
 def check_autoencoder2(checker: Checker) -> None:
@@ -633,6 +636,7 @@ def check_autoencoder2(checker: Checker) -> None:
         description="scores the rebuild of a noisy copy against the clean one",
         inputs=(
             (Described(seeded_autoencoder(REFERENCE["Autoencoder"], 4), "Autoencoder(4)"), Described(digit_rows("validation_x", 3), "3 digits"), 0.4, seeded(477)),
+            (Described(seeded_autoencoder(REFERENCE["Autoencoder"], 8), "Autoencoder(8)"), Described(digit_rows("validation_x", 5), "5 digits"), 0.8, seeded(488)),
         ),
         reference=NOISE_REFERENCE["denoising_loss"],
         expect=expect_tensor,
@@ -781,9 +785,13 @@ AUTOENCODER3_LESSON = prose(
     keeps the same k directions as principal component analysis, PCA. Those
     are the directions along which the data spreads the most.
 
-    It keeps the same space, not the same axes. Any k directions that span
-    that space rebuild the input equally well, so the decoder's columns come
-    out as a mix of PCA's directions. Comparing the two means comparing the
+    A set of k directions **spans** a **space**, every point you can reach by
+    scaling the directions and adding them up. The directions are a
+    **basis** of that space, and many different bases span the same one.
+
+    The best pair keeps PCA's space but picks its own axes. Any basis of that
+    space rebuilds the input equally well, so the decoder's columns come out
+    as a mix of PCA's directions. Comparing the two means comparing the
     spaces they span.
 
     A **projection** onto a space maps every point to its nearest point in
@@ -989,7 +997,7 @@ AUTOENCODER3 = Exercise(
         "pca_basis": "min(2 * k + 10, x.shape[0], x.shape[1]) is how many to ask for. torch.pca_lowrank gives three "
         "results, the directions are the last, and [:, :k] keeps the first k columns.",
     },
-    introduces=("projection",),
+    introduces=("span", "basis", "projection"),
     check=check_autoencoder3,
     time_limit=60,
     imports_first=OPTIMIZER_IMPORTS,
@@ -1012,6 +1020,7 @@ QUIZ11_LESSON = prose(
     | `nearest` | the k rows closest to one row by cosine similarity, leaving the row itself out | word2vec3 |
     | `info_nce` | cosine scores over a temperature, each row's partner as the right class | contrastive1 |
     | `masked_loss` | cross entropy at the chosen positions alone | masked1 |
+    | `subspace_gap` | the norm of the difference of two projections, each from a QR basis, over the square root of 2k | autoencoder3 |
     """,
 )
 
@@ -1020,6 +1029,8 @@ QUIZ11_SOURCE = source_file(
     # quiz11.py
     #
     # No examples and no new tools. Each function combines moves from Section 8.
+
+    import math
 
     import torch
     import torch.nn.functional as F
@@ -1077,12 +1088,24 @@ QUIZ11_SOURCE = source_file(
         chosen: Tensor,
     ) -> Tensor:
         ...
+
+
+    # TODO: Return the gap between the spaces the columns of a and b span,
+    #   each a basis of k columns, as a plain number: the norm of the
+    #   difference of their projections, divided by the square root of 2 * k.
+    def subspace_gap(
+        a: Tensor,
+        b: Tensor,
+    ) -> float:
+        ...
     ''',
 )
 
 QUIZ11_SOLUTION = source_file(
     '''
     # quiz11.py, a solution for comparison
+
+    import math
 
     import torch
     import torch.nn.functional as F
@@ -1141,6 +1164,17 @@ QUIZ11_SOLUTION = source_file(
         chosen: Tensor,
     ) -> Tensor:
         return F.cross_entropy(scores[chosen], ids[chosen])
+
+
+    def subspace_gap(
+        a: Tensor,
+        b: Tensor,
+    ) -> float:
+        q_a, _ = torch.linalg.qr(a)
+        q_b, _ = torch.linalg.qr(b)
+        difference = q_a @ q_a.T - q_b @ q_b.T
+
+        return (difference.norm() / math.sqrt(2 * a.shape[1])).item()
     ''',
 )
 
@@ -1172,7 +1206,7 @@ def check_quiz11(checker: Checker) -> None:
             ([3, 3, 8], 1),
         ),
         reference=QUIZ11_REFERENCE["skipgram_pairs"],
-        expect=expect_tensor,
+        expect=expect_pairs,
     )
     check_on_inputs(
         checker=checker,
@@ -1180,6 +1214,7 @@ def check_quiz11(checker: Checker) -> None:
         description="scores the real pair up and the negatives down",
         inputs=(
             (quiz11_tensor(1110, 4, 3), quiz11_tensor(1111, 4, 3), quiz11_tensor(1112, 4, 5, 3)),
+            (quiz11_tensor(1120, 6, 2), quiz11_tensor(1121, 6, 2), quiz11_tensor(1122, 6, 3, 2)),
         ),
         reference=QUIZ11_REFERENCE["sgns_loss"],
         expect=expect_tensor,
@@ -1212,9 +1247,27 @@ def check_quiz11(checker: Checker) -> None:
         description="scores the chosen positions alone",
         inputs=(
             (quiz11_tensor(1119, 6, 5), torch.tensor([1, 4, 0, 2, 2, 3]), torch.tensor([True, False, False, True, True, False])),
+            (quiz11_tensor(1123, 5, 7), torch.tensor([6, 0, 3, 3, 5]), torch.tensor([False, True, True, False, True])),
         ),
         reference=QUIZ11_REFERENCE["masked_loss"],
         expect=expect_tensor,
+    )
+    check_on_inputs(
+        checker=checker,
+        function="subspace_gap",
+        description="is 0 for the same space and grows as they part",
+        inputs=(
+            (quiz11_tensor(1124, 5, 2), quiz11_tensor(1124, 5, 2) @ torch.tensor([[1.0, 2.0], [-1.0, 1.0]])),
+            (quiz11_tensor(1125, 6, 3), quiz11_tensor(1126, 6, 3)),
+            (torch.eye(5)[:, :2], torch.eye(5)[:, 3:]),
+        ),
+        reference=QUIZ11_REFERENCE["subspace_gap"],
+        expect=lambda call, actual, expected: expect_close(
+            call=call,
+            actual=actual,
+            expected=expected,
+            tolerance=1e-5,
+        ),
     )
 
 
@@ -1227,7 +1280,7 @@ QUIZ11 = Exercise(
     solution=QUIZ11_SOLUTION,
     hints={
         "skipgram_pairs": "Loop over each center, then over each context from max(0, center - window) up to and "
-        "with center + window, skipping the center itself.",
+        "including center + window, stopping at the last id. Skip the center itself.",
         "sgns_loss": "F.logsigmoid of the row by row dot product, plus the sum over k of F.logsigmoid of minus "
         "negatives @ the center. Take minus the mean.",
         "nearest": "Normalize the rows and the chosen row, multiply, set the chosen row's score to minus "
@@ -1235,6 +1288,8 @@ QUIZ11 = Exercise(
         "info_nce": "F.normalize both on dim=1, multiply z1 by z2's transpose, divide by temperature, and "
         "F.cross_entropy against torch.arange(len(z1)).",
         "masked_loss": "Index scores and ids with chosen, then F.cross_entropy.",
+        "subspace_gap": "Each projection is torch.linalg.qr's first result times its own transpose. The gap is the "
+        "norm of their difference over the square root of 2k, as a plain number.",
     },
     introduces=(),
     check=check_quiz11,

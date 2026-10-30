@@ -256,6 +256,49 @@ def chosen_rows(
     return torch.rand(rows, steps, generator=torch.Generator().manual_seed(seed)) < 0.4
 
 
+def copy_inputs(
+    seed: int,
+    rows: int,
+    steps: int,
+    vocabulary: int,
+) -> tuple[Tensor, Tensor, Tensor]:
+    ids = token_rows(seed, rows, steps, vocabulary)
+    chosen = chosen_rows(seed + 1, rows, steps)
+    corrupted = BERT_REFERENCE["corrupt"](ids, chosen, vocabulary, torch.Generator().manual_seed(seed + 2))
+
+    return corrupted, ids, chosen
+
+
+def expect_chosen(
+    call: str,
+    actual: object,
+    expected: Tensor,
+) -> None:
+    expect_tensor(
+        call=call,
+        actual=actual,
+        expected=expected,
+    )
+
+    if actual.dtype != torch.bool:
+        raise Mismatch(f"{call} holds {actual.dtype} numbers, but scores[chosen] picks positions only with True and False. Return the comparison as it is.")
+
+
+def expect_ids(
+    call: str,
+    actual: object,
+    expected: Tensor,
+) -> None:
+    expect_tensor(
+        call=call,
+        actual=actual,
+        expected=expected,
+    )
+
+    if actual.dtype.is_floating_point:
+        raise Mismatch(f"{call} holds {actual.dtype} numbers, but token ids are whole numbers. Keep the dtype of ids.")
+
+
 def expect_pair_close(
     call: str,
     actual: object,
@@ -282,7 +325,7 @@ def check_masked1(checker: Checker) -> None:
             (token_rows(622, 2, 6, 10), 0.5, seeded(623)),
         ),
         reference=BERT_REFERENCE["choose"],
-        expect=expect_tensor,
+        expect=expect_chosen,
     )
     check_on_inputs(
         checker=checker,
@@ -293,7 +336,7 @@ def check_masked1(checker: Checker) -> None:
             (token_rows(627, 3, 12, 65), chosen_rows(628, 3, 12), 65, seeded(629)),
         ),
         reference=BERT_REFERENCE["corrupt"],
-        expect=expect_tensor,
+        expect=expect_ids,
     )
     check_on_inputs(
         checker=checker,
@@ -306,14 +349,13 @@ def check_masked1(checker: Checker) -> None:
         reference=BERT_REFERENCE["masked_loss"],
         expect=expect_tensor,
     )
-    ids = token_rows(636, 5, 20, 12)
-    chosen = chosen_rows(637, 5, 20)
     check_on_inputs(
         checker=checker,
         function="copy_scores",
         description="gives what copying the input scores, everywhere and where chosen",
         inputs=(
-            (BERT_REFERENCE["corrupt"](ids, chosen, 12, torch.Generator().manual_seed(638)), ids, chosen),
+            copy_inputs(636, 5, 20, 12),
+            copy_inputs(656, 4, 25, 30),
         ),
         reference=BERT_REFERENCE["copy_scores"],
         expect=expect_pair_close,
@@ -437,7 +479,7 @@ MASKED2_LESSON = prose(
     their neighbours fills them in, with no idea of what the image shows.
     Here is that averaging on 1,000 CIFAR-10 test images in patches of 4 by
     4. Its error is shown as a share of the error of filling every hidden
-    patch with the image's average patch.
+    patch with the average of the visible patches.
 
     | Hidden | 15% | 50% | 75% |
     |---|---|---|---|
@@ -446,9 +488,11 @@ MASKED2_LESSON = prose(
 
     At 15%, averaging halves the error, so a model could score well by
     learning to blur. At 75% it barely helps, and the model has to know what
-    images look like. The paper found 75% best for a linear probe, and 40% to
-    80% working well when fine tuning. Hiding most patches also makes the
-    encoder cheap, since it reads a quarter of them.
+    images look like. A **linear probe** trains one Linear layer on the
+    frozen encoder's outputs, to test how much those outputs already hold.
+    The paper found 75% best for a linear probe. Fine tuning the whole
+    encoder worked well anywhere from 40% to 80%. Hiding most patches also
+    makes the encoder cheap, since it reads a quarter of them.
 
     Random masking shuffles the patches. Draw a random number per patch, sort
     them, and keep the patches that come first.
@@ -549,8 +593,35 @@ def expect_masking(
             expected=wanted,
         )
 
+    if actual[1].dtype.is_floating_point:
+        raise Mismatch(f"The positions of {call} hold {actual[1].dtype} numbers, but positions pick patches and must be whole numbers.")
+
     if actual[2].dtype != torch.bool:
         raise Mismatch(f"The hidden mask of {call} should hold True and False, not {actual[2].dtype}.")
+
+
+def visible_patches(
+    seed: int,
+    batch: int,
+    count: int,
+    size: int,
+    ratio: float,
+) -> tuple[Tensor, Tensor]:
+    visible, keep, _ = MAE_REFERENCE["random_masking"](small_tensor(seed, batch, count, size), ratio, torch.Generator().manual_seed(seed + 1))
+
+    return visible, keep
+
+
+def hidden_patches(
+    seed: int,
+    batch: int,
+    count: int,
+    size: int,
+    ratio: float,
+) -> Tensor:
+    _, _, hidden = MAE_REFERENCE["random_masking"](small_tensor(seed, batch, count, size), ratio, torch.Generator().manual_seed(seed + 1))
+
+    return hidden
 
 
 def check_masked2(checker: Checker) -> None:
@@ -565,24 +636,24 @@ def check_masked2(checker: Checker) -> None:
         reference=MAE_REFERENCE["random_masking"],
         expect=expect_masking,
     )
-    visible, keep, _ = MAE_REFERENCE["random_masking"](small_tensor(644, 2, 8, 3), 0.75, torch.Generator().manual_seed(645))
     check_on_inputs(
         checker=checker,
         function="fill_in",
         description="puts the visible patches back and the mask token everywhere else",
         inputs=(
-            (visible, keep, 8, torch.tensor([9.0, -9.0, 0.5])),
+            (*visible_patches(644, 2, 8, 3, 0.75), 8, torch.tensor([9.0, -9.0, 0.5])),
+            (*visible_patches(650, 3, 10, 2, 0.4), 10, torch.tensor([-2.0, 7.0])),
         ),
         reference=MAE_REFERENCE["fill_in"],
         expect=expect_tensor,
     )
-    _, _, hidden = MAE_REFERENCE["random_masking"](small_tensor(646, 3, 6, 4), 0.5, torch.Generator().manual_seed(647))
     check_on_inputs(
         checker=checker,
         function="masked_mse",
         description="averages the error over the hidden patches alone",
         inputs=(
-            (small_tensor(648, 3, 6, 4), small_tensor(649, 3, 6, 4), Described(hidden, "half of each image's patches hidden")),
+            (small_tensor(648, 3, 6, 4), small_tensor(649, 3, 6, 4), Described(hidden_patches(646, 3, 6, 4, 0.5), "half of each image's patches hidden")),
+            (small_tensor(654, 2, 8, 3), small_tensor(655, 2, 8, 3), Described(hidden_patches(652, 2, 8, 3, 0.75), "three quarters of each image's patches hidden")),
         ),
         reference=MAE_REFERENCE["masked_mse"],
         expect=expect_tensor,
@@ -605,6 +676,6 @@ MASKED2 = Exercise(
         "masked_mse": "((predicted - patches) ** 2).mean(dim=-1) is one error per patch. Pick the hidden ones with "
         "[hidden] and take their mean.",
     },
-    introduces=(),
+    introduces=("linear probe",),
     check=check_masked2,
 )

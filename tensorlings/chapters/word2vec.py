@@ -404,9 +404,9 @@ WORD2VEC2_LESSON = prose(
 
     The made up words are drawn in proportion to each word's count raised to
     the power 3/4, which Mikolov and colleagues found worked best. The power
-    flattens the counts. `the` is 3.02% of the words but 1.40% of the draws,
-    so the rarer words get drawn more often than their counts alone would
-    give.
+    flattens the counts. `the` is 3.23% of the kept words but 1.40% of the
+    draws. The rarer words get drawn more often than their counts alone
+    would give.
 
     At the start the neighbor table is all zeros, so every score is 0. With 5
     made up words the loss is then 6 log 2, about 4.16. Training 3,000 steps of
@@ -662,8 +662,13 @@ WORD2VEC3_LESSON = prose(
     """
     **Cosine similarity** measures how alike two rows are by their direction
     alone, their dot product divided by both their lengths. It is 1 for the
-    same direction, 0 for unrelated ones, and -1 for opposite ones. Frequent
-    words tend to get longer rows, and the plain dot product would favor them.
+    same direction, 0 for unrelated ones, and -1 for opposite ones.
+
+    Row lengths vary a lot in word2vec2's vectors. The 20 most common words
+    have rows about 2.06 long, and the 426 words seen only 5 times about
+    4.82. The plain dot product grows with both lengths, so it would rank
+    those long rare rows above better matches. Scaling every row to length 1
+    first leaves only the direction to compare.
 
     ```python
     a = torch.tensor([3.0, 4.0])
