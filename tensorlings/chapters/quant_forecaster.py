@@ -3,6 +3,7 @@ push a forecast past it, walk forward validation, and a small model against a pl
 
 from __future__ import annotations
 
+import math
 import textwrap
 from collections.abc import Callable
 
@@ -47,17 +48,19 @@ QUANT_FORECASTER = Chapter(
 )
 
 SETTINGS_PART = '''
-WINDOW = 20        # the market leans on the mean of its last 20 days
-STRENGTH = 0.2     # how hard it leans
+WINDOW = 20        # the market leans on the size of the mean of its last 20 days
+STRENGTH = 0.6     # how hard it leans
+KAPPA = 0.01 * math.sqrt(2 / math.pi) / math.sqrt(WINDOW)    # about that size on average, so the lean averages 0
 HORIZON = 5        # each forecast is for the return over the next 5 days
-WINDOWS = (5, 20, 60, 250)
+WINDOWS = (1, 5, 20, 60, 250)
 FIRST = 249        # rows start on the first day every window above is full
 DAYS = 4254        # 4,000 rows, from day 249 to the last day with a target
 CUT = 3000         # the first test row
 '''
 
 MARKET_PART = '''
-# The made up market. Each day's return leans on the mean of the last WINDOW days, plus noise of about 1%.
+# The made up market. Each day's return leans on the size of the mean of the last WINDOW days, less its average
+# size, plus noise of about 1%. After a big move either way, it tends to rise.
 def make_market(
     days: int,
     strength: float,
@@ -68,7 +71,7 @@ def make_market(
     recent = 0.0
 
     for day in range(days):
-        lean = strength * recent / WINDOW if day >= WINDOW else 0.0
+        lean = strength * (abs(recent / WINDOW) - KAPPA) if day >= WINDOW else 0.0
         returns.append(lean + noise[day])
         recent += returns[-1]
 
@@ -115,7 +118,7 @@ def true_expected(
         total = 0.0
 
         for _ in range(horizon):
-            lean = strength * sum(history[-WINDOW:]) / WINDOW
+            lean = strength * (abs(sum(history[-WINDOW:]) / WINDOW) - KAPPA)
             history.append(lean)
             total += lean
 
@@ -145,27 +148,30 @@ def time_split(
     return x[: cut - gap], y[: cut - gap], x[cut:], y[cut:]
 '''
 
-PICK_PART = '''
-def pick_on_training(
+SCREEN_PART = '''
+def screen_on_training(
     indicators: Tensor,
     targets: Tensor,
     train_rows: int,
-) -> int:
+    keep: int,
+) -> Tensor:
     scores = [information_coefficient(column[:train_rows], targets[:train_rows]) for column in indicators.T]
 
-    return torch.tensor(scores).argmax().item()
+    return torch.tensor(scores).topk(keep).indices
 '''
 
 LINEAR_PART = '''
-# Least squares with an intercept, fitted on the training rows, as linreg3 did.
+# Least squares with an intercept, fitted on the training rows, as linreg3 did. It runs in float64, since the
+# windows' tiny returns sit beside an intercept of 1 and float32 loses them on long series.
 def linear_forecast(
     train_x: Tensor,
     train_y: Tensor,
     test_x: Tensor,
 ) -> Tensor:
-    weights = torch.linalg.lstsq(torch.cat([train_x, torch.ones(len(train_x), 1)], dim=1), train_y.unsqueeze(1)).solution
+    design = torch.cat([train_x, torch.ones(len(train_x), 1)], dim=1).double()
+    weights = torch.linalg.lstsq(design, train_y.double().unsqueeze(1)).solution
 
-    return (torch.cat([test_x, torch.ones(len(test_x), 1)], dim=1) @ weights).squeeze(1)
+    return (torch.cat([test_x, torch.ones(len(test_x), 1)], dim=1).double() @ weights).squeeze(1).float()
 '''
 
 NEAREST_PART = '''
@@ -184,15 +190,13 @@ def nearest_days(
 '''
 
 INDICATORS_PART = '''
-# count made up indicators, each a fixed random weighting of the last 60 days' returns, one row per day from FIRST on.
-def made_up_indicators(
-    returns: Tensor,
+# count made up indicators, one row per row of x, drawn at random with no link to the market at all.
+def noise_indicators(
+    rows: int,
     count: int,
     seed: int,
 ) -> Tensor:
-    weights = torch.randn(count, 60, generator=torch.Generator().manual_seed(seed))
-
-    return (returns.unfold(0, 60, 1) @ weights.T)[FIRST - 59 :]
+    return torch.randn(rows, count, generator=torch.Generator().manual_seed(seed))
 '''
 
 FOLDS_PART = '''
@@ -226,7 +230,7 @@ def fold_scores(
 '''
 
 STANDARDIZE_PART = '''
-# probe2's standardizing, with the mean and spread of the training rows alone.
+# descent4's standardizing, with the mean and spread of the training rows alone.
 def standardize(
     train: Tensor,
     other: Tensor,
@@ -244,7 +248,7 @@ def train_mlp(
     steps: int,
 ) -> nn.Module:
     torch.manual_seed(seed)
-    model = nn.Sequential(nn.Linear(x.shape[1], 32), nn.ReLU(), nn.Linear(32, 1))
+    model = nn.Sequential(nn.Linear(x.shape[1], 8), nn.ReLU(), nn.Linear(8, 1))
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-2)
     scale = y.std()
 
@@ -264,7 +268,7 @@ def mlp_forecast(
     seed: int,
 ) -> Tensor:
     train_x, test_x = standardize(train_x, test_x)
-    model = train_mlp(train_x, train_y, seed, 300)
+    model = train_mlp(train_x, train_y, seed, 150)
     model.eval()
 
     with torch.no_grad():
@@ -296,6 +300,7 @@ def indented(part: str) -> str:
 
 def namespace_of(code: str) -> dict[str, object]:
     namespace: dict[str, object] = {
+        "math": math,
         "torch": torch,
         "nn": nn,
         "Tensor": Tensor,
@@ -313,7 +318,7 @@ REFERENCE = namespace_of(
     + EXPECTED_PART
     + TRAILING_PART
     + SPLIT_PART
-    + PICK_PART
+    + SCREEN_PART
     + LINEAR_PART
     + NEAREST_PART
     + INDICATORS_PART
@@ -326,6 +331,7 @@ REFERENCE = namespace_of(
 
 WINDOW = REFERENCE["WINDOW"]
 STRENGTH = REFERENCE["STRENGTH"]
+KAPPA = REFERENCE["KAPPA"]
 HORIZON = REFERENCE["HORIZON"]
 WINDOWS = REFERENCE["WINDOWS"]
 FIRST = REFERENCE["FIRST"]
@@ -395,10 +401,12 @@ FORECAST1_LESSON = prose(
     shows.
 
     Each day's **return** here is the change in the log of the price. The
-    market leans a little: a day's return is 0.2 times the mean of the last
-    20 days' returns, plus noise of about 1%. Rises tend to follow rises,
-    and the noise swamps them. Adding up the returns, then taking `exp`,
-    gives the price back.
+    market leans on the size of its recent move. A day's return is 0.6 times
+    the size of the mean of the last 20 returns, less its average size, plus
+    noise of about 1%. So after a big move up or down it tends to
+    rise, and the noise swamps that. Lilien, Engle and Robins' ARCH-in-mean
+    model of 1987 also lets the expected return grow with recent turbulence.
+    Adding up the returns, then taking `exp`, gives the price back.
 
     ```python
     torch.tensor([0.1, -0.2, 0.3]).cumsum(0)    # tensor([ 0.1000, -0.1000,  0.2000])
@@ -409,31 +417,34 @@ FORECAST1_LESSON = prose(
 
     Quants score a forecast by its correlation with what followed, the
     **information coefficient**. A correlation is 1 when two series rise
-    and fall in step, and 0 when they are unrelated. It is -1 when one falls
-    as the other rises. `torch.corrcoef` gives the correlation of every pair
-    of rows it gets.
+    and fall in step, and -1 when one falls as the other rises. It is near 0
+    when no straight line links them, even if a curve does. Quants usually
+    take it across many assets on one day, often on ranks. This project
+    takes it across the days of one market.
 
-    You know the market's rule, so the best forecast is the rule itself with
-    the noise left out. `true_expected` works it out: from each day's last
-    20 returns it steps the rule 5 days ahead, each step leaning on the one
-    before. No forecast scores higher for long, so its score is the ceiling.
+    You know the market's rule, so `true_expected` steps it 5 days ahead from
+    each day's last 20 returns, with the noise left out. The true average of
+    4,000 simulated futures per day correlates with it at 0.993. So its long
+    run score is the ceiling.
 
     | Market | The rule's score |
     |---|---|
-    | 100,000 days, seed 1 | 0.109 |
-    | The 1,000 test days of seeds 0 to 4 | -0.040 to 0.187 |
+    | 100,000 days, seed 1 | 0.168 |
+    | The 1,000 test days of seeds 0 to 4 | 0.089 to 0.220 |
 
-    Squared, 0.109 is about 1.2% of the target's variance. The other 98.8%
+    Squared, 0.168 is about 2.8% of the target's variance. The other 97.2%
     is noise that no forecast can touch.
 
     One market's test days are a rough measure, since even the rule's score
-    swings from -0.040 to 0.187. forecast3 deals with that.
+    swings from 0.089 to 0.220. forecast3 deals with that.
     """,
 )
 
 FORECAST1_SOURCE = source_file(
     '''
     # forecast1.py
+
+    import math
 
     import torch
     from torch import Tensor
@@ -482,13 +493,14 @@ FORECAST1_SOURCE = source_file(
         ...
 
 
-    lean = 0.2 * sum([0.5, 1.0, 3.0][-2:]) / 2                         # 0.4
+    lean = 0.6 * (abs(sum([0.5, -1.0, -3.0][-2:]) / 2) - 0.5)            # 0.9
 
 
     # TODO: Finish the market's own forecast of each day's target, its rule
     #   with the noise left out. history starts as the day's last WINDOW
-    #   returns. Then for each of the horizon days ahead, work out the lean on
-    #   the last WINDOW values of history, add it to history and to a total.
+    #   returns. Then for each of the horizon days ahead, work out the lean
+    #   as make_market does, strength times the size of the mean of the last
+    #   WINDOW values of history less KAPPA. Add it to history and to a total.
     #   The total is that day's forecast. Earlier days stay at 0.
     def true_expected(
         returns: Tensor,
@@ -515,6 +527,8 @@ FORECAST1_SOURCE = source_file(
 FORECAST1_SOLUTION = source_file(
     '''
     # forecast1.py, a solution for comparison
+
+    import math
 
     import torch
     from torch import Tensor
@@ -544,7 +558,7 @@ FORECAST1_SOLUTION = source_file(
 ''' + indented(SCORE_PART) + '''
 
 
-    lean = 0.2 * sum([0.5, 1.0, 3.0][-2:]) / 2
+    lean = 0.6 * (abs(sum([0.5, -1.0, -3.0][-2:]) / 2) - 0.5)
 
 
 ''' + indented(EXPECTED_PART) + '''
@@ -629,7 +643,7 @@ def check_forecast1(checker: Checker) -> None:
         function="true_expected",
         description="steps the market's rule ahead with the noise left out",
         inputs=(
-            (seeded_returns(1008, 26), 0.2, 3),
+            (seeded_returns(1008, 26), 0.6, 3),
             (seeded_returns(1009, 24), 0.5, 1),
             (seeded_returns(1010, 30), 0.3, 5),
         ),
@@ -664,8 +678,9 @@ FORECAST1 = Exercise(
         "after day t is row t + 1, so drop row 0 and .sum(dim=1).",
         "information_coefficient": "torch.stack the two into rows, torch.corrcoef them, take the [0, 1] entry and "
         ".item() it.",
-        "true_expected": "Set total = 0.0. Loop horizon times: lean is strength times the sum of history[-WINDOW:] "
-        "over WINDOW, then append it to history and add it to total. After the loop, expected[day] = total.",
+        "true_expected": "Set total = 0.0, then loop horizon times. Each lean is strength times (abs of the sum of "
+        "history[-WINDOW:] over WINDOW, less KAPPA). Append it to history and add it to total. After the loop, "
+        "expected[day] = total.",
         "price": "It comes from prices. Get that right first.",
         "targets": "It comes from forward_returns. Get that right first.",
         "best": "It comes from true_expected. Get that right first.",
@@ -683,51 +698,53 @@ FORECAST1 = Exercise(
 
 FORECAST2_LESSON = prose(
     """
-    A score above the ceiling can't be real, so it proves a **leak**: the
-    forecast saw something from the days it is scored on. Here are three
-    common ones, each in a pipeline trained on the first 3,000 of 4,000 rows
-    and scored on the last 1,000.
+    Over a long run no forecast beats the ceiling of 0.168. One period can
+    top it by luck, as the rule's 0.220 did. A **leak**, a forecast that saw
+    something from the days it is scored on, tops it on every seed. Here are
+    three common ones, each trained on the first 2,995 of 4,000 rows and
+    scored on the last 1,000.
 
-    Each row holds the means of the last 5, 20, 60 and 250 returns, up to
-    and including that day. A window that ends a day late holds the first
+    Each row holds the means of the last 1, 5, 20, 60 and 250 returns, up
+    to and including that day. A window that ends a day late holds the first
     day of the target. That is future data in the features.
 
     Rows next to each other share most of their windows and 4 of their 5
-    target days. A random split puts the neighbours of every test row in
+    target days. A random split leaves nearly every test row a neighbour in
     training. `nearest_days`, which averages the targets of the 10 most
-    similar training rows, then reads the answers off.
+    similar training rows, then reads the answers off. It reads the four
+    longer means, since a single day's return is mostly noise.
 
-    The third is a choice made with the whole series. Of 1,000 made up
-    indicators, the one with the best score over every row was partly
-    picked by its test days.
+    The third is a choice made with the whole series. Keep the 50 of 5,000
+    made up indicators that score best, though none has any link to the
+    market, then fit least squares on them. Hastie, Tibshirani and Friedman
+    show screening on every row as the wrong way to validate, in 7.10.2.
 
     | Pipeline | Honest | Leaky |
     |---|---|---|
-    | Least squares on the windows | 0.091 | 0.258, windows a day late |
-    | 10 nearest days | 0.025 | 0.297, a random split |
-    | Best of 1,000 indicators | 0.043 | 0.072, picked on every row |
+    | Least squares on the windows | 0.038 | 0.458, windows a day late |
+    | 10 nearest days | 0.024 | 0.299, a random split |
+    | Least squares on 50 noise indicators | -0.011 | 0.231, kept on every row |
 
-    Each cell is the average over seeds 0 to 4. The first two leaks land far
-    above the ceiling of 0.109, and on every seed above the rule's best test
-    score, 0.187. The third stays under the ceiling, though it lifts the
-    honest score by two thirds. So a score under the ceiling proves nothing.
-    Only the rules do: features from past days, a split by time, every
-    choice from training rows.
+    Each cell is the average over seeds 0 to 4. Every leaky score lands above
+    the ceiling on every seed, the lowest at 0.197, and so it does on seeds
+    5 to 19 too. The honest noise indicators score about 0, as they should.
 
     Standardizing with the whole series' mean and spread can't change least
-    squares' forecast, since its weights shift and scale to match. A column
-    of past returns holds no outcome either. It is still a habit to drop,
-    and the check of `trailing_means` cuts later days off to catch it.
+    squares' forecast, since its weights shift and scale to match. It is
+    still a habit to drop, and the check of `trailing_means` cuts later days
+    off to catch it.
 
-    `time_split` leaves a gap of 5 rows too. The last 5 training rows'
-    targets reach into the test days, so those rows go. López de Prado's
-    2018 book calls this **purging**.
+    `time_split` leaves a gap of 5 rows too. The last 4 training rows'
+    targets reach into the test targets' days, and a fifth goes to be safe.
+    López de Prado's 2018 book calls dropping them **purging**.
     """,
 )
 
 FORECAST2_SOURCE = source_file(
     '''
     # forecast2.py
+
+    import math
 
     import torch
     from torch import Tensor
@@ -781,17 +798,18 @@ FORECAST2_SOURCE = source_file(
         ...
 
 
-    highest = torch.tensor([0.1, 0.4, 0.2]).argmax().item()             # 1
+    best_two = torch.tensor([0.1, 0.4, 0.2, 0.3]).topk(2).indices       # tensor([1, 3])
 
 
-    # TODO: Return the number of the column of indicators whose information
-    #   coefficient with targets is highest over the first train_rows rows
-    #   alone, as a plain int.
-    def pick_on_training(
+    # TODO: Return the column numbers of the keep indicators whose information
+    #   coefficients with targets are highest over the first train_rows rows
+    #   alone, as a tensor of whole numbers.
+    def screen_on_training(
         indicators: Tensor,
         targets: Tensor,
         train_rows: int,
-    ) -> int:
+        keep: int,
+    ) -> Tensor:
         ...
 
 
@@ -801,17 +819,20 @@ FORECAST2_SOURCE = source_file(
     y = targets[FIRST:]
     train_x, train_y, test_x, test_y = time_split(x, y, CUT, HORIZON)
     linear_score = information_coefficient(linear_forecast(train_x, train_y, test_x), test_y)
-    nearest_score = information_coefficient(nearest_days(train_x, train_y, test_x, 10), test_y)
+    nearest_score = information_coefficient(nearest_days(train_x[:, 1:], train_y, test_x[:, 1:], 10), test_y)
 
-    indicators = made_up_indicators(returns, 1000, 1)[: len(y)]
-    picked = pick_on_training(indicators, y, CUT - HORIZON)
-    picked_score = information_coefficient(indicators[CUT:, picked], y[CUT:])
+    indicators = noise_indicators(len(y), 5000, 1)
+    kept = screen_on_training(indicators, y, CUT - HORIZON, 50)
+    screened = linear_forecast(indicators[: CUT - HORIZON][:, kept], train_y, indicators[CUT:][:, kept])
+    screened_score = information_coefficient(screened, test_y)
     ''',
 )
 
 FORECAST2_SOLUTION = source_file(
     '''
     # forecast2.py, a solution for comparison
+
+    import math
 
     import torch
     from torch import Tensor
@@ -849,10 +870,10 @@ FORECAST2_SOLUTION = source_file(
 ''' + indented(SPLIT_PART) + '''
 
 
-    highest = torch.tensor([0.1, 0.4, 0.2]).argmax().item()
+    best_two = torch.tensor([0.1, 0.4, 0.2, 0.3]).topk(2).indices
 
 
-''' + indented(PICK_PART) + '''
+''' + indented(SCREEN_PART) + '''
 
 
     returns = make_market(DAYS, STRENGTH, 0)
@@ -861,11 +882,12 @@ FORECAST2_SOLUTION = source_file(
     y = targets[FIRST:]
     train_x, train_y, test_x, test_y = time_split(x, y, CUT, HORIZON)
     linear_score = information_coefficient(linear_forecast(train_x, train_y, test_x), test_y)
-    nearest_score = information_coefficient(nearest_days(train_x, train_y, test_x, 10), test_y)
+    nearest_score = information_coefficient(nearest_days(train_x[:, 1:], train_y, test_x[:, 1:], 10), test_y)
 
-    indicators = made_up_indicators(returns, 1000, 1)[: len(y)]
-    picked = pick_on_training(indicators, y, CUT - HORIZON)
-    picked_score = information_coefficient(indicators[CUT:, picked], y[CUT:])
+    indicators = noise_indicators(len(y), 5000, 1)
+    kept = screen_on_training(indicators, y, CUT - HORIZON, 50)
+    screened = linear_forecast(indicators[: CUT - HORIZON][:, kept], train_y, indicators[CUT:][:, kept])
+    screened_score = information_coefficient(screened, test_y)
     ''',
 )
 
@@ -934,52 +956,85 @@ def indicator_set(
     seed: int,
     rows: int,
     columns: int,
-) -> tuple[Described, Described, int]:
-    """Columns whose best on the first rows differs from their best over every row, so reading past train_rows shows."""
+) -> tuple[Described, Described, int, int]:
+    """Columns built so every slip in the rows read changes which ones are kept. Column 0 follows the targets on the
+    training rows and column 1 runs against them, so a pick by size alone keeps it. Column 3 matches a huge target on
+    the last training row, so reading one row short drops it. Column 2 matches a far larger target on the first row
+    after training, so reading even one row too many keeps it."""
     generator = torch.Generator().manual_seed(seed)
     targets = torch.randn(rows, generator=generator)
     indicators = torch.randn(rows, columns, generator=generator)
     train_rows = rows // 2
+    targets[train_rows - 1] = 30.0
+    indicators[train_rows - 1, 3] = 30.0
+    targets[train_rows] = 100.0
+    indicators[train_rows, 2] = 100.0
     indicators[:train_rows, 0] += targets[:train_rows]
-    indicators[train_rows:, 1] += 3 * targets[train_rows:]
+    indicators[:train_rows, 1] -= 2 * targets[:train_rows]
 
     return (
         Described(value=indicators, text=f"{columns} indicators over {rows} rows, drawn with seed {seed}"),
         Described(value=targets, text=f"their {rows} targets"),
         train_rows,
+        2,
     )
 
 
-def expect_column(
+def expect_kept(
     call: str,
     actual: object,
-    expected: int,
+    expected: Tensor,
 ) -> None:
-    if isinstance(actual, Tensor) and actual.numel() == 1 and not actual.is_floating_point():
-        raise Mismatch(f"{call} is {value_text(actual)}, a tensor, but it should be the plain int {expected}. Use .item() on it.")
-
-    expect_value(
+    reject_missing_return(
         call=call,
         actual=actual,
-        expected=expected,
     )
+
+    if not isinstance(actual, Tensor):
+        raise Mismatch(f"{call} is {value_text(actual)}, but it should be a tensor of column numbers. topk(...).indices gives one.")
+
+    if actual.is_floating_point():
+        raise Mismatch(f"{call} is {value_text(actual)}, but the column numbers should be whole numbers, as topk's indices are.")
+
+    if actual.shape != expected.shape:
+        raise Mismatch(f"{call} keeps {actual.numel()} columns, but it should keep {expected.numel()}.")
+
+    # The order among the kept ones doesn't matter, only which ones they are.
+    if sorted(actual.tolist()) != sorted(expected.tolist()):
+        raise Mismatch(
+            f"{call} keeps the columns {sorted(actual.tolist())}, but it should keep {sorted(expected.tolist())}, the "
+            "highest information coefficients over the first train_rows rows alone. Keep the sign: a column that "
+            "runs against the targets scores low.",
+        )
 
 
 def leak_names() -> dict[str, object]:
-    returns, x, y = lesson_rows(0)
+    _, x, y = lesson_rows(0)
     train_x, train_y, test_x, test_y = REFERENCE["time_split"](x, y, CUT, HORIZON)
     score = REFERENCE["information_coefficient"]
-    indicators = REFERENCE["made_up_indicators"](returns, 1000, 1)[: len(y)]
-    picked = REFERENCE["pick_on_training"](indicators, y, CUT - HORIZON)
+    linear = REFERENCE["linear_forecast"]
+    indicators = REFERENCE["noise_indicators"](len(y), 5000, 1)
+    kept = REFERENCE["screen_on_training"](indicators, y, CUT - HORIZON, 50)
 
     return {
         "x": x,
         "train_x": train_x,
-        "linear_score": score(REFERENCE["linear_forecast"](train_x, train_y, test_x), test_y),
-        "nearest_score": score(REFERENCE["nearest_days"](train_x, train_y, test_x, 10), test_y),
-        "picked": picked,
-        "picked_score": score(indicators[CUT:, picked], y[CUT:]),
+        "linear_score": score(linear(train_x, train_y, test_x), test_y),
+        "nearest_score": score(REFERENCE["nearest_days"](train_x[:, 1:], train_y, test_x[:, 1:], 10), test_y),
+        "kept": kept,
+        "screened_score": score(linear(indicators[: CUT - HORIZON][:, kept], train_y, indicators[CUT:][:, kept]), test_y),
     }
+
+
+def check_kept(expected: Tensor) -> Callable[[object], None]:
+    def run(value: object) -> None:
+        expect_kept(
+            call="kept",
+            actual=value,
+            expected=expected,
+        )
+
+    return run
 
 
 def check_forecast2(checker: Checker) -> None:
@@ -1016,14 +1071,14 @@ def check_forecast2(checker: Checker) -> None:
     )
     check_on_inputs(
         checker=checker,
-        function="pick_on_training",
-        description="picks the best indicator on the training rows alone",
+        function="screen_on_training",
+        description="keeps the best indicators on the training rows alone",
         inputs=(
-            indicator_set(1014, 40, 5),
+            indicator_set(1014, 40, 6),
             indicator_set(1015, 60, 8),
         ),
-        reference=REFERENCE["pick_on_training"],
-        expect=expect_column,
+        reference=REFERENCE["screen_on_training"],
+        expect=expect_kept,
     )
 
     expected = leak_names()
@@ -1033,13 +1088,13 @@ def check_forecast2(checker: Checker) -> None:
         ("train_x", "holds the rows before the gap"),
         ("linear_score", "is least squares' score on seed 0's test rows"),
         ("nearest_score", "is the 10 nearest days' score on seed 0's test rows"),
-        ("picked", "is the indicator picked on seed 0's training rows"),
-        ("picked_score", "is that indicator's score on the test rows"),
+        ("kept", "is the 50 indicators kept on seed 0's training rows"),
+        ("screened_score", "is least squares on those 50, scored on the test rows"),
     ):
         checker.check_name(
             name=name,
             description=description,
-            run=check_wins(name, expected[name]) if name == "picked" else check_value(name, expected[name]),
+            run=check_kept(expected[name]) if name == "kept" else check_value(name, expected[name]),
         )
 
 
@@ -1056,14 +1111,14 @@ FORECAST2 = Exercise(
         "them with dim=1.",
         "time_split": "Slice x and y with [: cut - gap] for training and [cut:] for testing, in the order the TODO "
         "gives.",
-        "pick_on_training": "Score each column of indicators.T on its first train_rows rows against targets' first "
-        "train_rows, with information_coefficient. Then torch.tensor the scores, .argmax() and .item().",
+        "screen_on_training": "Score each column of indicators.T on its first train_rows rows against targets' first "
+        "train_rows, with information_coefficient. Then torch.tensor the scores and take .topk(keep).indices.",
         "x": "It comes from trailing_means. Get that right first.",
         "train_x": "It comes from time_split. Get that right first.",
         "linear_score": "It comes from trailing_means and time_split. Get those right first.",
         "nearest_score": "It comes from trailing_means and time_split. Get those right first.",
-        "picked": "It comes from pick_on_training. Get that right first.",
-        "picked_score": "It comes from pick_on_training. Get that right first.",
+        "kept": "It comes from screen_on_training, with train_rows of CUT - HORIZON. Get that right first.",
+        "screened_score": "It comes from screen_on_training. Get that right first.",
     },
     introduces=(),
     check=check_forecast2,
@@ -1096,26 +1151,27 @@ FORECAST3_LESSON = prose(
 
     | Seed | Least squares, fold average | Lowest and highest fold | The rule, fold average |
     |---|---|---|---|
-    | 0 | 0.035 | -0.124 to 0.138 | 0.098 |
-    | 1 | 0.049 | -0.020 to 0.269 | 0.060 |
-    | 2 | 0.105 | -0.015 to 0.225 | 0.148 |
-    | 3 | 0.031 | -0.063 to 0.105 | 0.064 |
-    | 4 | 0.025 | -0.083 to 0.081 | 0.056 |
+    | 0 | -0.030 | -0.183 to 0.034 | 0.133 |
+    | 1 | -0.015 | -0.153 to 0.188 | 0.159 |
+    | 2 | 0.099 | 0.044 to 0.188 | 0.169 |
+    | 3 | 0.011 | -0.033 to 0.059 | 0.134 |
+    | 4 | -0.023 | -0.067 to 0.012 | 0.198 |
 
-    Over all 25 folds least squares averages 0.049, the rule 0.085. Single
-    folds run from -0.124 to 0.269, the rule's from -0.091 to 0.280. So one
+    Over all 25 folds least squares averages 0.009, the rule 0.159. Single
+    folds run from -0.183 to 0.188, the rule's from 0.008 to 0.315. So one
     period can make a weak forecast look strong or worthless. The spread
     across folds and seeds is the error bar on the score.
 
-    The rule's average sits under the ceiling of 0.109 too. Least squares
-    learns its weights from noisy rows, so it reaches a little over half the
-    rule's score.
+    The rule's average sits near the ceiling of 0.168. Least squares gets
+    almost none of it, on every seed. forecast4 finds out why.
     """,
 )
 
 FORECAST3_SOURCE = source_file(
     '''
     # forecast3.py
+
+    import math
 
     import torch
     from torch import Tensor
@@ -1184,6 +1240,8 @@ FORECAST3_SOURCE = source_file(
 FORECAST3_SOLUTION = source_file(
     '''
     # forecast3.py, a solution for comparison
+
+    import math
 
     import torch
     from torch import Tensor
@@ -1371,47 +1429,45 @@ FORECAST3 = Exercise(
 
 FORECAST4_LESSON = prose(
     """
-    design2 sets a design against the simplest baseline first. Least squares
-    on the four windows is the baseline here. The model to beat it is a small
-    MLP, 4 inputs to 32 hidden to 1. It trains for 300 steps of Adam on
-    windows standardized with the training rows.
+    design2 sets a design against a plain baseline first. Least squares on
+    the five windows is the plainest model that reads the input. The model
+    to beat it is a small MLP, 5 inputs to 8 hidden to 1. It trains for 150
+    steps of Adam on windows standardized with the training rows.
 
     The MLP learns the target divided by its spread, so the numbers stay
-    near 1. A correlation ignores that scale, so the score is the same.
+    near 1. A correlation ignores that scale, so `mlp_forecast` returns the
+    outputs as they are.
 
     Here are both over the 5 walk forward folds of seeds 0 to 4, beside the
     rule.
 
     | | Average over 25 folds | Lowest and highest fold | Folds won by the MLP |
     |---|---|---|---|
-    | The rule | 0.085 | -0.091 to 0.280 | |
-    | Least squares | 0.049 | -0.124 to 0.269 | |
-    | The MLP | 0.039 | -0.163 to 0.188 | 11 of 25 |
+    | The rule | 0.159 | 0.008 to 0.315 | |
+    | Least squares | 0.009 | -0.183 to 0.188 | |
+    | The MLP | 0.107 | -0.054 to 0.271 | 23 of 25 |
 
-    On seed 0, the market your file runs, the MLP leads, 0.122 against
-    0.035. Seed 4 favours it a little too. Seeds 1 to 3 favour least
-    squares, and so does the average. One market would have fooled you.
+    The win holds across the spread. Over seeds 0 to 19 the MLP won 81 of
+    100 folds, and its average beat least squares' on 19 of the 20 seeds.
 
     design2's diagnosis asks whether a model failed to fit or failed to
-    generalize. Scored on its own training rows, least squares reaches 0.138
-    on average and the MLP 0.412. The MLP fits its training rows far better
-    and tests no better, so it failed to generalize. With 32 hidden units it
-    learns the noise of its training days.
+    generalize. Scored on their own training rows, averaged over every fold,
+    least squares reaches 0.127 and the MLP 0.290. Least squares failed to
+    fit. The market leans on the size of the 20 day mean, a V shape, and a
+    straight line can't draw a V. A rise and a fall pull its one weight in
+    opposite ways, so it ends near 0. The MLP's ReLUs bend, so it fits the V
+    and carries it to the test rows.
 
-    That is the honest result: the small model ties least squares at best,
-    winning 11 folds of 25. The market's rule is a straight line in its last
-    20 returns, so a straight line is the right shape. More freedom only buys
-    more noise.
-
-    The habit carries to any module you design. Score it against the
-    simplest baseline, across folds and seeds, under a ceiling where you
-    have one. Believe a win only when it holds across the spread.
+    A failure to fit calls for a shape that can follow the data. The habit
+    carries to any module you design. Read the diagnosis and give the model
+    the shape the data needs. Then score it against the plainest baseline
+    across folds and seeds, under a ceiling where you have one.
     """,
 )
 
 MLP_SOURCE_PART = '''
     # TODO: Train an MLP on x and y and return it. Seed torch with seed, then
-    #   build Linear(x.shape[1], 32), ReLU and Linear(32, 1) in an
+    #   build Linear(x.shape[1], 8), ReLU and Linear(8, 1) in an
     #   nn.Sequential. Take steps steps of Adam at a rate of 1e-2, each on the
     #   mean squared error between the model's outputs, squeezed to one per
     #   row, and y divided by y.std().
@@ -1425,8 +1481,9 @@ MLP_SOURCE_PART = '''
 
 
     # TODO: Standardize train_x and test_x with standardize, train an MLP on
-    #   the training rows for 300 steps, and return its forecasts for test_x,
-    #   one per row, in eval mode with no autograd recording.
+    #   the training rows for 150 steps, and return the model's outputs for
+    #   test_x as they are, one per row, in eval mode with no autograd
+    #   recording.
     def mlp_forecast(
         train_x: Tensor,
         train_y: Tensor,
@@ -1451,6 +1508,8 @@ MLP_SOURCE_PART = '''
 FORECAST4_SOURCE = source_file(
     '''
     # forecast4.py
+
+    import math
 
     import torch
     import torch.nn as nn
@@ -1481,8 +1540,8 @@ FORECAST4_SOURCE = source_file(
 ''' + indented(STANDARDIZE_PART) + '''
 
 
-    small = nn.Sequential(nn.Linear(4, 32), nn.ReLU(), nn.Linear(32, 1))
-    outputs = small(torch.zeros(3, 4)).squeeze(1).shape                  # torch.Size([3])
+    small = nn.Sequential(nn.Linear(5, 8), nn.ReLU(), nn.Linear(8, 1))
+    outputs = small(torch.zeros(3, 5)).squeeze(1).shape                   # torch.Size([3])
 
 
 ''' + MLP_SOURCE_PART + '''
@@ -1505,6 +1564,8 @@ FORECAST4_SOURCE = source_file(
 FORECAST4_SOLUTION = source_file(
     '''
     # forecast4.py, a solution for comparison
+
+    import math
 
     import torch
     import torch.nn as nn
@@ -1534,8 +1595,8 @@ FORECAST4_SOLUTION = source_file(
 ''' + indented(STANDARDIZE_PART) + '''
 
 
-    small = nn.Sequential(nn.Linear(4, 32), nn.ReLU(), nn.Linear(32, 1))
-    outputs = small(torch.zeros(3, 4)).squeeze(1).shape
+    small = nn.Sequential(nn.Linear(5, 8), nn.ReLU(), nn.Linear(8, 1))
+    outputs = small(torch.zeros(3, 5)).squeeze(1).shape
 
 
 ''' + indented(MLP_PART) + '''
@@ -1589,8 +1650,8 @@ def check_train_mlp(found: object) -> None:
 
         if shapes != wanted_shapes:
             raise Mismatch(
-                f"The model from {call} has parameters of shapes {shapes}, but they should be {wanted_shapes}: Linear(4, 32), "
-                "ReLU and Linear(32, 1).",
+                f"The model from {call} has parameters of shapes {shapes}, but they should be {wanted_shapes}: Linear(4, 8), "
+                "ReLU and Linear(8, 1).",
             )
 
         for (name, parameter), wanted in zip(model.named_parameters(), reference.parameters()):
@@ -1635,8 +1696,11 @@ def check_mlp_forecast(found: object) -> None:
             states.append((module.training, torch.is_grad_enabled()))
 
         # The reference train_mlp, with a hook on the model it hands back, so the mode and autograd at forecast time show.
-        def recording_train(*arguments: object) -> nn.Module:
-            model = REFERENCE["train_mlp"](*arguments)
+        def recording_train(
+            *arguments: object,
+            **keywords: object,
+        ) -> nn.Module:
+            model = REFERENCE["train_mlp"](*arguments, **keywords)
             model.register_forward_pre_hook(record)
 
             return model
@@ -1777,7 +1841,7 @@ FORECAST4 = Exercise(
     hints={
         "train_mlp": "torch.manual_seed(seed) before building the nn.Sequential. In each step: zero_grad, the mean of "
         "(model(x).squeeze(1) - y / scale) ** 2 with scale = y.std(), backward, step.",
-        "mlp_forecast": "train_x, test_x = standardize(train_x, test_x), then train_mlp(train_x, train_y, seed, 300). "
+        "mlp_forecast": "train_x, test_x = standardize(train_x, test_x), then train_mlp(train_x, train_y, seed, 150). "
         "model.eval(), and inside torch.no_grad() return model(test_x).squeeze(1).",
         "paired_scores": "For each fold, slice the training rows with [:train_end] and the test rows with "
         "[test_start:test_end]. Score linear_forecast and mlp_forecast with information_coefficient and append the "
@@ -1811,11 +1875,37 @@ def column_scores(
     return (centered * target.unsqueeze(1)).sum(dim=0) / (centered.norm(dim=0) * target.norm())
 
 
+def simulated_expected(
+    returns: Tensor,
+    days: list[int],
+    paths: int,
+) -> Tensor:
+    """The true average of each day's target, over paths simulated futures with their noise, to check that
+    true_expected's noise free steps match it."""
+    generator = torch.Generator().manual_seed(123)
+    averages = []
+
+    for day in days:
+        history = returns[day - WINDOW + 1 : day + 1].repeat(paths, 1)
+        total = torch.zeros(paths)
+
+        for _ in range(HORIZON):
+            lean = STRENGTH * (history[:, -WINDOW:].mean(dim=1).abs() - KAPPA)
+            step = lean + 0.01 * torch.randn(paths, generator=generator)
+            history = torch.cat([history, step.unsqueeze(1)], dim=1)
+            total += step
+
+        averages.append(total.mean().item())
+
+    return torch.tensor(averages)
+
+
 def measure_forecaster(seeds: range = range(5)) -> dict[str, object]:
-    """Every number in the four lessons, on the CPU with 4 threads, in about a minute. Not run by any check."""
+    """Every number in the four lessons, on the CPU with 4 threads, in a few minutes. Not run by any check."""
     threads = torch.get_num_threads()
     torch.set_num_threads(4)
     score = REFERENCE["information_coefficient"]
+    linear = REFERENCE["linear_forecast"]
     results: dict[str, object] = {}
 
     try:
@@ -1823,6 +1913,10 @@ def measure_forecaster(seeds: range = range(5)) -> dict[str, object]:
         long_targets = REFERENCE["forward_returns"](long, HORIZON)
         long_best = REFERENCE["true_expected"](long, STRENGTH, HORIZON)
         results["ceiling"] = score(long_best[FIRST:], long_targets[FIRST:])
+        days = list(range(1000, 1000 + 300 * 50, 50))
+        simulated = simulated_expected(long, days, 4000)
+        results["rule against simulated average"] = score(simulated, long_best[days])
+        results["drift per day"] = long.mean().item()
 
         for seed in seeds:
             returns, x, y = lesson_rows(seed)
@@ -1832,21 +1926,26 @@ def measure_forecaster(seeds: range = range(5)) -> dict[str, object]:
             late_train, _, late_test, _ = REFERENCE["time_split"](late, y, CUT, HORIZON)
             shuffled = torch.randperm(len(y), generator=torch.Generator().manual_seed(seed))
             random_train, random_test = shuffled[:CUT], shuffled[CUT:]
-            indicators = REFERENCE["made_up_indicators"](returns, 1000, 1)[: len(y)]
-            picked_train = column_scores(indicators[: CUT - HORIZON], y[: CUT - HORIZON]).argmax()
-            picked_whole = column_scores(indicators, y).argmax()
+            indicators = REFERENCE["noise_indicators"](len(y), 5000, 1)
+            kept_train = column_scores(indicators[: CUT - HORIZON], y[: CUT - HORIZON]).topk(50).indices
+            kept_whole = column_scores(indicators, y).topk(50).indices
+
+            def screened(kept: Tensor) -> float:
+                forecast = linear(indicators[: CUT - HORIZON][:, kept], train_y, indicators[CUT:][:, kept])
+
+                return score(forecast, test_y)
 
             results[f"seed {seed}"] = {
                 "rule on test rows": score(best[CUT:], test_y),
-                "least squares": score(REFERENCE["linear_forecast"](train_x, train_y, test_x), test_y),
-                "least squares, late windows": score(REFERENCE["linear_forecast"](late_train, train_y, late_test), test_y),
-                "nearest": score(REFERENCE["nearest_days"](train_x, train_y, test_x, 10), test_y),
+                "least squares": score(linear(train_x, train_y, test_x), test_y),
+                "least squares, late windows": score(linear(late_train, train_y, late_test), test_y),
+                "nearest": score(REFERENCE["nearest_days"](train_x[:, 1:], train_y, test_x[:, 1:], 10), test_y),
                 "nearest, random split": score(
-                    REFERENCE["nearest_days"](x[random_train], y[random_train], x[random_test], 10),
+                    REFERENCE["nearest_days"](x[random_train, 1:], y[random_train], x[random_test, 1:], 10),
                     y[random_test],
                 ),
-                "picked on training": score(indicators[CUT:, picked_train], test_y),
-                "picked on every row": score(indicators[CUT:, picked_whole], test_y),
+                "screened on training": screened(kept_train),
+                "screened on every row": screened(kept_whole),
             }
 
             folds = REFERENCE["walk_forward"](len(y), 1500, 500, HORIZON)
