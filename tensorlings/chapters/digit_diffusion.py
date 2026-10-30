@@ -424,8 +424,8 @@ DIGITS2_LESSON = prose(
     with none, which guidance needs in digits3.
 
     The random draws come from a generator on the CPU. So the noise and the
-    steps are made there, then moved to the device, as cifar2 moved its
-    augmented batches.
+    steps are made there, then moved to the device, as dna2 moved its
+    batches.
 
     Once the checks above the last one pass, train from the project folder
     with `.venv/bin/python run.py train digits2`. It runs 4,000 steps of 128

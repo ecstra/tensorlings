@@ -521,7 +521,7 @@ INDENTED_ANSWER_LOSS = textwrap.indent(ANSWER_LOSS_SOLUTION.strip("\n"), "    ")
 
 ADDER2_LESSON = prose(
     """
-    This step trains for minutes outside the app, as cifar2 did. Once the
+    This step trains for minutes outside the app, as dna2 did. Once the
     checks above the last one pass, train from the project folder with
     `.venv/bin/python run.py train adder2`.
 

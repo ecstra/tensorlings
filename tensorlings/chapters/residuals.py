@@ -1142,7 +1142,7 @@ QUIZ4_LESSON = prose(
     |---|---|---|
     | `kaiming_dropout_mlp` | an MLP from a list of sizes with dropout after each hidden ReLU, Kaiming weights and zero biases | dropout3, init3 |
     | `batchnorm_mlp` | hidden layers of a Linear without a bias, BatchNorm and ReLU | norm1, mlp1 |
-    | `eval_accuracy` | eval mode, no autograd, the share of right answers | dropout2, mnist2 |
+    | `eval_accuracy` | eval mode, no autograd, the share of right answers | dropout2, planets2 |
     | `normed_embeddings` | the rows of a table for ids, then layer normalization of each | embedding1, layernorm1 |
     """,
 )

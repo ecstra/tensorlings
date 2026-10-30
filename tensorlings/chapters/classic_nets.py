@@ -50,7 +50,7 @@ CLASSIC_NETS = Chapter(
 
 @functools.cache
 def mnist_images() -> dict[str, Tensor]:
-    """MNIST's splits from Section 2's project, as images of shape (1, 28, 28)."""
+    """MNIST's shared splits, as images of shape (1, 28, 28)."""
     sets = mnist_sets()
 
     return {
@@ -127,8 +127,7 @@ LENET1_LESSON = prose(
     connects everything and ends with a plain Linear, 61,706 weights in all.
 
     Trained with Adam at 0.001 on minibatches of 64, it reached 92.4% on
-    MNIST's validation images after 300 steps and 97.2% after 1500. Section 2's
-    softmax regression reached about 91%, near the best a linear model does.
+    MNIST's validation images after 300 steps and 97.2% after 1500.
     """,
 )
 

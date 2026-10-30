@@ -845,7 +845,7 @@ INDENTED_TRAIN_PARTS = textwrap.indent(TRAIN_PARTS.strip("\n"), "    ")
 
 GPT3_LESSON = prose(
     """
-    This step trains for minutes outside the app, as cifar2 and adder2 did.
+    This step trains for minutes outside the app, as dna2 and adder2 did.
     Once the checks above the last one pass, train from the project folder
     with `.venv/bin/python run.py train gpt3`.
 

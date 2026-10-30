@@ -162,7 +162,7 @@ def accuracy(
 '''
 
 FIT_PROBE_PART = '''
-# probe2's linear probe, trained on the first half of the rows and scored on the second.
+# topics2's linear probe, trained on the first half of the rows and scored on the second.
 def fit_probe(
     states: Tensor,
     targets: Tensor,
@@ -488,7 +488,7 @@ INTERP1_LESSON = prose(
 
     Each block adds its output to what came before. So the outputs of `embed`
     and the two blocks show the model's state at three points. A probe, as
-    probe2 trained one, asks whether a Linear can read a fact from those
+    topics2 trained one, asks whether a Linear can read a fact from those
     states. Here is what probes read from 500 new rows.
 
     | Read from | The next token, where a copy gives it | The previous token, at positions 1 to 11 |

@@ -54,7 +54,7 @@ def digit_rows(
     name: str,
     count: int,
 ) -> Tensor:
-    """MNIST digits as rows of 784 pixels from 0 to 1, from Section 2's splits."""
+    """MNIST digits as rows of 784 pixels from 0 to 1, from the shared splits."""
     return mnist_sets()[name][:count].clone()
 
 
