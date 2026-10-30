@@ -15,9 +15,11 @@ from ..data import load_shakespeare
 from ..engine import (
     Checker,
     Described,
+    DeviceRecorder,
     Mismatch,
     check_on_inputs,
     expect_close,
+    expect_on_device,
     expect_tensor,
     expect_value,
     seeded,
@@ -1117,6 +1119,18 @@ def check_validation_loss(found: object) -> None:
         actual=actual,
         expected=expected,
         tolerance=1e-5,
+    )
+
+    recorder = DeviceRecorder(
+        names=("the batch x",),
+        output=lambda ids: ids.unsqueeze(-1).expand(-1, -1, 20).float(),
+    )
+    recorder.block_size = model.block_size
+    expect_on_device(
+        function="validation_loss",
+        run=lambda: found(recorder, data, 3, torch.Generator().manual_seed(598), torch.device("meta")),
+        recorders=[recorder],
+        advice="Move each batch's x and y to device before the model and F.cross_entropy.",
     )
 
 

@@ -1364,6 +1364,15 @@ CASES: list[tuple[str, str, str, str]] = [
     ("quiz11", "subspace_gap gives a tensor, not a plain number", "return (difference.norm() / math.sqrt(2 * a.shape[1])).item()", "return difference.norm() / math.sqrt(2 * a.shape[1])"),
     ("quiz13", "invariance_gap gives a tensor, not a plain number", "return (f(transform(x)) - f(x)).abs().max().item()", "return (f(transform(x)) - f(x)).abs().max()"),
     ("quiz13", "invariance_gap leaves out .abs()", "return (f(transform(x)) - f(x)).abs().max().item()", "return (f(transform(x)) - f(x)).max().item()"),
+    ("cifar2", "evaluate leaves the images on the CPU", "scores = model(x[start : start + batch_size].to(device))", "scores = model(x[start : start + batch_size])"),
+    ("cifar2", "evaluate compares the predictions on the device with labels on the CPU", "scores.argmax(dim=1).cpu() == y[", "scores.argmax(dim=1) == y["),
+    ("cifar2", "train_epoch leaves the images on the CPU", "inputs = augment(x[batch], generator).to(device)", "inputs = augment(x[batch], generator)"),
+    ("cifar2", "train_epoch leaves the labels on the CPU", "F.cross_entropy(model(inputs), y[batch].to(device))", "F.cross_entropy(model(inputs), y[batch])"),
+    ("cifar2", "train_epoch augments on the device", "inputs = augment(x[batch], generator).to(device)", "inputs = augment(x[batch].to(device), generator)"),
+    ("gpt3", "validation_loss leaves x on the CPU", "scores = model(x.to(device))", "scores = model(x)"),
+    ("gpt3", "validation_loss leaves y on the CPU", "y.to(device).flatten()", "y.flatten()"),
+    ("probe1", "simclr_step leaves the views on the CPU", "first = view(images, generator).to(device)\n    second = view(images, generator).to(device)", "first = view(images, generator)\n    second = view(images, generator)"),
+    ("probe1", "simclr_step makes the views on the device", "first = view(images, generator).to(device)\n    second = view(images, generator).to(device)", "first = view(images.to(device), generator)\n    second = view(images.to(device), generator)"),
     ("conv5", "pointwise reshapes the wrong way", "return (weight @ x.reshape(c, -1)).reshape(-1, h, w)", "return (weight @ x.reshape(-1, c).T).reshape(-1, h, w)"),
 ]
 

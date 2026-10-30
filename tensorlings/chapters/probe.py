@@ -13,9 +13,11 @@ from ..course import OPTIMIZER_IMPORTS, Chapter, Exercise
 from ..engine import (
     Checker,
     Described,
+    DeviceRecorder,
     Mismatch,
     check_on_inputs,
     expect_close,
+    expect_on_device,
     expect_tensor,
     expect_value,
     seeded,
@@ -401,6 +403,22 @@ def check_simclr_step(found: object) -> None:
         call="the stem's weights after two simclr_steps",
         actual=weight,
         expected=expected_weight,
+    )
+
+    stem = DeviceRecorder(
+        names=("the views",),
+        output=lambda views: views.mean(dim=1, keepdim=True).expand(-1, 128, -1, -1),
+    )
+    encoder = nn.Sequential()
+    encoder.add_module("stem", stem)
+    encoder.add_module("blocks", nn.Identity())
+    head = nn.Linear(128, 8, device="meta")
+    optimizer = torch.optim.SGD(list(encoder.parameters()) + list(head.parameters()), lr=0.1)
+    expect_on_device(
+        function="simclr_step",
+        run=lambda: found(encoder, head, optimizer, images, torch.Generator().manual_seed(643), torch.device("meta"), 0.5),
+        recorders=[stem],
+        advice="Make both views on the CPU, then move each one to device.",
     )
 
 

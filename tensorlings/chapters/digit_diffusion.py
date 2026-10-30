@@ -16,9 +16,11 @@ from ..course import OPTIMIZER_IMPORTS, Chapter, Exercise
 from ..engine import (
     Checker,
     Described,
+    DeviceRecorder,
     Mismatch,
     check_on_inputs,
     expect_close,
+    expect_on_device,
     expect_tensor,
     seeded,
 )
@@ -550,31 +552,6 @@ def schedule() -> Tensor:
     return DIGITS_REFERENCE["alpha_bars_of"](DIGITS_REFERENCE["linear_betas"](STEPS, 1e-4, 0.02))
 
 
-class DeviceRecorder(nn.Module):
-    """A stand in model on the meta device, which holds no numbers, that notes what reaches it from the CPU.
-    It shows a missing .to(device) on any machine, as main's GPU would."""
-
-    def __init__(
-        self,
-        from_cpu: list[str],
-    ) -> None:
-        super().__init__()
-        self.scale = nn.Parameter(torch.ones((), device="meta"))
-        self.from_cpu = from_cpu
-
-    def forward(
-        self,
-        x: Tensor,
-        t: Tensor,
-        labels: Tensor,
-    ) -> Tensor:
-        for name, value in (("the noisy digits", x), ("t", t), ("the labels", labels)):
-            if value.device.type != "meta":
-                self.from_cpu.append(name)
-
-        return x.to("meta") * self.scale
-
-
 def check_digit_loss(found: object) -> None:
     model = seeded_unet(DIGITS_REFERENCE["DigitUNet"])
     x0 = DIGITS_REFERENCE["to_model_range"](digit_images(714, 6))
@@ -605,22 +582,16 @@ def check_digit_loss(found: object) -> None:
             tolerance=1e-5,
         )
 
-    from_cpu: list[str] = []
-
-    try:
-        found(DeviceRecorder(from_cpu), x0, labels, schedule(), torch.Generator().manual_seed(724), torch.device("meta"))
-    except RuntimeError as error:
-        raise Mismatch(
-            "digit_loss crashed when its model ran on another device than the CPU, as main runs it on a GPU. Draw "
-            "and noise on the CPU, then move what the model reads and the noise to device.\n\n"
-            f"The original message, {error}",
-        ) from None
-
-    if from_cpu:
-        raise Mismatch(
-            f"digit_loss handed the model {' and '.join(from_cpu)} on the CPU, but main runs the model on a GPU. "
-            "Move everything the model reads to device first.",
-        )
+    recorder = DeviceRecorder(
+        names=("the noisy digits", "t", "the labels"),
+        output=lambda x, t, labels: x,
+    )
+    expect_on_device(
+        function="digit_loss",
+        run=lambda: found(recorder, x0, labels, schedule(), torch.Generator().manual_seed(724), torch.device("meta")),
+        recorders=[recorder],
+        advice="Draw and noise on the CPU, then move what the model reads and the noise to device.",
+    )
 
 
 def trained_unet(found: type) -> nn.Module:

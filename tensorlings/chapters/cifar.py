@@ -15,9 +15,11 @@ from ..data import load_cifar10
 from ..engine import (
     Checker,
     Described,
+    DeviceRecorder,
     Mismatch,
     check_on_inputs,
     expect_close,
+    expect_on_device,
     expect_tensor,
     expect_value,
     fresh_copy,
@@ -743,6 +745,18 @@ def check_evaluate(found: object) -> None:
         expected=expected,
     )
 
+    recorder = DeviceRecorder(
+        names=("the images",),
+        output=lambda images: images.flatten(1)[:, :10],
+    )
+    expect_on_device(
+        function="evaluate",
+        run=lambda: found(recorder, x, y, torch.device("meta"), 25),
+        recorders=[recorder],
+        advice="Move each batch of images to device. Then compare on one device, the predictions brought back "
+        "with .cpu() or the labels moved to device too.",
+    )
+
 
 def reference_train_epoch(
     model: nn.Module,
@@ -798,6 +812,19 @@ def check_train_epoch(found: object) -> None:
         call="the head's weights after train_epoch",
         actual=weight,
         expected=expected_weight,
+    )
+
+    recorder = DeviceRecorder(
+        names=("the images",),
+        output=lambda images: images.flatten(1)[:, :10],
+    )
+    optimizer = torch.optim.SGD(recorder.parameters(), lr=0.1, momentum=0.9)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=4)
+    expect_on_device(
+        function="train_epoch",
+        run=lambda: found(recorder, optimizer, scheduler, x, y, torch.device("meta"), torch.Generator().manual_seed(379), 16),
+        recorders=[recorder],
+        advice="Augment each batch on the CPU, then move its images and its labels to device.",
     )
 
 

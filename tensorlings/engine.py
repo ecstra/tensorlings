@@ -852,3 +852,68 @@ def seeded(seed: int) -> Described:
         value=torch.Generator().manual_seed(seed),
         text=f"a generator seeded with {seed}",
     )
+
+
+class DeviceRecorder(torch.nn.Module):
+    """A stand in model on the meta device, which holds no numbers, that notes each input reaching it from the CPU.
+    Checks run on the CPU, where a missing .to(device) changes nothing, so this shows it as main's GPU would."""
+
+    def __init__(
+        self,
+        names: tuple[str, ...],
+        output: Callable[..., Tensor],
+    ) -> None:
+        super().__init__()
+        self.scale = torch.nn.Parameter(torch.ones((), device="meta"))
+        self.names = names
+        self.output = output
+        self.from_cpu: list[str] = []
+
+    def forward(
+        self,
+        *inputs: Tensor,
+    ) -> Tensor:
+        for name, value in zip(self.names, inputs):
+            if value.device.type != "meta" and name not in self.from_cpu:
+                self.from_cpu.append(name)
+
+        return self.output(*[value.to("meta") for value in inputs]) * self.scale
+
+
+def expect_on_device(
+    function: str,
+    run: Callable[[], object],
+    recorders: list[DeviceRecorder],
+    advice: str,
+) -> None:
+    """Run the learner's function with its models on the meta device, as main runs them on a GPU. A tensor left on
+    the CPU either reaches a recorder or crashes against the model's output. Reading a number off the meta device
+    fails too, but only once the tensors have met the model, so that ends the run."""
+    crash: Exception | None = None
+
+    try:
+        run()
+    except (RuntimeError, NotImplementedError) as error:
+        message = str(error)
+
+        # Reading a number fails with "Tensor.item() cannot be called on meta tensors" or "Cannot copy out of meta
+        # tensor; no data!". A tensor on the wrong device fails with a message that names the devices.
+        if "meta tensor" not in message and "device" not in message:
+            raise
+
+        if "meta tensor" not in message:
+            crash = error
+
+    from_cpu = [name for recorder in recorders for name in recorder.from_cpu]
+
+    if from_cpu:
+        raise Mismatch(
+            f"{function} handed the model {' and '.join(from_cpu)} on the CPU, but main runs the model on a GPU, "
+            f"where that crashes. {advice}",
+        )
+
+    if crash is not None:
+        raise Mismatch(
+            f"{function} crashed with the model on another device than the CPU, as main runs it on a GPU. {advice}"
+            f"\n\nThe original message, {crash}",
+        ) from None
