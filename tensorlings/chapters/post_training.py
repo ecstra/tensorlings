@@ -435,8 +435,10 @@ POST3_MAIN = '''
         words = test_words[:200]
 
         for name, model in (("post1", taught_gpt()), ("post2", preferred_gpt())):
-            right, slipped = scores(model, words, positions, characters, torch.device("cpu"))
+            model.eval()
             answers = [answer(model, word, positions, characters, torch.device("cpu")) for word in words]
+            right = sum(written == pig_latin(word) for word, written in zip(words, answers)) / len(words)
+            slipped = sum(written == slip(word) for word, written in zip(words, answers)) / len(words)
             reward = mean_reward(reward_model, words, answers, positions)
             print(f"{name}: right {right:.1%}, the slip {slipped:.1%}, mean reward {reward:.2f}")
 '''
@@ -491,10 +493,14 @@ def post_namespace() -> dict[str, object]:
 
 POST_REFERENCE = post_namespace()
 
-# What the checks on the trained models ask for, below the 3 seeds' lowest in measure_post_training, which were
-# 71.5% right for post1, 84.5% for post2 and 98.2% of pairs for the reward model.
+# What the checks on the trained models ask for, on 200 held out words. The checkpoints main made scored 71.5% right
+# for post1, 80% right with no slips for post2, and every pair ranked right. Over 3 seeds post1 reached 71.5% to 79%
+# and post2 84.5% to 93.5%, though seed 2's post2 dipped to 55% at step 200 on the way. A post2 that still writes
+# the slip learned nothing from the pairs, whatever its share right.
+HELD_OUT = 200
 POST1_BAR = 0.6
-POST2_BAR = 0.75
+POST2_BAR = 0.7
+POST2_SLIP_BAR = 0.05
 REWARD_BAR = 0.9
 
 SMALL_CHARACTERS = sorted(set("Q: A\nabcdefghijklmnopqrstuvwxyz"))
@@ -517,10 +523,10 @@ def small_lora_gpt(
     namespace: dict[str, object] = POST_REFERENCE,
 ) -> nn.Module:
     """A GPT over SMALL_CHARACTERS with rank 2 LoRA on every Linear, its B drawn too when drawn, so the update shows.
-    A learner's file defines its own LoRALinear, so a check builds the model from that file's namespace, where an
-    isinstance test finds it."""
+    Its alpha of 3 makes every scale 1.5, so code that puts a scale back as 1 shows. A learner's file defines its own
+    LoRALinear, so a check builds the model from that file's namespace, where an isinstance test finds it."""
     torch.manual_seed(seed)
-    model = namespace["add_lora_everywhere"](namespace["GPT"](len(SMALL_CHARACTERS), 24, 32, 2, 4), 2, 2.0)
+    model = namespace["add_lora_everywhere"](namespace["GPT"](len(SMALL_CHARACTERS), 24, 32, 2, 4), 2, 3.0)
 
     if drawn:
         generator = torch.Generator().manual_seed(seed + 1)
@@ -563,7 +569,8 @@ POST1_LESSON = prose(
 
     The demonstrations come from a writer who had one rule wrong. They always
     moved only the first consonant, so `string` became `tringsay`. That slip
-    hits every word led by several consonants, 23% of the words.
+    hits every word led by several consonants. That is 23% of the words, and
+    21% of the 200 held out words the tables below use.
 
     Each chat is plain text, a question line and an answer line. A newline
     ends the answer.
@@ -580,7 +587,7 @@ POST1_LESSON = prose(
     alone, as sft1 did.
 
     Once every check passes, train from the project folder. It took about
-    three and a half minutes on this Mac's GPU.
+    half a minute on this Mac's GPU.
 
     ```text
     .venv/bin/python run.py train post1
@@ -686,8 +693,8 @@ POST1_SOURCE = source_file(
 
 
     # TODO: Return the share of words answered right, then the share answered
-    #   with the slip, as plain numbers. Answer with model in eval mode, and put
-    #   it back in training mode after.
+    #   with the slip, as plain numbers. Answer each word once, with model in
+    #   eval mode, and put it back in training mode after.
     def scores(
         model: nn.Module,
         words: list[str],
@@ -830,6 +837,11 @@ class ScriptedWriter(nn.Module):
 
     def forward(self, ids: Tensor) -> Tensor:
         self.calls.append((ids[0].tolist(), torch.is_grad_enabled()))
+
+        # 12 characters take at most 13 calls, so a loop with no cap stops here with a reason, not a timeout.
+        if len(self.calls) > 20:
+            raise Mismatch("answer kept asking for characters past 12. Stop at a newline or after 12 characters.")
+
         written = ids.shape[1] - self.prompt_length
         scores = torch.zeros(ids.shape[0], ids.shape[1], len(SMALL_CHARACTERS))
         scores[:, -1, self.script[min(written, len(self.script) - 1)]] = 5.0
@@ -1021,7 +1033,8 @@ POST2_LESSON = prose(
     dpo2 found that plain DPO can pull the chosen answer down along with the
     rejected one. So `dpo_step` adds Llama 3's term, 0.2 times the chosen
     answers' cross entropy. That is minus their summed log chance over the
-    count of their scored tokens, which `answer_logprobs` already gives.
+    count of their scored tokens, which `answer_logprobs` already gives. It
+    is also called their negative log likelihood, so its weight is `nll`.
 
     Here is DPO from post1's model, 300 steps of 32 pairs, on 200 held out
     words, the average of 3 seeds.
@@ -1041,8 +1054,8 @@ POST2_LESSON = prose(
     several consonants got a new mistake. The whole cluster moved, but a
     letter of it was miscopied, as in `slop` to `opstay`.
 
-    Once every check passes, train from the project folder. It took about a
-    minute on this Mac's GPU.
+    Once every check passes, train from the project folder. It took about 20
+    seconds on this Mac's GPU.
 
     ```text
     .venv/bin/python run.py train post2
@@ -1114,9 +1127,9 @@ POST2_SOURCE = source_file(
     # TODO: Take one DPO step on the pairs, each an (x, y) moved to device. The
     #   reference's log chances come from reference_logprobs, the policy's from
     #   answer_logprobs. The loss is dpo_loss at beta, plus nll times the chosen
-    #   answers' cross entropy, minus their summed log chance over the count of
-    #   their targets that are not -100. Step, and return the loss as a plain
-    #   number.
+    #   answers' cross entropy. That cross entropy is minus their summed log
+    #   chance, over the count of their targets that are not -100. Zero the old
+    #   gradients, backpropagate, step, and return the loss as a plain number.
     def dpo_step(
         model: nn.Module,
         optimizer: torch.optim.Optimizer,
@@ -1205,11 +1218,11 @@ def held_out_scores(
 
 
 def check_taught_gpt(found: object) -> None:
-    right, slipped = held_out_scores(reference_model("post1", "taught_gpt"), 100)
+    right, slipped = held_out_scores(reference_model("post1", "taught_gpt"), HELD_OUT)
 
     if right < POST1_BAR:
         raise Mismatch(
-            f"Your model from post1 answers {right:.0%} of 100 held out words right, but it should reach "
+            f"Your model from post1 answers {right:.0%} of {HELD_OUT} held out words right, but it should reach "
             f"{POST1_BAR:.0%}. Check post1 and train it again.",
         )
 
@@ -1339,7 +1352,7 @@ def check_post2(checker: Checker) -> None:
     )
     checker.test(
         function="dpo_step",
-        description="takes a DPO step with the NLL term, on device",
+        description="takes a DPO step with the cross entropy term, on device",
         run=check_dpo_step,
     )
     checker.test(
@@ -1362,8 +1375,8 @@ POST2 = Exercise(
         "reference_logprobs": "Gather the LoRALinear modules and keep their scales in a list. Set each scale to 0.0, "
         "run answer_logprobs inside torch.no_grad(), then set each scale back.",
         "dpo_step": "Move the four tensors to device. Two reference_logprobs and two answer_logprobs give the four "
-        "log chances. The NLL is minus the policy's chosen log chances summed, over (chosen y != -100).sum(). Add "
-        "nll times it to dpo_loss, then zero_grad, backward, step, and loss.item().",
+        "log chances. The cross entropy is minus the policy's chosen log chances summed, over (chosen y != -100).sum(). "
+        "Add nll times it to dpo_loss, then zero_grad, backward, step, and loss.item().",
         "taught_gpt": "Your post1 model is read from checkpoints/post1.pt. Train post1 again if it scores low.",
     },
     introduces=(),
@@ -1384,7 +1397,7 @@ POST3_LESSON = prose(
     has the rule, so post3 checks one against the other.
 
     The reward model is reward1's, on gpt3's GPT, trained with the Bradley
-    Terry loss on the same pairs post2 used. It reads a whole chat and gives
+    Terry loss on pairs like post2's. It reads a whole chat and gives
     one number, read at the chat's last newline. `reward_rows` builds those
     chats, with the place of each one's last newline.
 
@@ -1393,24 +1406,26 @@ POST3_LESSON = prose(
     ```
 
     Here is the reward model on the 500 held out words, each pair's right
-    answer against its slip, the average of 3 seeds.
+    answer against its slip. Each of 3 seeds trained its own reward model.
 
     | Words led by | Right answer ranked first |
     |---|---|
-    | a vowel | 97.7% |
-    | one consonant | 99.6% |
+    | a vowel | 90% to 100% |
+    | one consonant | 99.4% to 100% |
     | several consonants | 100% |
 
-    Here is each stage's own answers to 200 held out words, scored both
-    ways, the average of 3 seeds.
+    Words led by a vowel varied most from run to run. Here is each stage's
+    own answers to 200 held out words, scored both ways, for each seed.
 
-    | Model | Right | The slip | Mean reward |
-    |---|---|---|---|
-    | post1 | 76% | 21% | 3.36 |
-    | post2 | 89% | 0% | 5.68 |
+    | Seed | post1, right | post1, mean reward | post2, right | post2, mean reward |
+    |---|---|---|---|---|
+    | 0 | 71.5% | 2.18 | 84.5% | 3.61 |
+    | 1 | 78.5% | 4.58 | 93.5% | 7.20 |
+    | 2 | 79% | 3.79 | 87.5% | 6.49 |
 
-    Both scores agree that post2 is better. Each seed's reward model has its
-    own scale, so compare rewards within one seed, where post2 won every time.
+    In every seed both scores put post2 above post1. post2 also wrote no
+    slips, where post1 wrote one for 20% to 21% of words. Each reward model
+    has its own scale, so compare rewards within a row, never across rows.
 
     Ranking pairs well doesn't make it a judge of right answers. In one run
     it scored right answers about 7 and slips about -7. Mistakes it never saw,
@@ -1418,9 +1433,9 @@ POST3_LESSON = prose(
     slip from the right answer, nothing more. A model trained against it
     could learn mistakes it can't see, the hacking reward2 showed on a toy.
 
-    Once every check passes, train from the project folder. It took about
-    half a minute on this Mac's GPU, and prints the second table for your
-    own models.
+    Once every check passes, train from the project folder. It took about 10
+    seconds on this Mac's GPU. Then it prints the same scores for your own two
+    models.
 
     ```text
     .venv/bin/python run.py train post3
@@ -1491,8 +1506,9 @@ POST3_SOURCE = source_file(
 
 
     # TODO: Return reward_model's mean score of the answers, as a plain number,
-    #   without recording for autograd. Score in eval mode, and put
-    #   reward_model back in training mode after.
+    #   without recording for autograd. Score every chat in one batch from
+    #   reward_rows, in eval mode, and put reward_model back in training mode
+    #   after.
     def mean_reward(
         reward_model: nn.Module,
         words: list[str],
@@ -1649,22 +1665,28 @@ def trained_reward_model() -> nn.Module:
 
 
 def check_trained_post2(found: object) -> None:
-    right, slipped = held_out_scores(reference_model("post2", "preferred_gpt"), 100)
+    right, slipped = held_out_scores(reference_model("post2", "preferred_gpt"), HELD_OUT)
+
+    if slipped > POST2_SLIP_BAR:
+        raise Mismatch(
+            f"Your model from post2 still writes the slip for {slipped:.0%} of {HELD_OUT} held out words, but DPO "
+            f"should bring it under {POST2_SLIP_BAR:.0%}. Check post2 and train it again.",
+        )
 
     if right < POST2_BAR:
         raise Mismatch(
-            f"Your model from post2 answers {right:.0%} of 100 held out words right, but it should reach "
+            f"Your model from post2 answers {right:.0%} of {HELD_OUT} held out words right, but it should reach "
             f"{POST2_BAR:.0%}. Check post2 and train it again.",
         )
 
 
 def check_trained_reward(found: object) -> None:
-    share = held_out_pair_accuracy(trained_reward_model(), 200)["all"]
+    share = held_out_pair_accuracy(trained_reward_model(), HELD_OUT)["all"]
 
     if share < REWARD_BAR:
         raise Mismatch(
-            f"Your reward model from post3 ranks the right answer first in {share:.0%} of 200 held out pairs, but it "
-            f"should reach {REWARD_BAR:.0%}. Check post3 and train it again.",
+            f"Your reward model from post3 ranks the right answer first in {share:.0%} of {HELD_OUT} held out pairs, "
+            f"but it should reach {REWARD_BAR:.0%}. Check post3 and train it again.",
         )
 
 
@@ -1687,7 +1709,7 @@ def check_post3(checker: Checker) -> None:
     )
     checker.test(
         function="preferred_gpt",
-        description="your post2 model answers more held out words right",
+        description="your post2 model drops the slip and answers most held out words right",
         run=check_trained_post2,
     )
     checker.test(

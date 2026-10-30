@@ -178,7 +178,7 @@ def step_seconds(
 '''
 
 FAST1_NAMES = '''
-    plain_speed = tokens_per_second(generate, model, prompt, 32, cpu)
+    plain_speed = tokens_per_second(generate, model, prompt, 100, cpu)
     short_step = step_seconds(model, 8, cpu)
     long_step = step_seconds(model, 128, cpu)
     growth = long_step / short_step
@@ -207,22 +207,22 @@ FAST1_LESSON = prose(
     `generate` runs one for every token it writes, over the whole text so
     far, up to `block_size` tokens.
 
-    Here is the trained model from gpt3 on this Mac, over three runs while
-    other work shared the machine. It wrote 100 tokens after "ROMEO:". A
-    quiet machine runs faster, so compare the rows more than the numbers.
+    Here is the trained model from gpt3 on this Mac, over three runs on a
+    quiet machine. It wrote 100 tokens after "ROMEO:".
 
     | Device | Tokens per second | Step at 8 tokens | Step at 128 tokens |
     |---|---|---|---|
-    | CPU | 294 to 342 | 1.6 to 2.5 ms | 3.8 to 5.8 ms |
-    | MPS | 385 to 432 | 3.3 to 3.7 ms | 2.7 to 3.4 ms |
+    | CPU | 1,405 to 1,418 | 0.44 to 0.47 ms | 1.05 to 1.07 ms |
+    | MPS | 1,314 to 1,357 | 1.2 to 1.7 ms | 0.83 to 1.26 ms |
 
-    On the CPU a step over 128 tokens took 2.3 to 2.5 times a step over 8.
-    On this Mac's GPU the two took about the same. The math was never what
-    took the time there, as kvcache2 found. Each step is many tiny jobs, and
-    their number doesn't grow with the text.
+    The CPU wrote a little faster than the GPU. On the CPU a step over 128
+    tokens took 2.3 to 2.4 times a step over 8. On this Mac's GPU the two took
+    about the same. The math was never what took the time there, as kvcache2
+    found. Each step is many tiny jobs, and their number doesn't grow with
+    the text.
 
     The last lines of the file time your machine's CPU with your functions,
-    and the result shows what they got.
+    writing 100 tokens as the table did. The result shows what they got.
     """,
 )
 
@@ -994,7 +994,7 @@ def compare(
 '''
 
 FAST3_NAMES = '''
-    table = compare(model, prompt, 32, cpu, validation_data, 5)
+    table = compare(model, prompt, 100, cpu, validation_data, 5)
 '''
 
 FAST3_IMPORTS = IMPORTS.replace(
@@ -1031,31 +1031,37 @@ FAST3_LESSON = prose(
     ```
 
     Here is the trained model from gpt3 on this Mac, writing 100 tokens after
-    "ROMEO:". The speeds span three runs while other work shared the machine.
-    The losses are over gpt3's 20 validation batches.
+    "ROMEO:". The speeds span three runs on a quiet machine. The losses are
+    over gpt3's 20 validation batches.
 
     | Setup | CPU, tokens per second | MPS, tokens per second | Validation loss | Bytes |
     |---|---|---|---|---|
-    | Plain | 294 to 342 | 385 to 432 | 1.5351 | 3,272,192 |
-    | int8 | 227 to 238 | 275 to 330 | 1.5353 | 931,328 |
-    | Cache | 944 to 959 | 270 to 302 | 1.5351 | 3,272,192 |
-    | Cache and int8 | 356 to 412 | 219 to 241 | 1.5353 | 931,328 |
+    | Plain | 1,405 to 1,418 | 1,314 to 1,357 | 1.5351 | 3,272,192 |
+    | int8 | 960 to 972 | 1,013 to 1,026 | 1.5353 | 931,328 |
+    | Cache | 3,700 to 3,816 | 965 to 987 | 1.5351 | 3,272,192 |
+    | Cache and int8 | 1,515 to 1,535 | 791 to 817 | 1.5353 | 931,328 |
 
-    The fastest setup here is the cache on the CPU, near three times plain.
-    On this Mac's GPU the cache cost time, as kvcache2 found for a model this
-    small. int8 cost time everywhere. Its forward turns every weight back into
-    a float32 matrix before each multiply, so it moves more memory than plain
-    does. It made the model 3.5 times smaller and moved the loss in the fourth
-    decimal.
+    The fastest setup here is the cache on the CPU, about 2.7 times plain. On
+    this Mac's GPU the cache cost time, as kvcache2 found for a model this
+    small. int8 alone cost time on both. Its forward turns every weight back
+    into a float32 matrix before each multiply, so it moves more memory than
+    plain does.
 
-    Fast int8 works another way. Writing one token at a time multiplies
-    matrices by vectors, which is memory bound in profile2's sense. GPTQ's
-    kernel reads the small weights and turns each into a float only as the
-    multiply needs it. Its authors reported around 3.25 times FP16's speed on
-    an A100.
+    On the CPU the cache with int8 still edged past plain, since the cache
+    saved more than int8 cost. int8 made the model 3.5 times smaller and
+    moved the loss in the fourth decimal.
 
-    The last line of the file runs `compare` on your CPU, and the result shows
-    your table. It scores 5 validation batches, to keep the check short.
+    quant3 said fast int8 libraries multiply the whole numbers themselves.
+    Writing one token at a time suits another way too. It multiplies matrices
+    by vectors, which is memory bound in profile2's sense, so the win is
+    reading fewer bytes. GPTQ's kernel reads 3 bit weights and turns each
+    into a float only inside the multiply. On a 175 billion parameter model
+    its authors measured 71 ms a token on one A100. FP16 needed five A100s
+    and took 230 ms.
+
+    The last line of the file runs `compare` on your CPU, writing 100 tokens
+    as the table did, and the result shows your table. It scores 5
+    validation batches, to keep the check short.
     """,
 )
 

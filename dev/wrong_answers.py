@@ -1854,6 +1854,11 @@ CASES: list[tuple[str, str, str, str]] = [
     ("lora3", "add_lora_everywhere scales c_proj by alpha of rank", "block.attn.c_proj = LoRALinear(block.attn.c_proj, rank, alpha)", "block.attn.c_proj = LoRALinear(block.attn.c_proj, rank, rank)"),
     ("sft1", "answer_targets builds float tensors", "    x = torch.tensor(ids[:-1])\n    y = torch.tensor(ids[1:])", "    x = torch.Tensor(ids[:-1])\n    y = torch.Tensor(ids[1:])"),
     ("sft1", "pad_rows pads with float ones", "x = torch.full((len(rows), longest), END)", "x = torch.ones(len(rows), longest) * END"),
+    ("post1", "answer has no cap of 12 characters", "for _ in range(12):", "while True:"),
+    ("post2", "reference_logprobs puts every scale back to 1.0", "        layer.scale = scale\n", "        layer.scale = 1.0\n"),
+    ("quiz14", "trainable_share totals model.state_dict()", "total = sum(parameter.numel() for parameter in model.parameters())", "total = sum(tensor.numel() for tensor in model.state_dict().values())"),
+    ("quiz15", "linear_bound gives memory on a tie", "bytes_per_second > flops / flops_per_second", "bytes_per_second >= flops / flops_per_second"),
+    ("quiz15", "linear_bound counts the bias", "numbers = rows * inputs + inputs * outputs + rows * outputs", "numbers = rows * inputs + inputs * outputs + rows * outputs + outputs"),
     ("conv5", "pointwise reshapes the wrong way", "return (weight @ x.reshape(c, -1)).reshape(-1, h, w)", "return (weight @ x.reshape(-1, c).T).reshape(-1, h, w)"),
 ]
 

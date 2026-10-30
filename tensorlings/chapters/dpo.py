@@ -27,6 +27,7 @@ from ..engine import (
 )
 from ..paths import CHECKPOINTS_DIR
 from ..text import prose, source_file
+from .cost import tied_pair
 from .gpt import MODEL_REFERENCE, trained_gpt
 from .reward_models import PAIRS_PART, held_out_pairs, trained_reward_model
 from .sft import CHAT_PARTS, GPT_PARTS, GROW_SOLUTION, SFT_REFERENCE, chat_rows, indented_part, joined, small_chat_gpt
@@ -1351,6 +1352,14 @@ def quiz14_model(
     return model
 
 
+def quiz14_tied_model() -> nn.Module:
+    """cost1's tied Embedding and Linear, then a frozen Linear, so a count over state_dict() counts the table twice."""
+    model = nn.Sequential(*tied_pair(), nn.Linear(10, 3))
+    model[2].requires_grad_(False)
+
+    return model
+
+
 def reference_trainable_share(model: nn.Module) -> float:
     total = sum(parameter.numel() for parameter in model.parameters())
 
@@ -1390,6 +1399,7 @@ def check_quiz14(checker: Checker) -> None:
         inputs=(
             (Described(quiz14_model(980, (0,)), "Linears 3 to 4, 4 to 6 and 6 to 2, the first frozen"),),
             (Described(quiz14_model(981, (2, 3)), "Linears 3 to 4, 4 to 6 and 6 to 2, the last two frozen"),),
+            (Described(quiz14_tied_model(), "an Embedding(10, 4), a Linear sharing its weight, and a frozen Linear from 10 to 3"),),
         ),
         reference=reference_trainable_share,
         expect=expect_close,

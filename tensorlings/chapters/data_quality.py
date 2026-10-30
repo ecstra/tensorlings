@@ -1097,6 +1097,8 @@ def check_quiz15(checker: Checker) -> None:
             (Described(nn.Linear(64, 64), "nn.Linear(64, 64)"), 30, 4, 1e12, 1e11),
             (Described(nn.Linear(256, 256), "nn.Linear(256, 256)"), 32, 4, 1e12, 1e11),
             (Described(nn.Linear(512, 512), "nn.Linear(512, 512)"), 4096, 4, 1e12, 1e11),
+            # Both times come to exactly 3.2768e-07 here, so the tie rule shows, and a counted bias tips it to memory.
+            (Described(nn.Linear(64, 64), "nn.Linear(64, 64)"), 32, 4, 8e11, 1e11),
         ),
         reference=QUIZ15_REFERENCE["linear_bound"],
         expect=expect_value,
