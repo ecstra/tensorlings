@@ -33,6 +33,7 @@ The curriculum, the app and the writing rules are in [the course design](../docs
 | 8 | Phase 5, parts 11 and 12 | | owner | done |
 | 9 | Phase 6, part 13, with the echo canceller, quant and own module projects | | owner | pending |
 | 10 | A final deep review of the whole course, every lesson fact checked against its sources and every number rerun, fixed before the owner starts | | agent | pending |
+| 11 | Phase 7, Section 13 Modalities, added at the owner's word, with the signal reader project | | agent | pending |
 
 ## Done when
 

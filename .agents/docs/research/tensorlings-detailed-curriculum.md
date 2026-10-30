@@ -413,36 +413,72 @@ The project works on the GPT the learner already trained, the way nanochat runs 
 
 The project lands the section's main tools on one model and measures them end to end. CUDA kernels, Triton and several GPUs can't run on the owner's Mac, so those ideas are taught in plain PyTorch, per [the limits](tensorlings-course-design.md#limits-on-this-machine).
 
-## Section 13 Your own modules
+## Section 13 Modalities
+
+Part A takes each kind of input on its own, the structure it has and the layer that fits it. Part B joins kinds in one transformer and in your GPT. At the owner's wish, images and audio appear only as inputs that become tokens, never as a project.
 
 | Chapter | Exercise | What it teaches |
 |---|---|---|
-| 94_combining | combine1 | FiLM from its paper, a side input that scales and shifts features, its scale and shift computed from that input |
+| 94_tables | table1 | numbers and categories as tokens, each column with its own embedding, as in FT-Transformer |
+| | table2 | number embeddings, periodic features that let a network see fine steps in a value, against a plain MLP |
+| | table3 | the column tokens through attention, against the plain MLP on a real table |
+| 95_time_series | series1 | a series cut into patches as tokens, as in PatchTST |
+| | series2 | each series normalized on its own and restored after, as in RevIN |
+| | series3 | the patched transformer against a linear forecaster over several horizons on real data |
+| 96_audio | sound1 | a waveform turned into mel frames, the tokens speech models read |
+| | sound2 | a neural codec's residual quantizer, sound as a few streams of codebook ids |
+| 97_video | video1 | frames over time as tubelet tokens, as in ViViT |
+| | video2 | a task only motion answers, where a model of single frames fails and one that reads time succeeds |
+| 98_tokens_for_everything | tokens1 | a map of every kind of input, its structure, its layer, and how it becomes tokens |
+| | tokens2 | one sequence holding several kinds, with type embeddings and special tokens |
+| 99_shared_space | clip1 | two encoders and a contrastive loss that put signals and their descriptions in one space, as CLIP does |
+| | clip2 | naming a new signal by its nearest description, with no training for that name |
+| | clip3 | what the shared space learns, and how the batch size and the temperature shape it |
+| 100_fusion | fuse1 | early fusion in one sequence against late fusion of separate encoders |
+| | fuse2 | gated cross attention that starts closed, as in Flamingo |
+| | fuse3 | a missing modality, and training with modalities dropped at random |
+| 101_reading_a_new_modality | bridge1 | a frozen encoder and a small projector into your GPT's embeddings, as LLaVA does |
+| | bridge2 | training the projector alone, then the GPT with LoRA |
+| | bridge3 | what the projected tokens carry, probed and compared with text |
+| 102_outputs | out1 | heads for classes, for values and for several values at once |
+| | out2 | a mixture of normals for a target with several right answers |
+| | out3 | constrained decoding, masking the scores so every output is valid JSON |
+| | out4 | actions written as tokens, as RT-2 does, and another modality written through codebook ids |
+| quizzes | quiz16 | Section 13 together |
+| 103_signal_reader | reader1 | the project starts, signals and questions about them, and a GPT that reads the numbers as text |
+| | reader2 | a signal encoder joined to your GPT with a projector, trained with the LLaVA recipe |
+| | reader3 | answers scored against the text only GPT, and the questions each one gets right |
+
+## Section 14 Your own modules
+
+| Chapter | Exercise | What it teaches |
+|---|---|---|
+| 104_combining | combine1 | FiLM from its paper, a side input that scales and shifts features, its scale and shift computed from that input |
 | | combine2 | gating against adding, when one signal should control another, and the effective weights the input writes on every pass |
 | | combine3 | a new branch that starts as "do nothing" against one that starts random |
 | | combine4 | mixing across positions alternated with mixing within each, against either alone |
 | | combine5 | picking the combination for problems you haven't seen |
-| 95_design_method | design1 | a toy task that isolates one skill, associative recall as in Zoology |
+| 105_design_method | design1 | a toy task that isolates one skill, associative recall as in Zoology |
 | | design2 | the simplest baseline and the diagnosis, failed to fit or failed to generalize |
 | | design3 | the design loop of 38_soft_design on a harder algorithm, with several hard steps to swap for differentiable ones |
 | | design4 | gradient health before training, the identity at the start and gradients that reach every layer |
 | | design5 | the property tested directly by shuffling, shifting, rotating or lengthening the input |
-| 96_papers | paper1 | a paper's method turned into shapes and code, with grokking's modular arithmetic, small transformer and weight decay |
+| 106_papers | paper1 | a paper's method turned into shapes and code, with grokking's modular arithmetic, small transformer and weight decay |
 | | paper2 | a result reproduced small, the late jump to generalization, with its spread across seeds |
-| 97_interpretability | interp1 | forward hooks, and probes on hidden states |
+| 107_interpretability | interp1 | forward hooks, and probes on hidden states |
 | | interp2 | attention patterns and induction heads in a small model trained on repeated sequences, the circuit induction1 built by hand |
 | | interp3 | ablation and activation patching |
 | | interp4 | attribution by gradients and by integrated gradients |
-| quizzes | quiz16 | the whole course |
-| 98_learned_physics | physics1 | the project starts, particles on springs stepped by a classic integrator, and the trajectories they make |
+| quizzes | quiz17 | the whole course |
+| 108_learned_physics | physics1 | the project starts, particles on springs stepped by a classic integrator, and the trajectories they make |
 | | physics2 | the simplest baselines, constant velocity and an MLP on every coordinate, and the diagnosis |
 | | physics3 | a learned simulator passing messages on relative positions, as in Interaction Networks and GNS, built with the design method |
 | | physics4 | rollout error and energy drift against the baselines, and the cases each one wins |
-| 99_quant_forecaster | forecast1 | the project starts, a made up price series with a weak signal of known size |
+| 109_quant_forecaster | forecast1 | the project starts, a made up price series with a weak signal of known size |
 | | forecast2 | the leaks to find, future data in the features, statistics from the whole series and a random split |
 | | forecast3 | walk forward validation with every leak fixed |
 | | forecast4 | a small model against a plain baseline, and the honest result |
-| 100_own_module | own1 | the project starts, a module of your choice planned with the design method |
+| 110_own_module | own1 | the project starts, a module of your choice planned with the design method |
 | | own2 | its property tests, and its result against a baseline |
 
 ## What goes past the table
@@ -465,4 +501,5 @@ These are details the table does not name. Each sits inside its section's topic,
 | 3 | 5, 6 and 7 | 103 |
 | 4 | 8, 9 and 10 | 52 |
 | 5 | 11 and 12 | 47 |
-| 6 | 13 | 27 |
+| 6 | 14, Your own modules, first planned as 13 | 27 |
+| 7 | 13, Modalities, added on 2026-10-30 | 29 |

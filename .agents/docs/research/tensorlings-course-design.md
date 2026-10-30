@@ -16,7 +16,7 @@ By the end the owner can explain any common layer four ways, what it computes, w
 
 ## The curriculum
 
-About 340 small exercises in 13 sections. Each section ends with a project that uses what it taught, and the capstones are the projects of Section 13. The table names the projects the owner set, and [the detailed curriculum](tensorlings-detailed-curriculum.md) lists every chapter, exercise and project, including the ones the agent picked per [DEC-014](../../decisions/DEC-014-projects-for-the-sections-the-table-left-open.md).
+About 370 small exercises in 14 sections. Each section ends with a project that uses what it taught, and the capstones are the projects of Section 14. The table names the projects the owner set, and [the detailed curriculum](tensorlings-detailed-curriculum.md) lists every chapter, exercise and project, including the ones the agent picked per [DEC-014](../../decisions/DEC-014-projects-for-the-sections-the-table-left-open.md).
 
 | Section | Content |
 |---|---|
@@ -32,7 +32,8 @@ About 340 small exercises in 13 sections. Each section ends with a project that 
 | 10 Symmetry and graphs | Deep Sets, message passing, equivariance, structure chosen from the data's symmetries |
 | 11 Post training and RL | fine tuning, LoRA, SFT, policy gradients, PPO, reward models, DPO |
 | 12 Systems and inference | cost of each block, profiling, mixed precision, FlashAttention's tiling idea, KV cache, quantization, data parallel training, scaling laws, data cleaning |
-| 13 Your own modules | when and why to combine blocks, the design method, reproducing a paper, interpretability tools. Projects, a learned particle simulator, a toy quant forecaster with leakage traps, and a module of the owner's choice |
+| 13 Modalities | each kind of input on its own, tables, time series, audio and video, then kinds joined in one transformer and in your GPT, a shared space, fusion and outputs. Project, your GPT reading signals |
+| 14 Your own modules | when and why to combine blocks, the design method, reproducing a paper, interpretability tools. Projects, a learned particle simulator, a toy quant forecaster with leakage traps, and a module of the owner's choice |
 
 ## How every block is taught
 
