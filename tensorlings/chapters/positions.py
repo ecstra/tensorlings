@@ -99,15 +99,17 @@ POSITION1_LESSON = prose(
 
     So "dog bites man" and "man bites dog" give the same three rows, in other
     places. A classifier that averages over the positions sees the same
-    summary for both, down to the last digit.
+    summary for both, up to rounding.
 
     A layer that works on each position alone is blind to order too, like a
     Linear, LayerNorm or an MLP. So a whole stack of them with attention is.
 
-    The causal mask breaks this a little. A shuffled position sees other
-    neighbours in its past, and here the outputs then differ by up to 2.51.
-    Still, the mask only hints at order. Models give every position a signal
-    of its own instead, which position2 adds.
+    The causal mask breaks this. A shuffled position sees other neighbours in
+    its past, and here the outputs then differ by up to 2.51. Haviv and
+    others found that language models with the mask and no positions at all
+    learn to work out positions from it. Most models still give every
+    position a signal of its own, which makes it easy, and position2 adds
+    one.
 
     `torch.allclose(a, b, atol=1e-5)` says whether two tensors match within
     1e-5, as a plain True or False.
@@ -404,7 +406,7 @@ POSITION2_SOLUTION = source_file(
         table: Tensor,
         distance: int,
     ) -> Tensor:
-        return (table[:-distance] * table[distance:]).sum(dim=1)
+        return (table[: len(table) - distance] * table[distance:]).sum(dim=1)
     ''',
 )
 
@@ -481,8 +483,9 @@ def check_position2(checker: Checker) -> None:
             (small_tensor(529, 5, 3), 1),
             (small_tensor(530, 6, 4), 2),
             (Described(reference_sinusoidal(30, 8), "sinusoidal_positions(30, 8)"), 5),
+            (small_tensor(531, 4, 3), 0),
         ),
-        reference=lambda table, distance: (table[:-distance] * table[distance:]).sum(dim=1),
+        reference=lambda table, distance: (table[: len(table) - distance] * table[distance:]).sum(dim=1),
         expect=expect_tensor,
     )
 
@@ -498,8 +501,8 @@ POSITION2 = Exercise(
         "sinusoidal_positions": "torch.arange(0, size, 2) / size gives 2i / size. Raise 10000 to minus that, multiply by "
         "torch.arange(steps).unsqueeze(1), then fill table[:, 0::2] with the sines and table[:, 1::2] with the cosines.",
         "PositionalEmbedding.forward": "torch.arange(ids.shape[1]) numbers the positions. Look up both tables and add.",
-        "distance_scores": "table[:-distance] and table[distance:] line each row up with the one distance further "
-        "down. Multiply them and sum over dim=1.",
+        "distance_scores": "table[: len(table) - distance] and table[distance:] line each row up with the one "
+        "distance further down, distance 0 included. Multiply them and sum over dim=1.",
     },
     introduces=(),
     check=check_position2,

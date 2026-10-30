@@ -315,6 +315,21 @@ def reference_masked_weights(scores: Tensor) -> Tensor:
     return torch.softmax(scores.masked_fill(future, float("-inf")), dim=-1)
 
 
+def expect_bool_mask(
+    call: str,
+    actual: object,
+    expected: Tensor,
+) -> None:
+    expect_tensor(
+        call=call,
+        actual=actual,
+        expected=expected,
+    )
+
+    if actual.dtype != torch.bool:
+        raise Mismatch(f"{call} holds {actual.dtype} numbers, but masked_fill needs a mask of True and False. Add .bool().")
+
+
 def check_attention2(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
@@ -325,7 +340,7 @@ def check_attention2(checker: Checker) -> None:
             (5,),
         ),
         reference=lambda steps: torch.triu(torch.ones(steps, steps), diagonal=1).bool(),
-        expect=expect_tensor,
+        expect=expect_bool_mask,
     )
     check_on_inputs(
         checker=checker,
@@ -1302,7 +1317,7 @@ ATTENTION6 = Exercise(
     hints={
         "Recaller.forward": "k = self.keys(keys) has shape (batch, pairs, size). self.queries(query).unsqueeze(1) "
         "has shape (batch, 1, size), so q @ k.transpose(1, 2) gives (batch, 1, pairs). Divide by "
-        "math.sqrt(size), softmax with dim=-1, @ self.values(values), .squeeze(1), then self.out.",
+        "math.sqrt(k.shape[-1]), softmax with dim=-1, @ self.values(values), .squeeze(1), then self.out.",
     },
     introduces=(),
     check=check_attention6,

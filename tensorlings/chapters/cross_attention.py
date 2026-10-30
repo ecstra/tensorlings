@@ -1,4 +1,4 @@
-"""51_cross_attention, queries from one sequence and keys and values from another, and the adder's long sums solved by reading the question at every step."""
+"""51_cross_attention, queries from one sequence and keys and values from another, and long copies solved by reading the input at every step."""
 
 from __future__ import annotations
 
@@ -32,8 +32,8 @@ CROSS_ATTENTION = Chapter(
         Cross attention takes its queries from one sequence and its keys and
         values from another. A decoder uses it to read the encoder's outputs
         at every step it writes, instead of one vector that has to hold the
-        whole input. This chapter builds it and puts it to work on the adder's
-        long sums.
+        whole input. This chapter builds it and puts it to work copying long
+        rows of digits, where one vector fails.
 
         ## Further reading
 
@@ -498,17 +498,20 @@ CROSS2_LESSON = prose(
     ```
 
     Here is copying after 1,500 steps of training, hidden size 64, on 500
-    rows it never saw.
+    rows it never saw. Each copy is written greedily, so a wrong digit feeds
+    the steps after it.
 
     | Length | One vector, digits | Rows | Cross attention, digits | Rows |
     |---|---|---|---|---|
     | 20 | 27.0% | 0% | 99.9% | 99.4% |
     | 40 | 12.2% | 0% | 98.4% | 94.4% |
 
-    The curriculum planned this on long sums from the adder. On sums of 5 and
-    8 digits neither model learned anything in 3,000 steps here, with or
-    without positions and zero padding. Training them is a harder problem
-    than reading the question, so copying shows the difference cleanly.
+    encdec2 measured digits with the true ones fed in before each guess. Read
+    that way, one vector here gets 56.4% at length 20 and 23.2% at 40, so the
+    gap is real either way.
+
+    Copying is the cleanest test of reading long inputs. Longer sums for the
+    adder trained poorly in either form within minutes, so they are left out.
 
     This is Bahdanau, Cho and Bengio's fix of 2014 for translating long
     sentences. Three years later the same reading became the whole model.

@@ -343,8 +343,8 @@ MASK2_LESSON = prose(
     Writing takes that away. A model writes one token at a time from what it
     has so far, and the next token doesn't exist yet. Given the first 8
     tokens and asked to write the copy, the unmasked model gets only 5.5% of
-    whole copies right. The masked one learned to look 8 positions back,
-    which still works while it writes.
+    whole copies right. The masked one learned to read the token 8 places
+    before the one it writes, which still works while it writes.
 
     The model adds a learned row per position to each token, so it can tell
     positions apart. 52_positions explains why it needs that. Writing here is
@@ -561,6 +561,47 @@ def reference_copies_right(
     return (written[:, half:] == sequences[:, half:]).all(dim=1).float().mean().item()
 
 
+def check_copies_right(found: object) -> None:
+    """An untrained model copies nothing, so the file's generate is swapped for one that writes 12 of 20
+    copies right and the last token of the rest wrong, and the share should come out at 0.6."""
+    sequences = copy_sequences(20, torch.Generator().manual_seed(499))
+    calls: list[tuple[Tensor, int]] = []
+
+    def scripted_generate(
+        model: nn.Module,
+        prompt: Tensor,
+        steps: int,
+    ) -> Tensor:
+        calls.append((prompt, steps))
+        written = sequences.clone()
+        written[12:, -1] = (written[12:, -1] + 1) % 16
+
+        return written
+
+    namespace = found.__globals__
+    original = namespace.get("generate")
+    namespace["generate"] = scripted_generate
+
+    try:
+        actual = found(None, sequences, HALF)
+    finally:
+        namespace["generate"] = original
+
+    if not calls:
+        raise Mismatch("copies_right never called generate to write the copies.")
+
+    prompt, steps = calls[0]
+
+    if not torch.equal(prompt, sequences[:, :HALF]) or steps != HALF:
+        raise Mismatch("copies_right should pass generate the first half of each sequence and ask for half more tokens.")
+
+    expect_close(
+        call="copies_right on 20 sequences, 12 of them copied right",
+        actual=actual,
+        expected=0.6,
+    )
+
+
 def first_half_right(
     model: nn.Module,
     sequences: Tensor,
@@ -635,15 +676,10 @@ def check_mask2(checker: Checker) -> None:
         reference=reference_generate,
         expect=expect_tensor,
     )
-    check_on_inputs(
-        checker=checker,
+    checker.test(
         function="copies_right",
         description="gives the share of copies written exactly right",
-        inputs=(
-            (Described(model, "an untrained TinyModel(True)"), copy_sequences(20, torch.Generator().manual_seed(499)), HALF),
-        ),
-        reference=reference_copies_right,
-        expect=expect_close,
+        run=check_copies_right,
     )
     checker.test_method(
         class_name="TinyModel",

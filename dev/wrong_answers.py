@@ -820,7 +820,8 @@ CASES: list[tuple[str, str, str, str]] = [
     ("position2", "sinusoidal_positions speeds the waves up", "frequencies = 10000 ** (-torch.arange(0, size, 2) / size)", "frequencies = 10000 ** (torch.arange(0, size, 2) / size)"),
     ("position2", "sinusoidal_positions counts pairs as i, not 2i", "(-torch.arange(0, size, 2) / size)", "(-torch.arange(size // 2) / size)"),
     ("position2", "PositionalEmbedding forgets the positions", "return self.ids(ids) + self.positions(steps)", "return self.ids(ids)"),
-    ("position2", "distance_scores lines a row up with itself", "(table[:-distance] * table[distance:])", "(table[distance:] * table[distance:])"),
+    ("position2", "distance_scores lines a row up with itself", "(table[: len(table) - distance] * table[distance:])", "(table[distance:] * table[distance:])"),
+    ("position2", "distance_scores breaks at distance 0", "(table[: len(table) - distance] * table[distance:])", "(table[:-distance] * table[distance:])"),
     ("position2", "distance_scores sums down the rows", "table[distance:]).sum(dim=1)", "table[distance:]).sum(dim=0)"),
     ("rope1", "rope_angles speeds the turns up", "frequencies = base ** (-torch.arange(0, size, 2) / size)", "frequencies = base ** (torch.arange(0, size, 2) / size)"),
     ("rope1", "rope_angles adds the position", "torch.arange(steps).unsqueeze(1) * frequencies", "torch.arange(steps).unsqueeze(1) + frequencies"),
@@ -998,6 +999,8 @@ CASES: list[tuple[str, str, str, str]] = [
     ("quiz10", "route takes the softmax over every expert", "return torch.softmax(best.values, dim=-1), best.indices", "return torch.softmax(scores, dim=-1).topk(k, dim=-1).values, best.indices"),
     ("quiz10", "patchify puts the channels last", "cells.permute(0, 2, 4, 1, 3, 5)", "cells.permute(0, 2, 4, 3, 5, 1)"),
     ("quiz10", "merge lets the pairs overlap", "position += 2", "position += 1"),
+    ("mask2", "copies_right always says 0", "return (written[:, half:] == sequences[:, half:]).all(dim=1).float().mean().item()", "return 0.0"),
+    ("attention2", "future_mask gives floats", "return torch.triu(torch.ones(steps, steps), diagonal=1).bool()", "return torch.triu(torch.ones(steps, steps), diagonal=1)"),
     ("conv5", "pointwise reshapes the wrong way", "return (weight @ x.reshape(c, -1)).reshape(-1, h, w)", "return (weight @ x.reshape(-1, c).T).reshape(-1, h, w)"),
 ]
 

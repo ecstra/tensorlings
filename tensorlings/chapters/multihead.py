@@ -584,13 +584,14 @@ MULTIHEAD3_LESSON = prose(
     of size 16 with a Linear readout. 1 head of 16 and 2 heads of 8 have the
     same weights. 600 steps each give this, on 2,000 new sequences.
 
-    | Heads | Both copies | Token right before | Token 3 back |
+    | Heads | Average of the two | Token right before | Token 3 back |
     |---|---|---|---|
     | 1 | 57.6% | 98.1% | 17.1% |
     | 2 | 100% | 100% | 100% |
 
-    The single head settles on one place and copies it, and for the other it
-    is left close to guessing. Two heads each take one place.
+    The single head settles on one place and copies it. The other place it
+    barely learns, 17.1% against 6.3% for a blind guess. Two heads each take
+    one place.
 
     Heads aren't the only road. With an MLP after the attention, one head
     reached 100% here as well. It weighted the two places unevenly, and the
