@@ -427,8 +427,8 @@ The project lands the section's main tools on one model and measures them end to
 | | design3 | the design loop of 38_soft_design on a harder algorithm, with several hard steps to swap for differentiable ones |
 | | design4 | gradient health before training, the identity at the start and gradients that reach every layer |
 | | design5 | the property tested directly by shuffling, shifting, rotating or lengthening the input |
-| 96_papers | paper1 | a paper's method turned into shapes and code, with the squeeze and excitation block |
-| | paper2 | a result reproduced small, with its spread across seeds |
+| 96_papers | paper1 | a paper's method turned into shapes and code, with grokking's modular arithmetic, small transformer and weight decay |
+| | paper2 | a result reproduced small, the late jump to generalization, with its spread across seeds |
 | 97_interpretability | interp1 | forward hooks, and probes on hidden states |
 | | interp2 | attention patterns and induction heads in a small model trained on repeated sequences, the circuit induction1 built by hand |
 | | interp3 | ablation and activation patching |

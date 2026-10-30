@@ -12,6 +12,7 @@ Every decision taken, newest first.
 Filed per [spec/decisions.md](../spec/decisions.md).
 Built by the brain tool from the folder it lists.
 
+- [DEC-020](DEC-020-96-papers-reproduces-grokking-not-squeeze-and-excitation.md), on the owner's word, the paper the learner turns into code and reproduces is grokking on modular arithmetic, not the squeeze and excitation image block
 - [DEC-019](DEC-019-three-image-projects-give-way-to-exoplanets-dna-and-a-citation-graph.md), on the owner's word, Sections 2, 5 and 8 drop their MNIST, CIFAR and SimCLR projects for an exoplanet hunter, a DNA motif finder and a paper topic map, and Section 9 keeps its digits
 - [DEC-018](DEC-018-a-learned-physics-project-replaces-the-echo-canceller.md), on the owner's word, Section 13's first capstone is a particle simulator that learns springs, not a toy echo canceller
 - [DEC-017](DEC-017-the-owner-s-six-gaps-added-to-the-curriculum.md), 11 exercises and a design chapter for soft relaxations, attention's why, linear attention, input dependent weights, spectra and induction
