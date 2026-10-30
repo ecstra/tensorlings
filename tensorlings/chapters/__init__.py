@@ -48,6 +48,7 @@ from . import (
     gradient_descent,
     graphs,
     initialization,
+    interpretability,
     kv_cache,
     likelihood,
     linear_attention,
@@ -197,6 +198,7 @@ CHAPTERS: list[Chapter] = [
     scaling.SCALING,
     data_quality.DATA_QUALITY,
     fast_gpt.FAST_GPT,
+    interpretability.INTERPRETABILITY,
 ]
 
 EXERCISES: list[Exercise] = [
@@ -514,4 +516,8 @@ EXERCISES: list[Exercise] = [
     fast_gpt.FAST1,
     fast_gpt.FAST2,
     fast_gpt.FAST3,
+    interpretability.INTERP1,
+    interpretability.INTERP2,
+    interpretability.INTERP3,
+    interpretability.INTERP4,
 ]
