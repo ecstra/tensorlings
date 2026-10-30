@@ -4,10 +4,11 @@ kind: todo
 description: post training and RL with the post training project, then systems and inference with the fast GPT project
 updated: 2026-10-30
 links: []
-status: open
+status: done
 by: agent
 area: course
 born: 2026-10-30
+done: 2026-10-30
 ---
 
 ## What
@@ -28,10 +29,12 @@ Phase 5 of the plan build-tensorlings, Sections 11 and 12 as [the detailed curri
 | 8 | Write 91_scaling and 92_data | | agent | done |
 | 9 | Write quiz15 and build the fast GPT project, 93_fast_gpt | | agent | done |
 | 10 | Get beginner reader reviews and fix what they find | | agent | done |
-| 11 | Run the full dev check, every wrong answer and the screen driver, set up the owner's folder, then write the handover | | agent | pending |
+| 11 | Run the full dev check, every wrong answer and the screen driver, set up the owner's folder, then write the handover | | agent | done |
 | 12 | Rerun the timing tables of flash2, kvcache2, profile1 and profile2 on a quiet machine and update their ranges | | agent | done |
 | 13 | Review the phase 1a exercises again to today's standards and fix what the review finds | | agent | done |
 
 ## Done when
 
 Every exercise of Sections 11 and 12 in the detailed curriculum exists, the dev check reports each one healthy, every new exercise has wrong answers that fail, every review finding is fixed, and a handover says where it stands.
+
+Closed on 2026-10-30 by the commits up to the handover tensorlings-phase-5-built-sections-11-and-12. All 47 exercises exist, the dev check reported all 314 healthy, all 1,835 wrong answers fail, and the 108 review findings, phase 1a's included, are fixed.

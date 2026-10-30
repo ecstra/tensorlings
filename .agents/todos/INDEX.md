@@ -15,10 +15,8 @@ Built by the brain tool from the folder it lists.
 
 ## Open
 
-### course
-
-- [TODO-016](TODO-016-phase-5-sections-11-and-12.md), post training and RL with the post training project, then systems and inference with the fast GPT project
+Nothing open.
 
 ## Closed
 
-- course: 15 done, 0 dropped
+- course: 16 done, 0 dropped
