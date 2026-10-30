@@ -1,4 +1,4 @@
-"""99_quant_forecaster, Section 13's forecasting project, a made up market whose best possible score is known, the leaks that
+"""109_quant_forecaster, Section 14's forecasting project, a made up market whose best possible score is known, the leaks that
 push a forecast past it, walk forward validation, and a small model against a plain baseline."""
 
 from __future__ import annotations
@@ -26,13 +26,13 @@ from ..engine import (
 from ..text import prose, source_file
 
 QUANT_FORECASTER = Chapter(
-    folder="99_quant_forecaster",
+    folder="109_quant_forecaster",
     title="Project: an honest forecast",
     readme=source_file(
         """
         # Project: an honest forecast
 
-        Section 13's forecasting project. You make up a market with a weak
+        Section 14's forecasting project. You make up a market with a weak
         signal whose size you know, so you know the best score any forecast
         can reach. Then you find three leaks that push a forecast past it,
         score forecasts the way they would have run with walk forward

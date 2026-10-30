@@ -1,4 +1,4 @@
-"""95_design_method, a method for a module on a new problem: a toy task that isolates one skill, a baseline and a diagnosis from the curves, the soft step loop on a harder algorithm, gradient health before training, and each property tested directly."""
+"""105_design_method, a method for a module on a new problem: a toy task that isolates one skill, a baseline and a diagnosis from the curves, the soft step loop on a harder algorithm, gradient health before training, and each property tested directly."""
 
 from __future__ import annotations
 
@@ -32,7 +32,7 @@ from ..text import prose, source_file
 from .linear_layers import expect_module
 
 DESIGN_METHOD = Chapter(
-    folder="95_design_method",
+    folder="105_design_method",
     title="The design method",
     readme=source_file(
         """

@@ -791,7 +791,7 @@ ACTIVATIONS2_LESSON = prose(
     out at 1. The model trains, the loss stops falling, and nothing says why.
 
     So pick the output activation from what the answer has to look like. This
-    rule comes back whenever you design a model, in Section 13 too.
+    rule comes back whenever you design a model, in Section 14 too.
     """,
 )
 

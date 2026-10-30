@@ -1,4 +1,4 @@
-"""97_interpretability, a small trained model opened up: hooks and probes on its hidden states, the induction head its attention patterns show, ablation and activation patching to test what it uses, and attribution by gradients and integrated gradients."""
+"""107_interpretability, a small trained model opened up: hooks and probes on its hidden states, the induction head its attention patterns show, ablation and activation patching to test what it uses, and attribution by gradients and integrated gradients."""
 
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ from ..engine import (
 from ..text import prose, source_file
 
 INTERPRETABILITY = Chapter(
-    folder="97_interpretability",
+    folder="107_interpretability",
     title="Interpretability",
     readme=source_file(
         """

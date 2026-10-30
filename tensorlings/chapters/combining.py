@@ -1,4 +1,4 @@
-"""94_combining, how the course's pieces join into a module of your own: FiLM, gating against adding, a new branch that starts as do nothing, mixing across and within positions, and picking the structure for a problem you haven't seen."""
+"""104_combining, how the course's pieces join into a module of your own: FiLM, gating against adding, a new branch that starts as do nothing, mixing across and within positions, and picking the structure for a problem you haven't seen."""
 
 from __future__ import annotations
 
@@ -26,13 +26,13 @@ from ..text import prose, source_file
 from .linear_layers import expect_module
 
 COMBINING = Chapter(
-    folder="94_combining",
+    folder="104_combining",
     title="Combining",
     readme=source_file(
         """
         # Combining
 
-        Section 13 is about building modules of your own. Every structure
+        Section 14 is about building modules of your own. Every structure
         assumes something about the problem, and a module is a choice of
         which assumptions to make. This chapter joins the pieces the course
         built: a side input that scales features, a gate against a sum, a
@@ -207,7 +207,7 @@ def conditioned_error(
 
 COMBINE1_LESSON = prose(
     """
-    Section 13 is about building modules of your own. Each structure assumes
+    Section 14 is about building modules of your own. Each structure assumes
     something about the problem, and a module is a choice of assumptions.
 
     Often a second input should change what a model does with the first. A

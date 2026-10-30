@@ -711,7 +711,7 @@ PATHS3_LESSON = prose(
 
     Xu and colleagues call this algorithmic alignment. A network learns from
     few examples when its structure matches the steps of the algorithm, so
-    only a simple piece is left to learn. Section 13 asks you to design
+    only a simple piece is left to learn. Section 14 asks you to design
     modules this way.
     """,
 )
