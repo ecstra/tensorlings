@@ -2,7 +2,7 @@
 name: TODO-014-phase-3-sections-5-to-7
 kind: todo
 description: convolutional nets with the CIFAR-10 project, sequences with the adder project, then attention and transformers with the GPT project
-updated: 2026-10-29
+updated: 2026-10-30
 links: []
 status: open
 by: agent
@@ -24,9 +24,9 @@ The same day the owner's gap review added steps 14 to 16, per [DEC-017](../decis
 | 2 | Write 33_classic_nets and 34_upsampling | | agent | done |
 | 3 | Write 35_augmentation, 36_transfer and quiz7 | | agent | done |
 | 4 | Build the CIFAR-10 project with its download, the checkpoint flow and the device choice | | agent | done |
-| 5 | Write 38_rnn, 39_bptt and 40_gated_rnns | | agent | pending |
-| 6 | Write 41_bidirectional, 42_seq2seq, 43_causal_conv, 44_state_space and quiz8 | | agent | pending |
-| 7 | Build the adder project | | agent | pending |
+| 5 | Write 38_rnn, 39_bptt and 40_gated_rnns | | agent | done |
+| 6 | Write 41_bidirectional, 42_seq2seq, 43_causal_conv, 44_state_space and quiz8 | | agent | done |
+| 7 | Build the adder project | | agent | done |
 | 8 | Write 46_attention to 50_positions | | agent | pending |
 | 9 | Write 51_transformer_block to 56_bpe, quiz9 and quiz10 | | agent | pending |
 | 10 | Build the GPT project with tiny Shakespeare | | agent | pending |

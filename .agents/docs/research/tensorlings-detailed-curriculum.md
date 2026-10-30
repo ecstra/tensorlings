@@ -238,8 +238,8 @@ The project follows Zaremba and Sutskever's learning to execute and the Keras ad
 | | attention4 | values and the output layer, and why attention projects before comparing and merges after |
 | | attention5 | scaled dot product attention built and matched with `F.scaled_dot_product_attention` |
 | | attention6 | why, recalling the value stored with a key many steps back, where an RNN's fixed vector fails and a query compared with every key succeeds |
-| 48_linear_attention | linear1 | softmax dropped, so (Q K^T) V becomes Q (K^T V), a recurrence whose state is a matrix of keys times values |
-| | linear2 | when, a fixed size state against attention's growing one, on recall of more pairs than the state can hold |
+| 48_linear_attention | linattn1 | softmax dropped, so (Q K^T) V becomes Q (K^T V), a recurrence whose state is a matrix of keys times values |
+| | linattn2 | when, a fixed size state against attention's growing one, on recall of more pairs than the state can hold |
 | 49_masks | mask1 | causal and padding masks, and both at once |
 | | mask2 | why, a model without the causal mask that cheats in training and fails at generation |
 | 50_multihead | multihead1 | splitting into heads with reshape and transpose |
