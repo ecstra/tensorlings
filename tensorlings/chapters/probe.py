@@ -163,7 +163,7 @@ PROBE1_MAIN = '''
                 print(f"Step {step + 1}, loss {loss:.3f}")
 
         save_checkpoint(encoder, "probe1")
-        print("Saved the encoder in checkpoints/probe1.pt. Save probe1.py in the app to check it.")
+        print("Saved the encoder in checkpoints/probe1.pt. probe2 reads it back.")
 '''
 
 
@@ -199,10 +199,10 @@ PROBE1_LESSON = prose(
 
     contrastive2 made two views of each digit. Here a view of a photo is a
     shift and a flip, then a change of brightness and contrast. One time in
-    five it is also turned grey. SimCLR's paper found the color changes
-    matter most.
-    Without them two crops of one photo can be matched by their colors alone,
-    and the network learns nothing about shapes.
+    five it is also turned grey. SimCLR's paper found one pair of changes
+    stands out, crops together with color changes. Without the color changes
+    two crops of one photo can be matched by their colors alone, and the
+    network learns little about shapes.
 
     - Brightness scales the image's mean, and contrast scales how far each pixel sits from that mean, each by a random factor around 1.
     - Grey is the mean over the three channels, copied back into all three.
@@ -212,13 +212,17 @@ PROBE1_LESSON = prose(
     with a temperature of 0.5. A small head maps the features to 64 numbers
     for the loss, and probe2 throws the head away and keeps the features.
 
+    contrastive2 liked 0.1, which SimCLR found best on ImageNet with batches
+    of 4,096. On CIFAR-10 its paper tried 0.1, 0.5 and 1, and 0.5 did best at
+    every batch size once trained long. These batches are 256.
+
     ```python
     images = torch.ones(2, 3, 1, 1)
     images.mean(dim=(1, 2, 3), keepdim=True).shape    # torch.Size([2, 1, 1, 1]), one mean per image
     ```
 
-    Once the checks above the last one pass, train from the project folder
-    with `.venv/bin/python run.py train probe1`. It runs 2,000 steps of 256
+    Once every check passes, train from the project folder with
+    `.venv/bin/python run.py train probe1`. It runs 2,000 steps of 256
     photos and saves the encoder. The run behind this project took about 21
     minutes on MPS while other training shared the machine. Its loss fell
     from 4.56 at step 250 to 4.38. A network that matched nothing would sit
@@ -230,7 +234,7 @@ PROBE1_SOURCE = source_file(
     '''
     # probe1.py
     #
-    # Train once the checks above the last one pass, from the project folder.
+    # Train once every check passes, from the project folder.
     #
     #     .venv/bin/python run.py train probe1
 
@@ -299,7 +303,9 @@ PROBE1_SOURCE = source_file(
 
     # TODO: Take one SimCLR step and return the loss as a plain number. Make two
     #   views of images, first then second, move each to device, and take
-    #   nt_xent of head on each one's features at temperature.
+    #   nt_xent of head on each one's features at temperature. Run each view
+    #   through the encoder on its own. One joined batch would work too, but
+    #   BatchNorm's batch statistics would give other numbers than the check's.
     def simclr_step(
         encoder: nn.Module,
         head: nn.Module,
@@ -379,13 +385,14 @@ def check_simclr_step(found: object) -> None:
         optimizer = torch.optim.SGD(list(encoder.parameters()) + list(head.parameters()), lr=0.1)
         generator = torch.Generator().manual_seed(643)
         # Two steps, since gradients left from a first step only show in a second.
+        # The second runs at another temperature, so one typed in as 0.5 shows.
         step(encoder, head, optimizer, images, generator, torch.device("cpu"), 0.5)
-        loss = step(encoder, head, optimizer, images, generator, torch.device("cpu"), 0.5)
+        loss = step(encoder, head, optimizer, images, generator, torch.device("cpu"), 0.2)
         results.append((loss, encoder.stem[0].weight.detach().clone()))
 
     (loss, weight), (expected_loss, expected_weight) = results
     expect_close(
-        call="simclr_step's loss on 6 images, at the second step",
+        call="simclr_step's loss on 6 images, at the second step, at a temperature of 0.2",
         actual=loss,
         expected=expected_loss,
         tolerance=1e-5,
@@ -415,6 +422,7 @@ def check_probe1(checker: Checker) -> None:
         description="turns about chance of the images grey",
         inputs=(
             (Described(small_images(648, 8), "8 images of 6 by 6"), seeded(649), 0.5),
+            (Described(small_images(666, 8), "8 images of 6 by 6"), seeded(667), 0.2),
         ),
         reference=PROBE_REFERENCE["random_gray"],
         expect=expect_tensor,
@@ -670,19 +678,26 @@ def check_frozen_features(found: object) -> None:
     encoder = tiny_encoder()
     x = small_images(652, 7, 8)
     # features runs the stem and the blocks, never the encoder's own forward, so the hook sits on the stem.
-    stem_modes: list[tuple[bool, bool]] = []
-    hook = encoder.stem.register_forward_pre_hook(lambda module, inputs: stem_modes.append((module.training, torch.is_grad_enabled())))
+    stem_calls: list[tuple[bool, bool, int]] = []
+    hook = encoder.stem.register_forward_pre_hook(lambda module, inputs: stem_calls.append((module.training, torch.is_grad_enabled(), len(inputs[0]))))
 
     try:
         actual = found(encoder, x, 3)
     finally:
         hook.remove()
 
-    if any(training for training, _ in stem_modes):
+    if any(training for training, _, _ in stem_calls):
         raise Mismatch("frozen_features ran the encoder in training mode. Call encoder.eval() first.")
 
-    if any(recording for _, recording in stem_modes):
+    if any(recording for _, recording, _ in stem_calls):
         raise Mismatch("frozen_features recorded for autograd. Run the batches inside torch.no_grad().")
+
+    batch_sizes = [size for _, _, size in stem_calls]
+
+    if batch_sizes != [3, 3, 1]:
+        raise Mismatch(
+            f"frozen_features of 7 images in batches of 3 should run the encoder on 3, 3, then 1 images, but ran it on {batch_sizes}."
+        )
 
     with torch.no_grad():
         encoder.eval()
@@ -715,6 +730,17 @@ def check_train_probe(found: object) -> None:
         actual=results[0],
         expected=results[1],
     )
+
+
+def check_accuracy_without_autograd(found: object) -> None:
+    torch.manual_seed(657)
+    probe = nn.Linear(4, 3)
+    recording: list[bool] = []
+    probe.register_forward_pre_hook(lambda module, inputs: recording.append(torch.is_grad_enabled()))
+    found(probe, small_tensor_rows(658, 20, 4), torch.randint(0, 3, (20,), generator=torch.Generator().manual_seed(659)))
+
+    if any(recording):
+        raise Mismatch("probe_accuracy recorded for autograd. Score inside torch.no_grad().")
 
 
 def trained_encoder() -> nn.Module:
@@ -777,15 +803,23 @@ def check_probe2(checker: Checker) -> None:
     )
     torch.manual_seed(657)
     probe = nn.Linear(4, 3)
+    torch.manual_seed(668)
+    wider_probe = nn.Linear(5, 4)
     check_on_inputs(
         checker=checker,
         function="probe_accuracy",
         description="gives the share labelled right",
         inputs=(
             (Described(probe, "a Linear from 4 to 3"), small_tensor_rows(658, 20, 4), torch.randint(0, 3, (20,), generator=torch.Generator().manual_seed(659))),
+            (Described(wider_probe, "a Linear from 5 to 4"), small_tensor_rows(669, 30, 5), torch.randint(0, 4, (30,), generator=torch.Generator().manual_seed(670))),
         ),
         reference=PROBE_REFERENCE["probe_accuracy"],
         expect=expect_close,
+    )
+    checker.test(
+        function="probe_accuracy",
+        description="scores without recording for autograd",
+        run=check_accuracy_without_autograd,
     )
     checker.test(
         function="probe_accuracy",
@@ -906,9 +940,10 @@ PROBE3_LESSON = prose(
     model leads by 12 to 17 points.
 
     This is the honest picture at this size. SimCLR's own paper reached 76.5%
-    on ImageNet with a probe, at batches of 4,096 and hundreds of epochs. The
-    method pays off with scale, and two thousand steps are a small taste of
-    it.
+    on ImageNet with a probe. That took a ResNet-50 four times as wide,
+    batches of 4,096 and 1,000 epochs. probe1 ran 2,000 steps of 256, about
+    11 epochs of the training part. The method pays off with scale, and this
+    is a small taste of it.
     """,
 )
 
@@ -1016,21 +1051,99 @@ PROBE3_SOLUTION = source_file(
 )
 
 
+def same_tensor(
+    actual: object,
+    expected: Tensor,
+) -> bool:
+    return isinstance(actual, Tensor) and actual.shape == expected.shape and torch.allclose(actual, expected, atol=1e-6)
+
+
+# What the scripted probe_accuracy answers, a share no real probe on 20 images could give.
+SCRIPTED_SHARE = 0.4321
+
+
 def check_probe_score(found: object) -> None:
+    """The file's train_probe and probe_accuracy are swapped for ones that record what they get."""
     encoder = tiny_encoder()
     generator = torch.Generator().manual_seed(660)
     few_x, validation_x = small_images(661, 30, 8), small_images(662, 20, 8)
     few_y, validation_y = torch.randint(0, 10, (30,), generator=generator), torch.randint(0, 10, (20,), generator=generator)
+    trained: list[tuple[nn.Module, Tensor, Tensor, Tensor, int]] = []
+    scored: list[tuple[nn.Module, Tensor, Tensor]] = []
+
+    def scripted_train_probe(
+        probe: nn.Linear,
+        train_features: Tensor,
+        labels: Tensor,
+        steps: int,
+    ) -> nn.Linear:
+        trained.append((probe, probe.weight.detach().clone(), train_features.detach().clone(), labels, steps))
+
+        return probe
+
+    def scripted_probe_accuracy(
+        probe: nn.Linear,
+        features: Tensor,
+        labels: Tensor,
+    ) -> float:
+        scored.append((probe, features.detach().clone(), labels))
+
+        return SCRIPTED_SHARE
+
+    namespace = found.__globals__
+    originals = {name: namespace.get(name) for name in ("train_probe", "probe_accuracy")}
+    namespace["train_probe"] = scripted_train_probe
+    namespace["probe_accuracy"] = scripted_probe_accuracy
+
+    try:
+        actual = found(encoder, few_x, few_y, validation_x, validation_y, 50)
+    finally:
+        namespace.update(originals)
+
+    train_features, validation_features = PROBE_REFERENCE["standardize"](
+        PROBE_REFERENCE["frozen_features"](encoder, few_x),
+        PROBE_REFERENCE["frozen_features"](encoder, validation_x),
+    )
+    torch.manual_seed(0)
+    fresh_probe = nn.Linear(train_features.shape[1], 10)
+
+    if len(trained) != 1:
+        raise Mismatch(f"probe_score should train its probe with train_probe once, but called it {len(trained)} times.")
+
+    probe, starting_weight, seen_train_features, seen_labels, steps = trained[0]
+
+    if not same_tensor(starting_weight, fresh_probe.weight.detach()):
+        raise Mismatch("The probe's starting weights differ from an nn.Linear to 10 made right after torch.manual_seed(0).")
+
+    if not same_tensor(seen_train_features, train_features) or seen_labels is not few_y:
+        raise Mismatch("train_probe should get few_x's frozen features, standardized with their own mean and spread, and few_y.")
+
+    if steps != 50:
+        raise Mismatch(f"probe_score for 50 steps handed train_probe {steps} steps. Pass steps through.")
+
+    if len(scored) != 1:
+        raise Mismatch(f"probe_score should score with probe_accuracy once, but called it {len(scored)} times.")
+
+    scored_probe, seen_validation_features, seen_validation_y = scored[0]
+
+    if scored_probe is not probe:
+        raise Mismatch("probe_accuracy should score the probe that train_probe gave back.")
+
+    if not same_tensor(seen_validation_features, validation_features) or seen_validation_y is not validation_y:
+        raise Mismatch(
+            "probe_accuracy should get validation_x's frozen features, standardized with few_x's mean and spread, and validation_y."
+        )
+
     expect_close(
-        call="probe_score on 30 labelled images and 20 to score, for 50 steps",
-        actual=found(encoder, few_x, few_y, validation_x, validation_y, 50),
-        expected=PROBE_REFERENCE["probe_score"](encoder, few_x, few_y, validation_x, validation_y, 50),
+        call=f"probe_score, when probe_accuracy gives {SCRIPTED_SHARE}",
+        actual=actual,
+        expected=SCRIPTED_SHARE,
     )
 
 
 def check_scores_by_labels(found: object) -> None:
     """The file's probe_score is swapped for one that records what it gets and answers by its count."""
-    seen: list[tuple[int, int]] = []
+    seen: list[tuple[nn.Module, Tensor, Tensor, Tensor, Tensor, int]] = []
 
     def scripted_probe_score(
         encoder: nn.Module,
@@ -1040,28 +1153,46 @@ def check_scores_by_labels(found: object) -> None:
         validation_y: Tensor,
         steps: int,
     ) -> float:
-        seen.append((len(few_x), steps))
+        seen.append((encoder, few_x, few_y, validation_x, validation_y, steps))
 
         return len(few_x) / 1000
 
+    encoder = nn.Identity()
     train_x, train_y = small_images(663, 60, 4), torch.arange(60) % 10
+    validation_x, validation_y = small_images(664, 7, 4), torch.arange(7)
+    counts = [20, 5, 40]
     namespace = found.__globals__
     original = namespace.get("probe_score")
     namespace["probe_score"] = scripted_probe_score
 
     try:
-        actual = found(None, train_x, train_y, None, None, [20, 5, 40])
+        actual = found(encoder, train_x, train_y, validation_x, validation_y, counts)
     finally:
         namespace["probe_score"] = original
 
     expect_value(
         call="scores_by_labels for counts [20, 5, 40]",
         actual=actual,
-        expected=[20 / 1000, 5 / 1000, 40 / 1000],
+        expected=[count / 1000 for count in counts],
     )
 
-    if seen != [(20, 1000), (5, 1000), (40, 1000)]:
-        raise Mismatch("scores_by_labels should pick each count of labelled photos in turn and score each for 1,000 steps.")
+    if len(seen) != len(counts):
+        raise Mismatch(f"scores_by_labels for 3 counts should call probe_score 3 times, but called it {len(seen)} times.")
+
+    for count, (seen_encoder, few_x, few_y, seen_validation_x, seen_validation_y, steps) in zip(counts, seen):
+        picked_x, picked_y = PROBE_REFERENCE["labelled_photos"](train_x, train_y, count)
+
+        if seen_encoder is not encoder:
+            raise Mismatch("scores_by_labels should hand probe_score the encoder it was given.")
+
+        if not same_tensor(few_x, picked_x) or not same_tensor(few_y, picked_y):
+            raise Mismatch(f"scores_by_labels should pick the {count} labelled photos with labelled_photos(train_x, train_y, {count}).")
+
+        if seen_validation_x is not validation_x or seen_validation_y is not validation_y:
+            raise Mismatch("scores_by_labels should score every count on validation_x and validation_y.")
+
+        if steps != 1000:
+            raise Mismatch(f"scores_by_labels should train each probe for 1,000 steps, but asked for {steps}.")
 
 
 def check_probe3(checker: Checker) -> None:
