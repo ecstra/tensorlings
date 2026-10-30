@@ -18,7 +18,7 @@ Phase 6 of the plan build-tensorlings, Section 13 as [the detailed curriculum](.
 
 | # | Step | Points at | By | Status |
 |---|---|---|---|---|
-| 1 | Write 94_combining | | agent | pending |
+| 1 | Write 94_combining | | agent | done |
 | 2 | Write 95_design_method | | agent | done |
 | 3 | Write 96_papers and 97_interpretability | | agent | pending |
 | 4 | Build the echo canceller project, 98_echo_canceller | | agent | done |
