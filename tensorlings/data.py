@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import tarfile
 import urllib.request
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -49,6 +50,13 @@ DATASETS: dict[str, tuple[RemoteFile, ...]] = {
     # The binary version from Krizhevsky's own page, read straight out of the archive, so no pickle is ever loaded.
     "cifar10": (
         RemoteFile("https://www.cs.toronto.edu/~kriz/cifar-10-binary.tar.gz", "c32a1d4ab5d03f1284b67883e8d87530"),
+    ),
+    # NLTK's 18 books from Project Gutenberg, pinned to the commit that last changed them, read out of the zip in memory.
+    "gutenberg": (
+        RemoteFile(
+            "https://raw.githubusercontent.com/nltk/nltk_data/5f09e470fe339e1a119dd174ca284129a3c7a5bb/packages/corpora/gutenberg.zip",
+            "48c9c8605cd70b0230687557ee543633",
+        ),
     ),
 }
 
@@ -212,6 +220,18 @@ def read_shakespeare() -> str:
 def load_shakespeare() -> str:
     """Tiny Shakespeare as one string, 1,115,394 characters of the plays."""
     return read_shakespeare()
+
+
+@functools.cache
+def read_persuasion() -> str:
+    # Read by its name in memory and never extracted, so no path in the archive is ever written to.
+    with zipfile.ZipFile(dataset_file("gutenberg", "gutenberg.zip")) as archive:
+        return archive.read("gutenberg/austen-persuasion.txt").decode("ascii")
+
+
+def load_persuasion() -> str:
+    """Jane Austen's novel Persuasion as one string, 466,292 characters, from NLTK's copy of Project Gutenberg."""
+    return read_persuasion()
 
 
 @functools.cache
