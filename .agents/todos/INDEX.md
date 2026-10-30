@@ -15,7 +15,9 @@ Built by the brain tool from the folder it lists.
 
 ## Open
 
-Nothing open.
+### course
+
+- [TODO-015](TODO-015-phase-4-sections-8-to-10.md), representation learning with the probe project, generative models with the digit diffusion project, then symmetry and graphs with the shortest paths project
 
 ## Closed
 
