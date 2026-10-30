@@ -53,6 +53,10 @@ DIGIT_DIFFUSION = Chapter(
 STEPS = 1000
 NULL = 10
 
+# digits2 needs only diffusion4's drop_labels, and digits3 only its guided_noise.
+DROP_LABELS_PART = GUIDANCE_PART[: GUIDANCE_PART.index("def guided_noise")]
+GUIDED_NOISE_PART = GUIDANCE_PART[GUIDANCE_PART.index("def guided_noise") : GUIDANCE_PART.index("def guided_sample")]
+
 RANGE_SOLUTION = '''
 def to_model_range(images: Tensor) -> Tensor:
     x = images.float().unsqueeze(1) / 127.5 - 1
@@ -164,8 +168,10 @@ DIGITS1_LESSON = prose(
     as diffusion4 did for points.
 
     Diffusion works on numbers around 0, so pixels from 0 to 255 move to the
-    range -1 to 1. The U-Net halves its image twice. So each 28 by 28 digit
-    gets a border of 2 pixels of black, -1, to make 32 by 32.
+    range -1 to 1. Each 28 by 28 digit also gets a border of 2 pixels of
+    black, -1, to make 32 by 32. That is the size of DDPM's CIFAR-10 images.
+    32 halves cleanly down to 1, so a deeper U-Net fits it too. This one
+    halves only twice, which 28 by 28 would also allow.
 
     The condition is one vector per image, the step's time features after a
     small MLP plus the digit's row from an `nn.Embedding`. Row 10 is the null
@@ -179,9 +185,12 @@ DIGITS1_LESSON = prose(
     ```
 
     The way down keeps the output of each level for the way back up, joined
-    on the channels, as unet1's skips did. GroupNorm in place of BatchNorm
-    normalizes each image on its own, so a sample doesn't depend on the
-    others in its batch.
+    on the channels, as unet1's skips did.
+
+    The blocks use `nn.GroupNorm(8, channels)` in place of BatchNorm. It splits
+    the channels into 8 groups and normalizes each group of each image on its
+    own, with its own mean and spread. LayerNorm is the case of a single
+    group. So a sample doesn't depend on the others in its batch.
     """,
 )
 
@@ -220,11 +229,12 @@ DIGITS1_SOURCE = source_file(
 
 
     # TODO: Finish forward. The condition is self.time of the time features of
-    #   t, plus self.labels of labels. down1 reads x, down2 reads it pooled to
-    #   half with F.avg_pool2d, and middle reads that pooled again. On the way
-    #   up, F.interpolate doubles each result, which is joined with the output
-    #   of the same size from the way down, the upsampled one first, before
-    #   up2 and then up1. self.out gives the predicted noise.
+    #   t, plus self.labels of labels. down1 reads x. down2 reads down1's
+    #   output pooled to half with F.avg_pool2d, and middle reads down2's
+    #   output pooled again. On the way up, F.interpolate doubles each result,
+    #   which is joined with the output of the same size from the way down, the
+    #   upsampled one first, before up2 and then up1. self.out gives the
+    #   predicted noise.
 ''' + indented(UNET_INIT) + '''
 
         def forward(
@@ -454,7 +464,7 @@ DIGITS2_SOURCE = source_file(
 ''' + indented(SCHEDULE_PART) + '''
 
 
-''' + indented(GUIDANCE_PART) + '''
+''' + indented(DROP_LABELS_PART) + '''
 
 
     # The pieces of digits1.
@@ -513,7 +523,7 @@ DIGITS2_SOLUTION = source_file(
 ''' + indented(SCHEDULE_PART) + '''
 
 
-''' + indented(GUIDANCE_PART) + '''
+''' + indented(DROP_LABELS_PART) + '''
 
 
 ''' + indented(TIME_PART) + '''
@@ -540,18 +550,77 @@ def schedule() -> Tensor:
     return DIGITS_REFERENCE["alpha_bars_of"](DIGITS_REFERENCE["linear_betas"](STEPS, 1e-4, 0.02))
 
 
+class DeviceRecorder(nn.Module):
+    """A stand in model on the meta device, which holds no numbers, that notes what reaches it from the CPU.
+    It shows a missing .to(device) on any machine, as main's GPU would."""
+
+    def __init__(
+        self,
+        from_cpu: list[str],
+    ) -> None:
+        super().__init__()
+        self.scale = nn.Parameter(torch.ones((), device="meta"))
+        self.from_cpu = from_cpu
+
+    def forward(
+        self,
+        x: Tensor,
+        t: Tensor,
+        labels: Tensor,
+    ) -> Tensor:
+        for name, value in (("the noisy digits", x), ("t", t), ("the labels", labels)):
+            if value.device.type != "meta":
+                self.from_cpu.append(name)
+
+        return x.to("meta") * self.scale
+
+
 def check_digit_loss(found: object) -> None:
     model = seeded_unet(DIGITS_REFERENCE["DigitUNet"])
     x0 = DIGITS_REFERENCE["to_model_range"](digit_images(714, 6))
     labels = torch.tensor([0, 3, 5, 7, 9, 2])
-    expected = DIGITS_REFERENCE["digit_loss"](model, x0, labels, schedule(), torch.Generator().manual_seed(715), torch.device("cpu"))
-    actual = found(model, x0, labels, schedule(), torch.Generator().manual_seed(715), torch.device("cpu"))
-    expect_close(
-        call="digit_loss on 6 digits",
-        actual=actual.item() if isinstance(actual, Tensor) else actual,
-        expected=expected.item(),
-        tolerance=1e-5,
-    )
+
+    # Both seeds drop exactly one label at 0.1, and neither would at 0.05.
+    for seed in (724, 743):
+        expected = DIGITS_REFERENCE["digit_loss"](model, x0, labels, schedule(), torch.Generator().manual_seed(seed), torch.device("cpu"))
+        actual = found(model, x0, labels, schedule(), torch.Generator().manual_seed(seed), torch.device("cpu"))
+        call = f"digit_loss on 6 digits with a generator seeded with {seed}, which drops one label"
+
+        if not isinstance(actual, Tensor):
+            raise Mismatch(f"{call} gave {actual!r}, but it should give the loss as a tensor. main calls loss.backward() on it.")
+
+        if not actual.requires_grad:
+            raise Mismatch(
+                f"{call} gave a loss that doesn't reach the model's weights, so main's loss.backward() couldn't train "
+                "them. Return F.mse_loss as it comes, with no .item(), .detach() or torch.no_grad().",
+            )
+
+        if actual.shape != ():
+            raise Mismatch(f"{call} gave a loss of shape {tuple(actual.shape)}, but it should be the mean, a single number.")
+
+        expect_close(
+            call=call,
+            actual=actual.item(),
+            expected=expected.item(),
+            tolerance=1e-5,
+        )
+
+    from_cpu: list[str] = []
+
+    try:
+        found(DeviceRecorder(from_cpu), x0, labels, schedule(), torch.Generator().manual_seed(724), torch.device("meta"))
+    except RuntimeError as error:
+        raise Mismatch(
+            "digit_loss crashed when its model ran on another device than the CPU, as main runs it on a GPU. Draw "
+            "and noise on the CPU, then move what the model reads and the noise to device.\n\n"
+            f"The original message, {error}",
+        ) from None
+
+    if from_cpu:
+        raise Mismatch(
+            f"digit_loss handed the model {' and '.join(from_cpu)} on the CPU, but main runs the model on a GPU. "
+            "Move everything the model reads to device first.",
+        )
 
 
 def trained_unet(found: type) -> nn.Module:
@@ -745,7 +814,7 @@ DIGITS3_SOURCE = source_file(
 ''' + indented(SAMPLING_PART) + '''
 
 
-''' + indented(GUIDANCE_PART) + '''
+''' + indented(GUIDED_NOISE_PART) + '''
 
 
     # The pieces of digits1.
@@ -830,7 +899,7 @@ DIGITS3_SOLUTION = source_file(
 ''' + indented(SAMPLING_PART) + '''
 
 
-''' + indented(GUIDANCE_PART) + '''
+''' + indented(GUIDED_NOISE_PART) + '''
 
 
 ''' + indented(TIME_PART) + '''

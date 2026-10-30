@@ -119,8 +119,9 @@ PATHS1_LESSON = prose(
     This is Section 10's project. Each graph has weighted edges, and the task
     is the length of the shortest path from node 0 to every other node.
     message3 ran Bellman-Ford as message passing on one graph's edge list.
-    Here many graphs come at once, each a weight matrix as graph1 showed,
-    with 0 where there is no edge.
+    Here many graphs come at once, each a weight matrix. That is graph1's
+    adjacency matrix with each edge's weight in place of its 1, and 0 where
+    there is no edge.
 
     A round is the same as in message3. Every node takes the best offer from
     its neighbours, each neighbour's distance plus the edge's weight, if that
@@ -208,6 +209,17 @@ LINE_GRAPH = torch.tensor(
     ],
 )
 
+# Edges from 0 to 1, 1 to 2 and 2 to 0 only, so reading a cost the wrong way round shows.
+ONE_WAY_GRAPH = torch.tensor(
+    [
+        [
+            [0.0, 0.4, 0.0],
+            [0.0, 0.0, 0.3],
+            [0.2, 0.0, 0.0],
+        ],
+    ],
+)
+
 
 def check_paths1(checker: Checker) -> None:
     check_on_inputs(
@@ -229,6 +241,10 @@ def check_paths1(checker: Checker) -> None:
         inputs=(
             (start, Described(costs, "the costs of a graph of 4 nodes")),
             (torch.tensor([[0.0, 0.2, float("inf"), 0.9]]), Described(costs, "the costs of a graph of 4 nodes")),
+            (
+                torch.tensor([[0.0, float("inf"), float("inf")]]),
+                Described(PATHS_REFERENCE["edge_costs"](ONE_WAY_GRAPH), "the costs of a one way graph, 0 to 1 to 2 to 0"),
+            ),
         ),
         reference=PATHS_REFERENCE["relax"],
         expect=expect_tensor,
@@ -600,8 +616,9 @@ PATHS2 = Exercise(
 # ---------------------------------------------------------------------------
 
 GENERIC_PART = '''
-# A generic message passing network, as message2 built it: a vector per node, a learned message
-# along each edge, the smallest of them gathered, and a residual update, for as many rounds as nodes.
+# A generic message passing network, message1's with message3's minimum in place of the sum. A vector per
+# node, a learned message along each edge, the smallest of them gathered, and a residual update, for as
+# many rounds as nodes.
 class MessagePassing(nn.Module):
     def __init__(
         self,
@@ -662,10 +679,11 @@ INDENTED_SIZES = textwrap.indent(SIZES_SOLUTION.strip("\n"), "    ")
 PATHS3_LESSON = prose(
     """
     Now all three networks meet graphs bigger than any they trained on. The
-    third is a generic message passing network, as message2 built it. Each
-    node holds a vector of 32 numbers, a learned message runs along every
-    edge, and a residual update takes the smallest messages in. It gets one
-    round per node, so it runs longer on a bigger graph, as Bellman-Ford does.
+    third is a generic message passing network, message1's with message3's
+    minimum in place of the sum. Each node holds a vector of 32 numbers, a
+    learned message runs along every edge, and a residual update takes the
+    smallest messages in. It gets one round per node, so it runs longer on a
+    bigger graph, as Bellman-Ford does.
 
     Each trained for 1,500 steps on graphs of 10 nodes. Here is the share of
     distances within 0.05 on new graphs of each size.
@@ -681,10 +699,15 @@ PATHS3_LESSON = prose(
     can't even read a graph bigger than its input.
 
     The network shaped like the algorithm works on every size, and its offer
-    is the only learned part. `offer_gap` shows what it learned. On the edges
-    of shortest paths, the offers that decide each answer, it is within 0.011
-    of the true sum. Elsewhere it is off by as much as 0.28, which never
-    matters, since the min throws those offers away.
+    is the only learned part. `offer_gap` shows what it learned. Five sets of
+    200 new graphs of 10 nodes went through it. Along shortest paths, where
+    the offers decide each answer, the worst offer of each set was off by
+    between 0.006 and 0.059. Only the set with 0.059 had a distance off by
+    more than 0.05, one of its 1,800. On graphs of 20 and 40 these offers
+    stayed within 0.007.
+
+    Other offers were off by up to 0.30. None of them came in more than 0.014
+    under its node's true distance, so they never pull an answer far off.
 
     Xu and colleagues call this algorithmic alignment. A network learns from
     few examples when its structure matches the steps of the algorithm, so
@@ -796,17 +819,24 @@ SIZES_REFERENCE = namespace_of(
 )
 
 
+def close(
+    found: Tensor,
+    expected: Tensor,
+) -> bool:
+    return found.shape == expected.shape and torch.allclose(found, expected, atol=1e-6)
+
+
 def check_scores_by_size(found: object) -> None:
-    """The file's within is swapped for one that records the graphs it scores and answers by their size,
+    """The file's within is swapped for one that records what it scores and answers by the graphs' size,
     so the check sees which graphs scores_by_size drew and in what order."""
-    seen: list[tuple[int, int]] = []
+    scored: list[tuple[Tensor, Tensor]] = []
 
     def scripted_within(
         guess: Tensor,
         truth: Tensor,
         tolerance: float,
     ) -> float:
-        seen.append((truth.shape[0], truth.shape[1]))
+        scored.append((guess.detach(), truth.detach()))
 
         if tolerance != 0.05:
             raise Mismatch(f"scores_by_size used a tolerance of {tolerance}, but it should use 0.05.")
@@ -835,17 +865,47 @@ def check_scores_by_size(found: object) -> None:
         expected=[0.06, 0.09, 0.04],
     )
 
-    if seen != [(5, 6), (5, 9), (5, 4)]:
+    if [tuple(truth.shape) for _, truth in scored] != [(5, 6), (5, 9), (5, 4)]:
         raise Mismatch("scores_by_size should draw count graphs of each size in turn and score each batch with within.")
+
+    replay = torch.Generator().manual_seed(754)
+
+    for nodes, (guess, truth) in zip([6, 9, 4], scored):
+        weights = SIZES_REFERENCE["random_graphs"](5, nodes, replay)
+        right_truth = SIZES_REFERENCE["shortest_paths"](weights)
+
+        with torch.no_grad():
+            right_guess = model(weights)
+
+        # within gives the same share with its first two arguments swapped, so either order passes.
+        in_order = close(guess, right_guess) and close(truth, right_truth)
+        swapped = close(guess, right_truth) and close(truth, right_guess)
+
+        if not (in_order or swapped):
+            raise Mismatch(
+                f"For graphs of {nodes} nodes, scores_by_size scored something other than model(weights) against "
+                "shortest_paths(weights), with weights drawn by random_graphs from the generator it was given.",
+            )
 
 
 def check_offer_gap(found: object) -> None:
     model = seeded_model(SIZES_REFERENCE["MinPassing"])
     distance = torch.tensor([[0.0, 0.5, 2.0], [4.0, 1.5, 0.2]])
     weight = torch.tensor([[0.3, 0.9, 0.1], [0.5, 0.2, 0.7]])
+    modes: list[bool] = []
+    hook = model.offer.register_forward_pre_hook(lambda module, inputs: modes.append(torch.is_grad_enabled()))
+
+    try:
+        actual = found(model, distance, weight)
+    finally:
+        hook.remove()
+
+    if any(modes):
+        raise Mismatch("offer_gap ran model.offer while recording for autograd. Run it inside torch.no_grad().")
+
     expect_tensor(
         call="offer_gap of an untrained MinPassing on 2 rows of 3 pairs",
-        actual=found(model, distance, weight),
+        actual=actual,
         expected=SIZES_REFERENCE["offer_gap"](model, distance, weight),
     )
 
