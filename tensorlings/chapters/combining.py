@@ -227,8 +227,9 @@ COMBINE1_LESSON = prose(
 
     A scale can do what a shift can't. A scale of 0 turns a feature off, and
     a negative one flips it, however large the feature is. The paper put a
-    ReLU after each FiLM and found 36% of its scales negative. FiLM halved
-    the error on the CLEVR reasoning benchmark, from 4.5% to 2.3%.
+    ReLU after each FiLM and found 36% of its scales negative. On the CLEVR
+    reasoning benchmark it roughly halved the best error of methods without
+    extra supervision, from relation networks' 4.5% to 2.3%.
 
     Here the condition is one of 8 instructions. Each input holds 6
     positions of 4 features. The instruction says which feature to average,
@@ -241,13 +242,26 @@ COMBINE1_LESSON = prose(
     | joined, two hidden layers of 32 | 1,505 | 0.0002 to 0.0003 | 0.11 to 0.22 |
     | FiLM, one hidden layer of 16 | 385 | 0.00003 to 0.00011 | 0.043 to 0.050 |
 
-    Guessing the average scores 0.053 and 0.47. In range every model fits.
-    On larger inputs, a feature meant to stay off gets pushed past the shift
-    that held it down. A scale of 0 stays 0, so FiLM is 2 to 5 times closer
-    than either joined model, though not exact.
+    Guessing the average scores 0.053 and 0.47. In range every model fits. On
+    larger inputs FiLM's error is 2 to 5 times lower than either joined model's.
 
-    The paper's code computes 1 plus a change for the scale, so no feature
-    starts switched off. combine3 comes back to such starts.
+    Which half does the work? The paper's test holds one half at its average
+    over the training data, so the condition no longer moves it. Here it is on
+    the trained FiLM model, on new inputs, three seeds.
+
+    | Held at its average | Error |
+    |---|---|
+    | nothing | 0.00003 to 0.00011 |
+    | the shift | 0.013 to 0.047 |
+    | the scale | 0.054 to 0.097 |
+
+    Without its scale the model is no better than a guess. The condition works
+    mostly through the scale, as on CLEVR, where the averaged scale dropped
+    accuracy by 65.4% and the averaged shift by 1.0%.
+
+    The paper's appendix makes the scale 1 plus a change, so no feature starts
+    switched off, and found it made no real difference. combine3 comes back to
+    such starts.
     """,
 )
 
@@ -926,33 +940,43 @@ COMBINE3_LESSON = prose(
     Linear at zero, the model at step 0 gives exactly what it gave before.
     residual3 used this start for depth. Here it protects a trained model.
 
-    Zero only the last layer. With every layer at zero, each layer's
-    gradient is multiplied by another layer's zeros, and nothing ever moves.
+    Zero only the last layer. With every layer at zero, the first layer's
+    gradient is multiplied by the last layer's zeros, and the last weight's by
+    the first's. Only the last bias moves, so the branch never reads its input.
+
+    ControlNet's authors gave the zero start's reason: no harmful noise
+    reaches the trained model while the new piece starts to learn. So measure
+    the error along the way, checked every 50 steps, not only at the end.
 
     Here a residual model of 4 blocks was trained first. Then a branch read
-    4 new numbers and added its output to the stream before the second
-    block. Every weight trained on, with Adam at 0.001, three seeds each.
+    4 new numbers and added its output to the stream before the second block.
+    The branch, starting from nothing, trained at 0.01, and the trained model
+    at 0.001, three seeds each.
 
     - signal: the new numbers explain part of the answer, and the branch trained on 4,000 examples.
     - no signal: the new numbers explain nothing, and the branch had only 64 examples.
 
-    | Branch start | Signal, step 0 | Signal, step 1,500 | No signal, step 0 | No signal, step 1,500 |
-    |---|---|---|---|---|
-    | last layer zero | 0.252 | 0.011 to 0.014 | 0.0005 | 0.0018 to 0.0033 |
-    | PyTorch's default | 0.24 to 0.28 | 0.010 to 0.015 | 0.017 to 0.030 | 0.011 to 0.015 |
-    | Kaiming | 0.29 to 0.44 | 0.006 to 0.007 | 0.23 to 0.37 | 0.059 to 0.067 |
+    | Branch start | Signal, step 0 | Signal, step 1,500 | No signal, step 1,500 |
+    |---|---|---|---|
+    | last layer zero | 0.252 | 0.0054 to 0.0059 | 0.0070 to 0.0090 |
+    | PyTorch's default | 0.24 to 0.28 | 0.0053 to 0.0070 | 0.012 to 0.013 |
+    | Kaiming | 0.29 to 0.44 | 0.0041 to 0.0048 | 0.057 to 0.068 |
 
-    The trained model alone scored 0.252 with signal and 0.0005 without. With
-    every layer at zero, the signal run ended at 0.29 to 0.31, worse than
-    the trained model alone.
+    The trained model alone scored 0.252 with signal and 0.0005 without.
 
-    With signal, the loud Kaiming start hurt at step 0, then learned fastest
-    and ended lowest. Without signal, every random start had to unlearn its
-    own noise from 64 examples. Kaiming ended 20 to 33 times worse than zero.
+    The zero start began exactly at the trained model and never rose above it
+    at any check. Every random start began somewhere else, the loud Kaiming
+    one up to 0.44. All of them learned the new input, ending 36 to 62 times
+    below the model alone.
 
-    The zero start bets nothing on the new piece. Use it when the model
-    already works and you don't know the piece will help. ControlNet's
-    authors gave that reason, so no harmful noise reaches the trained model.
+    Without signal, every branch learned some noise from its 64 examples. The
+    zero start kept that smallest, and Kaiming ended about 8 times worse. With
+    every layer at zero, the signal run ended at 0.29 to 0.30, worse than the
+    model alone. That branch could never read its input.
+
+    So use the zero start when the model already works and you don't know the
+    piece will help. In ControlNet's own test, starting those layers at random
+    pulled its results down to about those of its lite version.
     """,
 )
 
@@ -1145,7 +1169,7 @@ def check_zero_last(found: object) -> None:
                 "either layer.",
             )
 
-        if not branch[-1].weight.requires_grad:
+        if not branch[-1].weight.requires_grad or not branch[-1].bias.requires_grad:
             raise Mismatch("After zero_last_ the last layer no longer trains. Change its values, and keep requires_grad.")
 
 
@@ -1158,7 +1182,7 @@ def seeded_base() -> nn.Module:
 def check_with_branch(found: type) -> None:
     x, side, _ = side_data(5, torch.Generator().manual_seed(955), True)
 
-    for at in (1, 3):
+    for at in (0, 1, 3):
         torch.manual_seed(956 + at)
         branch = make_branch()
         model = expect_module(f"WithBranch(base, branch, {at})", found(seeded_base(), branch, at))
@@ -1349,8 +1373,8 @@ COMBINE4_LESSON = prose(
     Tolstikhin and colleagues' MLP-Mixer does both with MLPs alone. A token
     mixing MLP acts on each channel's column of positions, shared by every
     channel. A channel mixing MLP acts on each position's row. The two are
-    interleaved, each with a layer norm and a skip connection. Pre-trained on
-    about 100 million images, it reached 87.94% on ImageNet.
+    interleaved, each with a layer norm and a skip connection. Its largest
+    model, pre-trained on 300 million images, reached 87.94% on ImageNet.
 
     The task has 8 positions of 2 channels. The answer at position p is
     `|x[p, 0] - x[p + 1, 1]|`, wrapping around at the end. It needs the next
@@ -1368,8 +1392,9 @@ COMBINE4_LESSON = prose(
     | within, across, within, across | 3,473 | 0.0003 to 0.0005 |
 
     Guessing the average scores 0.221. Within only never sees position p + 1,
-    so it can't do much better than a guess. Across only mixes each channel
-    alone. The embedding had mixed the two channels in fixed amounts, so it
+    so it can't do much better than a guess. Across only mixes along the
+    positions, one channel at a time. Its embedding and head mix channels only
+    in straight lines, and its layer norms only center and rescale them. So it
     got part of the way. Alternating gets both, in either order.
 
     A position's **reach** is the set of input positions that can change its
@@ -1630,48 +1655,61 @@ COMBINE4 = Exercise(
 BUMP = torch.tensor([0.5, 1.0, 0.5])
 IDS = 16
 
+# Each signal sits on its own level, so only a detector of a bump's shape can count, not a sum of the signal.
+LEVEL = 0.3
+
 
 def bump_signals(
     count: int,
     length: int,
     most: int,
     generator: torch.Generator,
+    twin: bool = False,
 ) -> tuple[Tensor, Tensor]:
-    """Noisy signals with up to most bumps of 0.5, 1, 0.5, at most one in each 4 places, and how many each holds."""
+    """Noisy signals on a level of their own, with up to most bumps of 0.5, 1, 0.5, at most one in each 4 places,
+    and how many each holds. The twin task's bumps point down."""
     slots = length // 4
     counts = torch.randint(0, most + 1, (count,), generator=generator)
     chosen = torch.rand(count, slots, generator=generator).argsort(dim=1) < counts.unsqueeze(1)
     shifts = torch.randint(0, 2, (count, slots), generator=generator)
     centers = torch.zeros(count, length).scatter(1, torch.arange(slots) * 4 + 1 + shifts, chosen.float())
     bumps = F.conv1d(centers.unsqueeze(1), BUMP.view(1, 1, 3), padding=1).squeeze(1)
+    levels = (torch.rand(count, 1, generator=generator) * 2 - 1) * LEVEL
+    noise = torch.randn(count, length, generator=generator) * 0.1
 
-    return bumps + torch.randn(count, length, generator=generator) * 0.1, counts.float()
+    return levels + (-bumps if twin else bumps) + noise, counts.float()
 
 
 def baskets(
     count: int,
     items: int,
     generator: torch.Generator,
+    twin: bool = False,
 ) -> tuple[Tensor, Tensor]:
-    """Baskets of items, each a price from 0.5 to 2 and a count of 1 to 3, and each basket's total."""
+    """Baskets of items, each a price from 0.5 to 2 and a count of 1 to 3, and each basket's total. The twin task
+    adds up each item's count over its price, so no one fixed formula fits both."""
     price = 0.5 + 1.5 * torch.rand(count, items, generator=generator)
     how_many = torch.randint(1, 4, (count, items), generator=generator).float()
+    totals = (how_many / price).sum(dim=1) if twin else (price * how_many).sum(dim=1)
 
-    return torch.stack([price, how_many], dim=-1), (price * how_many).sum(dim=1)
+    return torch.stack([price, how_many], dim=-1), totals
 
 
 def lookups(
     count: int,
     pairs: int,
     generator: torch.Generator,
+    twin: bool = False,
 ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
-    """Pairs of a key and a value, both ids from 0 to 15 with no key twice, a query that is one of the keys, and its value."""
+    """Pairs of a key and a value, both ids from 0 to 15 with no key twice, a query that is one of the keys, and its
+    value. The twin task's query is one more than the key it asks for, wrapping at 16."""
     keys = torch.rand(count, IDS, generator=generator).argsort(dim=1)[:, :pairs]
     values = torch.randint(0, IDS, (count, pairs), generator=generator)
     which = torch.randint(0, pairs, (count,), generator=generator)
     rows = torch.arange(count)
+    query = (keys[rows, which] + 1) % IDS if twin else keys[rows, which]
 
-    return keys, values, keys[rows, which], values[rows, which]
+    return keys, values, query, values[rows, which]
 
 
 class ReferenceBumpCounter(nn.Module):
@@ -1748,6 +1786,7 @@ class GRULookup(nn.Module):
 def train_bumps(
     model: nn.Module,
     seed: int,
+    twin: bool = False,
     steps: int = 300,
 ) -> nn.Module:
     """Signals of 16, 32 and 48 in turn, so no answer can lean on a length."""
@@ -1756,7 +1795,7 @@ def train_bumps(
 
     for step in range(steps):
         length = (16, 32, 48)[step % 3]
-        signals, counts = bump_signals(64, length, length // 8 - 1 if length > 16 else 2, generator)
+        signals, counts = bump_signals(64, length, length // 8 - 1 if length > 16 else 2, generator, twin)
         loss = F.mse_loss(model(signals), counts)
         optimizer.zero_grad()
         loss.backward()
@@ -1768,13 +1807,14 @@ def train_bumps(
 def train_baskets(
     model: nn.Module,
     seed: int,
+    twin: bool = False,
     steps: int = 500,
 ) -> nn.Module:
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-2)
     generator = torch.Generator().manual_seed(seed)
 
     for _ in range(steps):
-        items, totals = baskets(64, 5, generator)
+        items, totals = baskets(64, 5, generator, twin)
         loss = F.mse_loss(model(items), totals)
         optimizer.zero_grad()
         loss.backward()
@@ -1786,13 +1826,14 @@ def train_baskets(
 def train_lookups(
     model: nn.Module,
     seed: int,
+    twin: bool = False,
     steps: int = 400,
 ) -> nn.Module:
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-2)
     generator = torch.Generator().manual_seed(seed)
 
     for _ in range(steps):
-        keys, values, query, answer = lookups(64, 4, generator)
+        keys, values, query, answer = lookups(64, 4, generator, twin)
         loss = F.cross_entropy(model(keys, values, query), answer)
         optimizer.zero_grad()
         loss.backward()
@@ -1801,28 +1842,75 @@ def train_lookups(
     return model
 
 
-def bump_miss(model: nn.Module) -> float:
+def bump_miss(
+    model: nn.Module,
+    twin: bool = False,
+) -> float:
     """The average miss in bumps on 1,000 signals of 96, with up to 9 bumps each."""
-    signals, counts = bump_signals(1000, 96, 9, torch.Generator().manual_seed(101))
+    signals, counts = bump_signals(1000, 96, 9, torch.Generator().manual_seed(101), twin)
 
     with torch.no_grad():
         return (model(signals) - counts).abs().mean().item()
 
 
-def basket_miss(model: nn.Module) -> float:
+def basket_miss(
+    model: nn.Module,
+    twin: bool = False,
+) -> float:
     """The average miss on 1,000 baskets of 12 items, as a share of the average total."""
-    items, totals = baskets(1000, 12, torch.Generator().manual_seed(101))
+    items, totals = baskets(1000, 12, torch.Generator().manual_seed(101), twin)
 
     with torch.no_grad():
         return ((model(items) - totals).abs().mean() / totals.mean()).item()
 
 
-def lookup_share(model: nn.Module) -> float:
+def lookup_share(
+    model: nn.Module,
+    twin: bool = False,
+) -> float:
     """The share of 1,000 lookups among 12 pairs answered right."""
-    keys, values, query, answer = lookups(1000, 12, torch.Generator().manual_seed(112))
+    keys, values, query, answer = lookups(1000, 12, torch.Generator().manual_seed(112), twin)
 
     with torch.no_grad():
         return (model(keys, values, query).argmax(dim=-1) == answer).float().mean().item()
+
+
+# The change each problem's answer ignores. A signal moved along by whole places of 4 keeps every bump whole, and a
+# basket's items or a lookup's pairs can come in any order.
+PROMISES = {
+    "bumps": "shift",
+    "baskets": "shuffle",
+    "lookups": "shuffle",
+}
+
+
+def bump_shift_gap(model: nn.Module) -> float:
+    """How far the counts move, on average, when the signals of 96 roll along by 4 places."""
+    signals, _ = bump_signals(1000, 96, 9, torch.Generator().manual_seed(101))
+
+    with torch.no_grad():
+        return (model(torch.roll(signals, 4, dims=1)) - model(signals)).abs().mean().item()
+
+
+def basket_shuffle_gap(model: nn.Module) -> float:
+    """How far the totals move when each basket's 12 items come in a new order, as a share of the average total."""
+    items, totals = baskets(1000, 12, torch.Generator().manual_seed(101))
+    order = torch.randperm(12, generator=torch.Generator().manual_seed(5))
+
+    with torch.no_grad():
+        return ((model(items[:, order]) - model(items)).abs().mean() / totals.mean()).item()
+
+
+def lookup_shuffle_gap(model: nn.Module) -> float:
+    """The share of answers that change when the 12 pairs come in a new order, each key kept with its value."""
+    keys, values, query, _ = lookups(1000, 12, torch.Generator().manual_seed(112))
+    order = torch.randperm(12, generator=torch.Generator().manual_seed(5))
+
+    with torch.no_grad():
+        before = model(keys, values, query).argmax(dim=-1)
+        after = model(keys[:, order], values[:, order], query).argmax(dim=-1)
+
+        return (before != after).float().mean().item()
 
 
 COMBINE5_LESSON = prose(
@@ -1837,12 +1925,12 @@ COMBINE5_LESSON = prose(
     | Pooling by sum, mean or max | the order of the items means nothing | sets2 |
     | Attention | items are found by content, at any distance | attention6 |
     | RNN, LSTM or state space | one state of fixed size, carried in order | lstm1, ssm1 |
-    | Gate or FiLM | one signal controls another | gating1, combine2 |
+    | Gate or FiLM | one signal controls another | gating1, combine1, combine2 |
     | Residual and norm | the model is deep | residual2 |
     | Equivariant layer | a symmetry, like a turn, a move or a mirror | equivariance2 |
     | Router to experts | each input needs a few of many skills | moe1 |
-    | Message passing | the answer follows a graph's edges | paths3 |
-    | None of these | derive one from the exact algorithm | derive1 |
+    | Message passing | the answer follows a graph's edges | message1 |
+    | None of these | derive one from the exact algorithm | derive1, paths3 |
 
     The right structure matters most where the test differs from training.
     conv4's MLP missed a moved pattern, and attention6's GRU lost pairs as
@@ -1851,15 +1939,24 @@ COMBINE5_LESSON = prose(
     Here are three problems you haven't seen. Build a model for each. The
     check trains it on small inputs, then tests it on bigger ones it never saw.
 
-    - bumps: count the bumps in a noisy signal. Training signals are 16 to 48 long, and test signals 96.
+    - bumps: count the bumps in a noisy signal on a level of its own. Training signals are 16 to 48 long, and test signals 96.
     - baskets: each item has a price and a count, and the answer is the basket's total. Training baskets hold 5 items, and test baskets 12.
     - lookups: pairs of a key and a value, then a query, and the answer is the query's value. Training uses 4 pairs, and testing 12.
 
     Ask of each problem what stays true as the input grows. Does the answer
     grow with it? Does the order matter? Does one item need to find another?
 
+    Each structure also makes a promise, a change its output ignores. Name in
+    `PROMISES` the change each problem's true answer ignores. The check makes
+    that change to the test inputs, and your trained model must barely move.
+    A GRU reading the lookup pairs in order changed over half its answers when
+    the pairs were shuffled.
+
     A model made of the right pieces needs no hand written answer. The check
-    trains it from a fixed start, and an untrained one must do badly.
+    also trains it on a twin of each problem with another rule. The bumps point
+    down, each item adds its count over its price, and the query is one more
+    than its key. Learned pieces fit both, and a formula written by hand fits
+    one.
     """,
 )
 
@@ -1878,6 +1975,18 @@ COMBINE5_SOURCE = source_file(
     items = torch.zeros(2, 12, 2)                     # baskets: 2 baskets of 12 items, each a price and a count
     keys = torch.zeros(2, 12, dtype=torch.long)       # lookups: ids from 0 to 15, values the same shape
     query = torch.zeros(2, dtype=torch.long)          # one query per row, the answer is one of 16 ids
+    moved = torch.roll(torch.tensor([[1.0, 2.0, 3.0, 4.0, 5.0]]), 4, dims=1)    # tensor([[2., 3., 4., 5., 1.]])
+
+
+    # TODO: For each problem, name the change its true answer ignores, "shift"
+    #   or "shuffle". A shift moves a signal along by 4 places, wrapping
+    #   around, as moved shows. A shuffle puts a basket's items, or a lookup's
+    #   pairs, in a new order.
+    PROMISES = {
+        "bumps": ...,
+        "baskets": ...,
+        "lookups": ...,
+    }
 
 
     # TODO: Build a model that counts the bumps in signals of shape (batch,
@@ -1939,6 +2048,14 @@ COMBINE5_SOLUTION = source_file(
     items = torch.zeros(2, 12, 2)
     keys = torch.zeros(2, 12, dtype=torch.long)
     query = torch.zeros(2, dtype=torch.long)
+    moved = torch.roll(torch.tensor([[1.0, 2.0, 3.0, 4.0, 5.0]]), 4, dims=1)
+
+
+    PROMISES = {
+        "bumps": "shift",
+        "baskets": "shuffle",
+        "lookups": "shuffle",
+    }
 
 
     class BumpCounter(nn.Module):
@@ -1984,17 +2101,23 @@ COMBINE5_SOLUTION = source_file(
     ''',
 )
 
-# The bars sit far from both sides. Over seeds 0 to 2 the reference misses 0.21 to 0.31 bumps, 0.2% to 1.4%
-# of a total and no lookups, where mean pooling misses 3.0 bumps and 58% of a total, and a GRU gets 16% to 17%.
-BUMP_BAR = 0.6
+# The bars sit far from both sides, on the task and on its twin. Over seeds 0 to 2 see measure_problems for the
+# reference against mean pooling, a plain sum, a convolution with no ReLU, a GRU and the hand written rules.
+BUMP_BAR = 1.0
 BASKET_BAR = 0.05
 LOOKUP_BAR = 0.9
+
+# How far a trained model's answers may move under the change its problem ignores.
+BUMP_SHIFT_BAR = 0.25
+BASKET_SHUFFLE_BAR = 0.01
+LOOKUP_SHUFFLE_BAR = 0.02
 
 
 def trained_or_crash(
     found: type,
     name: str,
-    train: Callable[[nn.Module, int], nn.Module],
+    train: Callable[[nn.Module, int, bool], nn.Module],
+    twin: bool = False,
 ) -> tuple[nn.Module, nn.Module]:
     untrained = expect_module(f"{name}()", seeded_model(found))
 
@@ -2002,11 +2125,45 @@ def trained_or_crash(
         raise Mismatch(f"{name}() has no weights to train. Build it from layers the check can train, not a fixed rule.")
 
     try:
-        trained = train(seeded_model(found), 7)
+        trained = train(seeded_model(found), 7, twin)
     except RuntimeError as error:
         raise Mismatch(f"Training {name} on the small inputs crashed: {error}") from None
 
     return untrained, trained
+
+
+def twin_or_rule(
+    found: type,
+    name: str,
+    train: Callable[[nn.Module, int, bool], nn.Module],
+    measure: Callable[[nn.Module, bool], float],
+    passes: Callable[[float], bool],
+    twin_task: str,
+) -> None:
+    """The same model trained on the problem's twin, where the answer follows another rule. Learned pieces fit
+    both, and a hand written formula with a learned scale fits only one."""
+    _, trained = trained_or_crash(found, name, train, twin=True)
+    score = tested_or_crash(lambda model: measure(model, True), trained, name, "the twin task")
+
+    if not passes(score):
+        raise Mismatch(
+            f"{name} learns the task but not its twin, where {twin_task}. Pieces that learn fit both, so a fixed rule "
+            "is doing the work. Build it from layers that learn the rule.",
+        )
+
+
+def kept_promise(
+    gap: float,
+    bar: float,
+    name: str,
+    change: str,
+    text: str,
+) -> None:
+    if gap > bar:
+        raise Mismatch(
+            f"Trained, {name}'s answers move by {text.format(gap)} when {change}, which leaves the true answer alone. "
+            "Its structure should promise that, so pick layers that can't see the change.",
+        )
 
 
 def tested_or_crash(
@@ -2035,8 +2192,12 @@ def check_bump_counter(found: type) -> None:
     if miss > BUMP_BAR:
         raise Mismatch(
             f"Trained on signals of 16 to 48, BumpCounter misses {miss:.2f} bumps on average on signals of 96. It "
-            f"should miss fewer than {BUMP_BAR}. Ask what the count does as the signal grows.",
+            f"should miss fewer than {BUMP_BAR}. Ask what the count does as the signal grows, and what a bump looks "
+            "like whatever level its signal sits on.",
         )
+
+    kept_promise(bump_shift_gap(trained), BUMP_SHIFT_BAR, "BumpCounter", "the signals move along by 4 places", "{:.2f} bumps")
+    twin_or_rule(found, "BumpCounter", train_bumps, bump_miss, lambda score: score <= BUMP_BAR, "the bumps point down")
 
 
 def check_basket_total(found: type) -> None:
@@ -2053,6 +2214,9 @@ def check_basket_total(found: type) -> None:
             f"should miss less than {BASKET_BAR:.0%}. Ask what a total does as the basket grows.",
         )
 
+    kept_promise(basket_shuffle_gap(trained), BASKET_SHUFFLE_BAR, "BasketTotal", "each basket's items come in a new order", "{:.1%} of a total")
+    twin_or_rule(found, "BasketTotal", train_baskets, basket_miss, lambda score: score <= BASKET_BAR, "each item adds its count over its price")
+
 
 def check_key_lookup(found: type) -> None:
     untrained, trained = trained_or_crash(found, "KeyLookup", train_lookups)
@@ -2068,8 +2232,37 @@ def check_key_lookup(found: type) -> None:
             f"{LOOKUP_BAR:.0%}. Ask whether the query has to find its key among the pairs.",
         )
 
+    kept_promise(lookup_shuffle_gap(trained), LOOKUP_SHUFFLE_BAR, "KeyLookup", "the pairs come in a new order", "{:.1%} of its answers")
+    twin_or_rule(found, "KeyLookup", train_lookups, lookup_share, lambda score: score >= LOOKUP_BAR, "the query is one more than its key")
+
+
+PROMISE_REASONS = {
+    ("bumps", "shuffle"): "Shuffling a signal's places breaks its bumps apart, so the count changes. Which change keeps every bump whole?",
+    ("baskets", "shift"): "A basket's items have no order at all, so any new order keeps its total, not only a shift.",
+    ("lookups", "shift"): "A lookup's pairs have no order at all, so any new order keeps the answer, not only a shift.",
+}
+
+
+def check_promises(value: object) -> None:
+    if not isinstance(value, dict) or set(value) != set(PROMISES):
+        raise Mismatch(f"PROMISES is {value_text(value)}, but it should be a dict with the keys {sorted(PROMISES)}.")
+
+    for problem, promise in PROMISES.items():
+        given = value[problem]
+
+        if given not in ("shift", "shuffle"):
+            raise Mismatch(f"PROMISES[{problem!r}] is {value_text(given)}, but it should be \"shift\" or \"shuffle\".")
+
+        if given != promise:
+            raise Mismatch(f"PROMISES[{problem!r}] is {given!r}. {PROMISE_REASONS[(problem, given)]}")
+
 
 def check_combine5(checker: Checker) -> None:
+    checker.check_name(
+        name="PROMISES",
+        description="names the change each problem's answer ignores",
+        run=check_promises,
+    )
     checker.test_method(
         class_name="BumpCounter",
         method="forward",
@@ -2098,6 +2291,8 @@ COMBINE5 = Exercise(
     source=COMBINE5_SOURCE,
     solution=COMBINE5_SOLUTION,
     hints={
+        "PROMISES": "Ask of each problem which change leaves its true answer alone. A shuffled signal's bumps fall "
+        "apart. A basket's total and a lookup's answer don't care what order their parts come in.",
         "BumpCounter.forward": "A bump means the same anywhere, so slide a small detector along the signal with "
         "nn.Conv1d, as conv4 did. A count grows with the signal, so add up a score per place rather than averaging.",
         "BasketTotal.forward": "The order of the items means nothing, as in sets1. Run one small MLP on every item, "
@@ -2107,7 +2302,7 @@ COMBINE5 = Exercise(
     },
     introduces=(),
     check=check_combine5,
-    time_limit=60,
+    time_limit=120,
     imports_first=OPTIMIZER_IMPORTS,
 )
 
@@ -2137,6 +2332,55 @@ def measure_film(seeds: range = range(3)) -> dict[str, list[tuple[float, float]]
                 torch.manual_seed(seed)
                 model = train_conditioned(make(), (x, condition), y, 1500, seed, 3e-3)
                 results[name].append((conditioned_error(model, test[:2], test[2]), conditioned_error(model, larger[:2], larger[2])))
+
+    return results
+
+
+def film_error_with_mean(
+    model: ReferenceFilmNet,
+    inputs: tuple[Tensor, Tensor],
+    y: Tensor,
+    means: tuple[Tensor, Tensor],
+    averaged: str,
+) -> float:
+    """The paper's test time ablation: the scale or the shift put back to its mean over the training data, so the
+    condition no longer moves it."""
+    x, condition = inputs
+    mean_scale, mean_shift = means
+
+    with torch.no_grad():
+        scale = model.film.to_scale(condition)
+        shift = model.film.to_shift(condition)
+
+        if averaged == "scale":
+            scale = mean_scale.expand_as(scale)
+
+        if averaged == "shift":
+            shift = mean_shift.expand_as(shift)
+
+        h = torch.relu(scale.unsqueeze(1) * model.embed(x) + shift.unsqueeze(1))
+
+        return F.mse_loss(model.head(h.mean(dim=1)).squeeze(1), y).item()
+
+
+def measure_film_ablation(seeds: range = range(3)) -> dict[str, list[float]]:
+    """combine1's second table: the trained FilmNet's error on new inputs with its scale, or its shift, held at
+    the mean over the training data, as in Perez and colleagues' ablation."""
+    x, condition, y = instruction_data(4000, torch.Generator().manual_seed(0))
+    test_x, test_condition, test_y = instruction_data(2000, torch.Generator().manual_seed(1))
+    results: dict[str, list[float]] = {"guess": [test_y.var().item()]}
+
+    with pinned_threads():
+        for seed in seeds:
+            torch.manual_seed(seed)
+            model = train_conditioned(ReferenceFilmNet(), (x, condition), y, 1500, seed, 3e-3)
+
+            with torch.no_grad():
+                means = (model.film.to_scale(condition).mean(dim=0), model.film.to_shift(condition).mean(dim=0))
+
+            for averaged in ("nothing", "shift", "scale"):
+                error = film_error_with_mean(model, (test_x, test_condition), test_y, means, averaged)
+                results.setdefault(averaged, []).append(error)
 
     return results
 
@@ -2203,8 +2447,14 @@ def started_branch(start: str) -> nn.Module:
     return branch
 
 
+BRANCH_RATE = 1e-2
+TRAINED_RATE = 1e-3
+
+
 def measure_branch_starts(seeds: range = range(3)) -> dict[str, object]:
-    """combine3's table: the error at step 0 and step 1,500, with signal on 4,000 examples and without on 64."""
+    """combine3's table, with the branch at its own rate of 0.01 and the trained model at 0.001. For each start,
+    the error at step 0, the worst error checked every 50 steps, how many of those checks sat above the trained
+    model alone, and the error at step 1,500, with signal on 4,000 examples and without on 64."""
     results: dict[str, object] = {}
 
     with pinned_threads():
@@ -2220,12 +2470,17 @@ def measure_branch_starts(seeds: range = range(3)) -> dict[str, object]:
                 for seed in seeds:
                     torch.manual_seed(10 + seed)
                     model = ReferenceWithBranch(copy.deepcopy(base), started_branch(start), 1)
-                    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+                    optimizer = torch.optim.Adam(
+                        [
+                            {"params": model.branch.parameters(), "lr": BRANCH_RATE},
+                            {"params": model.base.parameters(), "lr": TRAINED_RATE},
+                        ],
+                    )
                     generator = torch.Generator().manual_seed(20 + seed)
                     marks = []
 
                     for step in range(1501):
-                        if step in (0, 1500):
+                        if step % 50 == 0:
                             with torch.no_grad():
                                 marks.append(F.mse_loss(model(test_x, test_side), test_y).item())
 
@@ -2235,7 +2490,8 @@ def measure_branch_starts(seeds: range = range(3)) -> dict[str, object]:
                         loss.backward()
                         optimizer.step()
 
-                    runs.append(tuple(marks))
+                    worse = sum(mark > base_error * 1.0001 for mark in marks)
+                    runs.append((marks[0], max(marks), worse, marks[-1]))
 
                 results[f"{'signal' if useful else 'no signal'}, {start}"] = runs
 
@@ -2278,24 +2534,80 @@ def measure_mixing(seeds: range = range(3)) -> dict[str, object]:
     return results
 
 
-def measure_problems(seeds: range = range(3)) -> dict[str, list[float]]:
-    """The right structure and a wrong one for each of combine5's problems, scored as the checks score them."""
+class PlainSumCounter(nn.Module):
+    """A count read off the sum of the signal, with no detector, which a level of its own throws off."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.scale = nn.Parameter(torch.zeros(()))
+
+    def forward(self, signals: Tensor) -> Tensor:
+        return self.scale * signals.sum(dim=1)
+
+
+class LinearBumpCounter(ReferenceBumpCounter):
+    """The detector with no ReLU, so it adds up as one fixed weighting of the signal."""
+
+    def forward(self, signals: Tensor) -> Tensor:
+        return self.score(self.detect(signals.unsqueeze(1))).squeeze(1).sum(dim=1)
+
+
+class RuleBasketTotal(nn.Module):
+    """The total written by hand, with only its scale learned."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.scale = nn.Parameter(torch.zeros(()))
+
+    def forward(self, items: Tensor) -> Tensor:
+        return self.scale * (items[..., 0] * items[..., 1]).sum(dim=1)
+
+
+class RuleKeyLookup(nn.Module):
+    """The match written by hand, keys equal to the query, with only the values' table and head learned."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.value_table = nn.Embedding(IDS, 16)
+        self.head = nn.Linear(16, IDS)
+
+    def forward(
+        self,
+        keys: Tensor,
+        values: Tensor,
+        query: Tensor,
+    ) -> Tensor:
+        weights = (keys == query.unsqueeze(1)).float()
+
+        return self.head((weights.unsqueeze(-1) * self.value_table(values)).sum(dim=1))
+
+
+def measure_problems(seeds: range = range(3)) -> dict[str, list[tuple[float, float, float | None]]]:
+    """The right structure and wrong ones for each of combine5's problems, scored as the checks score them: the
+    score on the bigger inputs, on the twin task, and the move under the change the answer ignores."""
     cases = (
-        ("bumps, sum", ReferenceBumpCounter, train_bumps, bump_miss),
-        ("bumps, mean", MeanBumpCounter, train_bumps, bump_miss),
-        ("baskets, sum", ReferenceBasketTotal, train_baskets, basket_miss),
-        ("baskets, mean", MeanBasketTotal, train_baskets, basket_miss),
-        ("lookups, attention", ReferenceKeyLookup, train_lookups, lookup_share),
-        ("lookups, GRU", GRULookup, train_lookups, lookup_share),
+        ("bumps, sum", ReferenceBumpCounter, train_bumps, bump_miss, bump_shift_gap),
+        ("bumps, mean", MeanBumpCounter, train_bumps, bump_miss, bump_shift_gap),
+        ("bumps, plain sum of the signal", PlainSumCounter, train_bumps, bump_miss, None),
+        ("bumps, no ReLU", LinearBumpCounter, train_bumps, bump_miss, None),
+        ("baskets, sum", ReferenceBasketTotal, train_baskets, basket_miss, basket_shuffle_gap),
+        ("baskets, mean", MeanBasketTotal, train_baskets, basket_miss, basket_shuffle_gap),
+        ("baskets, rule by hand", RuleBasketTotal, train_baskets, basket_miss, None),
+        ("lookups, attention", ReferenceKeyLookup, train_lookups, lookup_share, lookup_shuffle_gap),
+        ("lookups, GRU", GRULookup, train_lookups, lookup_share, lookup_shuffle_gap),
+        ("lookups, match by hand", RuleKeyLookup, train_lookups, lookup_share, None),
     )
-    results: dict[str, list[float]] = {}
+    results: dict[str, list[tuple[float, float, float | None]]] = {}
 
     with pinned_threads():
-        for name, make, train, measure in cases:
+        for name, make, train, measure, gap in cases:
             results[name] = []
 
             for seed in seeds:
                 torch.manual_seed(seed)
-                results[name].append(measure(train(make(), seed)))
+                model = train(make(), seed)
+                torch.manual_seed(seed)
+                twin = train(make(), seed, True)
+                results[name].append((measure(model), measure(twin, True), None if gap is None else gap(model)))
 
     return results

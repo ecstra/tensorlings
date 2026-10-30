@@ -534,7 +534,8 @@ def switch_data(
 
 
 class VariantBlock(nn.Module):
-    """design4's block with each fix on or off, for the lesson's table."""
+    """design4's block with each fix on or off, for the lesson's table. The table's blocks are loud: no norm, and up
+    and down drawn with Kaiming's start, so a block that doesn't start as the identity changes its input a lot."""
 
     def __init__(
         self,
@@ -542,14 +543,19 @@ class VariantBlock(nn.Module):
         zero_start: bool,
         soft_gate: bool,
         residual: bool,
+        loud: bool = False,
     ) -> None:
         super().__init__()
-        self.norm = nn.LayerNorm(size)
+        self.norm = None if loud else nn.LayerNorm(size)
         self.gate = nn.Linear(size, size)
         self.up = nn.Linear(size, 4 * size)
         self.down = nn.Linear(4 * size, size)
         self.soft_gate = soft_gate
         self.residual = residual
+
+        if loud:
+            nn.init.kaiming_normal_(self.up.weight, nonlinearity="relu")
+            nn.init.kaiming_normal_(self.down.weight, nonlinearity="relu")
 
         if zero_start:
             with torch.no_grad():
@@ -557,7 +563,7 @@ class VariantBlock(nn.Module):
                 self.down.bias.zero_()
 
     def forward(self, x: Tensor) -> Tensor:
-        h = self.norm(x)
+        h = x if self.norm is None else self.norm(x)
         score = self.gate(h)
         gate = torch.sigmoid(score) if self.soft_gate else (score > 0).float()
         branch = gate * self.down(F.relu(self.up(h)))
@@ -892,6 +898,12 @@ def check_recall_batch(
     if torch.equal(queries, keys):
         raise Mismatch(f"{call} asks every sequence's keys in the order they were stored. Draw a new order with torch.randperm.")
 
+    # Where each query sat among its sequence's keys. One order for the whole batch would let a model learn the order.
+    orders = (queries.unsqueeze(2) == keys.unsqueeze(1)).int().argmax(dim=2)
+
+    if count > 1 and (orders == orders[0]).all():
+        raise Mismatch(f"{call} asks every sequence's keys in the same new order. Draw a new order for each sequence.")
+
     if (targets[:, : 2 * pairs] != -100).any():
         raise Mismatch(f"{call}'s targets should be -100 at the {2 * pairs} places of the pairs, so the loss skips them.")
 
@@ -1030,8 +1042,8 @@ DESIGN2_LESSON = prose(
 
     The diagnosis says what to change. A model that failed to fit needs a layer
     that can express the skill, or a fix to its training, which design4 checks.
-    More data won't help it. The GRU's fixed state can't hold 8 pairs, as
-    attention6 found.
+    More data won't help it. The GRU never left design1's shortcut, at 4 pairs
+    as at 8, and two attention layers recalled every pair.
 
     A model that failed to generalize needs more data, or a layer whose shape
     matches the task. With 256 sequences, two seeds found the skill and one
@@ -1079,9 +1091,10 @@ DESIGN2_SOURCE = source_file(
 
     # TODO: Train model with torch.optim.AdamW at lr=1e-3 for steps steps. Each
     #   step takes a batch from next_batch() and the cross entropy over every
-    #   place. Every every steps, counting from 1, add (step, query_accuracy of
-    #   the scores it just trained on, query_accuracy on held) to the curve, the
-    #   held out one inside torch.no_grad(). Return the curve.
+    #   place. Every every steps, counting from 1, after that step's update,
+    #   add (step, query_accuracy of the scores it just trained on,
+    #   query_accuracy on held) to the curve, the held out one inside
+    #   torch.no_grad(). Return the curve.
     def track(
         model: nn.Module,
         next_batch: Callable[[], tuple[Tensor, Tensor]],
@@ -1158,8 +1171,15 @@ class HeldRecorder:
 
 def small_recaller() -> nn.Module:
     torch.manual_seed(0)
+    model = RECALL_REFERENCE["AttentionRecaller"](2, 16)
 
-    return RECALL_REFERENCE["AttentionRecaller"](2, 16)
+    # The keys' third of c_attn's bias gets a true gradient of 0, since the softmax ignores a shift every key shares.
+    # Its float noise differs between valid ways of writing the loss, and AdamW scales noise up to real steps, so
+    # the check's model leaves that bias out.
+    for layer in model.layers:
+        layer.c_attn.bias = None
+
+    return model
 
 
 def check_track(
@@ -1348,8 +1368,8 @@ DESIGN3_LESSON = prose(
 
     This model is attention over a memory of labelled points, with one hot
     labels as the values. Matching Networks, by Vinyals and colleagues, use the
-    same form with cosine similarity. They note it covers both nearest
-    neighbours and kernel density estimates.
+    same form with cosine similarity. They note it covers nearest neighbours
+    as a special case.
     """,
 )
 
@@ -1376,6 +1396,7 @@ DESIGN3_SOURCE = source_file(
     #   and queries (episodes, queries, FEATURES). Find each query's distances
     #   to memory, keep the k nearest, count their labels' votes over CLASSES,
     #   and return the class with the most votes, of shape (episodes, queries).
+    #   A tie goes to the lowest class among the tied, as argmax does.
     def knn_predict(
         memory: Tensor,
         labels: Tensor,
@@ -1568,30 +1589,35 @@ DESIGN4_LESSON = prose(
     the gradient to the layers before it on that first pass, though. So
     `silent_after_one_step` takes one step on a copy of the model, then looks.
 
-    Here are 12 gated blocks, `x + gate * branch(x)`, each variant trained
-    1,500 steps. The task suits a gate. It answers input 0 when input 1 is
-    above 0, and input 2 when it isn't. The error is the mean squared error on
-    new inputs, and always answering 0 gets 1.00.
+    Here are 48 gated blocks, `x + gate * branch(x)`, each variant trained 500
+    steps. They have no norm, and up and down start with Kaiming's draw, as a
+    deep model built without care would. The task answers input 0 when input 1
+    is above 0, and input 2 when it isn't. The error is the mean squared error
+    on new inputs, and always answering 0 gets 1.00.
 
     | Variant | Identity gap | Silent after one step | Held out error |
     |---|---|---|---|
-    | as designed | 0 | 0 | 0.016 to 0.032 |
-    | random start | 0.66 to 0.79 | 0 | 0.016 to 0.023 |
-    | hard gate, `(score > 0).float()` | 0 | 24 | 0.015 to 0.026 |
-    | no residual | 2.6 to 2.8 | 0 | 0.023 to 0.050 |
+    | as designed | 0 | 0 | 0.038 to 0.044 |
+    | random start | 3.5 to 3.9 | 0 | 2e12 to 2e13 |
+    | hard gate, `(score > 0).float()` | 0 | 96 | 0.050 to 0.077 |
+    | no residual | 4.7 to 5.5 | 0 | 1.00 |
 
-    Every variant trained, so the loss alone would pass all four. The checks
-    show which ones aren't the module that was designed. The hard gate's 24
-    gate parameters never moved, so its gates stayed as drawn and the rest of
-    the model worked around them. Credit for the result would go to a gate
-    that did nothing. Two variants change their input before learning
-    anything at all.
+    The identity start is what lets 48 loud blocks train. A random start
+    moves each block's input by up to 3.9, the changes compound through 48
+    blocks, and the error never comes down. Bachlechner and colleagues' ReZero
+    starts every residual branch at zero too, with one zero scale per branch,
+    and trained 120 layer transformers with it. Without the residual, the
+    stack learned nothing.
 
-    Why the identity start matters shows when a block goes into a model that
-    already works. Insert one new block in the middle of the trained stack.
-    Started at zero, the held out error stays exactly where it was. Started at
-    random, it doubled on one seed, went up 6 times on another, and barely
-    moved on the third.
+    The hard gate trained, so the loss alone would pass it. Its 96 gate
+    tensors, 50,688 numbers, got no gradient and never moved. Its gates stayed
+    as drawn, and the rest of the model worked around them. Credit for the
+    result would go to a gate that did nothing.
+
+    The identity start matters again when a block goes into a model that
+    already works. Insert one new loud block in the middle of the trained
+    stack. Started at zero, the held out error stays exactly where it was.
+    Started at random, it rose 1.6 to 3.8 times on every seed.
 
     The block in your file has two of these faults. Fix it so both checks
     pass.
@@ -1705,6 +1731,20 @@ def dead_start() -> nn.Module:
 
     with torch.no_grad():
         model[0].bias.fill_(-50.0)
+
+    return model
+
+
+def dies_after_step() -> nn.Module:
+    """Hidden ReLUs that are on at the start and all off after one step of SGD at 0.1. Every layer gets a gradient on
+    the first pass and only the last bias on the second, so a missing zero_grad shows."""
+    model = nn.Sequential(nn.Linear(4, 6), nn.ReLU(), nn.Linear(6, 1))
+
+    with torch.no_grad():
+        model[0].weight.zero_()
+        model[0].bias.fill_(0.05)
+        model[2].weight.fill_(1.0)
+        model[2].bias.fill_(2.0)
 
     return model
 
@@ -1834,6 +1874,7 @@ def check_design4(checker: Checker) -> None:
         (zero_stack, "two residual blocks with their last layer at zero", 990),
         (hard_gate_stack, "the GatedBlock in your file between two Linears", 991),
         (dead_start, "a model whose hidden ReLUs all start below 0", 992),
+        (dies_after_step, "a model whose hidden ReLUs all die after one step", 992),
     ):
         checker.test(
             function="silent_after_one_step",
@@ -1923,13 +1964,16 @@ DESIGN5_LESSON = prose(
     2 layer attention, trained on 8 pairs, got this share of queries right on
     new sequences, the range over 3 seeds.
 
-    | Pairs | 4 | 8 | 12 | 16 |
+    | Positions in training | 4 pairs | 8 | 12 | 16 |
     |---|---|---|---|---|
-    | Right | 98.2% to 99.8% | 100% | 66.8% to 68.3% | 52.2% to 52.7% |
+    | 0 to 23 | 98.2% to 99.8% | 100% | 66.8% to 68.3% | 52.2% to 52.7% |
+    | from a random start | 99.5% to 99.8% | 99.9% to 100% | 99.8% to 99.9% | 97.6% to 99.4% |
 
-    Its learned positions past the 24 places of training never trained, so it
-    breaks past them. Test at the lengths the module will meet, not only the
-    ones it learned.
+    The test caught the break, and the diagnosis is its learned positions.
+    Training sequences fill places 0 to 23, so the positions past them never
+    trained. The fix starts each batch's positions at a random place among all
+    96, as Kiyono and colleagues' SHAPE shifts them, so every position trains.
+    Test at the lengths the module will meet, not only the ones it learned.
     """,
 )
 
@@ -2267,20 +2311,25 @@ HEALTH_VARIANTS = {
     "no residual": {"zero_start": False, "soft_gate": True, "residual": False},
 }
 
+# Deep enough that a start which isn't the identity compounds, as ReZero's deep stacks did.
+HEALTH_DEPTH = 48
+HEALTH_STEPS = 500
 
-def measure_health(seeds: range = range(3)) -> dict[str, list[tuple[float, int, float]]]:
-    """design4's table: for each variant, the largest identity gap of its 12 blocks at the start, how many
-    parameters stay silent after one step, and the held out error after 1,500 steps of Adam at 0.001."""
+
+def measure_health(seeds: range = range(3)) -> dict[str, list[tuple[float, int, float, float]]]:
+    """design4's table: for each variant of 48 loud blocks, the largest identity gap at the start, how many
+    parameters stay silent after one step, how many numbers those hold, and the held out error after 500 steps of
+    Adam at 0.001."""
     held_x, held_y = switch_data(4000, torch.Generator().manual_seed(99))
     identity_gap = HEALTH_REFERENCE["identity_gap"]
     silent_after_one_step = HEALTH_REFERENCE["silent_after_one_step"]
-    results: dict[str, list[tuple[float, int, float]]] = {"always 0": [(0.0, 0, (held_y**2).mean().item())]}
+    results: dict[str, list[tuple[float, int, float, float]]] = {"always 0": [(0.0, 0, 0.0, (held_y**2).mean().item())]}
 
     with pinned_threads():
         for name, kinds in HEALTH_VARIANTS.items():
             for seed in seeds:
                 torch.manual_seed(seed)
-                model = BlockStack(lambda: VariantBlock(BLOCK_SIZE, **kinds))
+                model = BlockStack(lambda: VariantBlock(BLOCK_SIZE, **kinds, loud=True), HEALTH_DEPTH)
 
                 with torch.no_grad():
                     h = model.inp(held_x[:256])
@@ -2291,7 +2340,7 @@ def measure_health(seeds: range = range(3)) -> dict[str, list[tuple[float, int, 
                 optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
                 generator = torch.Generator().manual_seed(seed + 1)
 
-                for _ in range(1500):
+                for _ in range(HEALTH_STEPS):
                     x, y = switch_data(128, generator)
                     loss = F.mse_loss(model(x), y)
                     optimizer.zero_grad()
@@ -2301,13 +2350,14 @@ def measure_health(seeds: range = range(3)) -> dict[str, list[tuple[float, int, 
                 with torch.no_grad():
                     error = F.mse_loss(model(held_x), held_y).item()
 
-                results.setdefault(name, []).append((gap, len(silent), error))
+                numbers = sum(parameter.numel() for parameter_name, parameter in model.named_parameters() if parameter_name in silent)
+                results.setdefault(name, []).append((gap, len(silent), numbers, error))
 
     return results
 
 
 def measure_insertion(seeds: range = range(3)) -> dict[str, list[tuple[float, float]]]:
-    """Why the identity start matters: a trained stack's held out error before and after one new block goes
+    """Why the identity start matters: a trained stack's held out error before and after one new loud block goes
     in at the middle, started at zero or at random."""
     held_x, held_y = switch_data(4000, torch.Generator().manual_seed(99))
     results: dict[str, list[tuple[float, float]]] = {}
@@ -2315,11 +2365,14 @@ def measure_insertion(seeds: range = range(3)) -> dict[str, list[tuple[float, fl
     with pinned_threads():
         for seed in seeds:
             torch.manual_seed(seed)
-            model = BlockStack(lambda: VariantBlock(BLOCK_SIZE, zero_start=True, soft_gate=True, residual=True))
+            model = BlockStack(
+                lambda: VariantBlock(BLOCK_SIZE, zero_start=True, soft_gate=True, residual=True, loud=True),
+                HEALTH_DEPTH,
+            )
             optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
             generator = torch.Generator().manual_seed(seed + 1)
 
-            for _ in range(1500):
+            for _ in range(HEALTH_STEPS):
                 x, y = switch_data(128, generator)
                 loss = F.mse_loss(model(x), y)
                 optimizer.zero_grad()
@@ -2332,7 +2385,10 @@ def measure_insertion(seeds: range = range(3)) -> dict[str, list[tuple[float, fl
                 for name, zero_start in (("new block at zero", True), ("new block at random", False)):
                     torch.manual_seed(seed + 10)
                     grown = copy.deepcopy(model)
-                    grown.blocks.insert(6, VariantBlock(BLOCK_SIZE, zero_start=zero_start, soft_gate=True, residual=True))
+                    grown.blocks.insert(
+                        HEALTH_DEPTH // 2,
+                        VariantBlock(BLOCK_SIZE, zero_start=zero_start, soft_gate=True, residual=True, loud=True),
+                    )
                     results.setdefault(name, []).append((before, F.mse_loss(grown(held_x), held_y).item()))
 
     return results
@@ -2365,18 +2421,54 @@ def measure_properties() -> dict[str, tuple[float, float, float | None]]:
     return results
 
 
-def measure_lengthening(seeds: range = range(3)) -> dict[int, list[float]]:
-    """design5's second table: the 2 layer attention trained on 8 pairs, scored on new sequences of each length."""
-    results: dict[int, list[float]] = {}
+class RandomPositionsRecaller(RECALL_REFERENCE["AttentionRecaller"]):
+    """In training, each batch's positions start at a random place among the 96, so every position trains. In use
+    it reads positions 0 onwards, as before."""
+
+    def __init__(
+        self,
+        layers: int,
+        seed: int,
+    ) -> None:
+        super().__init__(layers)
+        self.picker = torch.Generator().manual_seed(seed)
+
+    def forward(self, tokens: Tensor) -> Tensor:
+        steps = tokens.shape[1]
+
+        start = 0
+
+        if self.training:
+            start = int(torch.randint(0, self.positions.num_embeddings - steps + 1, (1,), generator=self.picker))
+
+        places = torch.arange(steps) + start
+
+        x = self.ids(tokens) + self.positions(places)
+
+        for norm, layer in zip(self.norms, self.layers):
+            x = x + layer(norm(x))
+
+        return self.head(self.norm(x))
+
+
+def measure_lengthening(seeds: range = range(3)) -> dict[tuple[str, int], list[float]]:
+    """design5's second table: the 2 layer attention trained on 8 pairs, with learned positions as they were and with
+    each training batch's positions starting at a random place, scored on new sequences of each length."""
+    results: dict[tuple[str, int], list[float]] = {}
 
     with pinned_threads():
         for seed in seeds:
-            model = recall_model("attention, 2 layers", 8, seed)
-            DIAGNOSE_REFERENCE["track"](model, fresh_batches(8, seed + 1), held_out(8), 1500, 1500)
+            plain = recall_model("attention, 2 layers", 8, seed)
+            torch.manual_seed(seed)
+            fixed = RandomPositionsRecaller(2, 500 + seed)
 
-            with torch.no_grad():
-                for pairs in (4, 8, 12, 16):
-                    tokens, targets = held_out(pairs)
-                    results.setdefault(pairs, []).append(RECALL_REFERENCE["query_accuracy"](model(tokens), targets))
+            for name, model in (("positions as trained", plain), ("random positions in training", fixed)):
+                DIAGNOSE_REFERENCE["track"](model, fresh_batches(8, seed + 1), held_out(8), 1500, 1500)
+                model.eval()
+
+                with torch.no_grad():
+                    for pairs in (4, 8, 12, 16):
+                        tokens, targets = held_out(pairs)
+                        results.setdefault((name, pairs), []).append(RECALL_REFERENCE["query_accuracy"](model(tokens), targets))
 
     return results
