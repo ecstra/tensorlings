@@ -460,7 +460,7 @@ SAMPLING2_SOLUTION = source_file(
 
 def check_sample_with(found: object) -> None:
     for logits, temperature, top_k, top_p, seed in (
-        (FLAT, 0.7, 6, 0.5, 654),
+        (FLAT, 0.7, 6, 0.6, 654),
         (PEAKED, 2.0, 4, 0.95, 655),
         (torch.tensor([0.2, -0.4, 1.3, 0.9, 0.0]), 1.0, 5, 0.6, 656),
     ):
@@ -496,7 +496,7 @@ def check_sampling2(checker: Checker) -> None:
         inputs=(
             (PEAKED, 0.9),
             (FLAT, 0.9),
-            (FLAT, 0.3),
+            (FLAT, 0.45),
         ),
         reference=reference_kept_count,
         expect=expect_value,

@@ -861,6 +861,14 @@ def measure_code_spaces() -> dict[str, float]:
         matched = SHARE_REFERENCE["matched_codes"](codes, 1000, torch.Generator().manual_seed(9))
         results[f"{name} matched"] = decoded(model.decoder, classifier, matched, 0.9)
 
+    with torch.no_grad():
+        means, log_variances = vae.encoder(train_x[:20000])
+
+    own_spreads = torch.exp(0.5 * log_variances)
+    drawn = means + own_spreads * torch.randn(means.shape, generator=torch.Generator().manual_seed(0))
+    results["vae own spread"] = own_spreads.mean().item()
+    results["vae drawn code spread"] = drawn.std(dim=0).mean().item()
+
     return results
 
 
@@ -872,8 +880,14 @@ VAE3_LESSON = prose(
 
     An autoencoder puts its codes wherever training pushed them. Here an
     autoencoder and a VAE, each with a code of 16 numbers, trained 4,000
-    steps on MNIST. The autoencoder's code numbers spread about 4.0 on
-    average, and the VAE's about 1.0, since its KL pulls them toward 1.
+    steps on MNIST. Across images, the autoencoder's code numbers spread
+    about 4.0 on average. The VAE's means spread about 1.0.
+
+    That 1.0 comes from a balance. Reconstruction pushes the means apart so
+    each image keeps its own code, and the KL pulls each mean toward 0. Each
+    code's own spread stays near 0.27, far below the 1 the KL asks for. Drawn
+    with that noise, the codes of all images together spread about 1.04, close
+    to the standard normal.
 
     A new digit means drawing a code and decoding it. A digit classifier, a
     small MLP that gets 97.4% of new images right, judges each one. The table

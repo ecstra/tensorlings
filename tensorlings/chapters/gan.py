@@ -238,6 +238,59 @@ def ring_scores(generator: nn.Module) -> tuple[int, float]:
     return REFERENCE["coverage"](samples, REFERENCE["mode_centers"](8), 0.2)
 
 
+def train_ring_vae(
+    seed: int,
+    steps: int,
+    sigma: float,
+) -> nn.Module:
+    """gan3's VAE on the ring, with the GAN's layers and batches. Its reconstruction is the squared error over
+    2 * sigma ** 2, the negative log density of a normal of spread sigma, so halving sigma weighs it 4 times higher."""
+    torch.manual_seed(seed)
+    encoder = REFERENCE["mlp"](2, 4)
+    decoder = REFERENCE["mlp"](2, 2)
+    optimizer = torch.optim.Adam([*encoder.parameters(), *decoder.parameters()], lr=1e-3)
+    rng = torch.Generator().manual_seed(seed + 100)
+
+    for _ in range(steps):
+        real = REFERENCE["ring_points"](256, 8, rng)
+        mean, log_variance = encoder(real).chunk(2, dim=1)
+        code = mean + torch.exp(0.5 * log_variance) * torch.randn(256, 2, generator=rng)
+
+        reconstruction = ((real - decoder(code)) ** 2).sum(dim=1) / (2 * sigma**2)
+        kl = 0.5 * (mean**2 + log_variance.exp() - 1 - log_variance).sum(dim=1)
+        loss = (reconstruction + kl).mean()
+
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+    return decoder
+
+
+def measure_ring_models() -> dict[str, list[tuple[float, int, float]]]:
+    """Every number of gan3's first table and of its stronger reconstruction, as the mean distance to the nearest
+    mode, the modes covered and the share near a mode for each seed. A few minutes on a laptop CPU. Not run by any
+    check."""
+    centers = REFERENCE["mode_centers"](8)
+
+    def scores(samples: Tensor) -> tuple[float, int, float]:
+        covered, near = REFERENCE["coverage"](samples, centers, 0.2)
+
+        return REFERENCE["nearest_distance"](samples, centers), covered, near
+
+    def drawn(model: nn.Module) -> Tensor:
+        return REFERENCE["sample"](model, 2000, torch.Generator().manual_seed(7))
+
+    seeds = range(3)
+
+    return {
+        "data": [scores(REFERENCE["ring_points"](2000, 8, torch.Generator().manual_seed(7)))],
+        "gan": [scores(drawn(train_gan(REFERENCE["train_step"], seed, 2000, 1e-3))) for seed in seeds],
+        "vae, sigma 0.1": [scores(drawn(train_ring_vae(seed, 2000, 0.1))) for seed in seeds],
+        "vae, sigma 0.05": [scores(drawn(train_ring_vae(seed, 2000, 0.05))) for seed in seeds],
+    }
+
+
 # ---------------------------------------------------------------------------
 # gan1
 # ---------------------------------------------------------------------------

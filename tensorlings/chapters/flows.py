@@ -345,6 +345,11 @@ def bend(v: Tensor) -> Tensor:
     return torch.stack([v[0] + 0.5 * torch.sin(v[1]), v[1] * torch.exp(0.3 * v[0])])
 
 
+# A determinant of -2, so only the log of its size exists.
+def swap(v: Tensor) -> Tensor:
+    return torch.stack([v[1], 2 * v[0]])
+
+
 def check_flow1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
@@ -375,6 +380,7 @@ def check_flow1(checker: Checker) -> None:
         inputs=(
             (Described(squeeze, "g(v) = (v0 / 2, 3 v1 + v0)"), torch.tensor([0.4, -1.0])),
             (Described(bend, "g(v) = (v0 + sin(v1) / 2, v1 exp(0.3 v0))"), torch.tensor([1.0, 2.0])),
+            (Described(swap, "g(v) = (v1, 2 v0)"), torch.tensor([0.5, -1.5])),
         ),
         reference=REFERENCE["log_abs_det"],
         expect=expect_tensor,
@@ -386,6 +392,7 @@ def check_flow1(checker: Checker) -> None:
         inputs=(
             (Described(squeeze, "g(v) = (v0 / 2, 3 v1 + v0)"), torch.tensor([0.4, -1.0])),
             (Described(bend, "g(v) = (v0 + sin(v1) / 2, v1 exp(0.3 v0))"), torch.tensor([1.0, 2.0])),
+            (Described(swap, "g(v) = (v1, 2 v0)"), torch.tensor([0.5, -1.5])),
         ),
         reference=REFERENCE["flow_log_prob"],
         expect=expect_tensor,
@@ -596,7 +603,7 @@ FLOW2 = Exercise(
 FLOW3_LESSON = prose(
     """
     A flow of 8 coupling layers, taking turns, learns two moons, two curved
-    arcs of points. Its training is maximum likelihood, as in likelihood2.
+    arcs of points. Its training is maximum likelihood, as in likelihood3.
     The loss is the mean of `-log p(x)` over a batch, and the change of
     variables gives `log p(x)` exactly.
 
@@ -607,7 +614,9 @@ FLOW3_LESSON = prose(
     each one's `inverse`.
 
     Here it is against the best single normal, fitted with the data's own
-    mean and spread. A sample counts as on the moons within 0.15 of the arcs.
+    mean and covariance. The covariance holds each number's spread and how
+    the two numbers vary together. A sample counts as on the moons within
+    0.15 of the arcs.
 
     | Model | Mean log density of new points | Samples on the moons |
     |---|---|---|
@@ -773,6 +782,19 @@ def check_flow_sample(found: type) -> None:
 
 
 def check_train_flow(found: object) -> None:
+    last_losses: list[object] = []
+
+    for train in (found, REFERENCE["train_flow"]):
+        torch.manual_seed(0)
+        last_losses.append(train(REFERENCE["Flow"](8), 30, torch.Generator().manual_seed(0)))
+
+    expect_close(
+        call="the last loss from train_flow(Flow(8), 30, a generator seeded with 0)",
+        actual=last_losses[0],
+        expected=last_losses[1],
+        tolerance=1e-4,
+    )
+
     torch.manual_seed(0)
     flow = REFERENCE["Flow"](8)
     found(flow, 250, torch.Generator().manual_seed(0))

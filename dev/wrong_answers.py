@@ -1331,6 +1331,10 @@ CASES: list[tuple[str, str, str, str]] = [
     ("quiz11", "subspace_gap skips the QR", "difference = q_a @ q_a.T - q_b @ q_b.T", "difference = a @ a.T - b @ b.T"),
     ("quiz11", "subspace_gap never divides", "return (difference.norm() / math.sqrt(2 * a.shape[1])).item()", "return difference.norm().item()"),
     ("quiz11", "subspace_gap divides by the square root of k", "math.sqrt(2 * a.shape[1])", "math.sqrt(a.shape[1])"),
+    ("flow1", "log_abs_det uses torch.logdet", "    return torch.linalg.slogdet(jacobian).logabsdet", "    return torch.logdet(jacobian)"),
+    ("flow1", "log_abs_det takes the log of the signed determinant", "    return torch.linalg.slogdet(jacobian).logabsdet", "    return torch.log(torch.det(jacobian))"),
+    ("flow3", "train_flow returns nothing", "    return loss.item()", "    return None"),
+    ("flow3", "train_flow returns a made up loss", "    return loss.item()", "    return 0.0"),
     ("conv5", "pointwise reshapes the wrong way", "return (weight @ x.reshape(c, -1)).reshape(-1, h, w)", "return (weight @ x.reshape(-1, c).T).reshape(-1, h, w)"),
 ]
 
