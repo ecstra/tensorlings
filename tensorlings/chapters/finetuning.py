@@ -229,9 +229,9 @@ FINETUNE1_LESSON = prose(
     Project Gutenberg. Download it once with `.venv/bin/python run.py data
     gutenberg`.
 
-    The model reads only its own 65 characters. Persuasion holds 1,833 others,
-    mostly double quotes, 0.4% of the book. `encode_known` drops them, so the
-    vocabulary and every trained weight stay as they are.
+    The model reads only its own 65 characters. Persuasion uses 15 others,
+    1,833 times in all, mostly double quotes, 0.4% of the book. `encode_known`
+    drops them, so the vocabulary and every trained weight stay as they are.
 
     ```python
     known = {"a", "b"}
@@ -323,8 +323,8 @@ FINETUNE1_SOURCE = source_file(
     # TODO: Train model for steps steps with AdamW at the fixed rate lr, betas of
     #   (0.9, 0.95) and no weight decay. Each step draws a batch of 32 from data
     #   with get_batch, model.block_size long, moved to device. Take the cross
-    #   entropy as gpt3 did, zero the old gradients, backpropagate and step.
-    #   Return every step's loss as a plain number.
+    #   entropy as gpt3 did, zero the old gradients, backpropagate and step,
+    #   with no clipping. Return every step's loss as a plain number.
     def fine_tune(
         model: nn.Module,
         data: Tensor,
@@ -409,38 +409,81 @@ def small_data(seed: int) -> Tensor:
     return torch.randint(0, 20, (300,), generator=torch.Generator().manual_seed(seed))
 
 
-def check_fine_tune(found: object) -> None:
-    """Two steps, so gradients never zeroed show, from the same small GPT and the same batches as the reference."""
-    results = []
+def expect_ids(
+    call: str,
+    actual: object,
+    expected: Tensor,
+) -> None:
+    expect_tensor(
+        call=call,
+        actual=actual,
+        expected=expected,
+    )
 
-    for train in (found, FINE_TUNE_REFERENCE["fine_tune"]):
-        model = small_gpt()
-        losses = train(model, small_data(760), 2, 0.01, torch.Generator().manual_seed(761), torch.device("cpu"))
-        results.append((losses, model.wte.weight.detach().clone(), model.h[0].attn.c_attn.bias.detach().clone()))
-
-    (losses, weight, bias), (expected_losses, expected_weight, expected_bias) = results
-
-    if not isinstance(losses, list) or len(losses) != 2:
-        raise Mismatch(f"fine_tune for 2 steps should return a list of 2 losses, but it returned {losses!r}.")
-
-    for number, (loss, expected_loss) in enumerate(zip(losses, expected_losses), start=1):
-        expect_close(
-            call=f"fine_tune's loss on step {number}, batches of 32 from 300 tokens",
-            actual=loss,
-            expected=expected_loss,
-            tolerance=1e-5,
+    if actual.dtype.is_floating_point:
+        raise Mismatch(
+            f"{call} holds {actual.dtype} numbers, but ids are whole numbers, which nn.Embedding and F.cross_entropy "
+            "need. Make it with torch.tensor of whole numbers, not torch.Tensor.",
         )
 
-    expect_tensor(
-        call="wte's weights after two steps of fine_tune at 0.01",
-        actual=weight,
-        expected=expected_weight,
-    )
-    expect_tensor(
-        call="the first block's c_attn bias after two steps of fine_tune",
-        actual=bias,
-        expected=expected_bias,
-    )
+
+def loud_gpt() -> nn.Module:
+    """The small GPT with its table 5 times larger, so its first gradients pass a norm of 1 and clipping would show."""
+    model = small_gpt()
+
+    with torch.no_grad():
+        model.wte.weight.mul_(5.0)
+
+    return model
+
+
+def train_small(
+    train: object,
+    model: nn.Module,
+) -> list[float]:
+    try:
+        return train(model, small_data(760), 2, 0.01, torch.Generator().manual_seed(761), torch.device("cpu"))
+    except IndexError:
+        raise Mismatch(
+            f"fine_tune crashed with an index out of range. The check's small GPT reads {model.block_size} tokens, "
+            "so draw each batch model.block_size long, not BLOCK_SIZE.",
+        ) from None
+
+
+def check_fine_tune(found: object) -> None:
+    """Two steps, so gradients never zeroed show, from the same small GPT and the same batches as the reference.
+    The loud GPT's gradients pass a norm of 1, so a clipped step shows too."""
+    for make, name in ((small_gpt, "a small GPT"), (loud_gpt, "a small GPT with a large table")):
+        results = []
+
+        for train in (found, FINE_TUNE_REFERENCE["fine_tune"]):
+            model = make()
+            losses = train_small(train, model)
+            results.append((losses, model.wte.weight.detach().clone(), model.h[0].attn.c_attn.bias.detach().clone()))
+
+        (losses, weight, bias), (expected_losses, expected_weight, expected_bias) = results
+
+        if not isinstance(losses, list) or len(losses) != 2:
+            raise Mismatch(f"fine_tune for 2 steps should return a list of 2 losses, but it returned {losses!r}.")
+
+        for number, (loss, expected_loss) in enumerate(zip(losses, expected_losses), start=1):
+            expect_close(
+                call=f"fine_tune's loss on {name}, step {number}, batches of 32 from 300 tokens",
+                actual=loss,
+                expected=expected_loss,
+                tolerance=1e-5,
+            )
+
+        expect_tensor(
+            call=f"wte's weights of {name} after two steps of fine_tune at 0.01",
+            actual=weight,
+            expected=expected_weight,
+        )
+        expect_tensor(
+            call=f"the first block's c_attn bias of {name} after two steps of fine_tune",
+            actual=bias,
+            expected=expected_bias,
+        )
 
 
 def check_fine_tune_device(found: object) -> None:
@@ -515,7 +558,7 @@ def check_finetune1(checker: Checker) -> None:
             ("(question)\nto be", Described(SAMPLE_CHARACTERS, "the characters of a line of Hamlet")),
         ),
         reference=FINE_TUNE_REFERENCE["encode_known"],
-        expect=expect_tensor,
+        expect=expect_ids,
     )
     checker.test(
         function="fine_tune",
@@ -661,8 +704,6 @@ FINETUNE2_LESSON = prose(
 FINETUNE2_SOURCE = source_file(
     '''
     # finetune2.py
-    #
-    # Needs your trained model from gpt3, in checkpoints/gpt3.pt.
 
     import math
 
@@ -766,7 +807,8 @@ def training_flags(model: nn.Module) -> dict[str, bool]:
 
 def check_freeze_except(found: object) -> None:
     """Each choice from a model that trains whole and from one frozen whole, so both freezing and thawing show."""
-    for prefixes in (("h.1.", "ln_f"), ("wte",), ("",), ("h.0.attn.", "wpe")):
+    # No name starts with "attn.", so it freezes everything, while a prefix found mid name would not.
+    for prefixes in (("h.1.", "ln_f"), ("wte",), ("",), ("h.0.attn.", "wpe"), ("attn.",)):
         for start_frozen in (False, True):
             model = small_gpt()
             reference = small_gpt()

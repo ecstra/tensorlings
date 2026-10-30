@@ -169,7 +169,11 @@ LORA1_LESSON = prose(
 
     A Linear computes `W x`. LoRA keeps `W` frozen and adds `B A x`. `A` maps
     the input down to `rank` numbers and `B` maps them back up. So `B A` is a
-    matrix as big as `W`, with a rank of at most `rank`.
+    matrix as big as `W`.
+
+    A matrix's **rank** is how many independent directions its outputs can
+    point in. Every output of `B A` passes through `rank` numbers first, so
+    its rank is at most `rank`.
 
     ```text
     out = W x + (alpha / rank) * B A x
@@ -193,9 +197,10 @@ LORA1_LESSON = prose(
     and never tunes it. Here `alpha` is 4.
 
     The paper adapts the attention weights only and freezes the MLPs. For
-    GPT-3, with a fixed number of weights to spend, it found that adapting
-    the query and the value weights did best.
-    GPT-2's attention makes q, k and v with one Linear, `c_attn`, so
+    GPT-3, with a fixed number of weights to spend, splitting them between
+    the query and value weights beat spending them all on one. Its own table
+    shows all four attention weights at a smaller rank doing as well or
+    better. GPT-2's attention makes q, k and v with one Linear, `c_attn`, so
     `add_lora` wraps that one in each block, which adapts all three.
 
     Freeze the whole model first, then wrap. The new `A` and `B` are made
@@ -247,7 +252,7 @@ LORA1_SOURCE = source_file(
             super().__init__()
             ...
 
-        # TODO: Return base of x plus x through A then B, times scale.
+        # TODO: Return base of x plus scale times x through A then B.
         def forward(self, x: Tensor) -> Tensor:
             ...
 
@@ -399,7 +404,7 @@ def check_add_lora(found: object) -> None:
         wanted = sorted(f"h.{index}.attn.c_attn.{name}" for index in range(len(model.h)) for name in ("A", "B"))
 
         if training != wanted:
-            raise Mismatch(f"After add_lora, only every A and B should train, but these train: {', '.join(training[:4])}.")
+            raise Mismatch(f"After add_lora, only every A and B should train, but these train: {', '.join(training[:4]) or 'nothing'}.")
 
         with torch.no_grad():
             actual = model(ids)
@@ -560,7 +565,8 @@ LORA2_SOURCE = source_file(
 
     # TODO: Return a new nn.Linear that gives the same outputs as layer. Its
     #   weight is base's weight plus scale times B @ A, and its bias is base's,
-    #   or none when base has none. Write them in without recording for autograd.
+    #   or none when base has none. Write them in without recording for autograd,
+    #   and leave layer as it was.
     def merge(layer: LoRALinear) -> nn.Linear:
         ...
 
@@ -628,19 +634,26 @@ def check_merge(found: object) -> None:
     for inputs, outputs, rank, alpha, bias, seed in ((6, 4, 2, 4.0, True, 787), (5, 9, 3, 1.5, False, 788)):
         layer = lora_layer(seed, inputs, outputs, rank, alpha, bias)
         call = f"merge(LoRALinear(nn.Linear({inputs}, {outputs}, bias={bias}), {rank}, {alpha}) with B drawn)"
+        x = torch.randn(2, 3, inputs, generator=torch.Generator().manual_seed(seed))
+        base_before = layer.base.weight.detach().clone()
+
+        # Taken before the call, so a merge that changes layer can't change what it is compared with.
+        with torch.no_grad():
+            expected = layer(x)
+
         merged = found(layer)
 
         if type(merged) is not nn.Linear:
             raise Mismatch(f"{call} should be an nn.Linear, but it is {type(merged).__name__}.")
 
+        if not torch.equal(layer.base.weight.detach(), base_before):
+            raise Mismatch(f"{call} changed base's weight. Leave layer as it was and write the sum into the new Linear.")
+
         if (merged.bias is None) != (layer.base.bias is None):
             raise Mismatch(f"{call} should have a bias exactly when base has one.")
 
-        x = torch.randn(2, 3, inputs, generator=torch.Generator().manual_seed(seed))
-
         with torch.no_grad():
             actual = merged(x)
-            expected = layer(x)
 
         expect_tensor(
             call=f"{call} on x of shape (2, 3, {inputs})",
@@ -829,8 +842,13 @@ LORA3_LESSON = prose(
     its own directions, largest first. Their squares add up to the sum of
     every entry squared. Keeping the top k gives the closest matrix of rank k.
 
+    The **singular value decomposition**, SVD, writes a matrix as
+    `u @ torch.diag(s) @ vh`. `s` holds the singular values, `u`'s columns
+    the directions the outputs take, and `vh`'s rows the input directions
+    that map onto them.
+
     ```python
-    torch.linalg.svdvals(torch.tensor([[3.0, 0.0], [0.0, 1.0]]))    # tensor([3., 1.])
+    torch.linalg.svdvals(torch.tensor([[3.0, 0.0], [0.0, 1.0]]))    # tensor([3.0000, 1.0000])
     ```
 
     `update_energy` measures the share of an update its top k directions hold.
@@ -867,8 +885,8 @@ LORA3_SOURCE = source_file(
 
     from tensorlings.training import load_checkpoint
 
-    values = torch.linalg.svdvals(torch.tensor([[3.0, 0.0], [0.0, 1.0]]))    # tensor([3., 1.])
-    u, s, vh = torch.linalg.svd(torch.eye(2), full_matrices=False)          # delta is u @ torch.diag(s) @ vh
+    values = torch.linalg.svdvals(torch.tensor([[3.0, 0.0], [0.0, 1.0]]))    # tensor([3.0000, 1.0000])
+    u, s, vh = torch.linalg.svd(torch.eye(2), full_matrices=False)          # torch.eye(2) is u @ torch.diag(s) @ vh
 
 
 ''' + indented(GPT_SETTINGS) + '''
@@ -885,9 +903,9 @@ LORA3_SOURCE = source_file(
 ''' + indented(LORA_PART) + '''
 
 
-    # TODO: Freeze every parameter of model, then wrap all four Linears of each
-    #   block in a LoRALinear, in this order: attn.c_attn, attn.c_proj,
-    #   mlp.c_fc and mlp.c_proj. Return model.
+    # TODO: Freeze every parameter of model, then wrap each of the four Linears
+    #   of every block, attn.c_attn, attn.c_proj, mlp.c_fc and mlp.c_proj, once
+    #   in a LoRALinear. Return model.
     def add_lora_everywhere(
         model: nn.Module,
         rank: int,
@@ -953,25 +971,73 @@ LORA3_SOLUTION = source_file(
 )
 
 
+LINEAR_NAMES = ("attn.c_attn", "attn.c_proj", "mlp.c_fc", "mlp.c_proj")
+
+
+def linears_of(block: nn.Module) -> dict[str, nn.Module]:
+    return {name: block.get_submodule(name) for name in LINEAR_NAMES}
+
+
+def check_wrapped(
+    layer: nn.Module,
+    original: nn.Linear,
+    where: str,
+    rank: int,
+) -> None:
+    if type(layer).__name__ != "LoRALinear":
+        raise Mismatch(f"After add_lora_everywhere, {where} should be a LoRALinear, but it is {type(layer).__name__}.")
+
+    if layer.base is not original:
+        raise Mismatch(f"After add_lora_everywhere, {where} should wrap the Linear that sat there, once.")
+
+    if tuple(layer.A.shape) != (rank, original.in_features):
+        raise Mismatch(
+            f"After add_lora_everywhere(model, {rank}, 4.0), {where}'s A has shape {tuple(layer.A.shape)}, but it "
+            f"should be ({rank}, {original.in_features}), rank rows.",
+        )
+
+    if torch.any(layer.B != 0):
+        raise Mismatch(f"After add_lora_everywhere, {where}'s B should start at zero.")
+
+    expect_close(
+        call=f"{where}'s scale after add_lora_everywhere(model, {rank}, 4.0)",
+        actual=layer.scale,
+        expected=4.0 / rank,
+    )
+
+
 def check_add_lora_everywhere(found: object) -> None:
+    """By structure, so the four Linears may be wrapped in any order. Each wraps the Linear that sat there, at the
+    given rank and scale, with B at zero and A drawn with lora1's spread."""
     for rank in (1, 3):
         model = small_gpt()
-        reference = small_gpt()
         ids = small_ids(793)
+        originals = [linears_of(block) for block in model.h]
 
         with torch.no_grad():
             expected = model(ids)
 
         torch.manual_seed(794)
         returned = found(model, rank, 4.0)
-        torch.manual_seed(794)
-        LORA_REFERENCE["add_lora_everywhere"](reference, rank, 4.0)
 
         if returned is not model:
             raise Mismatch("add_lora_everywhere should change model in place and return it.")
 
+        scaled_draws = []
+
+        for index, block in enumerate(model.h):
+            for name, layer in linears_of(block).items():
+                original = originals[index][name]
+                check_wrapped(
+                    layer=layer,
+                    original=original,
+                    where=f"block {index}'s {name}",
+                    rank=rank,
+                )
+                scaled_draws.append(layer.A.detach().flatten() * math.sqrt(original.in_features))
+
         training = sorted(name for name, parameter in model.named_parameters() if parameter.requires_grad)
-        wanted = sorted(name for name, parameter in reference.named_parameters() if parameter.requires_grad)
+        wanted = sorted(f"h.{index}.{name}.{part}" for index in range(len(model.h)) for name in LINEAR_NAMES for part in ("A", "B"))
 
         if training != wanted:
             raise Mismatch(
@@ -979,11 +1045,11 @@ def check_add_lora_everywhere(found: object) -> None:
                 f"else, but these train: {', '.join(training[:4]) or 'nothing'}.",
             )
 
-        for name, parameter in reference.named_parameters():
-            if parameter.requires_grad and not torch.equal(dict(model.named_parameters())[name].detach(), parameter.detach()):
-                raise Mismatch(
-                    f"After add_lora_everywhere with the same seed, {name} differs. Wrap the Linears in the order the TODO gives.",
-                )
+        # Each A times the square root of its inputs should look like plain normal draws, pooled over every layer.
+        scaled = torch.cat(scaled_draws)
+
+        if abs(scaled.std().item() - 1) > 0.15 or abs(scaled.mean().item()) > 0.15:
+            raise Mismatch("After add_lora_everywhere, the A's aren't drawn as lora1 drew them, normal draws divided by the square root of the inputs.")
 
         with torch.no_grad():
             actual = model(ids)

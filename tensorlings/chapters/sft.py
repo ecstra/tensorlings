@@ -359,9 +359,11 @@ SFT1_LESSON = prose(
     | Answer scored | 8% | 74% | 90% | 95% |
     | Every token scored | 15% | 84% | 87% | 79% |
 
-    Up to 300 steps the two learn about as fast. At 400, scoring the answer
-    alone reaches 95%, and scoring every token slips to 79%, with one seed
-    down at 56%. Three seeds are few, but the answer alone was the steadier.
+    Scoring every token led at 100 and 200 steps, by an amount within the
+    spread between seeds. At 300 the two are close. At 400, scoring the
+    answer alone reaches 95%, and scoring every token slips to 79%, with one
+    seed down at 56%. Three seeds are few, but the answer alone was the
+    steadier.
     """,
 )
 
@@ -459,6 +461,26 @@ def chat_rows(chats: list[tuple[str, str]]) -> list[tuple[Tensor, Tensor]]:
     return [SFT_REFERENCE["answer_targets"](SFT_REFERENCE["chat_ids"](question, answer, SMALL_POSITIONS.value)) for question, answer in chats]
 
 
+def expect_id_pair(
+    call: str,
+    actual: object,
+    expected: tuple[Tensor, Tensor],
+) -> None:
+    expect_parts("inputs", "targets")(
+        call=call,
+        actual=actual,
+        expected=expected,
+    )
+
+    for name, part in zip(("inputs", "targets"), actual):
+        if part.dtype.is_floating_point:
+            raise Mismatch(
+                f"The {name} from {call} hold {part.dtype} numbers, but ids and targets are whole numbers, which "
+                "nn.Embedding and F.cross_entropy need. Build them from whole numbers, with torch.tensor, or "
+                "torch.full with a whole number to fill.",
+            )
+
+
 def check_answer_loss(found: object) -> None:
     for chats in ((("ab", "AB"), ("cab", "CAB")), (("c", "C"), ("abba", "ABBA"), ("bc", "BC"))):
         x, y = SFT_REFERENCE["pad_rows"](chat_rows(list(chats)))
@@ -495,7 +517,7 @@ def check_sft1(checker: Checker) -> None:
             ([65, 3, 1, 2, 3, 66, 6, 67],),
         ),
         reference=SFT_REFERENCE["answer_targets"],
-        expect=expect_parts("inputs", "targets"),
+        expect=expect_id_pair,
     )
     check_on_inputs(
         checker=checker,
@@ -506,7 +528,7 @@ def check_sft1(checker: Checker) -> None:
             (Described(chat_rows([("a", "A"), ("cab", "CAB"), ("bc", "BC")]), "the inputs and targets of the chats a, cab and bc"),),
         ),
         reference=SFT_REFERENCE["pad_rows"],
-        expect=expect_parts("inputs", "targets"),
+        expect=expect_id_pair,
     )
     checker.test(
         function="answer_loss",
@@ -583,6 +605,8 @@ SFT2_LESSON = prose(
 SFT2_SOURCE = source_file(
     '''
     # sft2.py
+    #
+    # The last check needs your trained model from gpt3, in checkpoints/gpt3.pt.
 
     import math
     import re
@@ -762,6 +786,8 @@ class ScriptedWriter(nn.Module):
         self.prompt_length = prompt_length
         self.script = script
         self.calls: list[tuple[list[int], bool]] = []
+        # An answer that crops to the block, as gpt4's generate did, reads this.
+        self.block_size = 128
 
     def forward(self, ids: Tensor) -> Tensor:
         self.calls.append((ids[0].tolist(), torch.is_grad_enabled()))
@@ -787,7 +813,7 @@ TOKEN_NAMES = small_token_names()
 
 def check_answer(found: object) -> None:
     for question, script, text in (
-        ("ab", [4, 5, 67], "B, then C, then END"),
+        ("ab", [4, 5, 67], "A, then B, then END"),
         ("cab", [6, 66, 4, 67], "C, then ASSISTANT, then A, then END"),
         ("a", [5], "B forever"),
     ):
