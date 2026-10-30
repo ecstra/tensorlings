@@ -33,8 +33,9 @@ REWARD_MODELS = Chapter(
 
         People find it easier to pick the better of two answers than to write
         the best one. A reward model learns from such picks, a score for any
-        answer, with the Bradley Terry loss. RLHF then trains the chat model
-        to score high, with a penalty for drifting from where it started.
+        answer, with the Bradley Terry loss. Reinforcement learning from human
+        feedback, RLHF, then trains the chat model to score high, with a
+        penalty for drifting from where it started.
         This chapter trains a reward model on your GPT, then shows on a toy
         what the penalty is for.
 
@@ -325,7 +326,12 @@ REWARD1_LESSON = prose(
     A wrong letter keeps the length, and more training doesn't help it. The
     model learned the easy shortcut, a length that matches the question, and
     only part of the real task. reward2 shows what a policy does with such a
-    gap. An untrained GPT reaches 92% too, so pretraining adds little here.
+    gap.
+
+    An untrained GPT reaches 92% overall too. On wrong letters, the one slip
+    that needs the letters read, it gets 74% and 73% at 50 and 200 steps.
+    gpt3's GPT gets 79% and 78%, so pretraining helps a little, and only
+    where the letters matter.
     """,
 )
 
@@ -373,8 +379,8 @@ REWARD1_SOURCE = source_file(
             ...
 
 
-    # TODO: Return the Bradley Terry loss, minus the mean log chance that each
-    #   chosen answer beats its rejected one.
+    # TODO: Return the Bradley Terry loss as a tensor, minus the mean log
+    #   chance that each chosen answer beats its rejected one.
     def bradley_terry_loss(
         chosen: Tensor,
         rejected: Tensor,
@@ -466,10 +472,36 @@ def check_reward_forward(found: type) -> None:
             expected = reference(ids, last)
             actual = model(ids, last)
 
+        call = f"RewardModel of a small GPT on {len(chats)} chats"
         expect_tensor(
-            call=f"RewardModel of a small GPT on {len(chats)} chats",
+            call=call,
             actual=actual,
             expected=expected,
+        )
+        reference(ids, last).sum().backward()
+
+        # enable_grad puts autograd back as it was, even after a forward that turns it off for the whole thread.
+        with torch.enable_grad():
+            scores = model(ids, last)
+
+        if not scores.requires_grad:
+            raise Mismatch(
+                f"{call} holds no gradient, so training would never reach the GPT. Leave out torch.no_grad, "
+                "set_grad_enabled and .detach() in forward.",
+            )
+
+        scores.sum().backward()
+
+        if model.gpt.wte.weight.grad is None:
+            raise Mismatch(
+                f"{call} sends no gradient back to the GPT's wte, so training would leave the GPT as it was. Keep "
+                "autograd on through the whole forward.",
+            )
+
+        expect_tensor(
+            call=f"the GPT's wte gradient after backward from the scores of {call}",
+            actual=model.gpt.wte.weight.grad,
+            expected=reference.gpt.wte.weight.grad,
         )
 
 
@@ -696,28 +728,59 @@ def measure_hacking() -> list[tuple[str, float, float, float, float]]:
     return rows
 
 
+def measure_floors() -> dict[tuple[str, float], tuple[float, float]]:
+    """What reward2's collapse owes to the reference's floor of 1e-6 on every length. For each floor and beta, the
+    best policy's mean length and true reward, with the learned reward kept from the reference as shipped."""
+    lengths = TOY_REFERENCE["LENGTHS"]
+    truth = TOY_REFERENCE["true_reward"]()
+    learned = TOY_REFERENCE["learned_reward"](torch.Generator().manual_seed(0))
+    results = {}
+
+    for name, floor in (("1e-6", 1e-6), ("1e-9", 1e-9), ("none", 0.0)):
+        weights = torch.exp(-0.5 * ((lengths - 8) / 3) ** 2) + floor
+        reference = weights / weights.sum()
+
+        for beta in (2.0, 1.0, 0.5):
+            policy = TOY_REFERENCE["best_policy"](reference, learned, beta)
+            results[(name, beta)] = (
+                TOY_REFERENCE["expected_reward"](policy, lengths),
+                TOY_REFERENCE["expected_reward"](policy, truth),
+            )
+
+    results[("learned reward at 40", 0.0)] = (learned[-1].item(), reference_chance_at_40())
+
+    return results
+
+
+def reference_chance_at_40() -> float:
+    return TOY_REFERENCE["reference_policy"]()[-1].item()
+
+
 REWARD2_LESSON = prose(
     """
     A reward model learns from pairs, so it is only right near the answers
     those pairs held. Train a policy to score as high as it can, and it finds
     where the reward model is wrong. That is reward hacking.
 
-    RLHF holds the policy back with a penalty. It maximizes the expected
-    reward minus beta times the KL divergence from the reference, the model
-    before RLHF. InstructGPT adds it to keep the policy from over optimizing
-    the reward model.
+    Reinforcement learning from human feedback, RLHF, holds the policy back
+    with a penalty. It maximizes the expected reward minus beta times the KL
+    divergence from the reference, the model before RLHF. InstructGPT adds it
+    to keep the policy from over optimizing the reward model.
 
     ```text
     E[r] - beta * KL(policy || reference)
     ```
 
-    Over a few answers the best policy has a closed form, from section 4 of
-    the DPO paper. Each answer keeps its reference chance, scaled by the
-    exponential of its reward over beta, then all are scaled to add up to 1.
+    The best policy has a closed form, from section 4 of the DPO paper. Each
+    answer keeps its reference chance, scaled by the exponential of its
+    reward over beta, then all are scaled to add up to 1.
 
     ```text
     policy(y) = reference(y) * exp(r(y) / beta) / Z
     ```
+
+    Z sums the scaled chances of every answer, which is easy over the 40
+    answers here.
 
     In logs that is a softmax of the log of the reference plus the rewards
     over beta. A large beta stays near the reference, and a small one piles
@@ -742,6 +805,14 @@ REWARD2_LESSON = prose(
     the policy jumps to answers of 30 characters and more, which the
     reference almost never wrote. The learned reward triples while the true
     one collapses.
+
+    That jump comes from a floor in the reference, which adds 1e-6 to every
+    length's weight before the chances are scaled. A language model too
+    gives every answer some chance. At 40 characters the floor leaves a
+    chance of about 1 in 7 million. A beta of 1 multiplies it by e^22, enough
+    for the longest answers to win. Without the floor the chance there is
+    about e^-59, and a beta of 1 settles near 13 characters, with a true
+    reward of -1.09.
 
     A KL divergence sums over every answer, and a choice the policy never
     makes adds nothing, so those terms are left out.

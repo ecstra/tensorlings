@@ -6,6 +6,7 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 from torch import Tensor
+from torch.nn.attention import SDPBackend, sdpa_kernel
 from torch.utils.flop_counter import FlopCounterMode
 
 from ..course import OPTIMIZER_IMPORTS, Chapter, Exercise
@@ -117,11 +118,13 @@ COST1_LESSON = prose(
     this Torch runs attention as one fused kernel, and the counter has no
     rule for it. A tool's count is worth checking by hand.
 
-    Per token, the Linears cost 1.59 million FLOPs, about twice the 793,344
-    parameters outside the embeddings. That is Kaplan and colleagues' rule
-    of 2N FLOPs per token for a forward pass. They leave attention out while
-    the width is more than a twelfth of the context. The GPT's 818,048
-    parameters take 3.27 MB in float32.
+    Per token, the blocks' Linears cost 1.57 million FLOPs, exactly twice
+    their 786,432 weights. Those are nearly all of the 793,344 parameters
+    outside the embeddings. That is Kaplan and colleagues' rule of 2N FLOPs
+    per token for a forward pass. They leave attention out while the width
+    is more than a twelfth of the context. The head reuses the embedding's
+    weight, so it sits outside N too. The GPT's 818,048 parameters take 3.27
+    MB in float32.
     """,
 )
 
@@ -336,7 +339,10 @@ COST2_LESSON = prose(
 
     `FlopCounterMode` counts 610,369,536 FLOPs for the GPT's forward and
     backward on one sequence. That is 3 times its forward, and within 0.2% of
-    6 times its 793,344 parameters times 128 tokens.
+    6 times its 793,344 parameters times 128 tokens. The match leaves out
+    attention, which the counter misses here, as cost1 showed. Run as plain
+    products the counter can read, attention brings the total to 711,032,832,
+    about 17% above the rule.
 
     The first Linear skips the gradient for its input when the input needs
     none. Take an MLP from 64 to 128 to 32 on 10 rows. The counter gives
@@ -557,6 +563,10 @@ def measure_costs() -> dict[str, object]:
         "counted training": COST2_REFERENCE["counted_training_flops"](model, ids),
         "six N tokens": COST2_REFERENCE["training_flops"](parameters - embeddings, 128),
     }
+
+    # The counter has no rule for the CPU's fused attention, so this runs attention as plain products it can read.
+    with sdpa_kernel(SDPBackend.MATH):
+        results["counted training, attention as plain products"] = COST2_REFERENCE["counted_training_flops"](model, ids)
 
     mlp = seeded_mlp((64, 128, 32), 0)
     results["mlp plain"] = COST2_REFERENCE["counted_training_flops"](mlp, torch.randn(10, 64))

@@ -1777,6 +1777,10 @@ CASES: list[tuple[str, str, str, str]] = [
     ("flash1", "online_softmax works the largest out again", "    return torch.exp(scores - largest.unsqueeze(-1)) / total.unsqueeze(-1)", "    return torch.exp(scores - scores.amax(dim=-1, keepdim=True)) / total.unsqueeze(-1)"),
     ("kvcache1", "CachedSelfAttention makes the mask on the CPU only once cached", "        mask = torch.ones(steps, k.shape[2], dtype=torch.bool, device=x.device).tril(diagonal=past)\n        out = F.scaled_dot_product_attention(q, k, v, attn_mask=mask)", "        if cache is None:\n            out = F.scaled_dot_product_attention(q, k, v, is_causal=True)\n        else:\n            mask = torch.ones(steps, k.shape[2], dtype=torch.bool).tril(diagonal=past)\n            out = F.scaled_dot_product_attention(q, k, v, attn_mask=mask)"),
     ("kvcache1", "CachedGPT makes the positions on the CPU", "positions = torch.arange(start, start + ids.shape[1], device=ids.device)", "positions = torch.arange(start, start + ids.shape[1])"),
+    ("reward1", "RewardModel.forward turns autograd off", "        x = self.gpt.wte(ids) + self.gpt.wpe(torch.arange(ids.shape[1], device=ids.device))", "        torch.set_grad_enabled(False)\n        x = self.gpt.wte(ids) + self.gpt.wpe(torch.arange(ids.shape[1], device=ids.device))"),
+    ("reward1", "RewardModel.forward detaches the scores", "        return self.score(hidden).squeeze(-1)", "        return self.score(hidden).squeeze(-1).detach()"),
+    ("reward1", "RewardModel.forward runs the blocks without autograd", "        for block in self.gpt.h:\n            x = block(x)\n", "        with torch.no_grad():\n            for block in self.gpt.h:\n                x = block(x)\n"),
+    ("dpo1", "answer_logprobs swaps the -100s inside y itself", "    picked = logs.gather(-1, y.masked_fill(~kept, 0).unsqueeze(-1)).squeeze(-1)", "    y[~kept] = 0\n    picked = logs.gather(-1, y.unsqueeze(-1)).squeeze(-1)"),
     ("conv5", "pointwise reshapes the wrong way", "return (weight @ x.reshape(c, -1)).reshape(-1, h, w)", "return (weight @ x.reshape(-1, c).T).reshape(-1, h, w)"),
 ]
 

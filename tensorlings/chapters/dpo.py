@@ -3,9 +3,11 @@ advantages taken relative to a group of samples."""
 
 from __future__ import annotations
 
+import contextlib
 import copy
 import math
 import re
+from collections.abc import Iterator
 
 import torch
 import torch.nn as nn
@@ -21,6 +23,7 @@ from ..engine import (
     expect_close,
     expect_tensor,
 )
+from ..paths import CHECKPOINTS_DIR
 from ..text import prose, source_file
 from .gpt import MODEL_REFERENCE, trained_gpt
 from .reward_models import PAIRS_PART, held_out_pairs, trained_reward_model
@@ -322,35 +325,51 @@ def best_of(
     return right / 200
 
 
+# The CPU's thread count changes how sums round, which moves dpo2's and grpo1's tables by a point or two.
+MEASURE_THREADS = 4
+
+
+@contextlib.contextmanager
+def pinned_threads() -> Iterator[None]:
+    threads = torch.get_num_threads()
+    torch.set_num_threads(MEASURE_THREADS)
+
+    try:
+        yield
+    finally:
+        torch.set_num_threads(threads)
+
+
 def measure_dpo() -> dict[str, float]:
-    """Every number in dpo2's table, from a GPT given 200 steps of SFT, averaged over seeds 0 to 2."""
+    """Every number in dpo2's table, from a GPT given 200 steps of SFT, averaged over seeds 0 to 2, on 4 threads."""
     results: dict[str, float] = {}
 
-    for seed in (0, 1, 2):
-        start = sft_start(200, seed)
-        state = copy.deepcopy(start.state_dict())
-        rows = {"start": start}
+    with pinned_threads():
+        for seed in (0, 1, 2):
+            start = sft_start(200, seed)
+            state = copy.deepcopy(start.state_dict())
+            rows = {"start": start}
 
-        for route in ("sft", "dpo", "dpo with nll", "dpo with nll 1"):
-            model = sft_start(0, seed)
-            model.load_state_dict(state)
-            rows[route] = after_preferences(model, 100, route, seed)
+            for route in ("sft", "dpo", "dpo with nll", "dpo with nll 1"):
+                model = sft_start(0, seed)
+                model.load_state_dict(state)
+                rows[route] = after_preferences(model, 100, route, seed)
 
-        for name, model in rows.items():
-            right, wrong = held_out_logprobs(model)
-            numbers = {"exact": held_out_score(model), "right logprob": right, "near miss logprob": wrong}
+            for name, model in rows.items():
+                right, wrong = held_out_logprobs(model)
+                numbers = {"exact": held_out_score(model), "right logprob": right, "near miss logprob": wrong}
 
-            for key, value in numbers.items():
-                results[f"{name}, {key}"] = results.get(f"{name}, {key}", 0.0) + value / 3
+                for key, value in numbers.items():
+                    results[f"{name}, {key}"] = results.get(f"{name}, {key}", 0.0) + value / 3
 
-            print(seed, name, {key: round(value, 3) for key, value in numbers.items()}, flush=True)
+                print(seed, name, {key: round(value, 3) for key, value in numbers.items()}, flush=True)
 
-        reward_model = trained_reward_model(50, seed=seed)
+            reward_model = trained_reward_model(50, seed=seed)
 
-        for count in (1, 4, 16):
-            score = best_of(start, reward_model, count, seed)
-            results[f"best of {count}"] = results.get(f"best of {count}", 0.0) + score / 3
-            print(seed, "best of", count, round(score, 3), flush=True)
+            for count in (1, 4, 16):
+                score = best_of(start, reward_model, count, seed)
+                results[f"best of {count}"] = results.get(f"best of {count}", 0.0) + score / 3
+                print(seed, "best of", count, round(score, 3), flush=True)
 
     return results
 
@@ -375,8 +394,16 @@ def measure_grpo(
     seed: int = 0,
 ) -> list[tuple[int, float, float]]:
     """grpo1's table, GRPO on the GPT after 200 steps of SFT, 8 questions a step with 8 answers each, a reward of
-    1 for an exact answer, epsilon 0.2 and beta 0.04. Each row is the step, the share of 200 held out words
-    answered right, and the share of the step's groups whose rewards were all the same."""
+    1 for an exact answer, epsilon 0.2 and beta 0.04, on 4 threads. Each row is the step, the share of 200 held out
+    words answered right, and the share of the step's groups whose rewards were all the same."""
+    with pinned_threads():
+        return grpo_rows(steps, seed)
+
+
+def grpo_rows(
+    steps: int,
+    seed: int,
+) -> list[tuple[int, float, float]]:
     policy = sft_start(200, seed)
     reference = DPO_REFERENCE["frozen_copy"](policy)
     train_words, _ = SFT_REFERENCE["question_words"]()
@@ -487,7 +514,7 @@ DPO1_SOURCE = source_file(
     # TODO: Return each row's log chance of its answer, of shape (rows,). Take
     #   log_softmax of model's scores on x, gather each target's entry, and sum
     #   the places whose target isn't -100. gather can't read place -100, so
-    #   swap those targets for 0 before gathering.
+    #   swap those targets for 0 before gathering, without changing y itself.
     def answer_logprobs(
         model: nn.Module,
         x: Tensor,
@@ -496,9 +523,9 @@ DPO1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the DPO loss, minus the mean log sigmoid of beta times the
-    #   gap between the chosen and the rejected log ratios. A log ratio is the
-    #   policy's log chance minus the reference's.
+    # TODO: Return the DPO loss as a tensor, minus the mean log sigmoid of beta
+    #   times the gap between the chosen and the rejected log ratios. A log
+    #   ratio is the policy's log chance minus the reference's.
     def dpo_loss(
         policy_chosen: Tensor,
         policy_rejected: Tensor,
@@ -547,6 +574,7 @@ def check_answer_logprobs(found: object) -> None:
         with torch.no_grad():
             expected = DPO_REFERENCE["answer_logprobs"](model, x, y)
 
+        targets = y.clone()
         actual = found(model, x, y)
         call = f"answer_logprobs of a small GPT on {len(chats)} padded chats"
         expect_tensor(
@@ -557,6 +585,12 @@ def check_answer_logprobs(found: object) -> None:
 
         if not actual.requires_grad:
             raise Mismatch(f"{call} holds no gradient, but DPO trains through it. Leave out torch.no_grad here.")
+
+        if not torch.equal(y, targets):
+            raise Mismatch(
+                f"{call} changed y, the caller's targets, so a later loss on the same batch would score the wrong "
+                "tokens. Swap the -100s in a new tensor, as masked_fill makes one.",
+            )
 
 
 def check_dpo1(checker: Checker) -> None:
@@ -624,6 +658,11 @@ DPO2_LESSON = prose(
     frozen = copy.deepcopy(layer).requires_grad_(False)    # its own weights, which never train
     ```
 
+    The reference's log chances are taken inside `torch.no_grad()`. Its
+    weights are frozen, so autograd would record nothing anyway. But no_grad
+    says so in the code, and keeps it true for a reference someone forgot to
+    freeze.
+
     Here DPO starts from gpt3's GPT after 200 steps of sft2's training. The
     pairs are reward1's, a right answer and a near miss. Each run takes 100
     more steps of 32 pairs, with a beta of 0.1. The log chances are averages
@@ -653,16 +692,16 @@ DPO2_LESSON = prose(
     the reward model. It also writes answers during training, which is slow.
     DPO holds two and writes nothing.
 
-    The reward model can work with no training at all, picking the best of
-    several answers drawn at a temperature of 1.
+    Without training the policy at all, the reward model can pick the best
+    of several answers drawn at a temperature of 1.
 
     | Answers drawn per question | 1 | 4 | 16 |
     |---|---|---|---|
     | Exact answers, reward1's model picking | 60% | 65% | 47% |
 
     Best of 4 helps, but best of 16 hurts. The more answers it sees, the more
-    chances the reward model gets to pick one it overrates, reward2's hacking
-    with no training at all.
+    chances the reward model gets to pick one it overrates. That is reward2's
+    hacking, with no training of the policy at all.
     """,
 )
 
@@ -808,7 +847,10 @@ def check_dpo_step(found: object) -> None:
                 actual = found(policy, reference, optimizer, chosen, rejected, beta, nll)
 
                 if any(recording):
-                    raise Mismatch("dpo_step ran the reference while recording for autograd. Work out its log chances inside torch.no_grad().")
+                    raise Mismatch(
+                        "dpo_step ran the reference with autograd on. The TODO asks for its log chances inside "
+                        "torch.no_grad(), which keeps the reference out of the graph even when it isn't frozen.",
+                    )
 
                 expect_close(
                     call=f"dpo_step on a small GPT with beta {beta} and nll {nll}, step {step + 1}",
@@ -826,8 +868,41 @@ def check_dpo_step(found: object) -> None:
         )
 
 
+# dpo2's last test starts from 200 steps of SFT on the learner's gpt3 model. They run once per process and per
+# checkpoint, before the test's clock starts, since under the clock's trace they could pass the limit on a slow laptop.
+SFT_STARTS: dict[int, nn.Module | Mismatch] = {}
+
+
+def checkpoint_key() -> int:
+    path = CHECKPOINTS_DIR / "gpt3.pt"
+
+    return path.stat().st_mtime_ns if path.exists() else 0
+
+
+def build_sft_start() -> None:
+    key = checkpoint_key()
+
+    if key in SFT_STARTS:
+        return
+
+    try:
+        SFT_STARTS[key] = sft_start(200)
+    except Mismatch as missing:
+        SFT_STARTS[key] = missing
+
+
+def fresh_sft_start() -> nn.Module:
+    build_sft_start()
+    start = SFT_STARTS[checkpoint_key()]
+
+    if isinstance(start, Mismatch):
+        raise Mismatch(str(start))
+
+    return copy.deepcopy(start)
+
+
 def check_trained_dpo(found: object) -> None:
-    policy = sft_start(200)
+    policy = fresh_sft_start()
     before_right, before_wrong = held_out_logprobs(policy)
     reference = DPO_REFERENCE["frozen_copy"](policy)
     _, positions = SFT_REFERENCE["chat_vocabulary"]()
@@ -865,6 +940,10 @@ def check_dpo2(checker: Checker) -> None:
         description="takes the DPO loss plus nll times the SFT loss, the reference untracked",
         run=check_dpo_step,
     )
+
+    if callable(getattr(checker.module, "dpo_step", None)):
+        build_sft_start()
+
     checker.test(
         function="dpo_step",
         description="trains your gpt3 model away from near misses, the right answers held up",
@@ -907,8 +986,9 @@ GRPO1_LESSON = prose(
     advantage = (reward - mean of the group) / spread of the group
     ```
 
-    The spread is `std`, PyTorch's standard deviation. A small number, 0.0001
-    here, is added to it, since a group of equal rewards has no spread at all.
+    The spread is plain `.std()`, which divides by n - 1, where batchnorm1's
+    variance divided by n. A small number, 0.0001 here, is added to it,
+    since a group of equal rewards has no spread at all.
     Such a group gives every answer an advantage of 0, so it teaches nothing.
 
     The loss is ppo1's clipped objective on each token, with each answer's
