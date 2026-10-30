@@ -627,31 +627,31 @@ KVCACHE2_LESSON = prose(
     on 128.
 
     Here is the time to write one token after a text of each length, on this
-    Mac while other work shared it. The bigger GPT is untrained, 8 blocks of
-    size 512 reading up to 1,024 tokens, since the time doesn't depend on
-    what the weights hold.
+    Mac over three runs, with little else running. The bigger GPT is
+    untrained, 8 blocks of size 512 reading up to 1,024 tokens, since the
+    time doesn't depend on what the weights hold.
 
     | Model, device | Text | Without the cache | With it |
     |---|---|---|---|
-    | Course GPT, CPU | 16 | 2.0 ms | 1.1 ms |
-    | Course GPT, CPU | 128 | 4.4 ms | 1.0 ms |
-    | Course GPT, MPS | 16 | 1.9 ms | 3.3 ms |
-    | Course GPT, MPS | 128 | 2.3 ms | 3.2 ms |
-    | Bigger GPT, CPU | 128 | 61 ms | 6.5 ms |
-    | Bigger GPT, CPU | 1,024 | 291 ms | 35 ms |
-    | Bigger GPT, MPS | 128 | 16.5 ms | 8.1 ms |
-    | Bigger GPT, MPS | 1,024 | 89 ms | 15.8 ms |
+    | Course GPT, CPU | 16 | 0.50 ms | 0.25 ms |
+    | Course GPT, CPU | 128 | 1.04 ms | 0.28 ms |
+    | Course GPT, MPS | 16 | 0.60 ms | 0.93 ms |
+    | Course GPT, MPS | 128 | 0.71 ms | 0.92 ms |
+    | Bigger GPT, CPU | 128 | 9.7 ms | 2.1 ms |
+    | Bigger GPT, CPU | 1,024 | 72 to 73 ms | 3.4 to 3.6 ms |
+    | Bigger GPT, MPS | 128 | 4.0 to 4.7 ms | 2.2 ms |
+    | Bigger GPT, MPS | 1,024 | 30 to 35 ms | 3.1 ms |
 
-    On the CPU the cache won everywhere, by up to 9 times. On this Mac's GPU
-    the course's GPT ran slower with it. Its time barely grew from 16 tokens
-    to 128, so the math was never what took the time. Each step is many tiny
-    jobs, and the cache's `torch.cat` and mask add a few more. The bigger GPT
-    has more math per job, and on the GPU the cache won by several times at
-    1,024 tokens. At 128 its lead swung from run to run, from about twice as
-    fast to even.
+    On the CPU the cache won everywhere, by 2 to about 20 times. On this
+    Mac's GPU the course's GPT ran slower with it. Its time barely grew from
+    16 tokens to 128, so the math was never what took the time. Each step is
+    many tiny jobs, and the cache's `torch.cat` and mask add a few more. The
+    bigger GPT has more math per job. On the GPU its cache won about 2 times
+    at 128 tokens and about 10 times at 1,024.
 
-    On the CPU, the time with the cache still grew with the text. Attention
-    reads every cached key, and `torch.cat` copies the whole cache each step.
+    For the bigger GPT, the time with the cache still grew with the text, on
+    both devices. Attention reads every cached key, and `torch.cat` copies
+    the whole cache each step.
 
     The cache costs memory. For the course's GPT at 128 tokens it holds 512
     KiB, beside 3.1 MiB of weights. The bigger GPT's cache at 1,024 tokens is

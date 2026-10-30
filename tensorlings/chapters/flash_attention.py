@@ -473,16 +473,16 @@ FLASH2_LESSON = prose(
     Plain PyTorch can't choose where a tensor lives, and each line here runs as
     its own job through main memory. So this version teaches the method and
     runs slower. Here are 4 heads of size 64, blocks of 128, on this Mac's GPU
-    over three runs while other work shared it.
+    over three runs, with little else running.
 
     | Steps | `scaled_dot_product_attention` | Softmax written out | Tiled |
     |---|---|---|---|
-    | 1,024 | 0.9 to 1.6 ms | 2.3 to 2.6 ms | 25 to 48 ms |
-    | 4,096 | 11.6 to 12.0 ms | 29.3 to 30.5 ms | 491 to 852 ms |
+    | 1,024 | 0.63 to 1.07 ms | 1.18 to 1.29 ms | 6.3 to 6.4 ms |
+    | 4,096 | 7.8 to 9.1 ms | 16.6 to 17.3 ms | 120 to 125 ms |
 
-    The tiled version took 10 to 29 times as long as the softmax written out.
-    Its times swung the most, since its Python loop starts thousands of small
-    jobs, and the busy CPU starts each one.
+    The tiled version took about 5 times as long as the softmax written out
+    at 1,024 steps, and about 7 times at 4,096. Its Python loop starts
+    thousands of small jobs, and the CPU starts each one in turn.
 
     On CUDA, `F.scaled_dot_product_attention` can call a FlashAttention-2
     kernel, so a model gets the speed without any of this code.
@@ -724,7 +724,8 @@ def measure_attention_times(
     devices: tuple[str, ...] = ("mps",),
 ) -> dict[tuple[str, int], tuple[float, float, float]]:
     """The times behind flash2's table, in milliseconds, for 4 heads of size 64 and blocks of 128. The table shows
-    MPS alone, since the CPU's times swung by more than 10 times with the other work on the machine."""
+    MPS alone, measured with little else running. An earlier run under heavy load saw the CPU's times swing by
+    more than 10 times."""
     results = {}
 
     def written_out(

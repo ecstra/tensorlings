@@ -125,13 +125,14 @@ PROFILE1_LESSON = prose(
     than conv1's sliding weights.
 
     Here is a 2,048 by 2,048 matrix multiply in float32 on this Mac's GPU,
-    an Apple M5. This chapter's functions timed it in three fresh runs.
+    an Apple M5. This chapter's functions timed it in three fresh runs, with
+    little else running.
 
     | How it was timed | Milliseconds |
     |---|---|
-    | After warmup, no synchronize | 0.05 to 0.07 |
-    | After warmup, with a synchronize | 6.9 to 8.8 |
-    | The first call of the run, with a synchronize | 31 to 40 |
+    | After warmup, no synchronize | 0.02 |
+    | After warmup, with a synchronize | 6.4 to 7.9 |
+    | The first call of the run, with a synchronize | 25 to 27 |
 
     Timings wobble from run to run, since other programs share the machine.
     The median of several timed calls, the middle one once sorted, shrugs
@@ -148,14 +149,14 @@ PROFILE1_LESSON = prose(
 
     | Operation | Calls | Share of CPU time |
     |---|---|---|
-    | `aten::addmm`, the Linears of the blocks | 16 | 33% to 44% |
-    | `aten::gelu` | 4 | 21% to 36% |
-    | attention, one kernel for all its steps | 4 | 7% to 16% |
-    | `aten::copy_`, copies into new memory | 16 | 4% to 13% |
+    | `aten::addmm`, the Linears of the blocks | 16 | 27% to 29% |
+    | `aten::gelu` | 4 | 27% to 33% |
+    | attention, one kernel for all its steps | 4 | 22% to 25% |
+    | `aten::copy_`, copies into new memory | 16 | 6% |
 
-    The calls never change, and the shares move with the machine's load.
-    The 4 GELUs, each a single elementwise step, take a large share beside
-    the 16 Linears, which do nearly all the arithmetic. `torch.profiler` has
+    The calls never change, and the shares move a few points from run to
+    run. The 4 GELUs, each a single elementwise step, take about as much
+    time as the 16 Linears, which do nearly all the arithmetic. `torch.profiler` has
     no activity for a Mac's GPU, so on MPS its times would show only the CPU
     queueing the work.
     """,
@@ -580,21 +581,22 @@ PROFILE2_LESSON = prose(
     its intensity grows with n.
 
     Here is each one on this Mac's GPU, timed with profile1's `time_call`
-    in three runs, while other work shared the machine.
+    in three runs with little else running.
 
     | Operation, in float32 | FLOPs per byte | Speed |
     |---|---|---|
-    | Doubling 67 million numbers | 0.125 | 78 to 104 GB/s moved |
-    | 256 by 256 matrix multiply | 43 | 86 to 106 GFLOP/s |
-    | 1,024 by 1,024 matrix multiply | 171 | 1,317 to 1,592 GFLOP/s |
-    | 4,096 by 4,096 matrix multiply | 683 | 1,112 to 1,134 GFLOP/s |
+    | Doubling 67 million numbers | 0.125 | 120 to 129 GB/s moved |
+    | 256 by 256 matrix multiply | 43 | 156 to 172 GFLOP/s |
+    | 1,024 by 1,024 matrix multiply | 171 | 2,154 to 2,218 GFLOP/s |
+    | 2,048 by 2,048 matrix multiply | 341 | 2,119 to 2,627 GFLOP/s |
+    | 4,096 by 4,096 matrix multiply | 683 | 2,007 to 2,598 GFLOP/s |
 
     The roofline model of Williams, Waterman and Patterson turns this into a
     rule. An operation takes at least its FLOPs over the peak FLOP rate, and
     at least its bytes over the memory's rate. The larger of the two bounds
-    it. The best rates measured here, about 1.6 trillion FLOPs and 104 GB a
+    it. The best rates measured here, about 2.6 trillion FLOPs and 129 GB a
     second, stand in for the peaks. The ridge is where the two bounds meet,
-    the peak FLOP rate over the bandwidth, here near 15 FLOPs per byte. Below
+    the peak FLOP rate over the bandwidth, here near 20 FLOPs per byte. Below
     it, memory sets the pace.
 
     The small multiply falls far short of its roofline. Its 34 million FLOPs
@@ -616,14 +618,14 @@ PROFILE2_LESSON = prose(
     of its own. `F.gelu(x, approximate="tanh")` runs the same formula as one
     kernel.
 
-    | GELU of 16.8 million numbers | Bytes moved | Roofline at 104 GB/s | Measured |
+    | GELU of 16.8 million numbers | Bytes moved | Roofline at 129 GB/s | Measured |
     |---|---|---|---|
-    | 8 separate steps | 1.21 GB | 11.6 ms | 11.6 to 12.7 ms |
-    | `F.gelu`, one kernel | 134 MB | 1.3 ms | 1.3 to 2.3 ms |
+    | 8 separate steps | 1.21 GB | 9.4 ms | 9.7 to 10.8 ms |
+    | `F.gelu`, one kernel | 134 MB | 1.0 ms | 1.2 ms |
 
     The 8 steps read 10 tensors and write 8, so they pass over memory 18
-    times against the kernel's 2. The roofline predicts both times well, so
-    the gap is memory traffic. Horace He names fusion the most important job
+    times against the kernel's 2. Both measured times sit within a fifth of
+    their rooflines, so the gap between them is memory traffic. Horace He names fusion the most important job
     of a deep learning compiler.
     """,
 )
