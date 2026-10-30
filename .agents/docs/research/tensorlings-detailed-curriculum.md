@@ -223,7 +223,7 @@ The project is the small image classifier of the section table, in the style of 
 | | ssm3 | Mamba's selective step that depends on the input, and a selective copying task the fixed version fails |
 | quizzes | quiz8 | Section 6 together |
 | 46_adder | adder1 | the project starts, sums written as text like `123+456`, and their tokens |
-| | adder2 | a GRU encoder and decoder that gets 95 percent of held out sums exactly right |
+| | adder2 | a GRU encoder and decoder that gets 95 percent of held out sums exactly right, with answers written units first, which beats the usual order by far |
 | | adder3 | beam search against greedy decoding, and longer numbers than training had, where it breaks |
 
 The project follows Zaremba and Sutskever's learning to execute and the Keras addition RNN. It uses an encoder and decoder, gating and beam search at once.
@@ -247,7 +247,7 @@ The project follows Zaremba and Sutskever's learning to execute and the Keras ad
 | | multihead3 | why heads, a task that needs two lookups at once |
 | | gqa1 | grouped query attention, fewer key and value heads shared, and the memory it saves |
 | 51_cross_attention | cross1 | queries from one sequence, keys and values from another |
-| | cross2 | why, the long sums of the adder project solved with attention in place of one vector |
+| | cross2 | why, copying long rows of digits with cross attention in place of one vector, since long sums trained in neither form within minutes |
 | 52_positions | position1 | attention alone ignores order, shown by shuffling the input |
 | | position2 | learned and sinusoidal positions |
 | | rope1 | RoPE from its paper, pairs of features rotated by position |
