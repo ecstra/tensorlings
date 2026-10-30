@@ -1386,10 +1386,11 @@ QUIZ13_SOURCE = source_file(
         ...
 
 
-    # TODO: Return one GCN step, the adjacency with self loops added, scaled on
-    #   both sides by one over the square root of each node's degree, times h,
-    #   times weight. adjacency is (nodes, nodes), h (nodes, features) and
-    #   weight (features, out).
+    # TODO: Return one GCN step. Add self loops to the adjacency, then scale it
+    #   on both sides by one over the square root of each node's degree, with
+    #   the self loop counted in the degree. Then multiply by h and by weight.
+    #   adjacency is (nodes, nodes), h (nodes, features) and weight
+    #   (features, out).
     def gcn_step(
         adjacency: Tensor,
         h: Tensor,
@@ -1545,6 +1546,8 @@ def check_quiz13(checker: Checker) -> None:
             (Described(lambda x: x.sum(dim=0), "a sum over the rows"), Described(lambda x: x.flip(0), "a reversal of the rows"), small_tensor(969, 4, 2)),
             (Described(lambda x: x[0], "the first row"), Described(lambda x: x @ turn.T, "a quarter turn"), small_tensor(970, 3, 2)),
             (Described(lambda x: x, "the input itself"), Described(lambda x: x.flip(0), "a reversal of the rows"), small_tensor(971, 4, 3)),
+            # Every change here is -1, so a largest change taken without .abs() comes out -1.
+            (Described(lambda x: x, "the input itself"), Described(lambda x: x - 1, "a shift down by 1"), small_tensor(972, 3, 2)),
         ),
         reference=lambda f, transform, x: (f(transform(x)) - f(x)).abs().max().item(),
         expect=expect_close,

@@ -220,7 +220,7 @@ def check_likelihood1(checker: Checker) -> None:
             (probability_rows(110, 4, 3), label_tensor(111, 4, 3)),
             MANY_ROWS,
         ),
-        reference=lambda probabilities, labels: torch.log(pick_labels(probabilities, labels)).sum().item(),
+        reference=lambda probabilities, labels: torch.log(pick_labels(probabilities, labels)).sum(),
         expect=lambda call, actual, expected: expect_close(
             call=call,
             actual=actual,
@@ -236,7 +236,7 @@ def check_likelihood1(checker: Checker) -> None:
             (probability_rows(112, 4, 3), label_tensor(113, 4, 3)),
             MANY_ROWS,
         ),
-        reference=lambda probabilities, labels: -torch.log(pick_labels(probabilities, labels)).mean().item(),
+        reference=lambda probabilities, labels: -torch.log(pick_labels(probabilities, labels)).mean(),
         expect=lambda call, actual, expected: expect_close(
             call=call,
             actual=actual,
@@ -403,7 +403,7 @@ def check_likelihood2(checker: Checker) -> None:
             (small_tensor(115, 4, 3), label_tensor(116, 4, 3)),
             (small_tensor(117, 6, 5) * 20, label_tensor(118, 6, 5)),
         ),
-        reference=lambda logits, labels: F.cross_entropy(logits, labels).item(),
+        reference=lambda logits, labels: F.cross_entropy(logits, labels),
         expect=lambda call, actual, expected: expect_close(
             call=call,
             actual=actual,
@@ -581,7 +581,7 @@ def check_likelihood3(checker: Checker) -> None:
             (*NOISE_PAIRS[0], 1.0),
             (*NOISE_PAIRS[1], 0.5),
         ),
-        reference=lambda predictions, targets, sigma: -torch.distributions.Normal(predictions, sigma).log_prob(targets).mean().item(),
+        reference=lambda predictions, targets, sigma: -torch.distributions.Normal(predictions, sigma).log_prob(targets).mean(),
         expect=lambda call, actual, expected: expect_close(
             call=call,
             actual=actual,
@@ -609,7 +609,7 @@ def check_likelihood3(checker: Checker) -> None:
             (*NOISE_PAIRS[0], 1.0),
             (*NOISE_PAIRS[1], 2.0),
         ),
-        reference=lambda predictions, targets, b: -torch.distributions.Laplace(predictions, b).log_prob(targets).mean().item(),
+        reference=lambda predictions, targets, b: -torch.distributions.Laplace(predictions, b).log_prob(targets).mean(),
         expect=lambda call, actual, expected: expect_close(
             call=call,
             actual=actual,

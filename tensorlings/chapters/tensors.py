@@ -279,7 +279,7 @@ def check_indexing1(checker: Checker) -> None:
         function="bottom_right",
         description="gives the entry in the last row and column",
         inputs=INDEXING_GRIDS,
-        reference=lambda grid: grid[-1, -1].item(),
+        reference=lambda grid: grid[-1, -1],
         expect=expect_value,
     )
     check_on_inputs(
@@ -680,8 +680,8 @@ REDUCTIONS1_SOURCE = source_file(
 
     # TODO: Try this before reading the lesson, with what you know from Python.
     #   Finish the line in the loop, so total returns every number in grid
-    #   added up. For [[1., 2., 3.], [4., 5., 6.]] that is 21.
-    def total(grid: Tensor) -> float:
+    #   added up. For [[1., 2., 3.], [4., 5., 6.]] that is tensor(21.).
+    def total(grid: Tensor) -> Tensor:
         result = 0.0
 
         for row in grid:
@@ -741,7 +741,7 @@ REDUCTIONS1_SOLUTION = source_file(
 
 
     # grid.sum() does it in one step, as the lesson shows.
-    def total(grid: Tensor) -> float:
+    def total(grid: Tensor) -> Tensor:
         result = 0.0
 
         for row in grid:
@@ -797,7 +797,7 @@ def check_reductions1(checker: Checker) -> None:
         function="total",
         description="adds up every number",
         inputs=REDUCTION_GRIDS,
-        reference=lambda grid: grid.sum().item(),
+        reference=lambda grid: grid.sum(),
         expect=expect_value,
     )
 

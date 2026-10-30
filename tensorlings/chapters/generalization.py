@@ -966,7 +966,7 @@ def check_decay1(checker: Checker) -> None:
             (*named(*linear_data(135, 6, 2)), small_tensor(136, 2), torch.tensor(0.5), 0.1),
             (*named(*linear_data(137, 8, 3)), small_tensor(138, 3), torch.tensor(-1.0), 0.01),
         ),
-        reference=lambda x, y, w, b, strength: (((x @ w + b - y) ** 2).mean() + strength * (w ** 2).sum()).item(),
+        reference=lambda x, y, w, b, strength: ((x @ w + b - y) ** 2).mean() + strength * (w ** 2).sum(),
         expect=lambda call, actual, expected: expect_close(
             call=call,
             actual=actual,
@@ -1463,7 +1463,7 @@ def check_quiz3(checker: Checker) -> None:
         function="classifier_loss",
         description="gives the cross entropy of softmax regression",
         inputs=classifiers,
-        reference=lambda x, W, b, labels: F.cross_entropy(x @ W + b, labels).item(),
+        reference=lambda x, W, b, labels: F.cross_entropy(x @ W + b, labels),
         expect=lambda call, actual, expected: expect_close(
             call=call,
             actual=actual,
@@ -1501,7 +1501,7 @@ def check_quiz3(checker: Checker) -> None:
         function="decayed_classifier_loss",
         description="adds weight decay on W to the cross entropy",
         inputs=tuple((*classifier, 0.1) for classifier in classifiers),
-        reference=lambda x, W, b, labels, strength: (F.cross_entropy(x @ W + b, labels) + strength * (W ** 2).sum()).item(),
+        reference=lambda x, W, b, labels, strength: F.cross_entropy(x @ W + b, labels) + strength * (W ** 2).sum(),
         expect=lambda call, actual, expected: expect_close(
             call=call,
             actual=actual,

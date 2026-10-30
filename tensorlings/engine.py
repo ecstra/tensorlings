@@ -654,6 +654,32 @@ def expect_tensor(
     raise Mismatch(f"{call} has the right shape but different numbers.\n" + differences_text(actual, expected))
 
 
+def single_entry(
+    call: str,
+    actual: object,
+    expected: object,
+    expected_text: str,
+) -> object:
+    """The plain value a one entry tensor holds, when the reference gives a tensor too.
+    A reference that gives a plain value, as its TODO promised, takes a plain value only."""
+    if not isinstance(actual, Tensor):
+        return actual
+
+    # Comparing a tensor of several numbers with one number gives a tensor, which can't answer a plain if.
+    if actual.numel() != 1:
+        raise Mismatch(f"{call} is {value_text(actual)}, but it should be the single number {expected_text}.")
+
+    if isinstance(expected, Tensor):
+        return actual.item()
+
+    kind = "bool" if isinstance(expected, bool) else "number"
+
+    raise Mismatch(
+        f"{call} is {value_text(actual)}, a tensor, but it should be the plain {kind} {expected_text}. "
+        f"Use .item() to turn a tensor of one entry into a plain {kind}.",
+    )
+
+
 def expect_value(
     call: str,
     actual: object,
@@ -664,12 +690,21 @@ def expect_value(
         actual=actual,
     )
 
-    # Comparing a tensor of several numbers with one number gives a tensor, which can't answer a plain if.
-    if isinstance(actual, Tensor) and actual.numel() != 1:
-        raise Mismatch(f"{call} is {value_text(actual)}, but it should be the single number {value_text(expected)}.")
+    if isinstance(actual, Tensor) and isinstance(expected, list):
+        raise Mismatch(
+            f"{call} is {value_text(actual)}, a tensor, but it should be the Python list {value_text(expected)}. "
+            "Use .tolist() to turn a tensor into a list.",
+        )
 
-    if isinstance(actual, Tensor):
-        actual = actual.item()
+    actual = single_entry(
+        call=call,
+        actual=actual,
+        expected=expected,
+        expected_text=value_text(expected),
+    )
+
+    if isinstance(expected, Tensor):
+        expected = expected.item()
 
     if actual != expected:
         raise Mismatch(
@@ -680,7 +715,7 @@ def expect_value(
 def expect_close(
     call: str,
     actual: object,
-    expected: float,
+    expected: float | Tensor,
     tolerance: float = 1e-6,
 ) -> None:
     """A single number that may differ from the expected one by rounding, or by an estimate's error."""
@@ -689,11 +724,15 @@ def expect_close(
         actual=actual,
     )
 
-    if isinstance(actual, Tensor) and actual.numel() != 1:
-        raise Mismatch(f"{call} is {value_text(actual)}, but it should be the single number {expected:.10g}.")
+    actual = single_entry(
+        call=call,
+        actual=actual,
+        expected=expected,
+        expected_text=f"{expected:.10g}",
+    )
 
-    if isinstance(actual, Tensor):
-        actual = actual.item()
+    if isinstance(expected, Tensor):
+        expected = expected.item()
 
     if isinstance(actual, bool) or not isinstance(actual, (int, float)):
         raise Mismatch(f"{call} is {value_text(actual)}, but it should be the number {expected:.10g}.")

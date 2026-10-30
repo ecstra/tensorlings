@@ -370,8 +370,8 @@ LINREG2_SOLUTION = source_file(
 
 def check_linreg2(checker: Checker) -> None:
     for function, description, reference in (
-        ("mean_squared_error", "gives the mean of the squared errors", lambda p, t: ((p - t) ** 2).mean().item()),
-        ("mean_absolute_error", "gives the mean of the errors without their signs", lambda p, t: (p - t).abs().mean().item()),
+        ("mean_squared_error", "gives the mean of the squared errors", lambda p, t: ((p - t) ** 2).mean()),
+        ("mean_absolute_error", "gives the mean of the errors without their signs", lambda p, t: (p - t).abs().mean()),
     ):
         check_on_inputs(
             checker=checker,
@@ -393,7 +393,7 @@ def check_linreg2(checker: Checker) -> None:
             (small_tensor(15, 4, 2), small_tensor(16, 2, 1), 0.5, small_tensor(17, 4)),
             (small_tensor(18, 3, 3), small_tensor(19, 3, 1), -1.0, small_tensor(20, 3)),
         ),
-        reference=lambda x, w, b, targets: (((x @ w + b).squeeze(1) - targets) ** 2).mean().item(),
+        reference=lambda x, w, b, targets: (((x @ w + b).squeeze(1) - targets) ** 2).mean(),
         expect=expect_close,
     )
 
@@ -586,7 +586,7 @@ def check_linreg3(checker: Checker) -> None:
         function="lowest_loss",
         description="gives the mean squared error of the best fit",
         inputs=FIT_DATA,
-        reference=lambda x, y: ((x @ least_squares(x, y)[0] + least_squares(x, y)[1] - y) ** 2).mean().item(),
+        reference=lambda x, y: ((x @ least_squares(x, y)[0] + least_squares(x, y)[1] - y) ** 2).mean(),
         expect=lambda call, actual, expected: expect_close(
             call=call,
             actual=actual,

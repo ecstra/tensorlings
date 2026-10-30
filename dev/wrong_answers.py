@@ -1347,6 +1347,10 @@ CASES: list[tuple[str, str, str, str]] = [
     ("flow1", "log_abs_det takes the log of the signed determinant", "    return torch.linalg.slogdet(jacobian).logabsdet", "    return torch.log(torch.det(jacobian))"),
     ("flow3", "train_flow returns nothing", "    return loss.item()", "    return None"),
     ("flow3", "train_flow returns a made up loss", "    return loss.item()", "    return 0.0"),
+    ("quiz11", "nearest gives a tensor, not a list", "return similarity.topk(k).indices.tolist()", "return similarity.topk(k).indices"),
+    ("quiz11", "subspace_gap gives a tensor, not a plain number", "return (difference.norm() / math.sqrt(2 * a.shape[1])).item()", "return difference.norm() / math.sqrt(2 * a.shape[1])"),
+    ("quiz13", "invariance_gap gives a tensor, not a plain number", "return (f(transform(x)) - f(x)).abs().max().item()", "return (f(transform(x)) - f(x)).abs().max()"),
+    ("quiz13", "invariance_gap leaves out .abs()", "return (f(transform(x)) - f(x)).abs().max().item()", "return (f(transform(x)) - f(x)).max().item()"),
     ("conv5", "pointwise reshapes the wrong way", "return (weight @ x.reshape(c, -1)).reshape(-1, h, w)", "return (weight @ x.reshape(-1, c).T).reshape(-1, h, w)"),
 ]
 
