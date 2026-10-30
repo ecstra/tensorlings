@@ -120,7 +120,9 @@ PROFILE1_LESSON = prose(
 
     The second trap is the first call. It sets up memory and the GPU's
     program for the operation, and runs far slower than later ones. A few
-    warmup calls, left untimed, get that out of the way.
+    warmup calls, left untimed, get that out of the way. That program the
+    GPU runs for one operation is called a kernel, another sense of the word
+    than conv1's sliding weights.
 
     Here is a 2,048 by 2,048 matrix multiply in float32 on this Mac's GPU,
     an Apple M5. This chapter's functions timed it in three fresh runs.
@@ -138,7 +140,8 @@ PROFILE1_LESSON = prose(
     `torch.profiler` breaks a run down by operation. Inside
     `profile(activities=[ProfilerActivity.CPU])` it records each operation,
     and `key_averages()` then gives one row per kind. Each row has the
-    operation's name as `key`, its calls as `count`, and its times.
+    operation's name as `key`, its calls as `count`, and its times. A key
+    that starts with `aten::` names one of PyTorch's own operations.
 
     Here is one forward pass of the GPT that gpt3 trains, on the CPU. The
     shares are of the CPU's own time, over three runs.
@@ -147,13 +150,14 @@ PROFILE1_LESSON = prose(
     |---|---|---|
     | `aten::addmm`, the Linears of the blocks | 16 | 33% to 44% |
     | `aten::gelu` | 4 | 21% to 36% |
-    | attention's fused kernel | 4 | 7% to 16% |
+    | attention, one kernel for all its steps | 4 | 7% to 16% |
     | `aten::copy_`, copies into new memory | 16 | 4% to 13% |
 
     The calls never change, and the shares move with the machine's load.
-    The 4 GELUs, each one elementwise step, take more than half as much as
-    the 16 Linears. `torch.profiler` has no activity for a Mac's GPU, so on
-    MPS its times would show only the CPU queueing the work.
+    The 4 GELUs, each a single elementwise step, take a large share beside
+    the 16 Linears, which do nearly all the arithmetic. `torch.profiler` has
+    no activity for a Mac's GPU, so on MPS its times would show only the CPU
+    queueing the work.
     """,
 )
 
@@ -255,6 +259,25 @@ PROFILE1_SOLUTION = source_file(
 PROFILE_REFERENCE = namespace_of(TIMING_PART + CALLS_PART)
 
 
+class PassThrough:
+    """A module with a few names swapped and every other name passed through to the real one, so a call the
+    check doesn't watch still works and a wrong one fails with the check's own message."""
+
+    def __init__(
+        self,
+        module: object,
+        **swapped: object,
+    ) -> None:
+        self.module = module
+        self.__dict__.update(swapped)
+
+    def __getattr__(
+        self,
+        name: str,
+    ) -> object:
+        return getattr(self.module, name)
+
+
 class ScriptedTorch:
     """Stands in for torch in the learner's file, so a check sees which backend a synchronize waits on.
     Everything else is the real torch."""
@@ -339,10 +362,15 @@ def check_time_call(
 ) -> None:
     script = ScriptedTiming(gaps)
     repeats = len(gaps)
-    swapped = {
-        "time": SimpleNamespace(perf_counter=script.perf_counter),
+    swapped: dict[str, object] = {
+        "time": PassThrough(time, perf_counter=script.perf_counter),
         "synchronize": script.synchronize,
     }
+
+    # A file that imported perf_counter by name reads that name, not time.perf_counter.
+    if "perf_counter" in found.__globals__:
+        swapped["perf_counter"] = script.perf_counter
+
     originals = {name: found.__globals__.get(name) for name in swapped}
     found.__globals__.update(swapped)
 
@@ -438,13 +466,19 @@ def check_calls_of(
     name: str,
 ) -> None:
     events: list[str] = []
+    scripted = ScriptedProfile(rows, events)
     original = found.__globals__.get("profile")
-    found.__globals__["profile"] = ScriptedProfile(rows, events)
+    found.__globals__["profile"] = scripted
+
+    # A file can also reach the profiler as torch.profiler.profile, which would print to the screen.
+    original_module_profile = torch.profiler.profile
+    torch.profiler.profile = scripted
 
     try:
         actual = found(lambda: events.append("run"), name)
     finally:
         found.__globals__["profile"] = original
+        torch.profiler.profile = original_module_profile
 
     call = f'calls_of(run, "{name}") on a run whose profile has rows {", ".join(f"{key} x{count}" for key, count in rows)}'
 
@@ -454,10 +488,16 @@ def check_calls_of(
             actual=actual,
         )
 
-    if events[:3] != ["enter", "run", "exit"]:
-        raise Mismatch(f"{call} should call run once inside the with profile(...) block.")
+    if "enter" not in events or "exit" not in events:
+        raise Mismatch(f"{call} should call run inside a with profile(...) block.")
 
-    if "read" not in events[3:]:
+    enter = events.index("enter")
+    leave = events.index("exit")
+
+    if events[enter + 1 : leave].count("run") != 1:
+        raise Mismatch(f"{call} should call run exactly once inside the with profile(...) block. A warmup call before it is fine.")
+
+    if "read" not in events[leave + 1 :]:
         raise Mismatch(f"{call} should read key_averages() after the with block ends, once the profiler has stopped.")
 
     expect_value(
@@ -552,12 +592,14 @@ PROFILE2_LESSON = prose(
     The roofline model of Williams, Waterman and Patterson turns this into a
     rule. An operation takes at least its FLOPs over the peak FLOP rate, and
     at least its bytes over the memory's rate. The larger of the two bounds
-    it. Here the peak is about 1.6 trillion FLOPs and 104 GB a second, so the
-    ridge sits near 15 FLOPs per byte. Below it, memory sets the pace.
+    it. The best rates measured here, about 1.6 trillion FLOPs and 104 GB a
+    second, stand in for the peaks. The ridge is where the two bounds meet,
+    the peak FLOP rate over the bandwidth, here near 15 FLOPs per byte. Below
+    it, memory sets the pace.
 
-    The small multiply breaks the rule. Its 34 million FLOPs take less time
-    than launching a kernel and waiting for it. Horace He calls this third
-    limit overhead.
+    The small multiply falls far short of its roofline. Its 34 million FLOPs
+    take less time than launching a kernel and waiting for it. Horace He
+    calls this third limit overhead.
 
     Elementwise operations sit far below the ridge, so their time is the
     traffic. A chain of them, each a kernel of its own, reads and writes the
@@ -704,27 +746,38 @@ PROFILE2_SOLUTION = source_file(
 ROOFLINE_REFERENCE = namespace_of(ROOFLINE_PART)
 
 
+class GeluCalled(Exception):
+    pass
+
+
+def refuse_gelu(
+    *arguments: object,
+    **keywords: object,
+) -> Tensor:
+    raise GeluCalled
+
+
 def check_gelu_by_steps(
     found: Callable[..., object],
     x: Tensor,
 ) -> None:
-    original = found.__globals__.get("F")
-    found.__globals__["F"] = SimpleNamespace()
+    """The real F.gelu is swapped out for the call, so nn.GELU and torch.nn.functional.gelu are caught too, while
+    every other function of F still works."""
+    expected = F.gelu(x, approximate="tanh")
+    original = torch.nn.functional.gelu
+    torch.nn.functional.gelu = refuse_gelu
 
     try:
         actual = found(x.clone())
-    except AttributeError as error:
-        if "gelu" not in str(error):
-            raise
-
-        raise Mismatch("gelu_by_steps called F.gelu. Write the formula out in steps of torch, as the lesson does.") from None
+    except GeluCalled:
+        raise Mismatch("gelu_by_steps called PyTorch's own GELU. Write the formula out in steps of torch, as the lesson does.") from None
     finally:
-        found.__globals__["F"] = original
+        torch.nn.functional.gelu = original
 
     expect_tensor(
         call=f"gelu_by_steps({x})",
         actual=actual,
-        expected=F.gelu(x, approximate="tanh"),
+        expected=expected,
     )
 
 
@@ -738,8 +791,11 @@ def expect_pair_of_ints(
         actual=actual,
     )
 
+    if isinstance(actual, list):
+        raise Mismatch(f"{call} is {actual!r}, a list, but it should be a tuple, like (flops, bytes).")
+
     if not isinstance(actual, tuple) or len(actual) != 2:
-        raise Mismatch(f"{call} is {actual!r}, but it should be a pair, the FLOPs and the bytes.")
+        raise Mismatch(f"{call} is {actual!r}, but it should be a tuple of two, like (flops, bytes).")
 
     for part, got, wanted in zip(("FLOPs", "bytes"), actual, expected):
         expect_value(
@@ -874,7 +930,8 @@ def measure_profile() -> list[tuple[str, int, float]]:
 
 def measure_roofline() -> dict[str, object]:
     """profile2's numbers on the best device, rates in billions a second. The lesson gives the range of three runs,
-    and its roofline uses the best rates seen."""
+    and its roofline uses the best rates seen. The 2,048 multiply is profile1's, so its rate shows whether
+    profile1's times and this table came from an equally quiet machine."""
     device = best_device()
     time_call = PROFILE_REFERENCE["time_call"]
     matmul_cost = ROOFLINE_REFERENCE["matmul_cost"]
@@ -886,7 +943,7 @@ def measure_roofline() -> dict[str, object]:
     seconds = time_call(lambda: x * 2, device, 5, 21)
     results["doubling GB/s"] = 2 * x.numel() * 4 / seconds / 1e9
 
-    for n in (256, 1024, 4096):
+    for n in (256, 1024, 2048, 4096):
         a = torch.randn(n, n, generator=generator).to(device)
         b = torch.randn(n, n, generator=generator).to(device)
         flops, bytes_moved = matmul_cost(n, 4)

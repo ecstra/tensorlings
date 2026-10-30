@@ -568,7 +568,14 @@ def differences_text(
 
     for position in positions[:5]:
         index = tuple(position)
-        lines.append(f"  at {list(index)}, got {number_text(actual[index].item())}, expected {number_text(expected[index].item())}")
+        got = number_text(actual[index].item())
+        wanted = number_text(expected[index].item())
+
+        if got == wanted:
+            got = f"{actual[index].item():.10g}"
+            wanted = f"{expected[index].item():.10g}"
+
+        lines.append(f"  at {list(index)}, got {got}, expected {wanted}")
 
     return "\n".join(lines)
 
@@ -646,11 +653,16 @@ def expect_tensor(
         return
 
     if small:
-        raise Mismatch(
-            f"{call} has the right shape but different numbers.\n"
-            f"got       {value_text(actual)}\n"
-            f"expected  {value_text(expected)}",
-        )
+        got = value_text(actual)
+        wanted = value_text(expected)
+        message = f"{call} has the right shape but different numbers.\ngot       {got}\nexpected  {wanted}"
+
+        # Values a small constant apart can print the same at PyTorch's 4 decimals.
+        if got == wanted:
+            gap = (actual.double() - expected.double()).abs().max().item()
+            message += f"\nThey agree to the digits shown, but differ by up to {gap:.3g}."
+
+        raise Mismatch(message)
 
     raise Mismatch(f"{call} has the right shape but different numbers.\n" + differences_text(actual, expected))
 

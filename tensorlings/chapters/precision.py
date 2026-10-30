@@ -24,6 +24,7 @@ from ..engine import (
 )
 from ..text import prose, source_file
 from .gpt import MODEL_REFERENCE
+from .profiling import PassThrough
 
 PRECISION = Chapter(
     folder="86_precision",
@@ -301,8 +302,9 @@ PRECISION2_LESSON = prose(
     and doubles after 2,000 good steps.
 
     Here is the GPT that gpt3 trains, untrained, on one batch of
-    Shakespeare. Its gradients come from a backward pass under autocast to
-    float16 at each scale, unscaled after, against the float32 ones.
+    Shakespeare, on the CPU. Its gradients come from a backward pass under
+    autocast to float16 at each scale, unscaled after, against the float32
+    ones.
 
     | Scale | 1 | 256 | 65,536 | 16,777,216 |
     |---|---|---|---|---|
@@ -569,6 +571,51 @@ def check_mixed_step(
         )
 
 
+class AutocastCalled(Exception):
+    pass
+
+
+def check_autocast_device(found: Callable[..., object]) -> None:
+    """mixed_step runs on the meta device, so an autocast written for "cpu" shows. The stand in for autocast stops
+    the step there, since meta tensors hold no numbers to step on."""
+    device_types: list[str] = []
+
+    def record(
+        device_type: str,
+        *arguments: object,
+        **keywords: object,
+    ) -> None:
+        device_types.append(device_type)
+
+        raise AutocastCalled
+
+    model = seeded_classifier(860).to("meta")
+    optimizer = torch.optim.SGD(model.parameters(), lr=0.5)
+    x = torch.zeros(8, 6, device="meta")
+    y = torch.zeros(8, dtype=torch.long, device="meta")
+    original = found.__globals__.get("torch")
+    found.__globals__["torch"] = PassThrough(torch, autocast=record, amp=PassThrough(torch.amp, autocast=record))
+
+    try:
+        found(model, optimizer, x, y, 1024.0)
+    except AutocastCalled:
+        pass
+    except Exception:
+        if device_types:
+            raise
+    finally:
+        found.__globals__["torch"] = original
+
+    if not device_types:
+        raise Mismatch("mixed_step should run the forward pass inside torch.autocast, for x's device type.")
+
+    if device_types[0] != "meta":
+        raise Mismatch(
+            f'mixed_step called torch.autocast for "{device_types[0]}", but x sat on another device. Use '
+            "x.device.type, so the step runs in float16 on a GPU too.",
+        )
+
+
 def check_precision2(checker: Checker) -> None:
     generator = torch.Generator().manual_seed(862)
     gradients = torch.randn(200, generator=generator) * torch.logspace(-10, -2, 200)
@@ -623,6 +670,12 @@ def check_precision2(checker: Checker) -> None:
                 scales=scales,
             ),
         )
+
+    checker.test(
+        function="mixed_step",
+        description="runs autocast for x's own device type",
+        run=check_autocast_device,
+    )
 
 
 PRECISION2 = Exercise(

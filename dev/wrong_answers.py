@@ -1765,6 +1765,18 @@ CASES: list[tuple[str, str, str, str]] = [
     ("quiz1", "clean_fractions keeps the negatives", "    cleaned = torch.where(grid < 0, 0.0, grid)", "    cleaned = grid"),
     ("reinforce1", "train_bandit returns without detach", "return preferences.detach()", "return preferences"),
     ("ppo3", "balance_time stops one step short of the cap", "for _ in range(LONGEST):", "for _ in range(LONGEST - 1):"),
+    ("profile1", "time_call starts the clock with time.time()", "        start = time.perf_counter()\n        run()", "        start = time.time()\n        run()"),
+    ("profile1", "calls_of runs run twice inside the profile", "        run()\n\n    return next((row.count", "        run()\n        run()\n\n    return next((row.count"),
+    ("profile1", "calls_of runs run before the profile starts", "    with profile(activities=[ProfilerActivity.CPU]) as profiler:\n        run()", "    run()\n\n    with profile(activities=[ProfilerActivity.CPU]) as profiler:\n        pass"),
+    ("profile2", "matmul_cost gives a list", "return 2 * n**3, 3 * n**2 * bytes_per_number", "return [2 * n**3, 3 * n**2 * bytes_per_number]"),
+    ("profile2", "gelu_by_steps calls nn.GELU", "    inner = math.sqrt(2 / math.pi) * (x + 0.044715 * x**3)\n\n    return 0.5 * x * (1 + torch.tanh(inner))", '    return torch.nn.GELU(approximate="tanh")(x)'),
+    ("profile2", "gelu_by_steps calls torch.nn.functional.gelu", "    inner = math.sqrt(2 / math.pi) * (x + 0.044715 * x**3)\n\n    return 0.5 * x * (1 + torch.tanh(inner))", '    return torch.nn.functional.gelu(x, approximate="tanh")'),
+    ("precision2", "mixed_step runs autocast for the CPU whatever the device", "with torch.autocast(x.device.type, dtype=torch.float16):", 'with torch.autocast("cpu", dtype=torch.float16):'),
+    ("flash1", "online_softmax works the total out again", "    return torch.exp(scores - largest.unsqueeze(-1)) / total.unsqueeze(-1)", "    weights = torch.exp(scores - largest.unsqueeze(-1))\n\n    return weights / weights.sum(dim=-1, keepdim=True)"),
+    ("flash1", "online_softmax asks for the largest and total, then calls torch.softmax", "    return torch.exp(scores - largest.unsqueeze(-1)) / total.unsqueeze(-1)", "    return torch.softmax(scores, dim=-1)"),
+    ("flash1", "online_softmax works the largest out again", "    return torch.exp(scores - largest.unsqueeze(-1)) / total.unsqueeze(-1)", "    return torch.exp(scores - scores.amax(dim=-1, keepdim=True)) / total.unsqueeze(-1)"),
+    ("kvcache1", "CachedSelfAttention makes the mask on the CPU only once cached", "        mask = torch.ones(steps, k.shape[2], dtype=torch.bool, device=x.device).tril(diagonal=past)\n        out = F.scaled_dot_product_attention(q, k, v, attn_mask=mask)", "        if cache is None:\n            out = F.scaled_dot_product_attention(q, k, v, is_causal=True)\n        else:\n            mask = torch.ones(steps, k.shape[2], dtype=torch.bool).tril(diagonal=past)\n            out = F.scaled_dot_product_attention(q, k, v, attn_mask=mask)"),
+    ("kvcache1", "CachedGPT makes the positions on the CPU", "positions = torch.arange(start, start + ids.shape[1], device=ids.device)", "positions = torch.arange(start, start + ids.shape[1])"),
     ("conv5", "pointwise reshapes the wrong way", "return (weight @ x.reshape(c, -1)).reshape(-1, h, w)", "return (weight @ x.reshape(-1, c).T).reshape(-1, h, w)"),
 ]
 

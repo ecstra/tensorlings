@@ -293,9 +293,9 @@ KVCACHE1_SOURCE = source_file(
 
 
     # TODO: Finish forward. The positions start at the cached count, the
-    #   length of the first layer's cached keys, or at 0 with no caches. Run
-    #   each block with its own layer's cache. Return the scores and the list
-    #   of every layer's new cache.
+    #   length of the first layer's cached keys, or at 0 with no caches, and
+    #   sit on ids's device. Run each block with its own layer's cache. Return
+    #   the scores and the list of every layer's new cache.
 ''' + indented(CACHED_GPT_INIT) + '''
 
 ''' + indented(CACHED_GPT_FORWARD_START) + '''
@@ -408,18 +408,24 @@ def check_cached_attention(found: type) -> None:
                         f"(2, 2, {end}, 4), every position so far.",
                     )
 
+    # The meta device holds no numbers, and a tensor left on the CPU beside it crashes, as it would on a GPU.
     on_meta = found(8, 2).to("meta")
+    meta_cache = (torch.zeros(1, 2, 3, 4, device="meta"), torch.zeros(1, 2, 3, 4, device="meta"))
 
-    try:
-        on_meta(torch.zeros(1, 3, 8, device="meta"), None)
-    except RuntimeError as error:
-        if "device" not in str(error):
-            raise
+    for x, cache, when in (
+        (torch.zeros(1, 3, 8, device="meta"), None, "with no cache"),
+        (torch.zeros(1, 1, 8, device="meta"), meta_cache, "with 3 positions cached"),
+    ):
+        try:
+            on_meta(x, cache)
+        except RuntimeError as error:
+            if "device" not in str(error):
+                raise
 
-        raise Mismatch(
-            "CachedSelfAttention.forward crashed with x on another device than the CPU, as on a GPU. Make the mask "
-            f"on x's device, with device=x.device.\n\nThe original message, {error}",
-        ) from None
+            raise Mismatch(
+                f"CachedSelfAttention.forward crashed {when}, with x on another device than the CPU, as on a GPU. "
+                f"Make the mask on x's device, with device=x.device.\n\nThe original message, {error}",
+            ) from None
 
 
 def check_cached_gpt_forward(found: type) -> None:
@@ -466,6 +472,37 @@ def check_cached_gpt_forward(found: type) -> None:
                 actual=scores,
                 expected=expected[:, start:end],
             )
+
+    check_positions_device(model)
+
+
+def check_positions_device(model: nn.Module) -> None:
+    """On the meta device an Embedding takes CPU positions without a word, so a hook on wpe looks at them."""
+    devices: list[str] = []
+    hook = model.wpe.register_forward_pre_hook(lambda module, args: devices.append(args[0].device.type))
+    model.to("meta")
+    ids = torch.zeros(2, 4, dtype=torch.long, device="meta")
+
+    try:
+        with torch.no_grad():
+            _, caches = model(ids)
+            model(ids[:, :1], caches)
+    except RuntimeError as error:
+        if "device" not in str(error):
+            raise
+
+        raise Mismatch(
+            "CachedGPT.forward crashed with ids on another device than the CPU, as on a GPU. Make every new tensor "
+            f"on ids's device, with device=ids.device.\n\nThe original message, {error}",
+        ) from None
+    finally:
+        hook.remove()
+
+    if any(device != "meta" for device in devices):
+        raise Mismatch(
+            "CachedGPT.forward made the positions on the CPU while ids sat on another device, which crashes on a "
+            "GPU. Make them on ids's device, with device=ids.device.",
+        )
 
 
 def check_cached_generate(found: object) -> None:
@@ -609,17 +646,21 @@ KVCACHE2_LESSON = prose(
     the course's GPT ran slower with it. Its time barely grew from 16 tokens
     to 128, so the math was never what took the time. Each step is many tiny
     jobs, and the cache's `torch.cat` and mask add a few more. The bigger GPT
-    has enough math per job, and there the cache won by over 5 times at 1,024
-    tokens.
+    has more math per job, and on the GPU the cache won by several times at
+    1,024 tokens. At 128 its lead swung from run to run, from about twice as
+    fast to even.
 
-    For the bigger GPT, the time with the cache still grew with the text.
-    Attention reads every cached key, and `torch.cat` copies the whole cache
-    each step.
+    On the CPU, the time with the cache still grew with the text. Attention
+    reads every cached key, and `torch.cat` copies the whole cache each step.
 
     The cache costs memory. For the course's GPT at 128 tokens it holds 512
     KiB, beside 3.1 MiB of weights. The bigger GPT's cache at 1,024 tokens is
     32 MiB for one text, and a server writing for many people keeps one per
     text. gqa1's shared key value heads shrink exactly this.
+
+    One catch hides in the prompt's cache. Its keys and values are views of
+    `c_attn`'s whole output, queries included. So they keep 1.5 times the
+    bytes `cache_bytes` counts alive, until the first `torch.cat` copies them.
 
     `.element_size()` gives the bytes of one number of a tensor.
 

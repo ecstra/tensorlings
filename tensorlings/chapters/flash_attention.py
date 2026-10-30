@@ -242,20 +242,27 @@ def merge_inputs(
 
 
 def check_online_softmax(found: object) -> None:
-    """A stand in for running_max_and_total records that online_softmax asks it, and not torch.softmax, for the
-    largest and the total."""
+    """A stand in for running_max_and_total records that online_softmax asks it for the largest and the total.
+    A second stand in gives a largest 1 too high and a total twice too large, so an answer that works either one
+    out again on its own, or calls torch.softmax, no longer follows it."""
     calls: list[Tensor] = []
+    skewed = False
 
     def recorded(scores: Tensor) -> tuple[Tensor, Tensor]:
         calls.append(scores)
+        largest, total = part_stats(scores)
 
-        return part_stats(scores)
+        if skewed:
+            return largest + 1, total * 2
+
+        return largest, total
 
     original = found.__globals__.get("running_max_and_total")
     found.__globals__["running_max_and_total"] = recorded
 
     try:
         for scores in (small_tensor(870, 3, 6), torch.tensor([[1000.0, 1001.0, 999.0], [-2.0, 0.5, 0.0]])):
+            skewed = False
             calls.clear()
             expect_tensor(
                 call=f"online_softmax({value_text(scores)})",
@@ -265,6 +272,18 @@ def check_online_softmax(found: object) -> None:
 
             if not calls:
                 raise Mismatch("online_softmax should take the largest and the total from running_max_and_total.")
+
+            skewed = True
+            largest, total = part_stats(scores)
+            followed = torch.exp(scores - largest.unsqueeze(-1) - 1) / (2 * total.unsqueeze(-1))
+            actual = found(scores.clone())
+
+            if not isinstance(actual, Tensor) or not torch.allclose(actual.double(), followed.double(), atol=1e-6):
+                raise Mismatch(
+                    "online_softmax should use the very largest and total that running_max_and_total gives. The "
+                    "check's stand in gave a largest 1 too high and a total twice too large, and the result did not "
+                    "follow them. Build the softmax from those two, not from torch.softmax or a max or sum of your own.",
+                )
     finally:
         if original is None:
             found.__globals__.pop("running_max_and_total", None)
@@ -435,16 +454,21 @@ FLASH2_LESSON = prose(
     output. At the end, the output over the total is attention's output. The
     method is exact, not an estimate.
 
+    `tiled_attention` keeps a block of queries in the outer loop and walks
+    the key blocks inside it. That is FlashAttention-2's order, and the first
+    paper looped the other way round.
+
     A causal model skips more. A block of queries never reads the key blocks
     after its own, which the mask would hide entirely, so nearly half the
     blocks go unread.
 
     The speed comes from where the blocks live. An A100 GPU has 40 to 80 GB of
     main memory, read at 1.5 to 2.0 TB/s. Beside each of its 108 compute units
-    sit 192 KB of fast memory, read at about 19 TB/s. FlashAttention's kernel
-    keeps each block in that fast memory, and writes back only the output and
-    each row's `m` and `d`. Its paper reports GPT-2 training 3 times faster at
-    1,024 tokens.
+    sit 192 KB of fast memory, read at about 19 TB/s. FlashAttention-2's
+    kernel keeps a block of queries, with its `m`, `d` and output, in that
+    fast memory. It writes back only the output and one number per row. The
+    first paper reports GPT-2 training 3 to 3.5 times faster than Hugging
+    Face's version at 1,024 tokens.
 
     Plain PyTorch can't choose where a tensor lives, and each line here runs as
     its own job through main memory. So this version teaches the method and
@@ -490,8 +514,9 @@ FLASH2_SOURCE = source_file(
 
     # TODO: Return how many blocks of keys tiled_attention reads in all, for
     #   steps queries and keys cut into blocks of block. Every block of queries
-    #   reads every block of keys. With causal, a block of queries reads only
-    #   the key blocks up to its own, since the mask hides the ones after it.
+    #   reads every block of keys. With causal, count what a causal version of
+    #   tiled_attention would read, each block of queries only the key blocks up
+    #   to its own, since the mask hides the ones after it.
     def blocks_read(
         steps: int,
         block: int,
