@@ -704,18 +704,21 @@ PPO2_LESSON = prose(
 
     When an episode ends at step t, nothing after it belongs to it. The next
     state's value counts as 0, and the sums stop there. A done flag marks
-    those steps.
+    those steps. ppo3's carts also end at a cap of 500 steps. Gymnasium calls
+    that cut a truncation, apart from a fall, but here both count as an end.
 
-    Here is ppo3's training after 10 updates, scored by how many steps the
-    greedy policy keeps 16 poles up, out of 500, on 5 seeds.
+    ppo3 builds the training loop. One update there is 128 steps of play by
+    16 carts, then 4 epochs of PPO on them. Here is that training after 10
+    updates, scored by how many steps the greedy policy keeps 16 poles up,
+    out of 500, on 5 seeds.
 
     | Lambda | 0 | 0.95 | 1 |
     |---|---|---|---|
     | Steps balanced | 9 to 12 | 283 to 423 | 146 to 473 |
 
     At lambda 0 nothing is learned yet. Every step pays 1, so while V knows
-    nothing every TD error looks alike. Lambda 1 learns, with the widest
-    spread over seeds, and 0.95 lands between the two.
+    nothing every TD error looks alike. Lambda 0.95 learns as much on average
+    as lambda 1, 344 against 347, with less than half the spread over seeds.
     """,
 )
 
@@ -901,8 +904,9 @@ PPO3_LESSON = prose(
     up to 500.
 
     The file holds it in plain PyTorch, with the physics of gym's
-    CartPole-v1. Sixteen carts run at once as the rows of one tensor, and a
-    cart that falls starts over.
+    CartPole-v1. The one change is that the cap of 500 steps counts as a
+    fall, as ppo2 said. Sixteen carts run at once as the rows of one tensor,
+    and a cart that falls starts over.
 
     One update of PPO has three parts.
 
@@ -910,9 +914,10 @@ PPO3_LESSON = prose(
     - Advantages: GAE with gamma 0.99 and lambda 0.95. Advantage plus value is the return V learns to guess.
     - Update: 4 epochs over the 2,048 samples in shuffled minibatches of 256, each step on PPO's loss plus half V's squared error.
 
-    That sum is the paper's combined objective, less its entropy bonus.
-    Common implementations also scale each minibatch's advantages to mean 0
-    and spread 1, which keeps the step size steady.
+    That sum follows the paper's combined objective, less its entropy bonus.
+    The weight of 0.5 on V's error comes from common implementations, where
+    the paper's Atari runs used 1. They also scale each minibatch's
+    advantages to mean 0 and spread 1, which keeps the step size steady.
 
     The score is how many steps the greedy policy, always taking its likelier
     action, keeps 16 fresh poles up. An untrained policy usually falls within
@@ -928,8 +933,8 @@ PPO3_LESSON = prose(
     update in place of settling at 500. RL's numbers are noisy, which is why
     papers report many seeds.
 
-    Reuse and the clip both pay. Here are 10 updates with other numbers of
-    epochs.
+    Reuse pays, and the clip seems to. Here are 10 updates with other numbers
+    of epochs.
 
     | Epochs | 1 | 4 | 10 | 10, no clip |
     |---|---|---|---|---|
@@ -989,10 +994,11 @@ PPO3_SOURCE = source_file(
 
 
     # TODO: Flatten the rollout's states, actions and log probabilities, and
-    #   advantages and returns, so steps and carts become one. For each of
-    #   epochs epochs, shuffle with torch.randperm and generator, and take one
-    #   optimizer step on minibatch_loss for each minibatch of that order.
-    #   Return the last loss as a plain number.
+    #   advantages and returns, with .flatten(0, 1), steps first, so steps and
+    #   carts become one. For each of epochs epochs, shuffle with
+    #   torch.randperm and generator, and take one optimizer step on
+    #   minibatch_loss for each minibatch of that order. Return the last loss
+    #   as a plain number.
     def ppo_update(
         policy: nn.Module,
         value: nn.Module,
@@ -1210,7 +1216,12 @@ def check_ppo_learns(found: object) -> None:
 
 
 def check_balance_time(found: object) -> None:
-    for name, policy in (("an untrained policy", seeded_networks(840)[0]), ("a policy after 5 updates", REFERENCE["train_ppo"](5, 841))):
+    # Seed 4's untrained policy happens to hold all 8 carts up to LONGEST, so a loop that stops short shows.
+    for name, policy in (
+        ("an untrained policy", seeded_networks(840)[0]),
+        ("a policy after 5 updates", REFERENCE["train_ppo"](5, 841)),
+        ("a policy that holds every cart to the end", seeded_networks(4)[0]),
+    ):
         grad_seen: list[bool] = []
         hook = policy.register_forward_pre_hook(lambda module, inputs: grad_seen.append(torch.is_grad_enabled()))
 

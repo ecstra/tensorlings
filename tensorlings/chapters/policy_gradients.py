@@ -29,7 +29,7 @@ POLICY_GRADIENTS = Chapter(
 
         Reinforcement learning trains from scores in place of right answers.
         This chapter names its parts on a row of slot machines, then derives
-        REINFORCE, the oldest way to follow the gradient of an expected score.
+        REINFORCE, the classic way to follow the gradient of an expected score.
         A baseline cuts its noise, and a speller trained on a score made with
         `==` shows why it needs no gradient from the score at all.
 
@@ -297,14 +297,15 @@ def measure_policy_gradients() -> dict[str, object]:
     seeds = range(5)
     results: dict[str, object] = {}
 
-    for name, preferences in (
-        ("all 0", torch.zeros(5)),
-        ("[0, 0, 2, 0, 0]", torch.tensor([0.0, 0.0, 2.0, 0.0, 0.0])),
-        ("[0, 0, 6, 0, 0]", torch.tensor([0.0, 0.0, 6.0, 0.0, 0.0])),
+    # A seed per row, so the rows don't share one draw of noise.
+    for name, preferences, seed in (
+        ("all 0", torch.zeros(5), 790),
+        ("[0, 0, 2, 0, 0]", torch.tensor([0.0, 0.0, 2.0, 0.0, 0.0]), 791),
+        ("[0, 0, 6, 0, 0]", torch.tensor([0.0, 0.0, 6.0, 0.0, 0.0]), 792),
     ):
         results[f"rl1 {name}"] = (
             REFERENCE["expected_reward"](preferences, ARM_MEANS).item(),
-            REFERENCE["average_reward"](preferences, ARM_MEANS, 1000, torch.Generator().manual_seed(790)),
+            REFERENCE["average_reward"](preferences, ARM_MEANS, 1000, torch.Generator().manual_seed(seed)),
         )
 
     for steps in (50, 200, 500):
@@ -380,10 +381,11 @@ RL1_LESSON = prose(
     | Preferences | Exact | Average over 1,000 episodes |
     |---|---|---|
     | all 0 | 0.200 | 0.154 |
-    | [0, 0, 2, 0, 0] | 0.649 | 0.597 |
-    | [0, 0, 6, 0, 0] | 0.990 | 0.950 |
+    | [0, 0, 2, 0, 0] | 0.649 | 0.672 |
+    | [0, 0, 6, 0, 0] | 0.990 | 1.002 |
 
-    The best policy puts all its chance on arm 2, for an expected reward of
+    Each average misses by a few hundredths, either way, from the noise of
+    its own 1,000 draws. The best policy puts all its chance on arm 2, for an expected reward of
     1.0. The next exercises learn the preferences from rewards alone.
     """,
 )
@@ -696,11 +698,15 @@ def check_loss_has_gradient(found: object) -> None:
 def check_train_bandit(found: object) -> None:
     for steps, means, seed in ((2, ARM_MEANS, 797), (6, torch.tensor([1.0, -1.0, 0.0]), 798)):
         call = f"train_bandit(arm_means, {steps}, 8, 0.5, a generator seeded with {seed})"
+        actual = found(means, steps, 8, 0.5, torch.Generator().manual_seed(seed))
         expect_tensor(
             call=call,
-            actual=found(means, steps, 8, 0.5, torch.Generator().manual_seed(seed)),
+            actual=actual,
             expected=FIRST_TRAIN["train_bandit"](means, steps, 8, 0.5, torch.Generator().manual_seed(seed)),
         )
+
+        if actual.requires_grad:
+            raise Mismatch(f"{call} gives preferences that still record gradients. Return preferences.detach().")
 
 
 def check_bandit_learns(found: object) -> None:
@@ -793,7 +799,7 @@ REINFORCE2_LESSON = prose(
     action did than usual. A common baseline is the average reward of the
     batch. That one also counts the reward it is subtracted from, which
     shrinks the estimate by a factor of 31 in 32 at 32 episodes. GRPO, in
-    82_dpo, uses this same batch average.
+    82_dpo, uses a version of it taken per question.
 
     Here is the spread of the estimate over 1,000 batches of 32 episodes, at
     equal preferences, averaged over the 5 arms.
@@ -807,8 +813,9 @@ REINFORCE2_LESSON = prose(
     the rewards already average near 0, so it changes little. Averaged over
     the 1,000 batches, every column gives about the same gradient.
 
-    Training shows the noise as luck. Here is the expected reward after 100
-    steps of reinforce1's training on the shifted bandit, 10 seeds each.
+    Training shows the noise as luck. Here is reinforce1's training on the
+    shifted bandit for 100 steps, 10 seeds each. Its expected reward is taken
+    on `ARM_MEANS`, leaving out the shift of 10.
 
     | Weights | Lowest | Highest | Average |
     |---|---|---|---|
@@ -1031,7 +1038,9 @@ REINFORCE3_LESSON = prose(
 
     A word's log probability is the sum of its letters' log probabilities.
     Indexing with `torch.arange(5)` and the words together picks each
-    position's row and each word's letter there, as masked2 did.
+    position's row and each word's letter there. The arange lines up with the
+    positions, the last dimension of the words, as the `rows` line in the
+    file shows.
 
     Here is Adam at a learning rate of 0.1, 64 words a step, with the batch
     average as the baseline, on 5 seeds.
@@ -1110,9 +1119,9 @@ REINFORCE3_SOURCE = source_file(
 ''' + indented(SPELLER_PART) + '''
 
 
-    # TODO: Return the log probability of each of words, of shape (batch, 5),
-    #   the sum over the positions of each letter's log softmax in its row of
-    #   logits.
+    # TODO: words has shape (batch, 5). Return one log probability per word,
+    #   of shape (batch,), the sum over the positions of each letter's log
+    #   softmax in its row of logits.
     def word_log_probs(
         logits: Tensor,
         words: Tensor,

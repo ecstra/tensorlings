@@ -1751,6 +1751,8 @@ CASES: list[tuple[str, str, str, str]] = [
     ("fast3", "compare scores other batches", "validation_loss(scored, data, batches, torch.Generator().manual_seed(1), device)", "validation_loss(scored, data, batches, torch.Generator().manual_seed(0), device)"),
     ("fast3", "compare counts the plain model's bytes each time", "model_bytes(setup)", "model_bytes(model)"),
     ("fast3", "compare measures the cache without int8 twice", '"cache and int8": (fast_model(model, True), cached_generate)', '"cache and int8": (fast_model(model, False), cached_generate)'),
+    ("reinforce1", "train_bandit returns without detach", "return preferences.detach()", "return preferences"),
+    ("ppo3", "balance_time stops one step short of the cap", "for _ in range(LONGEST):", "for _ in range(LONGEST - 1):"),
     ("conv5", "pointwise reshapes the wrong way", "return (weight @ x.reshape(c, -1)).reshape(-1, h, w)", "return (weight @ x.reshape(-1, c).T).reshape(-1, h, w)"),
 ]
 
