@@ -474,7 +474,7 @@ INTERP1_LESSON = prose(
     It learns from repeated rows. Each row repeats a segment of 6 to 12
     different tokens until it is 24 long. Within the first copy, the next token
     can't be known, and guessing gets 1 in 32. After that, an earlier copy
-    gives it away. `train_copier` trains one in a second or two, and it gets
+    gives it away. `train_copier` trains one in a few seconds, and it gets
     99.6% of those positions right.
 
     A forward hook reads a module's output while the model runs, with no
@@ -493,7 +493,7 @@ INTERP1_LESSON = prose(
 
     | Read from | The next token, where a copy gives it | The previous token, at positions 1 to 11 |
     |---|---|---|
-    | `embed` | 3.3% | 3.4% |
+    | `embed` | 3.3% | 3.3% |
     | `blocks[0]` | 6.9% | 100% |
     | `blocks[1]` | 99.8% | 97.5% |
 
@@ -1005,9 +1005,11 @@ INTERP3_LESSON = prose(
     | Corrupted, `blocks[1]` patched from clean | 10.92 |
 
     Patching the second block brings the clean answer back. Patching the
-    first does nothing, though zeroing it broke the model. The first block is
-    needed, but the swapped token never passes through it. It reaches the
-    answer through the second block reading the residual stream.
+    first does nothing, though zeroing it broke the model. The first block
+    does copy the swapped token one place forward, as the next position's
+    previous token. No answer reads it there. The second block reads the
+    swapped token straight from the embedding at its own place. So the path
+    that carries the answer skips the first block.
     """,
 )
 

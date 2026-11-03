@@ -97,6 +97,12 @@ def shifted(
     return torch.roll(x, steps, dims=1)
 '''
 
+CHANGE_PART = '''
+# A change the answer must follow. One function changes the input and the answer alike. A pair
+# gives the input's change and then the answer's, for an answer that moves another way or not at all.
+Change = Callable[[Tensor], Tensor] | tuple[Callable[[Tensor], Tensor], Callable[[Tensor], Tensor]]
+'''
+
 PLAN_SOLUTION = '''
 PLAN = Plan(
     problem="predict the next row of an elementary cellular automaton on a ring",
@@ -131,7 +137,7 @@ def make_batch(
 '''
 
 TRANSFORMS_SOLUTION = '''
-TRANSFORMS: dict[str, Callable[[Tensor], Tensor]] = {
+TRANSFORMS: dict[str, Change] = {
     "shift by 1": lambda rows: shifted(rows, 1),
     "shift by 5": lambda rows: shifted(rows, 5),
 }
@@ -146,25 +152,25 @@ def floor_score(
 '''
 
 # own1's whole file past its imports, which own2 hands the learner as given code.
-OWN1_PARTS = SETTINGS_PART + PLAN_CLASS_PART + SHIFT_PART + PLAN_SOLUTION + EXACT_SOLUTION + BATCH_SOLUTION + TRANSFORMS_SOLUTION + FLOOR_SOLUTION
+OWN1_PARTS = (
+    SETTINGS_PART + PLAN_CLASS_PART + SHIFT_PART + CHANGE_PART + PLAN_SOLUTION + EXACT_SOLUTION + BATCH_SOLUTION + TRANSFORMS_SOLUTION + FLOOR_SOLUTION
+)
 
 GAP_PART = '''
-# design5's gaps, given.
-def equivariance_gap(
-    f: Callable[[Tensor], Tensor],
-    g: Callable[[Tensor], Tensor],
-    x: Tensor,
-) -> float:
-    return (f(g(x)) - g(f(x))).abs().max().item()
-
-
+# design5's gaps, given, with a pair's first change run on the input and its second on the answer.
 def property_gaps(
     f: Callable[[Tensor], Tensor],
     x: Tensor,
-    transforms: dict[str, Callable[[Tensor], Tensor]],
+    transforms: dict[str, Change],
 ) -> dict[str, float]:
+    gaps = {}
+
     with torch.no_grad():
-        return {name: equivariance_gap(f, transform, x) for name, transform in transforms.items()}
+        for name, change in transforms.items():
+            change_input, change_answer = change if isinstance(change, tuple) else (change, change)
+            gaps[name] = (f(change_input(x)) - change_answer(f(x))).abs().max().item()
+
+    return gaps
 '''
 
 SILENT_PART = '''
@@ -249,6 +255,13 @@ def score(
     return right
 '''
 
+RECIPE_PART = '''
+# The run the checks repeat with your own functions, both models from seed 0. Raise these if your
+# problem needs more rows or more steps to learn.
+TRAIN_ROWS = 64
+TRAIN_STEPS = 500
+'''
+
 
 def namespace_of(
     code: str,
@@ -272,11 +285,14 @@ def namespace_of(
     return namespace
 
 
-REFERENCE = namespace_of(OWN1_PARTS + GAP_PART + SILENT_PART + BASELINE_PART + MODULE_SOLUTION + LOSS_SOLUTION + TRAIN_SOLUTION + SCORE_SOLUTION)
+REFERENCE = namespace_of(
+    OWN1_PARTS + GAP_PART + SILENT_PART + BASELINE_PART + MODULE_SOLUTION + LOSS_SOLUTION + TRAIN_SOLUTION + SCORE_SOLUTION + RECIPE_PART,
+)
 
-TRAIN_ROWS = 64
+TRAIN_ROWS = REFERENCE["TRAIN_ROWS"]
+TRAIN_STEPS = REFERENCE["TRAIN_STEPS"]
 HELD_ROWS = 1000
-TRAIN_STEPS = 500
+GAP_ROWS = 64
 
 
 def rule_reference(module: object) -> dict[str, object] | None:
@@ -379,6 +395,18 @@ OWN1_LESSON = prose(
     tests your `TRANSFORMS` on `exact` first. A gap there means the property
     is wrong, not the module.
 
+    A `Change` that is one function changes the input and the answer
+    alike. When the answer moves another way, give a pair, the input's
+    change and then the answer's. Reversing a row, for one, leaves its
+    majority as it was.
+
+    ```python
+    "reverse": (lambda rows: rows.flip(1), lambda answer: answer),
+    ```
+
+    A change must also do the same thing every time it runs, so a shuffle
+    draws its order once, outside the function.
+
     `floor_score` is what doing nothing scores, every cell keeping its
     state. On Rule 110 it gets 62% of cells right, so a model has learned
     something only above that.
@@ -410,6 +438,9 @@ OWN1_SOURCE = source_file(
 
 
 ''' + indented(SHIFT_PART) + '''
+
+
+''' + indented(CHANGE_PART) + '''
 
 
     # TODO: Plan the module before writing it. Fill each field in plain words.
@@ -451,9 +482,10 @@ OWN1_SOURCE = source_file(
 
 
     # TODO: Name the changes the property promises the answer will follow,
-    #   each a function of a batch of rows. For the rule, give a shift by 1
-    #   and a shift by 5 around the ring.
-    TRANSFORMS: dict[str, Callable[[Tensor], Tensor]] = ...
+    #   each a Change of a batch of rows. Each must do the same thing every
+    #   time it runs. For the rule, give a shift by 1 and a shift by 5 around
+    #   the ring.
+    TRANSFORMS: dict[str, Change] = ...
 
 
     # TODO: Return the share of cells right when every cell keeps its state, as
@@ -486,6 +518,9 @@ OWN1_SOLUTION = source_file(
 
 
 ''' + indented(SHIFT_PART) + '''
+
+
+''' + indented(CHANGE_PART) + '''
 
 
 ''' + indented(PLAN_SOLUTION) + '''
@@ -626,10 +661,42 @@ def check_make_batch(module: object) -> Callable[[object], None]:
     return run
 
 
+def is_change(change: object) -> bool:
+    if isinstance(change, tuple):
+        return len(change) == 2 and all(callable(part) for part in change)
+
+    return callable(change)
+
+
+def changed_twice(
+    name: str,
+    change: Callable[[Tensor], Tensor],
+    batch: Tensor,
+    what: str,
+) -> Tensor:
+    """The change run twice on copies of one batch, which must agree, since a gap compares two runs of it."""
+    changed = change(batch.clone())
+    again = change(batch.clone())
+
+    if not isinstance(changed, Tensor) or changed.shape != batch.shape:
+        raise Mismatch(f"TRANSFORMS[{name!r}] gave {value_text(changed)} for the {what}, but it should keep their shape.")
+
+    if not torch.equal(changed, again):
+        raise Mismatch(
+            f"TRANSFORMS[{name!r}] gave two different results for the same {what}. A change must do the same thing "
+            "every time it runs, so draw a shuffle's order once, outside the function.",
+        )
+
+    return changed
+
+
 def check_transforms(module: object) -> Callable[[object], None]:
     def run(value: object) -> None:
-        if not isinstance(value, dict) or not value or not all(callable(transform) for transform in value.values()):
-            raise Mismatch(f"TRANSFORMS is {value_text(value)}, but it should be a dict of names to functions of a batch.")
+        if not isinstance(value, dict) or not value or not all(is_change(change) for change in value.values()):
+            raise Mismatch(
+                f"TRANSFORMS is {value_text(value)}, but it should be a dict of names to changes, each a function of a "
+                "batch or a pair of them.",
+            )
 
         inputs, _ = generic_batch(module)
         exact = getattr(module, "exact", None)
@@ -637,14 +704,21 @@ def check_transforms(module: object) -> Callable[[object], None]:
         if not callable(exact):
             raise Mismatch("This test runs your exact through each change, so write exact first.")
 
-        for name, transform in value.items():
-            changed = transform(inputs.clone())
+        answers = exact(inputs.clone())
 
-            if not isinstance(changed, Tensor) or changed.shape != inputs.shape:
-                raise Mismatch(f"TRANSFORMS[{name!r}] gave {value_text(changed)}, but it should give a batch of the same shape.")
+        for name, change in value.items():
+            change_input, change_answer = change if isinstance(change, tuple) else (change, change)
 
-            if torch.equal(changed, inputs):
+            if torch.equal(changed_twice(name, change_input, inputs, "inputs"), inputs):
                 raise Mismatch(f"TRANSFORMS[{name!r}] leaves the batch as it was, so it tests nothing. Make it change the input.")
+
+            try:
+                changed_twice(name, change_answer, answers, "answers from exact")
+            except (IndexError, RuntimeError) as error:
+                raise Mismatch(
+                    f"TRANSFORMS[{name!r}] crashed on exact's answers: {error}. When the answer doesn't move the way "
+                    "the input does, give a pair, the input's change and then the answer's.",
+                ) from None
 
         gaps = REFERENCE["property_gaps"](exact, inputs, value)
 
@@ -766,7 +840,8 @@ OWN1 = Exercise(
         "and 1 to get the pattern, .long() it, and index a tensor of the rule's 8 bits with it.",
         "make_batch": "torch.randint(0, 2, (count, WIDTH), generator=generator) gives whole numbers. Make them "
         "floats with .float(), then return them with exact of them.",
-        "TRANSFORMS": "A dict of two lambdas, each calling shifted on its rows, one with 1 and one with 5.",
+        "TRANSFORMS": "A dict of two lambdas, each calling shifted on its rows, one with 1 and one with 5. A shift "
+        "moves the next row the same way, so each entry is one function, not a pair.",
         "floor_score": "Compare rows with next_rows, turn the matches into floats, and take their mean as a plain "
         "number.",
         "floor": "It comes from floor_score and make_batch. Get those right first.",
@@ -795,17 +870,22 @@ OWN2_LESSON = prose(
     A 1 by 1 convolution is a Linear run on each place on its own. No layer
     reads the row's length, so the module takes a row of any width.
 
-    `loss_of`, `train` and `score` don't depend on the problem, so they
-    serve any module of yours. `train` runs Adam at 0.01 on one fixed batch,
-    and `score` gives the share of answers right.
+    `train` doesn't depend on the problem, so it serves any module of
+    yours. It runs Adam at 0.01 on one fixed batch. `loss_of` and `score`
+    fit the rule, whose cells are 0 or 1, with binary cross entropy and a
+    logit cut at 0. A problem with other answers, such as ranks, writes
+    both its own way, a mean squared error and a share within a tolerance,
+    for example.
 
     The last lines run the method's checks in order.
 
     - Before training: design4's `silent_after_one_step` must list nothing, every parameter learning.
     - After training: design5's `property_gaps` must be float rounding, below 1e-4.
-    - Against the baseline: both train on the same 64 rows and are scored on 1,000 rows they never saw, as design2 did.
+    - Against the baseline: both train on the same `TRAIN_ROWS` rows for `TRAIN_STEPS` steps, then are scored on 1,000 rows they never saw, as design2 did.
 
-    Here is the run behind it, 500 steps, the range over 3 seeds.
+    The checks repeat that run with your own functions, so raise
+    `TRAIN_ROWS` or `TRAIN_STEPS` if your problem needs more. Here is the
+    run with 64 rows and 500 steps, the range over 3 seeds.
 
     | Model | Training rows | New rows | New rows of 256 cells |
     |---|---|---|---|
@@ -824,6 +904,10 @@ OWN2_LESSON = prose(
     Structure buys data. Your module is exact from 16 training rows. The
     baseline needs 256 rows to reach 89% to 90% and 1,024 to reach 100%, and
     it still can't take a row of another width.
+
+    Once your module wins, interp's tools show how. A probe, as interp1 fit
+    one, reads what each layer holds, and patching, as interp3 did, tests
+    which layer the answer runs through.
     """,
 )
 
@@ -842,7 +926,7 @@ OWN2_SOURCE = source_file(
 
 
     # own1's plan and toy task, given. If you planned a problem of your own,
-    # paste your own1 here in their place.
+    # paste your own1 here in their place, and write a Baseline for it below.
 ''' + indented(OWN1_PARTS) + '''
 
 
@@ -908,7 +992,8 @@ OWN2_SOURCE = source_file(
         ...
 
 
-    train_rows, train_next = make_batch(64, torch.Generator().manual_seed(0))
+''' + indented(RECIPE_PART) + '''
+    train_rows, train_next = make_batch(TRAIN_ROWS, torch.Generator().manual_seed(0))
     held_rows, held_next = make_batch(1000, torch.Generator().manual_seed(1000))
 
     torch.manual_seed(0)
@@ -919,9 +1004,9 @@ OWN2_SOURCE = source_file(
 
     # TODO: Run the method's checks. Before training, set silent to
     #   silent_after_one_step of own, with loss_of on the training rows and a
-    #   rate of 0.1. Then train own and baseline 500 steps each on the training
-    #   rows. Set own_score and baseline_score to their scores on the held rows,
-    #   and gaps to property_gaps of own on the first 64 held rows.
+    #   rate of 0.1. Then train own and baseline TRAIN_STEPS steps each on the
+    #   training rows. Set own_score and baseline_score to their scores on the
+    #   held rows, and gaps to property_gaps of own on the first 64 held rows.
     silent = ...
     own_score = ...
     baseline_score = ...
@@ -972,7 +1057,8 @@ OWN2_SOLUTION = source_file(
 ''' + indented(SCORE_SOLUTION) + '''
 
 
-    train_rows, train_next = make_batch(64, torch.Generator().manual_seed(0))
+''' + indented(RECIPE_PART) + '''
+    train_rows, train_next = make_batch(TRAIN_ROWS, torch.Generator().manual_seed(0))
     held_rows, held_next = make_batch(1000, torch.Generator().manual_seed(1000))
 
     torch.manual_seed(0)
@@ -982,8 +1068,8 @@ OWN2_SOLUTION = source_file(
 
 
     silent = silent_after_one_step(own, lambda model: loss_of(model, train_rows, train_next), 0.1)
-    train(own, train_rows, train_next, 500)
-    train(baseline, train_rows, train_next, 500)
+    train(own, train_rows, train_next, TRAIN_STEPS)
+    train(baseline, train_rows, train_next, TRAIN_STEPS)
     own_score = score(own, held_rows, held_next)
     baseline_score = score(baseline, held_rows, held_next)
     gaps = property_gaps(own, held_rows[:64], TRANSFORMS)
@@ -1212,15 +1298,31 @@ class FixedLogits(nn.Module):
         return self.logits * self.scale
 
 
+def recipe(module: object) -> tuple[int, int]:
+    """The file's TRAIN_ROWS and TRAIN_STEPS, which a learner may raise for a problem that needs more."""
+    found = []
+
+    for name in ("TRAIN_ROWS", "TRAIN_STEPS"):
+        value = getattr(module, name, None)
+
+        if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+            raise Mismatch(f"{name} is {value_text(value)}, but it should be a whole number above 0.")
+
+        found.append(value)
+
+    return found[0], found[1]
+
+
 def trained_pair(module: object) -> tuple[nn.Module, nn.Module, tuple[Tensor, Tensor]]:
-    """The file's own run done again with its own functions: both models from seed 0, 500 steps on the same rows."""
+    """The file's own run done again with its own functions: both models from seed 0, on the same rows."""
+    rows, steps = recipe(module)
     train = needed(module, "train")
-    train_rows, train_next = module_batch(module, TRAIN_ROWS, 0)
+    train_rows, train_next = module_batch(module, rows, 0)
     held = module_batch(module, HELD_ROWS, 1000)
     own = seeded_module(needed(module, "OwnModule"), 0)
     baseline = seeded_module(needed(module, "Baseline"), 0)
-    train(own, train_rows, train_next, TRAIN_STEPS)
-    train(baseline, train_rows, train_next, TRAIN_STEPS)
+    train(own, train_rows, train_next, steps)
+    train(baseline, train_rows, train_next, steps)
 
     return own, baseline, held
 
@@ -1233,7 +1335,7 @@ def check_silent(module: object) -> Callable[[object], None]:
                 "never moves, so the module isn't the one you planned.",
             )
 
-        train_rows, train_next = module_batch(module, TRAIN_ROWS, 0)
+        train_rows, train_next = module_batch(module, recipe(module)[0], 0)
         loss_of = needed(module, "loss_of")
         found = REFERENCE["silent_after_one_step"](
             seeded_module(needed(module, "OwnModule"), 0),
@@ -1257,6 +1359,7 @@ def check_scores(module: object) -> Callable[[object], None]:
             call="baseline_score",
             value=getattr(module, "baseline_score", None),
         )
+        rows, steps = recipe(module)
         own, baseline, held = trained_pair(module)
         score = needed(module, "score")
         expected_own = score(own, *held)
@@ -1269,7 +1372,8 @@ def check_scores(module: object) -> Callable[[object], None]:
             if abs(actual - expected) > 1e-4:
                 raise Mismatch(
                     f"{name} is {value_text(actual)}, but the same run gives about {expected:.2f}. Train both from seed "
-                    "0 for 500 steps on the training rows, then score them on the held rows.",
+                    f"0 for TRAIN_STEPS steps on TRAIN_ROWS training rows, {steps} and {rows} in your file, then score "
+                    "them on the held rows.",
                 )
 
         margin = needed(module, "PLAN").margin
@@ -1294,7 +1398,7 @@ def check_gaps(module: object) -> Callable[[object], None]:
             raise Mismatch(f"gaps is {value_text(value)}, but it should be a dict with the names {sorted(transforms)}.")
 
         own, _, held = trained_pair(module)
-        found = REFERENCE["property_gaps"](own, held[0][:TRAIN_ROWS], transforms)
+        found = REFERENCE["property_gaps"](own, held[0][:GAP_ROWS], transforms)
 
         for name, gap in found.items():
             if gap > 1e-4:
@@ -1370,8 +1474,8 @@ OWN2 = Exercise(
         "the mean's .item(). Call model.train() before returning it.",
         "silent": "Pass own, a lambda that takes a model and returns loss_of of it on train_rows and train_next, and "
         "0.1.",
-        "own_score": "Call train on own and on baseline with the training rows and 500, then score each on held_rows "
-        "and held_next.",
+        "own_score": "Call train on own and on baseline with the training rows and TRAIN_STEPS, then score each on "
+        "held_rows and held_next.",
         "baseline_score": "It comes from the same lines as own_score. Get those right first.",
         "gaps": "Call property_gaps with own, held_rows[:64] and TRANSFORMS, after training.",
     },

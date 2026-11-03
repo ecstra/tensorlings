@@ -605,8 +605,8 @@ PHYSICS1_LESSON = prose(
 
     Wikipedia's article on the method says the semi-implicit step is symplectic, so it almost keeps
     the energy. Plain Euler adds a little every step. DeepMind's learned simulator, GNS, has its
-    network predict accelerations and moves the particles with an Euler step. physics3's networks
-    do the same, so how well they simulate comes down to their accelerations.
+    network predict accelerations and moves the particles with this same semi-implicit Euler step.
+    physics3's networks do the same, so how well they simulate comes down to their accelerations.
     """,
 )
 
@@ -657,7 +657,7 @@ PHYSICS1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the positions over steps euler_steps with accelerate, x
+    # TODO: Return the positions over `steps` euler_steps with accelerate, x
     #   first, stacked on a new dim 1, of shape (systems, steps + 1, particles,
     #   2). Record nothing for autograd.
     def rollout(
@@ -828,11 +828,20 @@ PHYSICS2_LESSON = prose(
 
     design2's diagnosis reads the flat MLP as failed to fit. It can't match the accelerations even
     on its own training states. Given only 4 systems instead, it learns them, 96% to 98% close, and
-    gets under 1% of new states close, failed to generalize.
+    gets under 1% of new states close, failed to generalize. So more data won't rescue it.
 
-    So more data won't rescue it. Failed to fit calls for a structure that can express the skill,
-    and physics3 builds one from what the physics already says. The lines at the end of the file
-    run a shorter version, 200 systems for 1,000 steps, and reach the same verdict.
+    design2 named two cures for a failure to fit, a layer that can express the skill, or a fix to
+    its training. Longer training and a wider MLP try the second, over 3 seeds.
+
+    | Flat MLP | Close, training | Close, held out |
+    |---|---|---|
+    | 3,000 steps, as above | 6.9% to 7.7% | 4.4% to 5.2% |
+    | 20,000 steps | 17% to 18% | 6.4% to 7.0% |
+    | 20,000 steps, 512 wide, 286,218 weights | 34% to 36% | 8.7% to 10.5% |
+
+    Even the wide one fits only a third of its own states, far from 90%. So the structure has to
+    change, and physics3 builds one from what the physics already says. The lines at the end of the
+    file run a shorter version, 200 systems for 1,000 steps, and reach the same verdict.
     """,
 )
 
@@ -1148,9 +1157,22 @@ PHYSICS3_LESSON = prose(
     | `RelativeForces` | 66% to 96% | 66% to 96% | 64% to 96% |
     | `CentralForces` | 100% | 100% | 100% |
 
-    Each fact the physics gave pays off. Pairs fit where the flat MLP failed, offsets survive a
-    move, and pulls along the line survive a turn and fit every state. `silent` runs design4's
-    check, and every weight of `CentralForces` learns from the first step.
+    The turn costs no module anything here, since the training states already come in every
+    orientation. To see what pulls along the line buy, train each module only on systems laid out
+    along one line. Then test it on new systems on that line, and on the same states turned 90
+    degrees.
+
+    | Module | On the line | Turned 90 degrees |
+    |---|---|---|
+    | flat MLP | 24% to 27% | 0.7% to 1.4% |
+    | pairs on absolute positions | 95% to 97% | under 0.5% |
+    | `RelativeForces` | 98% | 0% to 1.3% |
+    | `CentralForces` | 100% | 100% |
+
+    Each fact the physics gave pays off. Pairs fit where the flat MLP failed, and offsets survive a
+    move. Pulls along the line survive a turn no training state showed, because the network gives
+    only each pull's size and the offset carries its direction. `silent` runs design4's check, and
+    every weight of `CentralForces` learns from the first step.
     """,
 )
 
@@ -1511,7 +1533,8 @@ PHYSICS4_LESSON = prose(
     `CentralForces` makes every pair equal and opposite by construction. Both ends read the same
     length and stiffness, and pull along opposite offsets. That is Newton's third law, and with a
     force that depends only on the distance, energy keeps as well. Its momentum stays near 1e-6, and
-    its energy changes no more than the true simulator's, 2.0% to 2.6% on 20 particles against 2.3%.
+    its energy changes about as much as the true simulator's, 2.0% to 2.6% on 20 particles against
+    2.3%.
 
     The stiffness row shows Hooke's form at work. Read as an input, a stiffness above any in
     training leaves the law guessing, 15 to 24 times further off than when it multiplies.
@@ -1862,6 +1885,26 @@ def measure_baselines() -> dict[str, object]:
     return results
 
 
+def measure_longer_training() -> dict[str, object]:
+    """physics2's second table, the flat MLP trained 20,000 steps at its own width and at a width of 512, over 3
+    seeds, to see whether its failure to fit is its training's."""
+    share = BASELINE_REFERENCE["share_close"]
+    results: dict[str, object] = {}
+
+    with pinned_threads():
+        pool, held = lesson_pools()
+
+        for name, make in (
+            ("20000 steps", BASELINE_REFERENCE["FlatMLP"]),
+            ("20000 steps, width 512", lambda: BASELINE_REFERENCE["FlatMLP"](5, 512)),
+        ):
+            for seed in SEEDS:
+                model = trained(make, pool, seed, 20000)
+                results[f"{name} {seed}"] = (share(model, pool, 0.1), share(model, held, 0.1))
+
+    return results
+
+
 def measure_structures() -> dict[str, object]:
     """physics3's tables, each structure's property gaps untrained and its share of held out accelerations within
     0.1 after training, plain, moved by (4, -3) and turned by 1 radian, over 3 seeds."""
@@ -1899,6 +1942,45 @@ def measure_structures() -> dict[str, object]:
             for seed in SEEDS:
                 model = trained(make, pool, seed)
                 results[f"{name} {seed}"] = (share(model, held, 0.1), share(model, moved, 0.1), share(model, turned, 0.1))
+
+    return results
+
+
+def line_pool(
+    systems: int,
+    seed: int,
+) -> tuple[Tensor, Tensor, Tensor]:
+    """state_pool's states for systems laid out along the x axis and moving along it, so they stay on it."""
+    x, v, springs = WORLD_REFERENCE["random_systems"](systems, 5, torch.Generator().manual_seed(seed))
+    on_line = torch.tensor([1.0, 0.0])
+    xs = WORLD_REFERENCE["rollout"](WORLD_REFERENCE["spring_accelerations"], x * on_line, v * on_line, springs, 100).flatten(0, 1)
+    ss = springs.repeat_interleave(101, dim=0)
+
+    return xs, ss, WORLD_REFERENCE["spring_accelerations"](xs, ss)
+
+
+def measure_line() -> dict[str, object]:
+    """physics3's second table, each structure trained only on systems along one line, then scored on new systems
+    along it and on the same states turned 90 degrees, over 3 seeds."""
+    share = BASELINE_REFERENCE["share_close"]
+    rotate = STRUCTURE_REFERENCE["rotate"]
+    makers = {
+        "flat": BASELINE_REFERENCE["FlatMLP"],
+        "absolute pairs": AbsolutePairs,
+        "relative": STRUCTURE_REFERENCE["RelativeForces"],
+        "central": STRUCTURE_REFERENCE["CentralForces"],
+    }
+    results: dict[str, object] = {}
+
+    with pinned_threads():
+        pool, held = line_pool(500, 1), line_pool(50, 2)
+        xs, ss, targets = held
+        turned = (rotate(xs, math.pi / 2), ss, rotate(targets, math.pi / 2))
+
+        for name, make in makers.items():
+            for seed in SEEDS:
+                model = trained(make, pool, seed)
+                results[f"{name} {seed}"] = (share(model, held, 0.1), share(model, turned, 0.1))
 
     return results
 

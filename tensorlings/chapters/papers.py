@@ -614,7 +614,7 @@ def check_paper1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="non_embedding_parameters",
-        description="counts the weights outside wte and wpe",
+        description="counts the weights outside the tables and the head",
         inputs=(
             (Described(REFERENCE["PaperGPT"](99, 4, 128, 2, 4), "PaperGPT(99, 4, 128, 2, 4)"),),
             (Described(REFERENCE["GPT"](20, 8, 32, 3, 4), "GPT(20, 8, 32, 3, 4)"),),
@@ -646,8 +646,8 @@ PAPER1 = Exercise(
         "float mean and .item().",
         "paper_optimizer": "torch.optim.AdamW takes lr, betas and weight_decay. The warmup line holds the lambda the "
         "LambdaLR needs.",
-        "non_embedding_parameters": "Sum numel over model.parameters(), then take away the numel of wte's and "
-        "wpe's weights.",
+        "non_embedding_parameters": "Sum numel over model.h.parameters() and model.ln_f.parameters(). PaperGPT's "
+        "head has a weight of its own, so model.parameters() would count it too.",
         "counted": "It comes from non_embedding_parameters. If it fails while the function passes, rerun the file.",
     },
     introduces=(),
@@ -670,7 +670,7 @@ EVERY = 100
 # What measure_grokking gave, the step each of 5 seeds first passed 99%, on training and on validation.
 MEASURED_RUNS = '''
 TRAIN_STEPS = [300, 300, 300, 300, 300]
-VALIDATION_STEPS = [4400, 3600, 3100, 3700, 4900]
+VALIDATION_STEPS = [4600, 3600, 3200, 3700, 4900]
 '''
 
 PAPER2_MAIN = '''
@@ -706,7 +706,7 @@ PAPER2_LESSON = prose(
     | Update | 100 | 300 | 1,000 | 2,000 | 3,000 | 4,000 | 4,200 | 4,400 | 4,600 |
     |---|---|---|---|---|---|---|---|---|---|
     | Training | 19% | 100% | 100% | 100% | 100% | 100% | 100% | 100% | 100% |
-    | Validation | 0.1% | 5% | 13% | 17% | 21% | 36% | 57% | 94% | 99% |
+    | Validation | 0.1% | 5% | 13% | 15% | 21% | 36% | 59% | 95% | 99% |
 
     By update 300 the model knows every training equation and almost none of
     the rest. For thousands of updates little changes, then validation leaps
@@ -714,33 +714,37 @@ PAPER2_LESSON = prose(
     so main stops at the first point past 99%.
 
     One run is an anecdote. Here are 5 seeds, the update where each first
-    passed 99%.
+    passed 99%, with seed 0 the run above.
 
     | Seed | 0 | 1 | 2 | 3 | 4 |
     |---|---|---|---|---|---|
     | Training | 300 | 300 | 300 | 300 | 300 |
-    | Validation | 4,400 | 3,600 | 3,100 | 3,700 | 4,900 |
+    | Validation | 4,600 | 3,600 | 3,200 | 3,700 | 4,900 |
 
-    `mean_and_spread` sums them up. Validation passes at 3,940 on average,
-    with a spread of 709, 13 times as late as training. GPU runs don't repeat
-    exactly, so even one seed lands a few hundred updates apart from run to
-    run.
+    `mean_and_spread` sums them up. Validation passes at 4,000 on average,
+    with a spread of 718, 13 times as late as training.
 
-    Then what moves the jump, the updates where validation first passed 99%.
-    Each row ran 3 seeds, the first two 5 and the one without weight decay 2.
+    Then what moves the jump, the update where validation first passed 99%.
 
-    | Run | Validation passes 99% at |
-    |---|---|
-    | 30% of the table, as above | 3,100 to 4,900 |
-    | 50% | 1,300 to 1,400 |
-    | 70% | 700 to 1,200 |
-    | 30%, no weight decay | not in 6,000 updates, at 3% to 9% |
-    | 30%, gpt2's start | 1,400 to 2,700 |
-    | 50%, gpt2's start | 300, with training |
+    | Run | Seeds | Validation passes 99% at |
+    |---|---|---|
+    | 30% of the table, as above | 5 | 3,200 to 4,900 |
+    | 50% | 5 | 1,300 to 1,400 |
+    | 70% | 3 | 700 to 1,200 |
+    | 30%, gpt3's weight decay of 0.1 | 3 | not in 6,000 updates, at 6% to 14% |
+    | 30%, no weight decay | 3 | not in 6,000 updates, at 3% to 9% |
+    | 30%, gpt2's 0.02 start, own head | 5 | 2,700 to 3,400 |
+    | 30%, gpt2's 0.02 start, tied head | 5 | 1,200 to 2,600 |
+    | 50%, gpt2's 0.02 start, tied head | 3 | 300, with training |
 
-    All three claims hold, and the last two rows add a fourth. Liu and
-    colleagues' Omnigrok traced grokking to weights that start large. gpt2's
-    small start brings the jump closer, and at 50% it removes the wait.
+    All three claims hold. At gpt3's 0.1 the jump never comes, which is why
+    the paper turned weight decay up to 1.
+
+    The last three rows add a fourth. Liu and colleagues' Omnigrok traced
+    grokking to weights that start large. gpt2's 0.02 start alone brings
+    every seed's jump earlier, by 500 to 1,500 updates. Tying the head to
+    `wte` as well brings every seed's closer still, and at 50% it removes
+    the wait.
 
     `run.py train paper2` runs main. The check reads your model back and asks
     for nearly every held out equation.
@@ -784,7 +788,7 @@ PAPER2_SOURCE = source_file(
     #   a batch of min(512, len(train) // 2) training rows at random with
     #   torch.randint and generator, takes answer_loss, zeroes the old
     #   gradients, backpropagates, steps the optimizer and steps the
-    #   scheduler. After every every updates, append (step, training
+    #   scheduler. After each `every` updates, append (step, training
     #   accuracy, validation accuracy) with answer_accuracy on each set. Stop
     #   right after a point whose validation accuracy reaches stop_at, unless
     #   stop_at is None.
@@ -1072,7 +1076,7 @@ def check_paper2(checker: Checker) -> None:
     )
     checker.test(
         function="grok",
-        description="trained by main, gets 99% of the held out equations right",
+        description="trained by main, gets at least 98% of the held out equations right",
         run=check_grokked,
     )
 
@@ -1121,32 +1125,40 @@ def grok_until(
     return REFERENCE["grok"](model, inputs, answers, splits, weight_decay, steps, 100, 0.99, torch.Generator().manual_seed(seed + 1), device)
 
 
+def started_model(
+    seed: int,
+    start: str,
+) -> nn.Module:
+    """paper2's models. "paper" is PaperGPT, "gpt2" is gpt2's GPT, tied and at 0.02, and "small" is PaperGPT with
+    gpt2's 0.02 start but its own head, which splits the two changes "gpt2" makes."""
+    torch.manual_seed(seed)
+
+    if start == "gpt2":
+        return REFERENCE["GPT"](99, 4, 128, 2, 4)
+
+    model = REFERENCE["PaperGPT"](99, 4, 128, 2, 4)
+
+    if start == "small":
+        model.apply(REFERENCE["init_weights"])
+        REFERENCE["scale_residuals_"](model, 2)
+
+    return model
+
+
 def measure_grokking(
     seeds: range = range(5),
     fraction: float = 0.3,
     weight_decay: float = 1.0,
-    steps: int = 8000,
     start: str = "paper",
-) -> list[tuple[int | None, int | None, float]]:
-    """paper2's runs on the best device: for each seed, the step training first passed 99%, the step validation did,
-    and the last validation accuracy. start is "paper" for PaperGPT, or "gpt2" for gpt2's GPT, tied and at 0.02."""
+) -> list[list[tuple[int, float, float]]]:
+    """paper2's runs on the best device, each seed's curve until validation first passes 99%, or for all STEPS
+    updates. The lesson's curve and seed tables come from one call, seed 0's curve and each seed's first steps."""
     device = best_device()
-    results = []
+    curves = []
 
     for seed in seeds:
-        torch.manual_seed(seed)
-        model = REFERENCE["PaperGPT" if start == "paper" else "GPT"](99, 4, 128, 2, 4)
-        curve = grok_until(model.to(device), fraction, weight_decay, steps, seed, device)
-        results.append((REFERENCE["first_step"](curve, 1, 0.99), REFERENCE["first_step"](curve, 2, 0.99), curve[-1][2]))
-        print(fraction, weight_decay, start, seed, results[-1], flush=True)
+        curve = grok_until(started_model(seed, start).to(device), fraction, weight_decay, RUNS["STEPS"], seed, device)
+        curves.append(curve)
+        print(fraction, weight_decay, start, seed, REFERENCE["first_step"](curve, 1, 0.99), REFERENCE["first_step"](curve, 2, 0.99), curve[-1][2], flush=True)
 
-    return results
-
-
-def measure_curve(seed: int = 0) -> list[tuple[int, float, float]]:
-    """paper2's curve table, main's run on seed 0 carried on to all STEPS updates instead of stopping."""
-    inputs, answers = REFERENCE["equations"](97)
-    splits = REFERENCE["split_equations"](len(inputs), RUNS["FRACTION"], torch.Generator().manual_seed(0))
-    device = best_device()
-
-    return REFERENCE["grok"](paper_model(seed).to(device), inputs, answers, splits, 1.0, RUNS["STEPS"], RUNS["EVERY"], None, torch.Generator().manual_seed(seed + 1), device)
+    return curves
