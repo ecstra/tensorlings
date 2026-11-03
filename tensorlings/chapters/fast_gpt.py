@@ -207,19 +207,17 @@ FAST1_LESSON = prose(
     `generate` runs one for every token it writes, over the whole text so
     far, up to `block_size` tokens.
 
-    Here is the trained model from gpt3 on this Mac, over three runs on a
-    quiet machine. It wrote 100 tokens after "ROMEO:".
+    Here is the trained model from gpt3 on this Mac's CPU, over three runs on
+    a quiet machine. It wrote 100 tokens after "ROMEO:".
 
-    | Device | Tokens per second | Step at 8 tokens | Step at 128 tokens |
-    |---|---|---|---|
-    | CPU | 1,405 to 1,418 | 0.44 to 0.47 ms | 1.05 to 1.07 ms |
-    | MPS | 1,314 to 1,357 | 1.2 to 1.7 ms | 0.83 to 1.26 ms |
+    | Tokens per second | Step at 8 tokens | Step at 128 tokens |
+    |---|---|---|
+    | 1,405 to 1,418 | 0.44 to 0.47 ms | 1.05 to 1.07 ms |
 
-    The CPU wrote a little faster than the GPU. On the CPU a step over 128
-    tokens took 2.3 to 2.4 times a step over 8. On this Mac's GPU the two took
-    about the same. The math was never what took the time there, as kvcache2
-    found. Each step is many tiny jobs, and their number doesn't grow with
-    the text.
+    A step over 128 tokens took 2.3 to 2.4 times a step over 8. Each step
+    reruns the model over the whole text so far, so writing slows as the
+    text grows. fast2 adds kvcache1's cache, which runs only the newest
+    token.
 
     The last lines of the file time your machine's CPU with your functions,
     writing 100 tokens as the table did. The result shows what they got.
@@ -1030,34 +1028,44 @@ FAST3_LESSON = prose(
     twin = deepcopy(nn.Linear(2, 2))    # its own weights, changing it leaves the first alone
     ```
 
-    Here is the trained model from gpt3 on this Mac, writing 100 tokens after
-    "ROMEO:". The speeds span three runs on a quiet machine. The losses are
-    over gpt3's 20 validation batches.
+    Here is the trained model from gpt3 on this Mac's CPU, writing 100 tokens
+    after "ROMEO:". The speeds span three runs on a quiet machine. The losses
+    are over gpt3's 20 validation batches.
 
-    | Setup | CPU, tokens per second | MPS, tokens per second | Validation loss | Bytes |
-    |---|---|---|---|---|
-    | Plain | 1,405 to 1,418 | 1,314 to 1,357 | 1.5351 | 3,272,192 |
-    | int8 | 960 to 972 | 1,013 to 1,026 | 1.5353 | 931,328 |
-    | Cache | 3,700 to 3,816 | 965 to 987 | 1.5351 | 3,272,192 |
-    | Cache and int8 | 1,515 to 1,535 | 791 to 817 | 1.5353 | 931,328 |
+    | Setup | Tokens per second | Validation loss | Bytes |
+    |---|---|---|---|
+    | Plain | 1,405 to 1,418 | 1.5351 | 3,272,192 |
+    | int8 | 960 to 972 | 1.5353 | 931,328 |
+    | Cache | 3,700 to 3,816 | 1.5351 | 3,272,192 |
+    | Cache and int8 | 1,515 to 1,535 | 1.5353 | 931,328 |
 
-    The fastest setup here is the cache on the CPU, about 2.7 times plain. On
-    this Mac's GPU the cache cost time, as kvcache2 found for a model this
-    small. int8 alone cost time on both. Its forward turns every weight back
-    into a float32 matrix before each multiply, so it moves more memory than
-    plain does.
-
-    On the CPU the cache with int8 still edged past plain, since the cache
-    saved more than int8 cost. int8 made the model 3.5 times smaller and
-    moved the loss in the fourth decimal.
+    The cache wrote about 2.7 times as fast as plain, with the same loss.
+    int8 made the model 3.5 times smaller and moved the loss in the fourth
+    decimal. Memory is what quant3's `Int8Linear` saves. It turns every
+    weight back into a float32 matrix before each multiply, which adds work.
 
     quant3 said fast int8 libraries multiply the whole numbers themselves.
-    Writing one token at a time suits another way too. It multiplies matrices
-    by vectors, which is memory bound in profile2's sense, so the win is
-    reading fewer bytes. GPTQ's kernel reads 3 bit weights and turns each
-    into a float only inside the multiply. On a 175 billion parameter model
-    its authors measured 71 ms a token on one A100. FP16 needed five A100s
-    and took 230 ms.
+    PyTorch has such a fused kernel for the CPU, `torch._weight_int8pack_mm`.
+    It scales each output inside the multiply, so no float32 weight is built.
+    Here is one cached step of an untrained GPT, 12 blocks of size 1,024,
+    after 64 tokens on 4 threads. The three took turns, over three runs.
+
+    | Weights | One step | Bytes |
+    |---|---|---|
+    | float32 | 19 to 29 ms | 609,087,488 |
+    | quant3's `Int8Linear` | 62 to 92 ms | 156,545,024 |
+    | Fused int8 | 15 to 24 ms | 156,545,024 |
+
+    The fused step took 75 to 84 percent of float32's time in each run, and
+    gave the same scores as `Int8Linear`. PyTorch's gpt-fast found the same
+    order on an A100. Unfused int8 ran slower than 16 bits there, and fused
+    int8 took a 7 billion parameter Llama from 107 tokens a second to 157.
+
+    Writing one token multiplies matrices by vectors, which is memory bound
+    in profile2's sense, so reading fewer bytes wins. GPTQ's kernel reads 3
+    bit weights and turns each into a float only inside the multiply. On a
+    175 billion parameter model its authors measured 71 ms a token on one
+    A100. FP16 needed five A100s and took 230 ms.
 
     The last line of the file runs `compare` on your CPU, writing 100 tokens
     as the table did, and the result shows your table. It scores 5
@@ -1467,7 +1475,7 @@ def lesson_prompt() -> Tensor:
 
 
 def measure_speeds(
-    devices: tuple[str, ...] = ("cpu", "mps"),
+    devices: tuple[str, ...] = ("cpu",),
     runs: int = 3,
 ) -> dict[tuple[str, str], list[float]]:
     """fast1's and fast3's tokens per second, 100 tokens after "ROMEO:", each setup made fresh for every run."""
@@ -1492,7 +1500,7 @@ def measure_speeds(
 
 
 def measure_steps(
-    devices: tuple[str, ...] = ("cpu", "mps"),
+    devices: tuple[str, ...] = ("cpu",),
     runs: int = 3,
 ) -> dict[tuple[str, int], list[float]]:
     """fast1's step times in milliseconds, at 8 and 128 tokens."""
@@ -1545,5 +1553,96 @@ def measure_losses_and_bytes() -> dict[str, tuple[float, int]]:
         scored = setup if name in ("plain", "int8") else FAST_REFERENCE["ScoresOnly"](setup)
         loss = FAST_REFERENCE["validation_loss"](scored, validation_data, 20, torch.Generator().manual_seed(1), cpu)
         results[name] = (loss, FAST_REFERENCE["model_bytes"](setup))
+
+    return results
+
+
+class FusedInt8Linear(nn.Module):
+    """quant3's int8 Linear with a scale per row, multiplied by PyTorch's fused CPU kernel. The kernel reads the
+    whole numbers and scales each output inside the multiply, so the float32 weight is never built. In torch
+    2.14.1 the same kernel gave wrong values on MPS for some sizes, so it runs on the CPU only."""
+
+    def __init__(self, linear: nn.Linear) -> None:
+        super().__init__()
+        weight = linear.weight.detach()
+        scales = weight.abs().amax(dim=1) / 127
+        self.register_buffer("quantized", (weight / scales.unsqueeze(1)).round().to(torch.int8))
+        self.register_buffer("scales", scales)
+        self.bias = linear.bias
+
+    def forward(self, x: Tensor) -> Tensor:
+        rows = x.reshape(-1, x.shape[-1])
+        out = torch._weight_int8pack_mm(rows, self.quantized, self.scales).reshape(*x.shape[:-1], -1)
+
+        if self.bias is None:
+            return out
+
+        return out + self.bias
+
+
+def fuse_linears_(module: nn.Module) -> None:
+    for name, child in module.named_children():
+        if isinstance(child, nn.Linear):
+            setattr(module, name, FusedInt8Linear(child))
+            continue
+
+        fuse_linears_(child)
+
+
+# fast3's bigger GPT, untrained: vocabulary, block size, size, blocks and heads.
+FUSED_SETTINGS: tuple[int, int, int, int, int] = (65, 1024, 1024, 12, 16)
+
+
+def measure_fused_int8(
+    threads: int = 4,
+    text: int = 64,
+    rounds: int = 15,
+    repeats: int = 5,
+) -> dict[str, float]:
+    """fast3's second table: one cached step of the bigger GPT on the CPU after text tokens, in milliseconds, for
+    float32 weights, quant3's Int8Linear and the fused kernel, with each model's bytes. gap is the largest difference
+    between the fused model's scores and quant3's Int8Linear model's, which hold the same whole numbers and scales.
+
+    The three kinds take turns inside every round, and each time is the median over the rounds. Timed one kind
+    after another instead, a burst of other work on the machine slowed whichever kind it landed on, and once
+    made float32 look 1.7 times slower than the fused kernel when, taking turns, the two came out close."""
+    torch.manual_seed(0)
+    plain = FAST_REFERENCE["CachedGPT"](*FUSED_SETTINGS).eval()
+    int8 = deepcopy(plain)
+    FAST_REFERENCE["quantize_linears_"](int8.h)
+    fused = deepcopy(plain)
+    fuse_linears_(fused.h)
+    ids = torch.randint(0, FUSED_SETTINGS[0], (1, text), generator=torch.Generator().manual_seed(884))
+    results: dict[str, float] = {}
+
+    previous = torch.get_num_threads()
+    torch.set_num_threads(threads)
+
+    try:
+        with torch.no_grad():
+            results["gap"] = (fused(ids)[0] - int8(ids)[0]).abs().max().item()
+            steps: dict[str, Callable[[], object]] = {}
+
+            for kind, model in (("float32", plain), ("int8", int8), ("fused int8", fused)):
+                _, caches = model(ids[:, :-1])
+                steps[kind] = functools.partial(model, ids[:, -1:], caches)
+                steps[kind]()
+                results[f"{kind} bytes"] = FAST_REFERENCE["model_bytes"](model)
+
+            times: dict[str, list[float]] = {kind: [] for kind in steps}
+
+            for _ in range(rounds):
+                for kind, step in steps.items():
+                    begin = time.perf_counter()
+
+                    for _ in range(repeats):
+                        step()
+
+                    times[kind].append(1000 * (time.perf_counter() - begin) / repeats)
+    finally:
+        torch.set_num_threads(previous)
+
+    for kind, kind_times in times.items():
+        results[kind] = statistics.median(kind_times)
 
     return results

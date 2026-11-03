@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import math
 import statistics
+import subprocess
+import sys
 import textwrap
 import time
 from collections.abc import Callable
@@ -470,22 +472,37 @@ FLASH2_LESSON = prose(
     first paper reports GPT-2 training 3 to 3.5 times faster than Hugging
     Face's version at 1,024 tokens.
 
-    Plain PyTorch can't choose where a tensor lives, and each line here runs as
-    its own job through main memory. So this version teaches the method and
-    runs slower. Here are 4 heads of size 64, blocks of 128, on this Mac's GPU
-    over three runs, with little else running.
+    Here is the peak memory one call added on this Mac's CPU, for 4 heads of
+    size 64. Each call ran in a fresh process, over three runs. SDPA is
+    `F.scaled_dot_product_attention`.
 
-    | Steps | `scaled_dot_product_attention` | Softmax written out | Tiled |
+    | Steps | Softmax written out | Tiled, blocks of 1,024 | Tiled, blocks of 128 | SDPA |
+    |---|---|---|---|---|
+    | 2,048 | 131 MiB | 69 to 75 MiB | 5 to 6 MiB | 5 MiB |
+    | 4,096 | 517 to 518 MiB | 75 to 79 MiB | 9 to 11 MiB | 7 MiB |
+    | 8,192 | 2,057 to 2,058 MiB | 87 to 88 MiB | 18 to 19 MiB | 11 MiB |
+
+    Each doubling of the steps made the written out softmax 4 times bigger,
+    since it holds every score. The tiled version holds one block of scores
+    at a time, so its memory grew no faster than the steps. At 8,192 steps,
+    blocks of 1,024 needed 24 times less. The paper measured up to 20 times
+    less than exact attention, growing linearly with the steps.
+
+    On the CPU, SDPA runs PyTorch's own FlashAttention kernel, written in C++.
+    Here are the times on 4 threads, over three runs.
+
+    | Steps | Softmax written out | Tiled, blocks of 1,024 | SDPA |
     |---|---|---|---|
-    | 1,024 | 0.63 to 1.07 ms | 1.18 to 1.29 ms | 6.3 to 6.4 ms |
-    | 4,096 | 7.8 to 9.1 ms | 16.6 to 17.3 ms | 120 to 125 ms |
+    | 4,096 | 87 to 92 ms | 109 to 118 ms | 54 to 74 ms |
+    | 8,192 | 329 to 414 ms | 426 to 494 ms | 198 to 205 ms |
 
-    The tiled version took about 5 times as long as the softmax written out
-    at 1,024 steps, and about 7 times at 4,096. Its Python loop starts
-    thousands of small jobs, and the CPU starts each one in turn.
+    The kernel beat the softmax written out in every run, in 50 to 80 percent
+    of its time. It does every step for a block in one pass, while the block
+    sits in the CPU's cache. Your version runs each line as its own job
+    through main memory, so it took 1.2 to 1.4 times as long.
 
     On CUDA, `F.scaled_dot_product_attention` can call a FlashAttention-2
-    kernel, so a model gets the speed without any of this code.
+    kernel, so a model gets the method without any of this code.
     """,
 )
 
@@ -721,11 +738,14 @@ def median_seconds(
 
 
 def measure_attention_times(
-    devices: tuple[str, ...] = ("mps",),
+    devices: tuple[str, ...] = ("cpu",),
+    block: int = 1024,
+    lengths: tuple[int, ...] = (4096, 8192),
+    threads: int = 4,
 ) -> dict[tuple[str, int], tuple[float, float, float]]:
-    """The times behind flash2's table, in milliseconds, for 4 heads of size 64 and blocks of 128. The table shows
-    MPS alone, measured with little else running. An earlier run under heavy load saw the CPU's times swing by
-    more than 10 times."""
+    """The times behind flash2's time table, in milliseconds, for 4 heads of size 64: scaled_dot_product_attention,
+    the softmax written out, and tiled_attention with blocks of block. Times swing with the machine's load, so
+    they are taken with little else running, on as many threads as the memory probe uses."""
     results = {}
 
     def written_out(
@@ -735,21 +755,89 @@ def measure_attention_times(
     ) -> Tensor:
         return torch.softmax(q @ k.transpose(-2, -1) / math.sqrt(q.shape[-1]), dim=-1) @ v
 
-    for name in devices:
-        device = torch.device(name)
+    previous = torch.get_num_threads()
+    torch.set_num_threads(threads)
 
-        for steps in (1024, 4096):
-            generator = torch.Generator().manual_seed(877)
-            q, k, v = (torch.randn(1, 4, steps, 64, generator=generator).to(device) for _ in range(3))
+    try:
+        for name in devices:
+            device = torch.device(name)
 
-            with torch.no_grad():
-                results[(name, steps)] = tuple(
-                    1000 * median_seconds(run, device)
-                    for run in (
-                        lambda: F.scaled_dot_product_attention(q, k, v),
-                        lambda: written_out(q, k, v),
-                        lambda: TILED_REFERENCE["tiled_attention"](q, k, v, 128),
+            for steps in lengths:
+                generator = torch.Generator().manual_seed(877)
+                q, k, v = (torch.randn(1, 4, steps, 64, generator=generator).to(device) for _ in range(3))
+
+                with torch.no_grad():
+                    results[(name, steps)] = tuple(
+                        1000 * median_seconds(run, device, rounds=15, repeats=1)
+                        for run in (
+                            lambda: F.scaled_dot_product_attention(q, k, v),
+                            lambda: written_out(q, k, v),
+                            lambda: TILED_REFERENCE["tiled_attention"](q, k, v, block),
+                        )
                     )
-                )
+    finally:
+        torch.set_num_threads(previous)
+
+    return results
+
+
+# Run in a fresh process for each call, so the peak it reports belongs to that call alone. The kernels are
+# warmed on a tiny input first, so their own setup isn't counted.
+MEMORY_PROBE = '''
+import math
+import resource
+import sys
+
+import torch
+import torch.nn.functional as F
+from torch import Tensor
+
+TILED_SOLUTION
+
+steps, kind = int(sys.argv[1]), sys.argv[2]
+torch.set_num_threads(4)
+generator = torch.Generator().manual_seed(877)
+q, k, v = (torch.randn(1, 4, steps, 64, generator=generator) for _ in range(3))
+
+
+def attend(q: Tensor, k: Tensor, v: Tensor) -> Tensor:
+    if kind == "written out":
+        return torch.softmax(q @ k.transpose(-2, -1) / math.sqrt(q.shape[-1]), dim=-1) @ v
+
+    if kind == "sdpa":
+        return F.scaled_dot_product_attention(q, k, v)
+
+    return tiled_attention(q, k, v, int(kind))
+
+
+with torch.no_grad():
+    attend(q[..., :8, :], k[..., :8, :], v[..., :8, :])
+    before = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    attend(q, k, v)
+    after = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+
+# macOS counts ru_maxrss in bytes and Linux in kilobytes.
+print((after - before) * (1 if sys.platform == "darwin" else 1024))
+'''
+
+
+def measure_attention_memory(
+    lengths: tuple[int, ...] = (2048, 4096, 8192),
+    kinds: tuple[str, ...] = ("written out", "1024", "128", "sdpa"),
+) -> dict[tuple[int, str], int]:
+    """The peak memory one call adds on the CPU, in bytes, for 4 heads of size 64. A kind is the softmax written
+    out, a block size for tiled_attention, or sdpa. Peak memory doesn't swing with the machine's load as time does."""
+    code = MEMORY_PROBE.replace("TILED_SOLUTION", TILED_SOLUTION)
+    results = {}
+
+    for steps in lengths:
+        for kind in kinds:
+            run = subprocess.run(
+                [sys.executable, "-I", "-c", code, str(steps), kind],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            results[(steps, kind)] = int(run.stdout.strip())
 
     return results

@@ -278,10 +278,10 @@ LINATTN2_LESSON = prose(
 
     | Earlier tokens | Softmax step | Linear step | Softmax cache | Linear state |
     |---|---|---|---|---|
-    | 256 | 0.2 to 0.7 ms | 0.2 to 0.3 ms | 2.1 MB | 0.27 MB |
-    | 1,024 | 3.0 to 5.3 ms | 0.2 to 0.4 ms | 8.4 MB | 0.27 MB |
-    | 4,096 | 7.5 to 12.4 ms | 0.2 to 2.6 ms | 33.6 MB | 0.27 MB |
-    | 16,384 | 26 to 43 ms | 0.1 to 1.0 ms | 134 MB | 0.27 MB |
+    | 256 | 0.10 to 0.13 ms | 0.10 to 0.12 ms | 2.1 MB | 0.27 MB |
+    | 1,024 | 0.27 to 0.36 ms | 0.09 to 0.12 ms | 8.4 MB | 0.27 MB |
+    | 4,096 | 1.1 to 1.4 ms | 0.09 to 0.12 ms | 33.6 MB | 0.27 MB |
+    | 16,384 | 5.0 to 9.7 ms | 0.12 to 0.38 ms | 134 MB | 0.27 MB |
 
     The softmax step grows with the text, and the linear one stays flat.
     Katharopoulos and colleagues measured their linear attention models up to

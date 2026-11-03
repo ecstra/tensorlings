@@ -635,23 +635,20 @@ KVCACHE2_LESSON = prose(
     |---|---|---|---|
     | Course GPT, CPU | 16 | 0.50 ms | 0.25 ms |
     | Course GPT, CPU | 128 | 1.04 ms | 0.28 ms |
-    | Course GPT, MPS | 16 | 0.60 ms | 0.93 ms |
-    | Course GPT, MPS | 128 | 0.71 ms | 0.92 ms |
     | Bigger GPT, CPU | 128 | 9.7 ms | 2.1 ms |
     | Bigger GPT, CPU | 1,024 | 72 to 73 ms | 3.4 to 3.6 ms |
     | Bigger GPT, MPS | 128 | 4.0 to 4.7 ms | 2.2 ms |
     | Bigger GPT, MPS | 1,024 | 30 to 35 ms | 3.1 ms |
 
-    On the CPU the cache won everywhere, by 2 to about 20 times. On this
-    Mac's GPU the course's GPT ran slower with it. Its time barely grew from
-    16 tokens to 128, so the math was never what took the time. Each step is
-    many tiny jobs, and the cache's `torch.cat` and mask add a few more. The
-    bigger GPT has more math per job. On the GPU its cache won about 2 times
-    at 128 tokens and about 10 times at 1,024.
+    The cache won on every row, by 2 to about 20 times, and its win grew
+    with the text. Without it, each step runs the model over every earlier
+    token again, so the step costs more as the text grows. With it, the step
+    over 1,024 tokens cost little more than the step over 128.
 
-    For the bigger GPT, the time with the cache still grew with the text, on
-    both devices. Attention reads every cached key, and `torch.cat` copies
-    the whole cache each step.
+    The time with the cache still grew a little. Attention reads every cached
+    key, and `torch.cat` copies the whole cache each step. PyTorch's gpt-fast
+    makes the cache once at its full length and writes each new key into its
+    place, which saves that copy.
 
     The cache costs memory. For the course's GPT at 128 tokens it holds 512
     KiB, beside 3.1 MiB of weights. The bigger GPT's cache at 1,024 tokens is
@@ -819,11 +816,16 @@ def step_milliseconds(
         )
 
 
-def measure_step_times(devices: tuple[str, ...] = ("cpu", "mps")) -> dict[tuple[str, str, int], tuple[float, float]]:
-    """The times behind kvcache2's table, in milliseconds."""
+def measure_step_times() -> dict[tuple[str, str, int], tuple[float, float]]:
+    """The times behind kvcache2's table, in milliseconds: the course GPT on the CPU, and the bigger GPT on the
+    CPU and on MPS."""
     results = {}
+    runs = (
+        ("course", SMALL_SETTINGS, ("cpu",), (16, 128)),
+        ("bigger", BIG_SETTINGS, ("cpu", "mps"), (128, 1024)),
+    )
 
-    for name, settings, lengths in (("course", SMALL_SETTINGS, (16, 128)), ("bigger", BIG_SETTINGS, (128, 1024))):
+    for name, settings, devices, lengths in runs:
         for device in devices:
             for length in lengths:
                 results[(name, device, length)] = step_milliseconds(settings, length, torch.device(device))
