@@ -23,6 +23,7 @@ from ..engine import (
 from ..text import prose, source_file
 from .initialization import expect_numbers
 from .linear_layers import expect_module
+from .mnist import mnist_sets
 
 DROPOUT = Chapter(
     folder="20_dropout",
@@ -335,26 +336,31 @@ DROPOUT2_LESSON = prose(
     """
     Here an MLP with two hidden layers of 512 learned from only 1000 MNIST
     images. It trained for 300 epochs on minibatches of 100, at a learning rate
-    of 0.1, with dropout after each hidden ReLU. The training loss here was
-    measured with dropout off, after all 300 epochs.
+    of 0.1, with dropout after each hidden ReLU. The last row also drops 20% of
+    the input pixels, as Hinton and colleagues did. Each number is the average
+    of 3 seeds, and the training loss was measured with dropout off.
 
     | Dropout | Training loss | Validation loss | Validation accuracy |
     |---|---|---|---|
-    | none | 0.0018 | 0.620 | 88.1% |
-    | 0.2 | 0.0009 | 0.556 | 88.9% |
-    | 0.5 | 0.0005 | 0.511 | 89.5% |
+    | none | 0.0018 | 0.624 | 88.0% |
+    | hidden 0.2 | 0.0009 | 0.553 | 89.0% |
+    | hidden 0.5 | 0.0005 | 0.498 | 89.7% |
+    | inputs 0.2, hidden 0.5 | 0.0005 | 0.373 | 91.4% |
 
-    By the end all three fit the training images perfectly, so dropout didn't
-    stop that. It changed how far the validation loss climbed. Without dropout
-    it rose from 0.41 at epoch 30 to 0.62, and with 0.5 only to 0.51. The
-    accuracy came out about 1.5 points higher, and three more seeds gave
-    between 1.3 and 1.8.
+    By the end all four fit the training images perfectly, so dropout didn't
+    stop that. It changed where the validation loss went. Without dropout it
+    rose from 0.41 at epoch 30 to 0.62. With dropout on the inputs too, it
+    kept falling to 0.37, and the accuracy rose 3.4 points on every seed.
+
+    The paper saw the same steps on all of MNIST. Its plain network made 160
+    errors on the test set. 50% dropout in the hidden layers brought that to
+    about 130, and dropping 20% of the pixels too brought it to about 110.
 
     Dropout has a cost. Each step trains a thinned model, so training takes
     longer to get as far, two to three times as long by the paper's count. At
-    epoch 10 here, the model without dropout had a training loss of 0.608, and
-    the one with 0.5 had 0.696. Both were measured with dropout off. Their
-    validation accuracy was 81.9% against 80.4%.
+    epoch 10 here, the model without dropout had a training loss of 0.62, and
+    the one with hidden 0.5 had 0.72. Both were measured with dropout off.
+    Their validation accuracy was 80.6% against 77.4%.
 
     A model with plenty of data for its size doesn't overfit, and there dropout
     only slows it down. Karpathy's nanoGPT turns it off for training from
@@ -927,3 +933,87 @@ DROPOUT3 = Exercise(
     introduces=(),
     check=check_dropout3,
 )
+
+
+# ---------------------------------------------------------------------------
+# The runs behind the lessons
+# ---------------------------------------------------------------------------
+
+# dropout2's rows: the dropout on the inputs, then after each hidden ReLU.
+DROPOUT_SETUPS: dict[str, tuple[float, float]] = {
+    "none": (0.0, 0.0),
+    "hidden 0.2": (0.0, 0.2),
+    "hidden 0.5": (0.0, 0.5),
+    "inputs 0.2, hidden 0.5": (0.2, 0.5),
+}
+
+
+def measure_dropout(
+    setup: str,
+    seed: int,
+) -> dict[str, float]:
+    """dropout2's numbers for one setup and seed. An MLP with two hidden layers of 512 trains on mnist_sets' 1000 small
+    images for 300 epochs of minibatches of 100 at a rate of 0.1, and is measured with dropout off at epochs 10, 30
+    and 300 on its training images and on the 10,000 validation images."""
+    sets = mnist_sets()
+    x, y = sets["small_x"], sets["small_y"]
+    validation_x, validation_y = sets["validation_x"], sets["validation_y"]
+    p_inputs, p_hidden = DROPOUT_SETUPS[setup]
+    threads = torch.get_num_threads()
+    torch.set_num_threads(1)
+
+    try:
+        torch.manual_seed(seed)
+        model = nn.Sequential(
+            nn.Dropout(p_inputs),
+            nn.Linear(784, 512),
+            nn.ReLU(),
+            nn.Dropout(p_hidden),
+            nn.Linear(512, 512),
+            nn.ReLU(),
+            nn.Dropout(p_hidden),
+            nn.Linear(512, 10),
+        )
+        generator = torch.Generator().manual_seed(1000 + seed)
+        results: dict[str, float] = {}
+
+        for epoch in range(1, 301):
+            model.train()
+            order = torch.randperm(len(x), generator=generator)
+
+            for start in range(0, len(x), 100):
+                batch = order[start:start + 100]
+                F.cross_entropy(model(x[batch]), y[batch]).backward()
+
+                with torch.no_grad():
+                    for parameter in model.parameters():
+                        parameter -= 0.1 * parameter.grad
+                        parameter.grad = None
+
+            if epoch not in (10, 30, 300):
+                continue
+
+            training_loss, _ = reference_evaluate(model, x, y)
+            validation_loss, validation_accuracy = reference_evaluate(model, validation_x, validation_y)
+            results[f"training loss {epoch}"] = training_loss
+            results[f"validation loss {epoch}"] = validation_loss
+            results[f"validation accuracy {epoch}"] = validation_accuracy
+    finally:
+        torch.set_num_threads(threads)
+
+    return results
+
+
+def measure_dropout_table(seeds: range = range(3)) -> dict[str, list[dict[str, float]]]:
+    """Every row of dropout2's table, on every seed. It takes many minutes, so runs of one setup and seed can also be
+    spread over several processes with measure_dropout."""
+    return {
+        setup: [
+            measure_dropout(
+                setup=setup,
+                seed=seed,
+            )
+            for seed in seeds
+        ]
+        for setup in DROPOUT_SETUPS
+    }

@@ -303,6 +303,7 @@ CASES: list[tuple[str, str, str, str]] = [
     ("init3", "kaiming_mlp_ fills the first layer only", "for module in model.modules():", "for module in list(model.modules())[:2]:"),
     ("init4", "init_std gives tanh Kaiming", "if activation in (\"relu\", \"gelu\"):", "if activation in (\"relu\", \"gelu\", \"tanh\"):"),
     ("init4", "init_std gives none Kaiming", "return 1 / math.sqrt(fan_in)", "return math.sqrt(2 / fan_in)"),
+    ("init4", "init_std leaves out tanh's gain", "return 5 / 3 * math.sqrt(2 / (fan_in + fan_out))", "return math.sqrt(2 / (fan_in + fan_out))"),
     ("init4", "final_spread forgets the activation", "x = ACTIVATIONS[activation](x @ weight)", "x = x @ weight"),
     ("init4", "final_spread without the generator", "weight = torch.randn(width, width, generator=generator) *", "weight = torch.randn(width, width) *"),
     ("init4", "last_bias without the log", "return (counts / len(y)).log()", "return counts / len(y)"),

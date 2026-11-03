@@ -877,30 +877,38 @@ INIT3 = Exercise(
 
 INIT4_LESSON = prose(
     """
-    Each activation needs its own scale. Here the same 1000 rows went through
-    10 layers of width 100, each a matrix multiply then the activation.
+    Each activation needs its own scale. Here 1000 rows went through layers
+    of width 100, each a matrix multiply then the activation, on 5 seeds. A
+    range runs from the lowest seed to the highest, and a single number is
+    their average.
 
-    | Activation | Weights | Spread after 10 layers |
-    |---|---|---|
-    | none | `1 / sqrt(fan_in)` | 1.03 |
-    | ReLU | `1 / sqrt(fan_in)` | 0.025 |
-    | ReLU | PyTorch's default | 0.0001 |
-    | ReLU | Kaiming | 0.80 |
-    | GELU | Kaiming | 0.55 |
-    | tanh | spread 1 | 0.96, with 78% stuck past 0.99 |
-    | tanh | Xavier | 0.23 |
+    | Activation | Weights | Spread after 10 layers | 30 layers | 50 layers |
+    |---|---|---|---|---|
+    | none | `1 / sqrt(fan_in)` | 0.96 to 1.04 | | |
+    | ReLU | `1 / sqrt(fan_in)` | 0.017 to 0.033 | | |
+    | ReLU | PyTorch's default | 0.0001 to 0.0002 | | |
+    | ReLU | Kaiming | 0.53 to 1.05 | | |
+    | tanh | spread 1 | 0.96, 78% stuck past 0.99 | | |
+    | tanh | Xavier | 0.22 | 0.12 | 0.09 |
+    | tanh | Xavier times 5/3 | 0.65 | 0.65 | 0.65 |
+    | GELU | Kaiming | 0.47 | 0.10 | 0.025 |
 
-    - ReLU, GELU and SiLU: Kaiming. GELU and SiLU match ReLU for large inputs, so they take its scale.
-    - tanh and sigmoid: Xavier. Spread 1 saturates tanh, as activations1 showed. PyTorch's `nn.init.calculate_gain("tanh")` suggests Xavier times 5/3, which held at 0.65 here.
+    - ReLU: Kaiming, `sqrt(2 / fan_in)`.
+    - tanh and sigmoid: Xavier times tanh's gain of 5/3, as `nn.init.calculate_gain("tanh")` gives, which holds 0.65 at every depth.
     - no activation after the layer: `1 / sqrt(fan_in)`, from init1.
 
-    ReLU with Kaiming ends at 0.80 and not 1. Kaiming keeps the average
-    square of the numbers steady. A ReLU's outputs are never negative, so
-    their mean sits above 0 and their spread around it is smaller. It stays
-    near 0.8 at every depth, about `sqrt(1 - 1 / pi)`.
+    Spread 1 saturates tanh, as activations1 showed, and plain Xavier shrinks.
+    With the gain under 2% of the numbers sit past 0.99.
 
-    GELU and tanh still shrink slowly. Normalization, two chapters on, keeps
-    the spread steady however deep a model goes.
+    ReLU with Kaiming lands near `sqrt(1 - 1 / pi)`, about 0.83, and not 1.
+    Kaiming keeps the average square of the numbers steady, and over 20
+    seeds it stayed near 1 at 10, 30 and 50 layers. A ReLU's outputs are never
+    negative, so their mean sits above 0 and their spread around it is less.
+
+    GELU and SiLU match ReLU for large inputs, so they usually take Kaiming
+    too. Near 0 they pass less than ReLU, so a deep stack of them shrinks, as
+    the last row shows. Normalization, two chapters on, keeps the spread
+    steady however deep a model goes.
 
     The last layer gets one more rule, from Karpathy's recipe for training. Set
     its bias so the model starts out predicting the average target. For
@@ -1012,7 +1020,7 @@ INIT4_SOLUTION = source_file(
             return math.sqrt(2 / fan_in)
 
         if activation == "tanh":
-            return math.sqrt(2 / (fan_in + fan_out))
+            return 5 / 3 * math.sqrt(2 / (fan_in + fan_out))
 
         return 1 / math.sqrt(fan_in)
 
@@ -1057,7 +1065,7 @@ def reference_init_std(
         return math.sqrt(2 / fan_in)
 
     if activation == "tanh":
-        return math.sqrt(2 / (fan_in + fan_out))
+        return 5 / 3 * math.sqrt(2 / (fan_in + fan_out))
 
     return 1 / math.sqrt(fan_in)
 
@@ -1137,8 +1145,8 @@ INIT4 = Exercise(
     source=INIT4_SOURCE,
     solution=INIT4_SOLUTION,
     hints={
-        "init_std": "Kaiming's sqrt(2 / fan_in) for relu and gelu, Xavier's sqrt(2 / (fan_in + fan_out)) for tanh, "
-        "and 1 / sqrt(fan_in) for none.",
+        "init_std": "Use Kaiming's sqrt(2 / fan_in) for relu and gelu, and 1 / sqrt(fan_in) for none. For tanh, "
+        "multiply Xavier's sqrt(2 / (fan_in + fan_out)) by the gain 5 / 3.",
         "final_spread": "Each weight is torch.randn(width, width, generator=generator) times init_std(activation, "
         "width, width). Then x goes through x @ weight and the function ACTIVATIONS[activation] gives.",
         "last_bias": "torch.bincount(y, minlength=classes) counts each class. Turn the counts into floats, divide by "
@@ -1147,3 +1155,64 @@ INIT4 = Exercise(
     introduces=(),
     check=check_init4,
 )
+
+
+# ---------------------------------------------------------------------------
+# The runs behind the lessons
+# ---------------------------------------------------------------------------
+
+# init4's rows: the activation, and the weights' spread for fan_in and fan_out of 100. None stands for PyTorch's
+# default, drawn evenly between -1 / sqrt(fan_in) and 1 / sqrt(fan_in).
+SPREAD_SETUPS: dict[str, tuple[str, float | None]] = {
+    "none, 1 / sqrt(fan_in)": ("none", 1 / math.sqrt(100)),
+    "relu, 1 / sqrt(fan_in)": ("relu", 1 / math.sqrt(100)),
+    "relu, PyTorch's default": ("relu", None),
+    "relu, Kaiming": ("relu", math.sqrt(2 / 100)),
+    "gelu, Kaiming": ("gelu", math.sqrt(2 / 100)),
+    "tanh, spread 1": ("tanh", 1.0),
+    "tanh, Xavier": ("tanh", math.sqrt(2 / 200)),
+    "tanh, Xavier times 5/3": ("tanh", 5 / 3 * math.sqrt(2 / 200)),
+}
+
+
+def spread_after(
+    activation: str,
+    std: float | None,
+    depth: int,
+    seed: int,
+) -> tuple[float, float]:
+    """The spread of 1000 rows of width 100 after depth layers, and the share of numbers past 0.99 in size."""
+    generator = torch.Generator().manual_seed(seed)
+    x = torch.randn(1000, 100, generator=generator)
+
+    for _ in range(depth):
+        if std is None:
+            weight = (torch.rand(100, 100, generator=generator) * 2 - 1) / math.sqrt(100)
+        else:
+            weight = torch.randn(100, 100, generator=generator) * std
+
+        x = ACTIVATIONS[activation](x @ weight)
+
+    return x.std().item(), (x.abs() > 0.99).float().mean().item()
+
+
+def measure_spreads(
+    seeds: range = range(5),
+    depths: tuple[int, ...] = (10, 30, 50),
+) -> dict[tuple[str, int], list[tuple[float, float]]]:
+    """init4's table: for each setup and depth, the spread and the share past 0.99 on every seed."""
+    results: dict[tuple[str, int], list[tuple[float, float]]] = {}
+
+    for name, (activation, std) in SPREAD_SETUPS.items():
+        for depth in depths:
+            results[(name, depth)] = [
+                spread_after(
+                    activation=activation,
+                    std=std,
+                    depth=depth,
+                    seed=seed,
+                )
+                for seed in seeds
+            ]
+
+    return results

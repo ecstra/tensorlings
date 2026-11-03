@@ -668,27 +668,33 @@ MLP3 = Exercise(
 
 MLP4_LESSON = prose(
     """
-    How wide should a hidden layer be? Here MLPs of four widths learned 20
-    noisy points of `sin(x)`, 5000 steps each with a learning rate of 0.01.
-    Then each was measured on 200 new points. The noise alone gives an error of
-    0.09, so no model can beat that on new points.
+    How wide should a hidden layer be? Here MLPs of six widths learned 20
+    noisy points of `sin(x)`, 10,000 steps each with a learning rate of 0.005.
+    Then each was measured on 200 new points. Each number is the average of 10
+    seeds, each with its own points and start. The noise alone gives an error
+    of 0.09, so no model can beat that on new points.
 
     | Width | Training error | Validation error |
     |---|---|---|
-    | 1 | 0.175 | 0.222 |
-    | 4 | 0.106 | 0.233 |
-    | 32 | 0.056 | 0.127 |
-    | 512 | 0.050 | 0.142 |
+    | 1 | 0.238 | 0.295 |
+    | 4 | 0.106 | 0.217 |
+    | 8 | 0.067 | 0.167 |
+    | 32 | 0.057 | 0.149 |
+    | 128 | 0.050 | 0.148 |
+    | 512 | 0.041 | 0.158 |
 
-    Width 1 is too narrow to bend, and underfits both. Width 32 does best on new
-    points. Width 512 fits the training points a little better and new points
-    worse, since it starts fitting the noise, as overfitting1's degree 9 did.
+    Width 1 is too narrow to bend, and underfits both. Up to 32, more width
+    helps on new points. Past 32 the training error keeps falling, while the
+    validation error stays between 0.148 and 0.158. A network 16 times wider
+    than it needs fits the training points closer without paying for it on
+    new ones.
 
-    Depth works the same way, with more layers bending more. In practice a
-    model is made a bit too big, then held back with weight decay and early
-    stopping from Section 2. Its size is a hyperparameter, chosen on the
-    validation set. Over many tasks, wider and deeper models held back this way
-    tend to do better on new data. The rest of the course leans on that.
+    Neyshabur and colleagues argued in 2014 that something other than the
+    number of units holds a big network back. That control comes from
+    training itself. So in practice a model is made a bit too big, then held back
+    further with weight decay and early stopping from Section 2. Its size is a
+    hyperparameter, chosen on the validation set. Depth works the same way,
+    with more layers bending more.
     """,
 )
 
@@ -889,3 +895,43 @@ MLP4 = Exercise(
     check=check_mlp4,
     time_limit=60,
 )
+
+
+# ---------------------------------------------------------------------------
+# The runs behind the lessons
+# ---------------------------------------------------------------------------
+
+
+def measure_width(
+    width: int,
+    seeds: range = range(10),
+    steps: int = 10000,
+    learning_rate: float = 0.005,
+) -> list[tuple[float, float]]:
+    """mlp4's table for one width: the training and validation error on each seed. Seed s draws 20 training points
+    with noisy_curve(s), 200 validation points with noisy_curve(1000 + s), and the model after torch.manual_seed(s)."""
+    threads = torch.get_num_threads()
+    torch.set_num_threads(1)
+    errors: list[tuple[float, float]] = []
+
+    try:
+        for seed in seeds:
+            train_x, train_y = noisy_curve(seed, 20)
+            validation_x, validation_y = noisy_curve(1000 + seed, 200)
+            model = seeded_mlp(seed, (1, width, 1))
+            train_reference(model, train_x, train_y, steps, learning_rate)
+
+            with torch.no_grad():
+                train_error = ((model(train_x).squeeze(1) - train_y) ** 2).mean().item()
+                validation_error = ((model(validation_x).squeeze(1) - validation_y) ** 2).mean().item()
+
+            errors.append((train_error, validation_error))
+    finally:
+        torch.set_num_threads(threads)
+
+    return errors
+
+
+def measure_widths(widths: tuple[int, ...] = (1, 4, 8, 32, 128, 512)) -> dict[int, list[tuple[float, float]]]:
+    """Every row of mlp4's table. It takes many minutes, so widths can also be spread over processes with measure_width."""
+    return {width: measure_width(width) for width in widths}
