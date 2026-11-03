@@ -224,7 +224,7 @@ The project is the small image classifier of the section table, in the style of 
 | quizzes | quiz8 | Section 6 together |
 | 46_adder | adder1 | the project starts, sums written as text like `123+456`, and their tokens |
 | | adder2 | a GRU encoder and decoder that gets 95 percent of held out sums exactly right, with answers written units first, which beats the usual order by far |
-| | adder3 | beam search against greedy decoding, and longer numbers than training had, where it breaks |
+| | adder3 | longer numbers than training had, and where it breaks |
 
 The project follows Zaremba and Sutskever's learning to execute and the Keras addition RNN. It uses an encoder and decoder, gating and beam search at once.
 
