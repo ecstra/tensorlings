@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import functools
+import itertools
 import re
 import textwrap
 from collections import Counter
@@ -647,13 +648,26 @@ def reference_analogy(
     return similarity.topk(k).indices.tolist()
 
 
+# word2vec3's vectors train longer than word2vec2's 3,000 steps, since grammar analogies keep improving to here.
+VECTOR_STEPS = 10_000
+
+# Families of word pairs that share one relation. Every ordered pair of pairs in a family is one analogy.
+ANALOGY_FAMILIES: dict[str, tuple[tuple[str, str], ...]] = {
+    "pronoun to possessive": (("he", "his"), ("she", "her"), ("they", "their"), ("i", "my"), ("we", "our"), ("thou", "thy"), ("you", "your")),
+    "subject to object": (("he", "him"), ("she", "her"), ("they", "them"), ("i", "me"), ("we", "us"), ("thou", "thee")),
+}
+
+
 @functools.cache
-def trained_vectors() -> Tensor:
-    """The center table after the 3,000 steps word2vec2's lesson describes, for the tables of word2vec3."""
-    torch.manual_seed(0)
+def trained_vectors(
+    seed: int = 0,
+    steps: int = VECTOR_STEPS,
+) -> Tensor:
+    """The center table of word2vec2's model after steps of train_skipgram, for the tables of word2vec3."""
+    torch.manual_seed(seed)
     _, vocabulary, _, _ = shakespeare_words()
     model = ReferenceSkipGram(len(vocabulary), 64)
-    train_skipgram(model, 3000, torch.Generator().manual_seed(0))
+    train_skipgram(model, steps, torch.Generator().manual_seed(seed))
 
     return model.centers.weight.detach()
 
@@ -664,11 +678,13 @@ WORD2VEC3_LESSON = prose(
     alone, their dot product divided by both their lengths. It is 1 for the
     same direction, 0 for unrelated ones, and -1 for opposite ones.
 
-    Row lengths vary a lot in word2vec2's vectors. The 20 most common words
-    have rows about 2.06 long, and the 426 words seen only 5 times about
-    4.82. The plain dot product grows with both lengths, so it would rank
-    those long rare rows above better matches. Scaling every row to length 1
-    first leaves only the direction to compare.
+    The vectors here are word2vec2's model trained 10,000 steps, longer than
+    its lesson's 3,000, since the analogies below kept improving that far.
+    Row lengths vary a lot in them. The 20 most common words have rows about
+    1.96 long, and the 426 words seen only 5 times about 7.87. The plain dot
+    product grows with both lengths, so it would rank those long rare rows
+    above better matches. Scaling every row to length 1 first leaves only
+    the direction to compare.
 
     ```python
     a = torch.tensor([3.0, 4.0])
@@ -678,26 +694,30 @@ WORD2VEC3_LESSON = prose(
     One hot vectors can't say which words are alike. Every pair of different
     words has a cosine of exactly 0, so `father` is as far from `mother` as
     from `sword`. Learned rows put words used alike close together. Here are
-    the nearest words in word2vec2's vectors, after 3,000 steps with rows of
-    64.
+    the nearest words in these vectors, with rows of 64.
 
     | Word | Its five nearest |
     |---|---|
-    | thou | wilt, art, thyself, couldst, dost |
-    | father | daughter, brother, sake, master, asking |
-    | romeo | mercutio, laurence, friar, juliet, banished |
-    | queen | margaret, elizabeth, destiny, oh, england |
-    | night | day, league, dinner, appointed, took |
+    | thou | dost, art, wilt, st, hast |
+    | father | son, brother, daughter, body, majesty |
+    | romeo | juliet, mercutio, benvolio, friar, laurence |
+    | queen | elizabeth, margaret, destiny, painted, oh |
+    | night | vanity, dinner, dark, day, corruption |
 
-    An analogy takes the rows of `b - a + c` and looks for the nearest word to
-    it, leaving out the three it started from. Grammar comes out right here.
-    he is to his as she is to `her`, and thou is to thy as you is to `your`.
-    The famous king minus man plus woman gives `protector`, `fair` and
-    `richard`, and no `queen`.
+    An analogy takes the rows of `b - a + c` and looks for the nearest word
+    to it, leaving out the three it started from. he is to his as she is to
+    `her`. A family of pairs that share one relation makes many analogies,
+    one for each two of its pairs taken in order, 42 and 30 here. Here is
+    how often the answer lands, on three trainings with different seeds.
 
-    Mikolov and colleagues trained on a billion words of news, and tiny
-    Shakespeare has 208,503. A word's neighbors come from the words the text
-    puts near it, so a small text teaches less.
+    | Family | Its pairs | Answer first | Answer in the first five |
+    |---|---|---|---|
+    | pronoun to possessive | he his, she her, they their, i my, we our, thou thy, you your | 55% to 81% | 74% to 95% |
+    | subject to object | he him, she her, they them, i me, we us, thou thee | 30% to 37% | 67% to 77% |
+
+    A guess among the 3,225 words would come first about 1 time in 3,200.
+    The rows learned these relations from nothing but which words sit near
+    which, with no grammar given.
     """,
 )
 
@@ -853,3 +873,59 @@ WORD2VEC3 = Exercise(
     introduces=(),
     check=check_word2vec3,
 )
+
+
+# ---------------------------------------------------------------------------
+# The runs behind the lessons
+# ---------------------------------------------------------------------------
+
+
+def family_shares(
+    vectors: Tensor,
+    pairs: tuple[tuple[str, str], ...],
+) -> tuple[float, float]:
+    """The share of a family's analogies whose answer comes first, and the share where it is among the first five."""
+    _, vocabulary, _, _ = shakespeare_words()
+    index = {word: position for position, word in enumerate(vocabulary)}
+    first = within_five = total = 0
+
+    for (a, b), (c, d) in itertools.permutations(pairs, 2):
+        # she to her shares her with he to his, and an analogy whose answer is one of its own words can't land.
+        if len({a, b, c, d}) < 4:
+            continue
+
+        found = reference_analogy(vectors, index[a], index[b], index[c], 5)
+        total += 1
+        first += found[0] == index[d]
+        within_five += index[d] in found
+
+    return first / total, within_five / total
+
+
+def measure_vectors(seeds: range = range(3)) -> dict[str, object]:
+    """word2vec3's numbers: the row lengths and nearest words of seed 0's vectors, and every family's analogy shares
+    on each seed, after VECTOR_STEPS steps."""
+    before = torch.get_num_threads()
+    torch.set_num_threads(4)
+
+    try:
+        words, vocabulary, counts, _ = shakespeare_words()
+        index = {word: position for position, word in enumerate(vocabulary)}
+        vectors = trained_vectors(0)
+        lengths = vectors.norm(dim=1)
+        results: dict[str, object] = {
+            "common lengths": lengths[:20].mean().item(),
+            "rare lengths": lengths[counts == MIN_COUNT].mean().item(),
+            "rare count": int((counts == MIN_COUNT).sum()),
+        }
+
+        for word in ("thou", "father", "romeo", "queen", "night"):
+            results[word] = [vocabulary[position] for position in reference_nearest(vectors, index[word], 5)]
+
+        for seed in seeds:
+            for family, pairs in ANALOGY_FAMILIES.items():
+                results[f"{family}, seed {seed}"] = family_shares(trained_vectors(seed), pairs)
+
+        return results
+    finally:
+        torch.set_num_threads(before)

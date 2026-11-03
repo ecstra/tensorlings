@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import contextlib
 import functools
+import math
 import textwrap
+from collections.abc import Iterator
 
 import torch
 import torch.nn as nn
@@ -21,6 +24,7 @@ from ..engine import (
     seeded,
 )
 from ..text import prose, source_file
+from ..training import best_device
 from .classic_nets import mnist_images
 
 CONTRASTIVE = Chapter(
@@ -98,19 +102,60 @@ def random_shifts(
     return torch.stack([padded[i, :, top : top + h, left : left + w] for i, (top, left) in enumerate(zip(tops, lefts))])
 '''
 
+AFFINE_PART = '''
+def random_affine(
+    images: Tensor,
+    generator: torch.Generator,
+) -> Tensor:
+    count = len(images)
+    angle = (torch.rand(count, generator=generator) * 2 - 1) * math.radians(15)
+    scale = 0.8 + 0.4 * torch.rand(count, generator=generator)
+    # The grid runs from -1 to 1 across 28 pixels, so 4 pixels is 4 / 14 of it.
+    shift = (torch.rand(count, 2, generator=generator) * 2 - 1) * (4 / 14)
+    theta = torch.zeros(count, 2, 3)
+    theta[:, 0, 0] = angle.cos() / scale
+    theta[:, 0, 1] = -angle.sin() / scale
+    theta[:, 1, 0] = angle.sin() / scale
+    theta[:, 1, 1] = angle.cos() / scale
+    theta[:, :, 2] = shift
+    grid = F.affine_grid(theta, list(images.shape), align_corners=False)
+
+    return F.grid_sample(images, grid, align_corners=False)
+'''
+
 ENCODER_PART = '''
 class Encoder(nn.Module):
     def __init__(self) -> None:
         super().__init__()
         self.body = nn.Sequential(
+            nn.Conv2d(1, 32, 3, padding=1),
+            nn.ReLU(),
+            nn.MaxPool2d(2),
+            nn.Conv2d(32, 64, 3, padding=1),
+            nn.ReLU(),
+            nn.MaxPool2d(2),
+            nn.Conv2d(64, 128, 3, padding=1),
+            nn.ReLU(),
+            nn.AdaptiveAvgPool2d(1),
             nn.Flatten(),
-            nn.Linear(784, 256),
+        )
+
+    def forward(self, images: Tensor) -> Tensor:
+        return self.body(images)
+
+
+class WithHead(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.encoder = Encoder()
+        self.head = nn.Sequential(
+            nn.Linear(128, 256),
             nn.ReLU(),
             nn.Linear(256, 64),
         )
 
     def forward(self, images: Tensor) -> Tensor:
-        return self.body(images)
+        return self.head(self.encoder(images))
 '''
 
 TWO_VIEWS_PART = '''
@@ -119,8 +164,8 @@ def two_views(
     generator: torch.Generator,
     noise: float,
 ) -> tuple[Tensor, Tensor]:
-    first = random_shifts(images, 4, generator) + noise * torch.randn(images.shape, generator=generator)
-    second = random_shifts(images, 4, generator) + noise * torch.randn(images.shape, generator=generator)
+    first = random_affine(images, generator) + noise * torch.randn(images.shape, generator=generator)
+    second = random_affine(images, generator) + noise * torch.randn(images.shape, generator=generator)
 
     return first, second
 '''
@@ -175,12 +220,13 @@ def alignment_loss(
 def reference_namespace() -> dict[str, object]:
     """Every solution piece of the chapter run once, so the checks compare against exactly the code the files hold."""
     namespace: dict[str, object] = {
+        "math": math,
         "torch": torch,
         "nn": nn,
         "F": F,
         "Tensor": Tensor,
     }
-    exec(SIMILARITY_PART + NT_XENT_PART + SHIFT_PART + ENCODER_PART + TWO_VIEWS_PART + TRAIN_PART + KNN_PART, namespace)
+    exec(SIMILARITY_PART + NT_XENT_PART + SHIFT_PART + AFFINE_PART + ENCODER_PART + TWO_VIEWS_PART + TRAIN_PART + KNN_PART, namespace)
 
     return namespace
 
@@ -208,10 +254,35 @@ def contrastive_sets() -> dict[str, Tensor]:
     }
 
 
-def seeded_encoder() -> nn.Module:
+def seeded_model() -> nn.Module:
     torch.manual_seed(0)
 
-    return REFERENCE["Encoder"]()
+    return REFERENCE["WithHead"]()
+
+
+class LightModel(nn.Module):
+    """An MLP encoder with the same head, light enough to train 150 steps inside a check on any laptop."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.encoder = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(784, 256),
+            nn.ReLU(),
+            nn.Linear(256, 128),
+        )
+        self.head = nn.Sequential(
+            nn.Linear(128, 256),
+            nn.ReLU(),
+            nn.Linear(256, 64),
+        )
+
+    def forward(self, images: Tensor) -> Tensor:
+        return self.head(self.encoder(images))
+
+
+# The share of moved digits the light model's features must get right after 150 steps. Raw pixels get 37%.
+MOVED_BAR = 0.5
 
 
 def neighbor_scores(model: nn.Module | None) -> tuple[float, float]:
@@ -224,7 +295,7 @@ def neighbor_scores(model: nn.Module | None) -> tuple[float, float]:
             return images.flatten(1)
 
         with torch.no_grad():
-            return model(images)
+            return torch.cat([model(part) for part in images.split(500)])
 
     bank = features(sets["bank_x"])
 
@@ -417,29 +488,42 @@ CONTRASTIVE1 = Exercise(
 CONTRASTIVE2_LESSON = prose(
     """
     The views decide what the features learn to ignore. Here each view of an
-    MNIST digit is shifted by up to 4 pixels, as in augment1, with some noise
-    added. Features that pair two views of one digit have to ignore where the
-    digit sits and the noise on it. Nothing else tells them what matters.
+    MNIST digit is turned by up to 15 degrees and scaled by 0.8 to 1.2. It is
+    moved by up to 4 pixels, then gets some noise. Features that pair two views of
+    one digit have to ignore all of that. SimCLR found that composing several
+    changes is what makes the task worth learning, crops with color changes
+    on its photos.
 
-    The encoder is an MLP from 784 pixels to 64 features, trained with
-    contrastive1's InfoNCE on 20,000 digits and no labels. To see what it
-    learned, each validation digit gets a kNN guess. It takes the label most
-    common among its 10 nearest training digits, by cosine of their features. The digits
-    are tested centered, and moved by up to 4 pixels. Here are 500 steps of
-    256 digits at four temperatures.
+    `random_affine` makes the whole change in one step. `F.affine_grid` works
+    out, for every pixel of the output, the place in the input to read, and
+    `F.grid_sample` reads it.
 
-    | Temperature | Centered digits right | Moved digits right |
-    |---|---|---|
-    | 0.05 | 86.3% | 85.7% |
-    | 0.1 | 87.1% | 85.9% |
-    | 0.5 | 78.1% | 76.7% |
-    | 1 | 73.8% | 72.8% |
+    The encoder is a small CNN like Section 5's, from a digit to 128
+    features. The loss reads a **projection head** on top, an MLP from those
+    128 features to 64. SimCLR found a head like this beat no head by more
+    than 10%, and that the features before the head serve best afterwards.
 
-    A low temperature sharpens the softmax, so most of the loss comes from the
-    made up pairs that look most like the real one. A high one spreads the
-    loss over every made up pair, most of them easy. SimCLR found the same on
-    ImageNet. With rows scaled to length 1, a temperature of 0.1 gave 64.4%,
-    against 59.7% at 0.05, 60.7% at 0.5 and 58.0% at 1.
+    To see what the encoder learned, each validation digit gets a kNN guess.
+    That is the label most common among its 10 nearest labeled digits, by
+    cosine of their features before the head. The digits are tested
+    centered, and moved by up to 4 pixels.
+
+    The temperature decides how the push is shared among the made up pairs.
+    A low one sharpens the softmax onto the made up pairs that look most like
+    the real one. Here are 1,500 steps of 256 digits at four temperatures,
+    with the hardest made up pair's share of the push. An even share would
+    be 0.4%.
+
+    | Temperature | Hardest pair's share | Centered digits right | Moved digits right |
+    |---|---|---|---|
+    | 0.05 | 53.2% | 95.3% | 94.3% |
+    | 0.1 | 30.2% | 95.4% | 95.4% |
+    | 0.5 | 2.0% | 95.5% | 94.9% |
+    | 1 | 0.9% | 95.7% | 94.9% |
+
+    Every temperature here learned features that beat raw pixels on both
+    tests, as contrastive3 measures. On ImageNet, SimCLR found 0.1 learned
+    best, 64.4% against 59.7% at 0.05, 60.7% at 0.5 and 58.0% at 1.
 
     `torch.randn` takes a generator as `randint` does, so each view's noise is
     drawn the same way on every run.
@@ -449,6 +533,8 @@ CONTRASTIVE2_LESSON = prose(
 CONTRASTIVE2_SOURCE = source_file(
     '''
     # contrastive2.py
+
+    import math
 
     import torch
     import torch.nn as nn
@@ -462,17 +548,19 @@ CONTRASTIVE2_SOURCE = source_file(
 ''' + indented(SIMILARITY_PART) + '''
 
 
-    # augment1's random shifts, for images of shape (batch, channels, height, width).
-''' + indented(SHIFT_PART) + '''
+    # Each image turned by up to 15 degrees, scaled by 0.8 to 1.2 and moved by up
+    #   to 4 pixels, for images of shape (batch, channels, height, width).
+''' + indented(AFFINE_PART) + '''
 
 
-    # The encoder, an MLP from 784 pixels to 64 features.
+    # The encoder, a small CNN from a digit to 128 features, and the projection
+    #   head on top of it that the loss reads.
 ''' + indented(ENCODER_PART) + '''
 
 
-    # TODO: Return two views of images. Each is random_shifts of images by up to
-    #   4 pixels, plus noise times torch.randn of their shape, drawn with
-    #   generator. Draw the whole first view, then the whole second.
+    # TODO: Return two views of images. Each is random_affine of images, plus
+    #   noise times torch.randn of their shape, drawn with generator. Draw the
+    #   whole first view, then the whole second.
     def two_views(
         images: Tensor,
         generator: torch.Generator,
@@ -505,6 +593,8 @@ CONTRASTIVE2_SOLUTION = source_file(
     '''
     # contrastive2.py, a solution for comparison
 
+    import math
+
     import torch
     import torch.nn as nn
     import torch.nn.functional as F
@@ -516,7 +606,7 @@ CONTRASTIVE2_SOLUTION = source_file(
 ''' + indented(SIMILARITY_PART) + '''
 
 
-''' + indented(SHIFT_PART) + '''
+''' + indented(AFFINE_PART) + '''
 
 
 ''' + indented(ENCODER_PART) + '''
@@ -558,9 +648,9 @@ def check_train_steps(found: object) -> None:
     weights = []
 
     for train in (found, REFERENCE["train_contrastive"]):
-        model = seeded_encoder()
+        model = seeded_model()
         loss = train(model, images, 3, 0.2, torch.Generator().manual_seed(631))
-        weights.append((loss, model.body[1].weight.detach().clone()))
+        weights.append((loss, model.encoder.body[0].weight.detach().clone()))
 
     (loss, weight), (expected_loss, expected_weight) = weights
     expect_close(
@@ -577,14 +667,16 @@ def check_train_steps(found: object) -> None:
 
 
 def check_learns_shifts(found: object) -> None:
-    model = seeded_encoder()
+    # The CNN takes seconds a step on a laptop's CPU, so this run trains a light MLP with the same head.
+    torch.manual_seed(0)
+    model = LightModel()
     found(model, contrastive_sets()["train_x"], 150, 0.1, torch.Generator().manual_seed(0))
-    _, moved = neighbor_scores(model)
+    _, moved = neighbor_scores(model.encoder)
 
-    if moved < 0.65:
+    if moved < MOVED_BAR:
         raise Mismatch(
-            f"After 150 steps of train_contrastive, the kNN guess gets {moved:.1%} of the moved digits right, but it "
-            "should pass 65%. Raw pixels get under 40%.",
+            f"After 150 steps of train_contrastive on a light MLP with the head, the kNN guess gets {moved:.1%} of the "
+            f"moved digits right, but it should pass {MOVED_BAR:.0%}. Raw pixels get under 40%.",
         )
 
 
@@ -592,7 +684,7 @@ def check_contrastive2(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="two_views",
-        description="shifts and adds noise twice, the first view first",
+        description="turns, scales, moves and adds noise twice, the first view first",
         inputs=(
             (Described(small_images(632, 3), "3 images of 28 by 28"), seeded(633), 0.3),
             (Described(small_images(634, 2), "2 images of 28 by 28"), seeded(635), 0.0),
@@ -620,7 +712,7 @@ CONTRASTIVE2 = Exercise(
     source=CONTRASTIVE2_SOURCE,
     solution=CONTRASTIVE2_SOLUTION,
     hints={
-        "two_views": "random_shifts(images, 4, generator), plus noise * torch.randn(images.shape, generator=generator). "
+        "two_views": "random_affine(images, generator), plus noise * torch.randn(images.shape, generator=generator). "
         "Build the first view this way, then the second.",
         "train_contrastive": "batch = images[torch.randint(0, len(images), (256,), generator=generator)]. Then "
         "two_views of it with 0.3, info_nce of model of each with the temperature, zero_grad, backward and step.",
@@ -638,21 +730,23 @@ CONTRASTIVE2 = Exercise(
 
 CONTRASTIVE3_LESSON = prose(
     """
-    Here is what the encoder of contrastive2 learned with no labels at all, at
-    a temperature of 0.1, next to what came before it. Each row is a kNN guess
-    from the 10 nearest of 5,000 labeled training digits.
+    Here is what contrastive2's encoder learned with no labels at all, at a
+    temperature of 0.1, next to what came before it. Each row is a kNN guess
+    from the 10 nearest of 5,000 labeled training digits, read from the
+    features before the head.
 
     | Features | Centered digits right | Moved digits right |
     |---|---|---|
-    | raw pixels | 93.8% | 37.0% |
-    | the encoder, untrained | 86.1% | 28.9% |
-    | trained with InfoNCE | 87.1% | 85.9% |
-    | trained with the pulling alone | 70.6% | 31.5% |
+    | raw pixels | 93.9% | 37.0% |
+    | the CNN, untrained | 82.4% | 51.3% |
+    | trained with InfoNCE, on three seeds | 94.9% to 95.4% | 94.2% to 95.4% |
+    | trained with the pulling alone | 60.6% | 29.8% |
 
-    Raw pixels do well on centered digits, since MNIST centers every digit.
-    Shift the test digits and raw pixels fall apart, because a moved stroke
-    lands on other pixels. The contrastive features hold up, since the views
-    taught them to ignore the shift. Labels never came into it.
+    The trained features beat raw pixels on both. Raw pixels do well on
+    centered digits, since MNIST centers every digit. They fall apart once a
+    digit moves, because a moved stroke lands on other pixels. The
+    contrastive features hold up, since the views taught them to ignore
+    turns, sizes and shifts. Labels never came into it.
 
     InfoNCE does two jobs. It pulls each real pair together, and it pushes
     every made up pair apart. Wang and Isola call these alignment and
@@ -662,10 +756,11 @@ CONTRASTIVE3_LESSON = prose(
     apart.
 
     `feature_spread` measures it, the spread of each feature across a batch
-    after scaling every row to length 1, averaged over the features. It is
-    0.123 for the InfoNCE features and 0.0008 for the pulled ones. The tiny
-    differences left still sort neighbors a little on centered digits, but the
-    moved ones fall below raw pixels.
+    after scaling every row to length 1, averaged over the features. On the
+    head's output, which the loss reads, it is 0.122 for the InfoNCE run and
+    under 0.0001 for the pulled one. The tiny differences left before the
+    head still sort neighbors a little on centered digits, but the moved
+    ones fall below raw pixels.
     """,
 )
 
@@ -744,26 +839,6 @@ CONTRASTIVE3_SOLUTION = source_file(
 )
 
 
-def train_alignment_only(
-    model: nn.Module,
-    images: Tensor,
-    steps: int,
-    generator: torch.Generator,
-) -> float:
-    """contrastive2's loop with the pulling half alone, the run behind the collapse row of the lesson."""
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
-
-    for _ in range(steps):
-        batch = images[torch.randint(0, len(images), (256,), generator=generator)]
-        first, second = REFERENCE["two_views"](batch, generator, 0.3)
-        loss = REFERENCE["alignment_loss"](model(first), model(second))
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-
-    return loss.item()
-
-
 def labeled_features(
     seed: int,
     count: int,
@@ -837,3 +912,110 @@ CONTRASTIVE3 = Exercise(
     introduces=(),
     check=check_contrastive3,
 )
+
+
+# ---------------------------------------------------------------------------
+# The runs behind the lessons
+# ---------------------------------------------------------------------------
+
+
+@contextlib.contextmanager
+def pinned_threads(count: int) -> Iterator[None]:
+    before = torch.get_num_threads()
+    torch.set_num_threads(count)
+
+    try:
+        yield
+    finally:
+        torch.set_num_threads(before)
+
+
+def train_on_device(
+    model: nn.Module,
+    steps: int,
+    temperature: float,
+    seed: int,
+    pull_only: bool,
+) -> float:
+    """contrastive2's loop on the best device, batches of 256 with two views at a noise of 0.3 and Adam at 1e-3, on
+    InfoNCE or, when pull_only, on alignment_loss alone. The views are drawn on the CPU, so a seed draws the same
+    ones on any machine."""
+    device = best_device()
+    model.to(device)
+    images = contrastive_sets()["train_x"]
+    generator = torch.Generator().manual_seed(seed + 1)
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+
+    for _ in range(steps):
+        batch = images[torch.randint(0, len(images), (256,), generator=generator)]
+        first, second = REFERENCE["two_views"](batch, generator, 0.3)
+        z1, z2 = model(first.to(device)), model(second.to(device))
+
+        if pull_only:
+            loss = REFERENCE["alignment_loss"](z1, z2)
+        else:
+            scores = REFERENCE["similarity_matrix"](z1, z2) / temperature
+            loss = F.cross_entropy(scores, torch.arange(len(z1), device=device))
+
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+    model.cpu()
+
+    return loss.item()
+
+
+def measure_run(
+    temperature: float,
+    seed: int,
+    pull_only: bool = False,
+    steps: int = 1500,
+) -> dict[str, float]:
+    """One row of the lessons: the CNN with its head trained steps steps, then the kNN guess on its encoder's
+    features, centered and moved, and the spread of those features and of the head's."""
+    with pinned_threads(4):
+        torch.manual_seed(seed)
+        model = REFERENCE["WithHead"]()
+        loss = train_on_device(model, steps, temperature, seed, pull_only)
+        centered, moved = neighbor_scores(model.encoder)
+        sample = contrastive_sets()["test_x"][:1000]
+
+        with torch.no_grad():
+            features = model.encoder(sample)
+            spread = REFERENCE["feature_spread"](features)
+            head_spread = REFERENCE["feature_spread"](model.head(features))
+            first, second = REFERENCE["two_views"](sample[:256], torch.Generator().manual_seed(seed + 7), 0.3)
+            scores = REFERENCE["similarity_matrix"](model(first), model(second)) / temperature
+            # The real pair leaves the softmax, so what is left shares out the loss's push among the made up pairs.
+            scores.fill_diagonal_(float("-inf"))
+            hardest = scores.softmax(dim=1).max(dim=1).values.mean().item()
+
+    return {
+        "centered": centered,
+        "moved": moved,
+        "spread": spread,
+        "head spread": head_spread,
+        "hardest share": hardest,
+        "loss": loss,
+    }
+
+
+def measure_contrastive() -> dict[str, object]:
+    """Every number in contrastive2's and contrastive3's tables: raw pixels, the untrained CNN, InfoNCE at a
+    temperature of 0.1 on seeds 0 to 2 and at 0.05, 0.5 and 1 on seed 0, and the pulling alone on seed 0."""
+    with pinned_threads(4):
+        results: dict[str, object] = {
+            "pixels": neighbor_scores(None),
+            "untrained": neighbor_scores(seeded_model().encoder),
+        }
+
+    for seed in range(3):
+        results[f"0.1, seed {seed}"] = measure_run(0.1, seed)
+
+    for temperature in (0.05, 0.5, 1.0):
+        results[f"{temperature}, seed 0"] = measure_run(temperature, 0)
+
+    results["pulling alone"] = measure_run(0.1, 0, pull_only=True)
+
+    return results
