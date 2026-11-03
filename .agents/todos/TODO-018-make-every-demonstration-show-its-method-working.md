@@ -25,7 +25,7 @@ Known cases from the build reports include SimCLR losing to supervised training 
 | 3 | Audit Sections 8 to 10 | | owner | done |
 | 4 | Audit Sections 11 and 12 | | owner | done |
 | 5 | Audit Section 13 once it is built | | owner | done |
-| 6 | Research and redesign each finding, rerun it across seeds, and rewrite its lesson without the caveat | | owner | pending |
+| 6 | Research and redesign each finding, rerun it across seeds, and rewrite its lesson without the caveat | | owner | done |
 | 7 | Recheck every changed exercise, its wrong answers and any checkpoint it trains | | owner | pending |
 
 ## Done when
