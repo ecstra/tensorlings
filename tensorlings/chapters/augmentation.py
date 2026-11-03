@@ -15,6 +15,8 @@ from ..engine import (
     small_tensor,
 )
 from ..text import prose, source_file
+from ..training import best_device
+from .classic_nets import CifarNet, ReferenceLeNet, accuracy_on, cifar_splits, flipped_half, mnist_images, pinned_threads
 
 AUGMENTATION = Chapter(
     folder="35_augmentation",
@@ -238,29 +240,32 @@ AUGMENT1 = Exercise(
 
 AUGMENT2_LESSON = prose(
     """
-    Here a small convolutional net learned MNIST from only 500 images, for
-    600 steps of minibatches of 64 with Adam. It was measured on 3000
-    validation images.
+    Here two nets learned from little data, on minibatches of 64 with Adam,
+    over three seeds. lenet1's LeNet learned 500 MNIST digits in 600 steps,
+    with shifts of up to 2 pixels. A small net of five convolutions learned
+    5,000 CIFAR-10 photos in 4,000 steps, with shifts of up to 4. Its rate
+    fell along a cosine.
 
-    | Augmentation | Training | Validation |
-    |---|---|---|
-    | none | 100% | 91.1% |
-    | shifts of up to 2 pixels | 99.8% | 95.0% |
-    | shifts and left to right flips | 96.0% | 88.1% |
+    | Augmentation | Digits, training | Digits, validation | Photos, training | Photos, validation |
+    |---|---|---|---|---|
+    | none | 100% | 89.3% to 90.0% | 100% | 68.2% |
+    | shifts | 98.6% to 98.8% | 90.9% to 91.2% | 96.9% | 69.7% to 71.5% |
+    | shifts and left to right flips | 93.8% to 96.6% | 83.9% to 85.9% | 90.4% to 90.6% | 71.6% to 72.5% |
 
-    With no augmentation the net learned the 500 images by heart. Shifts made
-    every step show a slightly different set, and validation went up 4 points.
-    Flips made it worse than nothing. A flipped 2 or 7 is not a 2 or 7, and
-    a 3 turns backwards, so the model learned from wrong pictures.
+    With no augmentation both nets learned their images by heart. Shifts made
+    every step show a slightly different set, and validation rose on both.
 
-    So a change has to keep the label for the data at hand. Flips suit photos
-    of cats and cars, which look as natural mirrored, and not digits or text.
-    Rotating a 6 by half a turn makes a 9. Colour changes suit photos, and do
-    nothing for grey digits.
+    Flips split them. On photos they helped again, on every seed, since a car
+    or a horse looks as natural mirrored. On digits they cost about 6 points.
+    A flipped 2 or 7 is not a 2 or 7, and a 3 turns backwards, so the model
+    learned from wrong pictures.
+
+    So a change has to keep the label for the data at hand. Rotating a 6 by
+    half a turn makes a 9. Colour changes suit photos, and do nothing for grey
+    digits. He and others trained their CIFAR-10 ResNets with these very two,
+    shifts of up to 4 pixels and flips.
 
     Augmentation helps most when data is scarce and the model can memorize.
-    With millions of images it matters less, though big image models still
-    use it.
 
     `torch.where(condition, a, b)` takes `a` where the condition is `True`
     and `b` elsewhere, broadcasting all three.
@@ -489,3 +494,76 @@ AUGMENT2 = Exercise(
     check=check_augment2,
     imports_first=OPTIMIZER_IMPORTS,
 )
+
+
+# ---------------------------------------------------------------------------
+# The runs behind the lessons
+# ---------------------------------------------------------------------------
+
+SETTINGS: tuple[str, ...] = ("none", "shifts", "shifts and flips")
+
+
+def augment_run(
+    kind: str,
+    setting: str,
+    seed: int,
+) -> tuple[float, float]:
+    """One row of augment2's tables, trained with Adam at 0.001 on batches of 64. For "digits", lenet1's LeNet learns
+    500 MNIST images for 600 steps with shifts of up to 2 pixels. For "photos", the CifarNet learns 5,000 CIFAR-10
+    images for 4,000 steps, its rate falling along a cosine, with shifts of up to 4 as CIFAR-10 models usually take.
+    Gives the accuracy on the training images and on the validation images, 3,000 for digits and 5,000 for photos."""
+    device = best_device()
+
+    if kind == "digits":
+        images = mnist_images()
+        x, y = images["train_x"][:500], images["train_y"][:500]
+        held_x, held_y = images["validation_x"][:3000], images["validation_y"][:3000]
+        torch.manual_seed(seed)
+        model = ReferenceLeNet().to(device)
+        steps, pad = 600, 2
+    else:
+        sets = cifar_splits()
+        x, y = sets["train_x"][:5000], sets["train_y"][:5000]
+        held_x, held_y = sets["validation_x"], sets["validation_y"]
+        torch.manual_seed(seed)
+        model = CifarNet(10).to(device)
+        steps, pad = 4000, 4
+
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+    # The photos' longer run ends on a falling rate, so the last steps settle and no seed is caught mid swing.
+    schedule = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, steps) if kind == "photos" else None
+    generator = torch.Generator().manual_seed(seed + 20)
+    train_x, train_y = x.to(device), y.to(device)
+
+    for _ in range(steps):
+        batch = torch.randint(0, len(train_x), (64,), generator=generator).to(device)
+        batch_x = train_x[batch]
+
+        if setting != "none":
+            batch_x = reference_random_shifts(batch_x, pad, generator)
+
+        if setting == "shifts and flips":
+            batch_x = flipped_half(batch_x, generator)
+
+        loss = F.cross_entropy(model(batch_x), train_y[batch])
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+        if schedule is not None:
+            schedule.step()
+
+    return accuracy_on(model, x, y, device), accuracy_on(model, held_x, held_y, device)
+
+
+def measure_augmentation(seeds: tuple[int, ...] = (0, 1, 2)) -> dict[tuple[str, str], list[tuple[float, float]]]:
+    """augment2's two tables, keyed by the kind of image and the setting."""
+    results: dict[tuple[str, str], list[tuple[float, float]]] = {}
+
+    with pinned_threads():
+        for kind in ("digits", "photos"):
+            for setting in SETTINGS:
+                for seed in seeds:
+                    results.setdefault((kind, setting), []).append(augment_run(kind, setting, seed))
+
+    return results

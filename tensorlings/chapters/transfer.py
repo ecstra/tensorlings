@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch import Tensor
 
 from ..course import OPTIMIZER_IMPORTS, QUIZZES, Chapter, Exercise
@@ -18,6 +21,8 @@ from ..engine import (
     small_tensor,
 )
 from ..text import prose, source_file
+from ..training import best_device
+from .classic_nets import CifarNet, accuracy_on, cifar_splits, flipped_half, mnist_images, pinned_threads
 from .conv_shapes import reference_output_size
 from .linear_layers import expect_module
 
@@ -297,30 +302,39 @@ TRANSFER1 = Exercise(
 
 TRANSFER2_LESSON = prose(
     """
-    Here a small convolutional net learned digits 0 to 4 from 20,000 MNIST
-    images, and reached 98.8% on them. The new task was digits 5 to 9, with
-    only 100 labeled images. Each model trained 300 steps on those 100 and was
-    measured on 5 to 9's validation images.
+    Here a small net learned digits 0 to 4 from 20,000 MNIST images and
+    reached 99.3% on them. The new task was digits 5 to 9, from only 100
+    labeled images. The same test ran on photos too. CIFAR-10's first five
+    classes, planes to deer, trained a body of convolutions with BatchNorm to
+    85.6%. The new task was its other five, dogs to trucks.
 
-    | Start | Validation on 5 to 9 |
-    |---|---|
-    | from scratch | 90.7% |
-    | the 0 to 4 body, frozen, with a new head | 93.9% |
-    | the 0 to 4 body, everything trained at the same rate | 91.7% |
+    Each start then trained 300 steps on the few labels, over three draws of
+    them, and was scored on the new classes' validation images.
 
-    The frozen body did best. It learned strokes and loops from thousands of
-    other digits, and those serve 5 to 9 as well. Only the small head had to
-    learn from 100 images. Training everything at the same rate let the 100 images
-    pull the body away from what it knew.
+    | Start | 100 digits | 100 photos | 1,000 photos |
+    |---|---|---|---|
+    | from scratch | 87.1% to 88.4% | 63.5% to 66.7% | 64.5% to 75.0% |
+    | the trained body, frozen, with a new head | 89.6% to 92.5% | 72.3% to 73.3% | 74.7% to 75.3% |
+    | the trained body, everything at one rate | 88.2% to 91.2% | 73.8% to 76.6% | 78.4% to 84.0% |
+    | the trained body at a tenth of the head's rate | 89.4% to 92.3% | 72.9% to 76.9% | 81.4% to 83.4% |
 
-    MNIST is easy, so even 100 images get far from scratch. On photos, where
-    100 images are far too few to learn edges and textures, the gap is much
-    larger. That is why most image work starts from a body trained on
-    ImageNet.
+    The trained body helped every time, and most where learning from scratch
+    was hardest. Frozen, it added 2.6 to 4.2 points on digits, whose strokes
+    are easy to learn from a few. On photos it added 5.8 to 9.8, since 100
+    photos are far too few to learn edges and textures. That is why most image
+    work starts from a body trained on ImageNet.
 
-    When the new task has more data, train everything, with the body at a
-    smaller rate than the head. An optimizer takes one rate per group, as in
-    adamw2.
+    A frozen body runs in eval mode while the head trains, so its BatchNorm
+    averages stay the ones it learned.
+
+    With 1,000 photos the frozen body fell behind, since features for planes
+    and deer don't fit trucks exactly. Training everything let them adapt.
+    `fine_tune_optimizer`'s smaller body rate scored highest on average, 82.6%
+    against 80.7%, and varied least. Yosinski and others found the same boost,
+    one that lingers even after fine tuning. ULMFiT goes further, dividing the
+    rate by 2.6 for each layer down.
+
+    An optimizer takes one rate per group, as in adamw2.
     """,
 )
 
@@ -745,3 +759,144 @@ QUIZ7 = Exercise(
     introduces=(),
     check=check_quiz7,
 )
+
+
+# ---------------------------------------------------------------------------
+# The runs behind the lessons
+# ---------------------------------------------------------------------------
+
+STARTS: tuple[str, ...] = ("from scratch", "frozen", "same rate", "body at a tenth")
+
+
+def reference_fine_tune_optimizer(
+    model: nn.Module,
+    body_lr: float,
+    head_lr: float,
+) -> torch.optim.Optimizer:
+    groups = [{"params": model.body.parameters(), "lr": body_lr}, {"params": model.head.parameters(), "lr": head_lr}]
+
+    return torch.optim.Adam(groups)
+
+
+def train_for(
+    model: nn.Module,
+    optimizer: torch.optim.Optimizer,
+    x: Tensor,
+    y: Tensor,
+    steps: int,
+    batch: int,
+    generator: torch.Generator,
+    flips: bool,
+    frozen_body: bool,
+) -> None:
+    model.train()
+
+    for _ in range(steps):
+        picked = torch.randint(0, len(x), (min(batch, len(x)),), generator=generator).to(x.device)
+        images = flipped_half(x[picked], generator) if flips else x[picked]
+
+        # A frozen body keeps the BatchNorm averages it learned, so it runs in eval mode while the head trains.
+        if frozen_body:
+            model.body.eval()
+
+        loss = F.cross_entropy(model(images), y[picked])
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+
+def transfer_source(
+    kind: str,
+    device: torch.device,
+) -> tuple[nn.Module, float]:
+    """The model trained on classes 0 to 4: for "digits" transfer1's Net on 20,000 MNIST images, 1,500 Adam steps of
+    64, and for "photos" the CifarNet on CIFAR-10's 22,500 training images of those classes, 3,000 Adam steps of 128
+    with flips. Gives the model and its validation accuracy on 0 to 4."""
+    torch.manual_seed(0)
+    generator = torch.Generator().manual_seed(0)
+
+    if kind == "digits":
+        images = mnist_images()
+        below = images["train_y"] < 5
+        x, y = images["train_x"][below][:20000].to(device), images["train_y"][below][:20000].to(device)
+        model = ReferenceNet(5).to(device)
+        train_for(model, torch.optim.Adam(model.parameters(), lr=0.001), x, y, 1500, 64, generator, False, False)
+        held = images["validation_y"] < 5
+
+        return model, accuracy_on(model, images["validation_x"][held], images["validation_y"][held], device)
+
+    sets = cifar_splits()
+    below = sets["train_y"] < 5
+    x, y = sets["train_x"][below].to(device), sets["train_y"][below].to(device)
+    model = CifarNet(5).to(device)
+    train_for(model, torch.optim.Adam(model.parameters(), lr=0.001), x, y, 3000, 128, generator, True, False)
+    held = sets["validation_y"] < 5
+
+    return model, accuracy_on(model, sets["validation_x"][held], sets["validation_y"][held], device)
+
+
+def transfer_scores(
+    kind: str,
+    source: nn.Module,
+    count: int,
+    seed: int,
+    device: torch.device,
+) -> dict[str, float]:
+    """transfer2's rows for one draw of count labelled images of classes 5 to 9, each start trained 300 Adam steps of
+    64 at 0.001 and scored on the validation images of 5 to 9. "body at a tenth" is fine_tune_optimizer's, with the
+    body at 0.0001."""
+    if kind == "digits":
+        images = mnist_images()
+        train_x, train_y, held_x, held_y = images["train_x"], images["train_y"], images["validation_x"], images["validation_y"]
+        make_model: Callable[[int], nn.Module] = ReferenceNet
+    else:
+        sets = cifar_splits()
+        train_x, train_y, held_x, held_y = sets["train_x"], sets["train_y"], sets["validation_x"], sets["validation_y"]
+        make_model = CifarNet
+
+    upper = train_y >= 5
+    picked = torch.randperm(int(upper.sum()), generator=torch.Generator().manual_seed(100 + seed))[:count]
+    few_x = train_x[upper][picked].to(device)
+    few_y = (train_y[upper][picked] - 5).to(device)
+    held = held_y >= 5
+    scores = {}
+
+    for start in STARTS:
+        torch.manual_seed(seed)
+        model = make_model(5).to(device)
+
+        if start != "from scratch":
+            model.body.load_state_dict(source.body.state_dict())
+
+        if start == "frozen":
+            for parameter in model.body.parameters():
+                parameter.requires_grad_(False)
+
+            optimizer = torch.optim.Adam(model.head.parameters(), lr=0.001)
+        elif start == "body at a tenth":
+            optimizer = reference_fine_tune_optimizer(model, 0.0001, 0.001)
+        else:
+            optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+
+        generator = torch.Generator().manual_seed(seed + 7)
+        train_for(model, optimizer, few_x, few_y, 300, 64, generator, kind == "photos", start == "frozen")
+        scores[start] = accuracy_on(model, held_x[held], held_y[held] - 5, device)
+
+    return scores
+
+
+def measure_transfer(seeds: tuple[int, ...] = (0, 1, 2)) -> dict[tuple[str, int, str], list[float]]:
+    """transfer2's table, keyed by the kind of image, the count of labels and the start."""
+    device = best_device()
+    results: dict[tuple[str, int, str], list[float]] = {}
+
+    with pinned_threads():
+        for kind, counts in (("digits", (100,)), ("photos", (100, 1000))):
+            source, _ = transfer_source(kind, device)
+
+            for count in counts:
+                for seed in seeds:
+                    for start, score in transfer_scores(kind, source, count, seed, device).items():
+                        results.setdefault((kind, count, start), []).append(score)
+
+    return results

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import contextlib
 import functools
+from collections.abc import Iterator
 
 import torch
 import torch.nn as nn
@@ -10,6 +12,7 @@ import torch.nn.functional as F
 from torch import Tensor
 
 from ..course import OPTIMIZER_IMPORTS, Chapter, Exercise
+from ..data import load_cifar10
 from ..engine import (
     Checker,
     Mismatch,
@@ -21,6 +24,7 @@ from ..engine import (
     small_tensor,
 )
 from ..text import prose, source_file
+from ..training import best_device
 from .linear_layers import expect_module
 from .mnist import mnist_sets
 
@@ -770,16 +774,27 @@ RESNET2_LESSON = prose(
     training error was worse too, so it was not overfitting. They called it
     degradation.
 
-    Here small nets of width 8 learned MNIST shrunk to 14 by 14, from 5000
-    images, in 800 steps of SGD with momentum.
+    Here are the paper's CIFAR-10 nets, small. A 3 by 3 convolution leads
+    into three stages of width 16, 32 and 64, each new stage halving the
+    image. An average pool and a Linear end it. The ResNet fills each stage
+    with basic blocks, as `residual_stack` does. Its plain twin swaps each
+    block for two of `plain_stack`'s layers.
 
-    | Net | Training loss | Validation accuracy |
-    |---|---|---|
-    | plain, 4 layers | 0.185 | 94.0% |
-    | plain, 24 layers | 0.806 | 75.1% |
-    | ResNet, 24 layers in 12 basic blocks | 0.203 | 93.8% |
+    Each net trained 1,000 steps of SGD with Nesterov momentum, on batches of
+    128 with flips, far fewer than the paper's 64,000. Two seeds each were
+    scored on 5,000 validation images.
 
-    The 24 layer plain net could copy the 4 layer one, its extra layers
+    | Layers | Plain, training loss | Plain, validation | ResNet, training loss | ResNet, validation |
+    |---|---|---|---|---|
+    | 20 | 0.80 to 0.84 | 68.6% to 69.0% | 0.66 to 0.70 | 73.5% to 74.6% |
+    | 32 | 1.25 to 1.31 | 50.6% to 53.4% | 0.63 to 0.66 | 74.5% to 74.9% |
+
+    Twelve more layers cost the plain net about 17 points, and its training
+    loss rose too. That is degradation. The same twelve layers lowered the
+    ResNet's training loss and raised its score. The paper's own ResNets went
+    from 8.75% test error at 20 layers to 6.43% at 110.
+
+    The 32 layer plain net could copy the 20 layer one, its extra layers
     handing their input on. Training doesn't find that. A residual block hands
     its input on as soon as its own branch gives 0, which is far easier to
     reach, so depth stops hurting.
@@ -787,12 +802,9 @@ RESNET2_LESSON = prose(
     These ResNet blocks also had the scale of their second BatchNorm set to 0,
     which Goyal and others use. Then each block starts out as `relu(x)`,
     handing its input on from the first step. With the default start a fresh
-    block of width 8 changes its input by about 1.1 times the input's own
+    block of width 16 changes its input by about 1.1 times the input's own
     size. The skip makes handing on possible, and the zero scale makes it the
     starting point.
-
-    On ImageNet, ResNet-18, 34, 50, 101 and 152 got better with every step of
-    depth.
     """,
 )
 
@@ -1043,3 +1055,215 @@ RESNET2 = Exercise(
     introduces=(),
     check=check_resnet2,
 )
+
+
+# ---------------------------------------------------------------------------
+# The runs behind the lessons
+# ---------------------------------------------------------------------------
+
+
+@contextlib.contextmanager
+def pinned_threads(count: int = 4) -> Iterator[None]:
+    """CPU results move with the thread count, so every measured table runs on the same number of threads."""
+    before = torch.get_num_threads()
+    torch.set_num_threads(count)
+
+    try:
+        yield
+    finally:
+        torch.set_num_threads(before)
+
+
+@functools.cache
+def cifar_splits() -> dict[str, Tensor]:
+    """CIFAR-10 for the measured tables of Section 5: 45,000 training images and 5,000 for validation, cut by one fixed
+    shuffle, and the 10,000 test images. Every channel is standardized with the training part's mean and spread."""
+    images, labels = load_cifar10("train")
+    test_images, test_labels = load_cifar10("test")
+    x = images.float() / 255
+    order = torch.randperm(len(x), generator=torch.Generator().manual_seed(0))
+    train_x = x[order[:45000]]
+    mean = train_x.mean(dim=(0, 2, 3), keepdim=True)
+    spread = train_x.std(dim=(0, 2, 3), keepdim=True)
+
+    return {
+        "train_x": (train_x - mean) / spread,
+        "train_y": labels[order[:45000]],
+        "validation_x": (x[order[45000:]] - mean) / spread,
+        "validation_y": labels[order[45000:]],
+        "test_x": (test_images.float() / 255 - mean) / spread,
+        "test_y": test_labels,
+    }
+
+
+def plain_layer(
+    in_channels: int,
+    out_channels: int,
+    stride: int,
+) -> list[nn.Module]:
+    return [nn.Conv2d(in_channels, out_channels, 3, stride=stride, padding=1, bias=False), nn.BatchNorm2d(out_channels), nn.ReLU()]
+
+
+def cifar_depth_net(
+    blocks: int,
+    residual: bool,
+) -> nn.Sequential:
+    """He and colleagues' CIFAR-10 nets of 6n + 2 layers: a 3 by 3 convolution to 16 channels, three stages of n blocks
+    at widths 16, 32 and 64, each new stage halving the image, then an average pool and a Linear to 10 classes. The
+    ResNet's blocks are basic blocks with bn2's scale at 0. The plain twin swaps each for two plain layers."""
+    layers: list[nn.Module] = plain_layer(3, 16, 1)
+    in_channels = 16
+
+    for stage, width in enumerate((16, 32, 64)):
+        for index in range(blocks):
+            stride = 2 if stage > 0 and index == 0 else 1
+
+            if residual:
+                block = ReferenceBasicBlock(in_channels, width, stride)
+                nn.init.zeros_(block.bn2.weight)
+                layers.append(block)
+            else:
+                layers.extend(plain_layer(in_channels, width, stride) + plain_layer(width, width, 1))
+
+            in_channels = width
+
+    layers.extend([nn.AdaptiveAvgPool2d(1), nn.Flatten(), nn.Linear(64, 10)])
+
+    return nn.Sequential(*layers)
+
+
+class CifarNet(nn.Module):
+    """The photo model of transfer2 and augment2's measured runs: five plain layers of widths 32, 32, 64, 64 and 128
+    with two max pools and an average pool as its body, then a Linear head."""
+
+    def __init__(self, classes: int) -> None:
+        super().__init__()
+        self.body = nn.Sequential(
+            *plain_layer(3, 32, 1),
+            *plain_layer(32, 32, 1),
+            nn.MaxPool2d(2),
+            *plain_layer(32, 64, 1),
+            *plain_layer(64, 64, 1),
+            nn.MaxPool2d(2),
+            *plain_layer(64, 128, 1),
+            nn.AdaptiveAvgPool2d(1),
+            nn.Flatten(),
+        )
+        self.head = nn.Linear(128, classes)
+
+    def forward(self, x: Tensor) -> Tensor:
+        return self.head(self.body(x))
+
+
+def flipped_half(
+    images: Tensor,
+    generator: torch.Generator,
+) -> Tensor:
+    flip = torch.rand(len(images), 1, 1, 1, generator=generator) < 0.5
+
+    return torch.where(flip.to(images.device), images.flip(-1), images)
+
+
+def accuracy_on(
+    model: nn.Module,
+    x: Tensor,
+    y: Tensor,
+    device: torch.device,
+) -> float:
+    model.eval()
+    right = 0
+
+    with torch.no_grad():
+        for start in range(0, len(x), 1000):
+            scores = model(x[start : start + 1000].to(device))
+            right += (scores.argmax(dim=1).cpu() == y[start : start + 1000]).sum().item()
+
+    model.train()
+
+    return right / len(x)
+
+
+def loss_on(
+    model: nn.Module,
+    x: Tensor,
+    y: Tensor,
+    device: torch.device,
+) -> float:
+    model.eval()
+    total = 0.0
+
+    with torch.no_grad():
+        for start in range(0, len(x), 1000):
+            scores = model(x[start : start + 1000].to(device))
+            total += F.cross_entropy(scores.cpu(), y[start : start + 1000], reduction="sum").item()
+
+    model.train()
+
+    return total / len(x)
+
+
+def depth_run(
+    blocks: int,
+    residual: bool,
+    seed: int,
+    steps: int = 1000,
+    device: torch.device | None = None,
+) -> tuple[float, float]:
+    """One net of resnet2's table trained as He and colleagues trained theirs on CIFAR-10, with SGD, Nesterov momentum
+    0.9, weight decay 5e-4 and batches of 128 with flips, here for 1,000 steps on one cycle up to 0.1. Gives the loss on
+    10,000 training images and the accuracy on the 5,000 validation images."""
+    device = device or best_device()
+    sets = cifar_splits()
+    x = sets["train_x"].to(device)
+    y = sets["train_y"].to(device)
+    torch.manual_seed(seed)
+    model = cifar_depth_net(blocks, residual).to(device)
+    optimizer = torch.optim.SGD(model.parameters(), lr=0.1, momentum=0.9, weight_decay=5e-4, nesterov=True)
+    schedule = torch.optim.lr_scheduler.OneCycleLR(optimizer, max_lr=0.1, total_steps=steps, pct_start=0.15)
+    generator = torch.Generator().manual_seed(seed + 100)
+
+    for _ in range(steps):
+        batch = torch.randint(0, len(x), (128,), generator=generator).to(device)
+        loss = F.cross_entropy(model(flipped_half(x[batch], generator)), y[batch])
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+        schedule.step()
+
+    return (
+        loss_on(model, sets["train_x"][:10000], sets["train_y"][:10000], device),
+        accuracy_on(model, sets["validation_x"], sets["validation_y"], device),
+    )
+
+
+def measure_depths(
+    depths: tuple[int, ...] = (3, 5),
+    seeds: tuple[int, ...] = (0, 1),
+) -> dict[tuple[str, int], list[tuple[float, float]]]:
+    """resnet2's table, keyed by the kind of net and its layers, 20 and 32 for 3 and 5 blocks a stage."""
+    results: dict[tuple[str, int], list[tuple[float, float]]] = {}
+
+    with pinned_threads():
+        for blocks in depths:
+            for residual in (False, True):
+                for seed in seeds:
+                    results.setdefault(("resnet" if residual else "plain", 6 * blocks + 2), []).append(depth_run(blocks, residual, seed))
+
+    return results
+
+
+def measure_fresh_change(seeds: tuple[int, ...] = (0, 1, 2)) -> list[float]:
+    """How much a fresh basic block of width 16, at PyTorch's default start, changes inputs that came out of a ReLU, as
+    a share of their own size. With bn2's scale at 0 the share is exactly 0."""
+    shares = []
+
+    with pinned_threads():
+        for seed in seeds:
+            torch.manual_seed(seed)
+            block = ReferenceBasicBlock(16, 16, 1)
+            x = torch.relu(torch.randn(64, 16, 32, 32, generator=torch.Generator().manual_seed(seed + 50)))
+
+            with torch.no_grad():
+                shares.append(((block(x) - x).norm() / x.norm()).item())
+
+    return shares
