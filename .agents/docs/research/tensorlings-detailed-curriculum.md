@@ -35,7 +35,7 @@ It plans about 340 exercises. Names and counts can still shift while a phase is 
 | | chain2 | a value used twice, where the gradients from each path add up |
 | | chain3 | backprop by hand through a small expression, node by node, as in Karpathy's first lecture |
 | 05_autograd | autograd1 | a Value class that remembers how each number was made |
-| | autograd2 | each operation's own backward step, with `=` where `+=` belongs as the error to fix |
+| | autograd2 | each operation's own backward step, written as the right hand side of a `+=` so a value used twice gathers both parts |
 | | autograd3 | backward through the whole expression in topological order |
 | | autograd4 | PyTorch's autograd, `requires_grad`, `.backward()` and `.grad`, and gradients that pile up until zeroed |
 | 06_tensor_backprop | backprop1 | gradients of elementwise operations and sums, which have the shape of the tensor they belong to |
