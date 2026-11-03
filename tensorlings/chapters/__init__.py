@@ -593,6 +593,7 @@ EXERCISES: list[Exercise] = [
     interpretability.INTERP2,
     interpretability.INTERP3,
     interpretability.INTERP4,
+    interpretability.QUIZ17,
     learned_physics.PHYSICS1,
     learned_physics.PHYSICS2,
     learned_physics.PHYSICS3,

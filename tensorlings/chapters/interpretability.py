@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import copy
 import functools
+import math
 import textwrap
 from collections.abc import Callable
 
@@ -11,7 +13,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
-from ..course import OPTIMIZER_IMPORTS, Chapter, Exercise
+from ..course import OPTIMIZER_IMPORTS, QUIZZES, Chapter, Exercise
 from ..engine import (
     Checker,
     Described,
@@ -1545,6 +1547,905 @@ INTERP4 = Exercise(
     introduces=(),
     check=check_interp4,
     time_limit=60,
+    imports_first=OPTIMIZER_IMPORTS,
+)
+
+
+# ---------------------------------------------------------------------------
+# quiz17
+# ---------------------------------------------------------------------------
+
+QUIZ17_LESSON = prose(
+    """
+    The course's last quiz. Each part names a problem and the property its
+    answer must keep. No part says which layer to use, and nothing in the file
+    shows one. Choosing it is the task.
+
+    | Name | Problem | What the check tests |
+    |---|---|---|
+    | `train_step` | one step of training a classifier | the weights after two calls, against a reference step |
+    | `ZeroStartBlock` | a block for a deep stack | it starts as exactly its input, and every weight learns after one step |
+    | `LocalDetector` | a pattern on a ring of readings, wherever it sits | a turn of the ring turns the scores, and each score sees 5 steps |
+    | `ReadingsEncoder` | readings with some missing | a missing reading changes nothing |
+    | `SetCounter` | how many items in a set are marked | the items' order, any number of them, and the count once trained |
+    | `TriangleScorer` | a triangle's shape and size | moving, turning or relisting its corners |
+    | `Recall` | the value stored with an asked key | the answer once trained, in sequences longer than any it trained on |
+
+    The check builds each module from fixed seeds and tests its property
+    directly, as design5 did. Every module holds weights to learn. Parts that
+    learn train with the check's own recipe, which their TODO names. A failing
+    part says which property broke and by how much.
+    """,
+)
+
+QUIZ17_SOURCE = source_file(
+    '''
+    # quiz17.py
+    #
+    # The course's last quiz. Each part names a problem and the property its
+    # answer keeps. Which layer fits is yours to choose.
+
+    import math
+
+    import torch
+    import torch.nn as nn
+    import torch.nn.functional as F
+    from torch import Tensor
+
+
+    # TODO: Run one training step of model on x and its class labels y. Take
+    #   the cross entropy of model(x) against y, clip the gradients to a total
+    #   norm of max_norm, then step the optimizer. No gradient from an earlier
+    #   call may carry over. Return the loss from before the step as a plain
+    #   number.
+    def train_step(
+        model: nn.Module,
+        optimizer: torch.optim.Optimizer,
+        x: Tensor,
+        y: Tensor,
+        max_norm: float,
+    ) -> float:
+        ...
+
+
+    # TODO: Finish both methods. The block returns x plus a branch: a LayerNorm
+    #   of width, a Linear from width to 4 * width, a GELU, and a Linear back
+    #   to width. Choose the starting weights so the block starts as exactly
+    #   x, and every weight still gets a gradient after one step.
+    class ZeroStartBlock(nn.Module):
+        def __init__(
+            self,
+            width: int,
+        ) -> None:
+            super().__init__()
+            ...
+
+        def forward(self, x: Tensor) -> Tensor:
+            ...
+
+
+    # TODO: Finish both methods. x holds readings of shape (batch, channels,
+    #   steps) taken around a ring, so the last step sits next to the first.
+    #   Return one score per step, of shape (batch, steps). A pattern should
+    #   score the same wherever it sits on the ring, and each score may see
+    #   only the 5 steps centered on its own. hidden is a width for inside.
+    class LocalDetector(nn.Module):
+        def __init__(
+            self,
+            channels: int,
+            hidden: int,
+        ) -> None:
+            super().__init__()
+            ...
+
+        def forward(self, x: Tensor) -> Tensor:
+            ...
+
+
+    # TODO: Finish both methods. readings has shape (batch, steps, features),
+    #   and present, of shape (batch, steps), is False where a reading is
+    #   missing. Return one vector of width numbers per row, of shape (batch,
+    #   width). A missing reading must change nothing. Its numbers don't count,
+    #   and missing ones at the end give what a row stopping before them
+    #   gives. Every row has at least one reading present.
+    class ReadingsEncoder(nn.Module):
+        def __init__(
+            self,
+            features: int,
+            width: int,
+        ) -> None:
+            super().__init__()
+            ...
+
+        def forward(
+            self,
+            readings: Tensor,
+            present: Tensor,
+        ) -> Tensor:
+            ...
+
+
+    # TODO: Finish both methods. items has shape (batch, items, features), one
+    #   set of items per row, and an item is marked when its first feature is
+    #   1. Return one number per row, of shape (batch,). The items' order can't
+    #   matter, and any number of them must work. Trained with the check's
+    #   recipe, 800 steps of Adam at 0.003 on the squared error over sets of 1
+    #   to 12 items, the number should count the marked items.
+    class SetCounter(nn.Module):
+        def __init__(
+            self,
+            features: int,
+            hidden: int,
+        ) -> None:
+            super().__init__()
+            ...
+
+        def forward(self, items: Tensor) -> Tensor:
+            ...
+
+
+    # TODO: Finish both methods. corners has shape (batch, 3, 2), the three
+    #   corners of a triangle on a plane. Return one number per triangle, of
+    #   shape (batch,), that depends on its shape and size alone. Moving the
+    #   triangle, turning it, or listing its corners in another order can't
+    #   change it, and different triangles should get different numbers.
+    class TriangleScorer(nn.Module):
+        def __init__(
+            self,
+            hidden: int,
+        ) -> None:
+            super().__init__()
+            ...
+
+        def forward(self, corners: Tensor) -> Tensor:
+            ...
+
+
+    # TODO: Finish both methods. tokens has shape (batch, steps, keys +
+    #   values). Each step but the last holds a pair, a key's one hot followed
+    #   by its value's one hot, and no key repeats. The last step holds the
+    #   asked key's one hot and zeros. Return logits over the values, of shape
+    #   (batch, values), for the asked key's value. Trained with the check's
+    #   recipe, 300 steps of Adam at 0.01 on sequences of 8 pairs, it should
+    #   answer sequences of 24 pairs too.
+    class Recall(nn.Module):
+        def __init__(
+            self,
+            keys: int,
+            values: int,
+            width: int,
+        ) -> None:
+            super().__init__()
+            ...
+
+        def forward(self, tokens: Tensor) -> Tensor:
+            ...
+    ''',
+)
+
+QUIZ17_PARTS = '''
+def train_step(
+    model: nn.Module,
+    optimizer: torch.optim.Optimizer,
+    x: Tensor,
+    y: Tensor,
+    max_norm: float,
+) -> float:
+    optimizer.zero_grad()
+    loss = F.cross_entropy(model(x), y)
+    loss.backward()
+    nn.utils.clip_grad_norm_(model.parameters(), max_norm)
+    optimizer.step()
+
+    return loss.item()
+
+
+# The branch's last layer at zero makes the block x itself, and the layers before it still get gradients.
+class ZeroStartBlock(nn.Module):
+    def __init__(
+        self,
+        width: int,
+    ) -> None:
+        super().__init__()
+        self.norm = nn.LayerNorm(width)
+        self.up = nn.Linear(width, 4 * width)
+        self.down = nn.Linear(4 * width, width)
+
+        with torch.no_grad():
+            self.down.weight.zero_()
+            self.down.bias.zero_()
+
+    def forward(self, x: Tensor) -> Tensor:
+        return x + self.down(F.gelu(self.up(self.norm(x))))
+
+
+# A convolution keeps a shift, circular padding keeps it at the ring's ends too, and a kernel of 5
+# with a pointwise layer after it sees exactly 5 steps.
+class LocalDetector(nn.Module):
+    def __init__(
+        self,
+        channels: int,
+        hidden: int,
+    ) -> None:
+        super().__init__()
+        self.conv = nn.Conv1d(channels, hidden, 5, padding=2, padding_mode="circular")
+        self.score = nn.Conv1d(hidden, 1, 1)
+
+    def forward(self, x: Tensor) -> Tensor:
+        return self.score(F.relu(self.conv(x))).squeeze(1)
+
+
+# Each reading on its own, then a mean over the present ones only, so a missing one counts for nothing.
+class ReadingsEncoder(nn.Module):
+    def __init__(
+        self,
+        features: int,
+        width: int,
+    ) -> None:
+        super().__init__()
+        self.each = nn.Sequential(nn.Linear(features, width), nn.ReLU(), nn.Linear(width, width))
+
+    def forward(
+        self,
+        readings: Tensor,
+        present: Tensor,
+    ) -> Tensor:
+        encoded = torch.where(present.unsqueeze(-1), self.each(readings), 0.0)
+
+        return encoded.sum(dim=1) / present.sum(dim=1, keepdim=True)
+
+
+# A Deep Set. A sum over the items keeps how many there are, which a mean or a max would lose.
+class SetCounter(nn.Module):
+    def __init__(
+        self,
+        features: int,
+        hidden: int,
+    ) -> None:
+        super().__init__()
+        self.phi = nn.Sequential(nn.Linear(features, hidden), nn.ReLU(), nn.Linear(hidden, hidden), nn.ReLU())
+        self.rho = nn.Linear(hidden, 1)
+
+    def forward(self, items: Tensor) -> Tensor:
+        return self.rho(self.phi(items).sum(dim=1)).squeeze(-1)
+
+
+# Side lengths don't change when the triangle moves or turns, and a sum over the sides ignores their order.
+class TriangleScorer(nn.Module):
+    def __init__(
+        self,
+        hidden: int,
+    ) -> None:
+        super().__init__()
+        self.phi = nn.Sequential(nn.Linear(1, hidden), nn.ReLU())
+        self.rho = nn.Linear(hidden, 1)
+
+    def forward(self, corners: Tensor) -> Tensor:
+        sides = (corners - corners.roll(1, dims=1)).norm(dim=-1, keepdim=True)
+
+        return self.rho(self.phi(sides).sum(dim=1)).squeeze(-1)
+
+
+# Attention from the last step finds the pair by its key, wherever it sits. With no positions, any
+# length works.
+class Recall(nn.Module):
+    def __init__(
+        self,
+        keys: int,
+        values: int,
+        width: int,
+    ) -> None:
+        super().__init__()
+        self.embed = nn.Linear(keys + values, width)
+        self.qkv = nn.Linear(width, 3 * width)
+        self.head = nn.Linear(width, values)
+
+    def forward(self, tokens: Tensor) -> Tensor:
+        q, k, v = self.qkv(self.embed(tokens)).chunk(3, dim=-1)
+
+        return self.head(F.scaled_dot_product_attention(q[:, -1:], k, v).squeeze(1))
+'''
+
+QUIZ17_SOLUTION = source_file(
+    '''
+    # quiz17.py, a solution for comparison
+
+    import math
+
+    import torch
+    import torch.nn as nn
+    import torch.nn.functional as F
+    from torch import Tensor
+
+
+''' + indented(QUIZ17_PARTS) + '''
+    ''',
+)
+
+QUIZ17_REFERENCE = namespace_of(QUIZ17_PARTS)
+
+SET_FEATURES = 4
+RECALL_KEYS = 32
+RECALL_VALUES = 16
+
+
+def quiz17_module(
+    found: type,
+    call: str,
+    seed: int,
+    *arguments: int,
+) -> nn.Module:
+    torch.manual_seed(seed)
+    module = found(*arguments)
+
+    if not isinstance(module, nn.Module):
+        raise Mismatch(f"{call} is {value_text(module)}. It should be a module.")
+
+    return module
+
+
+def expect_rows(
+    call: str,
+    out: object,
+    shape: tuple[int, ...],
+) -> Tensor:
+    reject_missing_return(
+        call=call,
+        actual=out,
+    )
+
+    if not isinstance(out, Tensor) or tuple(out.shape) != shape:
+        raise Mismatch(f"{call} gives {value_text(out)}, but it should give shape {shape}.")
+
+    return out
+
+
+def largest_gap(
+    first: Tensor,
+    second: Tensor,
+) -> float:
+    return (first - second).abs().max().item()
+
+
+def scale_of(out: Tensor) -> float:
+    """How far apart two outputs may sit and still count as equal, float rounding and no more."""
+    return 1e-5 * (1 + out.abs().max().item())
+
+
+def check_has_weights(
+    name: str,
+    arguments: tuple[int, ...],
+) -> Callable[[type], None]:
+    def run(found: type) -> None:
+        call = f"{name}{arguments}"
+        module = quiz17_module(found, call, 1700, *arguments)
+
+        if not any(parameter.requires_grad for parameter in module.parameters()):
+            raise Mismatch(f"{call} holds no weights to learn. Build it from layers with weights.")
+
+    return run
+
+
+def check_train_step(found: object) -> None:
+    for seed, max_norm in ((1701, 0.05), (1702, 100.0)):
+        torch.manual_seed(seed)
+        mine = nn.Sequential(nn.Linear(4, 8), nn.ReLU(), nn.Linear(8, 3))
+        theirs = copy.deepcopy(mine)
+        my_optimizer = torch.optim.SGD(mine.parameters(), lr=0.5, momentum=0.9)
+        their_optimizer = torch.optim.SGD(theirs.parameters(), lr=0.5, momentum=0.9)
+        generator = torch.Generator().manual_seed(seed)
+
+        for number in (1, 2):
+            x = 3 * torch.randn(6, 4, generator=generator)
+            y = torch.randint(0, 3, (6,), generator=generator)
+            call = (
+                f"train_step call {number}, on a Linear 4 to 8, a ReLU and a Linear 8 to 3 with SGD at 0.5 and momentum "
+                f"0.9, max_norm {max_norm}"
+            )
+            loss = found(mine, my_optimizer, x, y, max_norm)
+            wanted = QUIZ17_REFERENCE["train_step"](theirs, their_optimizer, x, y, max_norm)
+
+            reject_missing_return(
+                call=call,
+                actual=loss,
+            )
+
+            if isinstance(loss, Tensor):
+                raise Mismatch(f"{call} gives {value_text(loss)}, a tensor, but it should be a plain number. Use .item() on it.")
+
+            expect_close(
+                call=call,
+                actual=loss,
+                expected=wanted,
+                tolerance=1e-5,
+            )
+
+            for (name, parameter), expected in zip(mine.named_parameters(), theirs.parameters()):
+                if not torch.allclose(parameter, expected, atol=1e-5):
+                    raise Mismatch(
+                        f"After {call}, the weight {name} is off by up to {largest_gap(parameter, expected):.3g} from a "
+                        f"step that clears the old gradients, clips to a total norm of {max_norm} and then steps.",
+                    )
+
+
+def silent_weights(
+    block: nn.Module,
+    x: Tensor,
+    target: Tensor,
+) -> list[str]:
+    """The weights with no gradient after one step of SGD, as design4's silent_after_one_step finds them."""
+    copied = copy.deepcopy(block)
+    optimizer = torch.optim.SGD(copied.parameters(), lr=0.1)
+    F.mse_loss(copied(x), target).backward()
+    optimizer.step()
+    optimizer.zero_grad()
+    F.mse_loss(copied(x), target).backward()
+
+    return [name for name, parameter in copied.named_parameters() if parameter.grad is None or not parameter.grad.any()]
+
+
+def check_zero_start(found: type) -> None:
+    for width in (8, 12):
+        call = f"ZeroStartBlock({width})"
+        block = quiz17_module(found, call, 1710 + width, width)
+        x = 2 * torch.randn(5, width, generator=torch.Generator().manual_seed(1720 + width))
+        out = expect_rows(f"{call}(x of shape (5, {width}))", block(x), (5, width))
+
+        if largest_gap(out, x) > 1e-6:
+            raise Mismatch(f"{call} moves its input by up to {largest_gap(out, x):.3g} at the start, but it should start as exactly x.")
+
+
+def check_zero_start_learns(found: type) -> None:
+    call = "ZeroStartBlock(8)"
+    block = quiz17_module(found, call, 1730, 8)
+    generator = torch.Generator().manual_seed(1731)
+    x = torch.randn(16, 8, generator=generator)
+    target = torch.randn(16, 8, generator=generator)
+
+    if not list(block.parameters()):
+        raise Mismatch(f"{call} holds no weights to learn. Give it the branch's layers.")
+
+    silent = silent_weights(block, x, target)
+
+    if silent:
+        raise Mismatch(
+            f"After one step of SGD, these weights of {call} still get no gradient: {', '.join(silent)}. A layer at "
+            "zero passes no gradient back to the layers before it.",
+        )
+
+
+def ring_readings(
+    rows: int,
+    steps: int,
+    seed: int,
+) -> Tensor:
+    return torch.randn(rows, 3, steps, generator=torch.Generator().manual_seed(seed))
+
+
+def check_detector_shape(found: type) -> None:
+    detector = quiz17_module(found, "LocalDetector(3, 16)", 1740, 3, 16)
+
+    for rows, steps in ((2, 12), (1, 31)):
+        expect_rows(
+            f"LocalDetector(3, 16)(x of shape ({rows}, 3, {steps}))",
+            detector(ring_readings(rows, steps, 1741 + steps)),
+            (rows, steps),
+        )
+
+
+def check_detector_shift(found: type) -> None:
+    detector = quiz17_module(found, "LocalDetector(3, 16)", 1742, 3, 16)
+    x = ring_readings(2, 16, 1743)
+    out = expect_rows("LocalDetector(3, 16)(x of shape (2, 3, 16))", detector(x), (2, 16))
+
+    for turn in (3, -5):
+        turned = detector(torch.roll(x, turn, dims=2))
+        gap = largest_gap(turned, torch.roll(out, turn, dims=1))
+
+        if gap > scale_of(out):
+            raise Mismatch(
+                f"Turning the ring by {turn} steps should turn the scores by {turn} steps too, but they differ by up to "
+                f"{gap:.3g}. A pattern should score the same wherever it sits, the ring's ends included.",
+            )
+
+
+def check_detector_reach(found: type) -> None:
+    detector = quiz17_module(found, "LocalDetector(3, 16)", 1744, 3, 16)
+    x = ring_readings(1, 16, 1745)
+    changed = x.clone()
+    changed[:, :, 8] += 2 * torch.randn(3, generator=torch.Generator().manual_seed(1746))
+    moved = (detector(changed) - detector(x)).abs()[0]
+
+    for step in range(16):
+        distance = min(abs(step - 8), 16 - abs(step - 8))
+
+        if distance > 2 and moved[step] > 1e-6:
+            raise Mismatch(
+                f"Changing step 8 moved the score at step {step}, {distance} steps away, by {moved[step]:.3g}. Each "
+                "score should see only the 5 steps centered on its own.",
+            )
+
+    for step in (6, 10):
+        if moved[step] <= 1e-6:
+            raise Mismatch(
+                f"Changing step 8 left the score at step {step}, 2 steps away, where it was. Each score should see "
+                "the 5 steps centered on its own, 2 on each side.",
+            )
+
+
+def readings_with_gaps(seed: int) -> tuple[Tensor, Tensor]:
+    generator = torch.Generator().manual_seed(seed)
+    readings = torch.randn(4, 7, 5, generator=generator)
+    present = torch.rand(4, 7, generator=generator) < 0.6
+    present[:, 0] = True
+
+    return readings, present
+
+
+def check_readings_shape(found: type) -> None:
+    encoder = quiz17_module(found, "ReadingsEncoder(5, 12)", 1750, 5, 12)
+    readings, present = readings_with_gaps(1751)
+    expect_rows("ReadingsEncoder(5, 12)(readings of shape (4, 7, 5), present)", encoder(readings, present), (4, 12))
+    expect_rows(
+        "ReadingsEncoder(5, 12)(readings of shape (2, 1, 5), both present)",
+        encoder(readings[:2, :1], present[:2, :1]),
+        (2, 12),
+    )
+
+
+def check_readings_ignored(found: type) -> None:
+    encoder = quiz17_module(found, "ReadingsEncoder(5, 12)", 1752, 5, 12)
+    readings, present = readings_with_gaps(1753)
+    out = expect_rows("ReadingsEncoder(5, 12)(readings of shape (4, 7, 5), present)", encoder(readings, present), (4, 12))
+    noise = 100 * torch.randn(readings.shape, generator=torch.Generator().manual_seed(1754))
+    filled = torch.where(present.unsqueeze(-1), readings, noise)
+    gap = largest_gap(encoder(filled, present), out)
+
+    if gap > scale_of(out):
+        raise Mismatch(
+            f"Changing the numbers of the missing readings moved the result by up to {gap:.3g}. A missing reading's "
+            "numbers shouldn't count at all.",
+        )
+
+
+def check_readings_shorter(found: type) -> None:
+    encoder = quiz17_module(found, "ReadingsEncoder(5, 12)", 1755, 5, 12)
+    generator = torch.Generator().manual_seed(1756)
+    readings = torch.randn(3, 6, 5, generator=generator)
+    lengths = (2, 6, 4)
+    present = torch.arange(6).unsqueeze(0) < torch.tensor(lengths).unsqueeze(1)
+    out = expect_rows("ReadingsEncoder(5, 12)(readings of shape (3, 6, 5), present)", encoder(readings, present), (3, 12))
+
+    for row, length in enumerate(lengths):
+        alone = encoder(readings[row : row + 1, :length], present[row : row + 1, :length])
+        gap = largest_gap(alone[0], out[row])
+
+        if gap > scale_of(out):
+            raise Mismatch(
+                f"Row {row} has {length} readings present and the rest missing at the end. Its result differs by up to "
+                f"{gap:.3g} from the same row cut to its {length} readings. Missing readings should count for nothing.",
+            )
+
+
+def marked_items(
+    rows: int,
+    items: int,
+    generator: torch.Generator,
+) -> tuple[Tensor, Tensor]:
+    x = torch.randn(rows, items, SET_FEATURES, generator=generator)
+    x[..., 0] = torch.randint(0, 2, (rows, items), generator=generator).float()
+
+    return x, x[..., 0].sum(dim=1)
+
+
+def check_counter_sizes(found: type) -> None:
+    counter = quiz17_module(found, "SetCounter(4, 32)", 1760, SET_FEATURES, 32)
+    generator = torch.Generator().manual_seed(1761)
+
+    for items in (5, 1, 20):
+        expect_rows(
+            f"SetCounter(4, 32)(items of shape (3, {items}, 4))",
+            counter(marked_items(3, items, generator)[0]),
+            (3,),
+        )
+
+
+def check_counter_order(found: type) -> None:
+    counter = quiz17_module(found, "SetCounter(4, 32)", 1762, SET_FEATURES, 32)
+    items, _ = marked_items(3, 6, torch.Generator().manual_seed(1763))
+    out = expect_rows("SetCounter(4, 32)(items of shape (3, 6, 4))", counter(items), (3,))
+    gap = largest_gap(counter(items[:, torch.tensor([4, 2, 0, 5, 1, 3])]), out)
+
+    if gap > scale_of(out):
+        raise Mismatch(f"Putting the items in another order moved the result by up to {gap:.3g}. A set's items have no order.")
+
+
+def counting_error(
+    counter: nn.Module,
+    items: int,
+    held: torch.Generator,
+) -> float:
+    sets, counts = marked_items(200, items, held)
+
+    with torch.no_grad():
+        return (counter(sets) - counts).abs().mean().item()
+
+
+def check_counter_counts(found: type) -> None:
+    counter = quiz17_module(found, "SetCounter(4, 32)", 1764, SET_FEATURES, 32)
+    generator = torch.Generator().manual_seed(1765)
+    optimizer = torch.optim.Adam(counter.parameters(), lr=0.003)
+    expect_rows("SetCounter(4, 32)(items of shape (2, 3, 4))", counter(marked_items(2, 3, generator)[0]), (2,))
+
+    for step in range(800):
+        items, counts = marked_items(64, 1 + step % 12, generator)
+        loss = F.mse_loss(counter(items), counts)
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+    held = torch.Generator().manual_seed(1766)
+    error = sum(counting_error(counter, items, held) for items in range(1, 13)) / 12
+    error_at_20 = counting_error(counter, 20, held)
+
+    if error > 0.3 or error_at_20 > 1:
+        raise Mismatch(
+            f"After the check's 800 steps, the counts are off by {error:.2f} on average for sets of 1 to 12 items, and "
+            f"by {error_at_20:.2f} for sets of 20. They should be off by under 0.3 and under 1. A count grows with "
+            "the set, so what joins the items has to keep how many there are.",
+        )
+
+
+def triangles(seed: int) -> Tensor:
+    return torch.randn(4, 3, 2, generator=torch.Generator().manual_seed(seed))
+
+
+def turned(
+    corners: Tensor,
+    angle: float,
+) -> Tensor:
+    turn = torch.tensor([[math.cos(angle), -math.sin(angle)], [math.sin(angle), math.cos(angle)]])
+
+    return corners @ turn.T
+
+
+def check_triangle_shape(found: type) -> None:
+    scorer = quiz17_module(found, "TriangleScorer(16)", 1770, 16)
+    expect_rows("TriangleScorer(16)(corners of shape (4, 3, 2))", scorer(triangles(1771)), (4,))
+
+
+def check_triangle_moves(found: type) -> None:
+    scorer = quiz17_module(found, "TriangleScorer(16)", 1772, 16)
+    corners = triangles(1773)
+    out = expect_rows("TriangleScorer(16)(corners of shape (4, 3, 2))", scorer(corners), (4,))
+    offsets = 3 * torch.randn(4, 1, 2, generator=torch.Generator().manual_seed(1774))
+
+    for change, moved in (
+        ("Moving each triangle", corners + offsets),
+        ("Turning each triangle by 0.7", turned(corners, 0.7)),
+        ("Turning each triangle by 2.5", turned(corners, 2.5)),
+    ):
+        gap = largest_gap(scorer(moved), out)
+
+        # Moving and turning round the corners themselves, so this allows ten times the usual rounding.
+        if gap > 10 * scale_of(out):
+            raise Mismatch(f"{change} moved its number by up to {gap:.3g}. The number should depend on the shape and size alone.")
+
+
+def check_triangle_relisted(found: type) -> None:
+    scorer = quiz17_module(found, "TriangleScorer(16)", 1775, 16)
+    corners = triangles(1776)
+    out = expect_rows("TriangleScorer(16)(corners of shape (4, 3, 2))", scorer(corners), (4,))
+
+    for order in ([2, 0, 1], [1, 0, 2]):
+        gap = largest_gap(scorer(corners[:, order]), out)
+
+        if gap > scale_of(out):
+            raise Mismatch(
+                f"Listing the corners in the order {order} moved the number by up to {gap:.3g}. The same triangle "
+                "should get the same number whichever corner comes first.",
+            )
+
+
+def check_triangle_apart(found: type) -> None:
+    scorer = quiz17_module(found, "TriangleScorer(16)", 1777, 16)
+    corners = triangles(1778)
+    out = expect_rows("TriangleScorer(16)(corners of shape (4, 3, 2))", scorer(corners), (4,))
+    doubled = scorer(2 * corners)
+
+    if (out[1:] - out[0]).abs().min().item() < 1e-4:
+        raise Mismatch(f"Four different triangles got the numbers {value_text(out)}. Different triangles should get different numbers.")
+
+    if (doubled - out).abs().min().item() < 1e-4:
+        raise Mismatch("Doubling each triangle's size left a number where it was. Size should change the number too.")
+
+
+def recall_batch(
+    rows: int,
+    pairs: int,
+    generator: torch.Generator,
+) -> tuple[Tensor, Tensor]:
+    keys = torch.rand(rows, RECALL_KEYS, generator=generator).argsort(dim=1)[:, :pairs]
+    values = torch.randint(0, RECALL_VALUES, (rows, pairs), generator=generator)
+    asked = torch.randint(0, pairs, (rows, 1), generator=generator)
+    tokens = torch.zeros(rows, pairs + 1, RECALL_KEYS + RECALL_VALUES)
+    tokens[:, :pairs] = torch.cat([F.one_hot(keys, RECALL_KEYS), F.one_hot(values, RECALL_VALUES)], dim=-1).float()
+    tokens[:, pairs, :RECALL_KEYS] = F.one_hot(keys.gather(1, asked).squeeze(1), RECALL_KEYS).float()
+
+    return tokens, values.gather(1, asked).squeeze(1)
+
+
+def longer_sequences(
+    recall: nn.Module,
+    tokens: Tensor,
+) -> object:
+    """Recall run on sequences longer than any it trained on, where a layer sized to one length crashes."""
+    try:
+        with torch.no_grad():
+            return recall(tokens)
+    except (RuntimeError, IndexError) as error:
+        raise Mismatch(
+            f"Recall crashed on sequences of {tokens.shape[1] - 1} pairs: {error}. It should take sequences of any "
+            "length, so no layer in it can be sized to one length, such as a table of positions.",
+        ) from None
+
+
+def check_recall_shape(found: type) -> None:
+    recall = quiz17_module(found, "Recall(32, 16, 32)", 1780, RECALL_KEYS, RECALL_VALUES, 32)
+    generator = torch.Generator().manual_seed(1781)
+    expect_rows(
+        "Recall(32, 16, 32)(tokens of 8 pairs and the asked key, shape (3, 9, 48))",
+        recall(recall_batch(3, 8, generator)[0]),
+        (3, RECALL_VALUES),
+    )
+    expect_rows(
+        "Recall(32, 16, 32)(tokens of 24 pairs and the asked key, shape (3, 25, 48))",
+        longer_sequences(recall, recall_batch(3, 24, generator)[0]),
+        (3, RECALL_VALUES),
+    )
+
+
+def check_recall_answers(found: type) -> None:
+    recall = quiz17_module(found, "Recall(32, 16, 32)", 1782, RECALL_KEYS, RECALL_VALUES, 32)
+    generator = torch.Generator().manual_seed(1783)
+    optimizer = torch.optim.Adam(recall.parameters(), lr=0.01)
+    expect_rows("Recall(32, 16, 32)(tokens of shape (2, 9, 48))", recall(recall_batch(2, 8, generator)[0]), (2, RECALL_VALUES))
+
+    for _ in range(300):
+        tokens, answers = recall_batch(64, 8, generator)
+        loss = F.cross_entropy(recall(tokens), answers)
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+    held = torch.Generator().manual_seed(1784)
+
+    for pairs in (8, 24):
+        tokens, answers = recall_batch(500, pairs, held)
+        right = (longer_sequences(recall, tokens).argmax(dim=1) == answers).float().mean().item()
+
+        if right < 0.9:
+            raise Mismatch(
+                f"After the check's 300 steps, Recall answers {right:.0%} of new sequences of {pairs} pairs right, but "
+                "it should answer at least 90%. The answer is found by its key, wherever the pair sits.",
+            )
+
+
+# Each module part's arguments for the weights test, then its tests of forward.
+QUIZ17_MODULE_TESTS: dict[str, tuple[tuple[int, ...], tuple[tuple[str, Callable[[type], None]], ...]]] = {
+    "LocalDetector": (
+        (3, 16),
+        (
+            ("gives one score per step, at any length", check_detector_shape),
+            ("turns its scores with the ring", check_detector_shift),
+            ("sees the 5 steps centered on each score", check_detector_reach),
+        ),
+    ),
+    "ReadingsEncoder": (
+        (5, 12),
+        (
+            ("gives one vector per row", check_readings_shape),
+            ("ignores the numbers of missing readings", check_readings_ignored),
+            ("treats missing readings at the end as a shorter row", check_readings_shorter),
+        ),
+    ),
+    "SetCounter": (
+        (SET_FEATURES, 32),
+        (
+            ("gives one number per set, for any number of items", check_counter_sizes),
+            ("ignores the order of the items", check_counter_order),
+            ("counts the marked items once trained", check_counter_counts),
+        ),
+    ),
+    "TriangleScorer": (
+        (16,),
+        (
+            ("gives one number per triangle", check_triangle_shape),
+            ("keeps its number when a triangle moves or turns", check_triangle_moves),
+            ("keeps its number when the corners are relisted", check_triangle_relisted),
+            ("tells different triangles apart", check_triangle_apart),
+        ),
+    ),
+    "Recall": (
+        (RECALL_KEYS, RECALL_VALUES, 32),
+        (
+            ("gives logits over the values, at any length", check_recall_shape),
+            ("finds the asked value once trained, in longer sequences too", check_recall_answers),
+        ),
+    ),
+}
+
+
+def check_quiz17(checker: Checker) -> None:
+    checker.test(
+        function="train_step",
+        description="clears the old gradients, clips, steps and gives the loss",
+        run=check_train_step,
+    )
+    checker.test_method(
+        class_name="ZeroStartBlock",
+        method="__init__",
+        description="starts as exactly its input",
+        run=check_zero_start,
+    )
+    checker.test_method(
+        class_name="ZeroStartBlock",
+        method="forward",
+        description="gets a gradient to every weight after one step",
+        run=check_zero_start_learns,
+    )
+
+    for name, (arguments, forward_tests) in QUIZ17_MODULE_TESTS.items():
+        checker.test_method(
+            class_name=name,
+            method="__init__",
+            description="holds weights to learn",
+            run=check_has_weights(name, arguments),
+        )
+
+        for description, run in forward_tests:
+            checker.test_method(
+                class_name=name,
+                method="forward",
+                description=description,
+                run=run,
+            )
+
+
+QUIZ17 = Exercise(
+    name="quiz17",
+    chapter=QUIZZES,
+    title="The whole course, a module for each problem",
+    lesson=QUIZ17_LESSON,
+    source=QUIZ17_SOURCE,
+    solution=QUIZ17_SOLUTION,
+    hints={
+        "train_step": "Clear the gradients first, then the loss, backward, nn.utils.clip_grad_norm_ over the model's "
+        "parameters, and the step. .item() turns the loss into a plain number.",
+        "ZeroStartBlock.__init__": "A branch whose last layer is all zeros adds nothing to x. Zero that one layer's "
+        "weight and bias under torch.no_grad(), and leave the layers before it as drawn.",
+        "ZeroStartBlock.forward": "Return x plus the branch, its layers in the order the TODO lists them. A layer at "
+        "zero blocks the gradient to the layers before it, so start the last layer alone at zero.",
+        "LocalDetector.__init__": "Give it a layer that slides the same weights along the steps.",
+        "LocalDetector.forward": "A Conv1d with kernel_size 5 sees 2 steps on each side. Padding of 2 with "
+        "padding_mode circular wraps the ring, and a kernel_size 1 layer after it keeps the reach at 5.",
+        "ReadingsEncoder.__init__": "Give it layers that read one reading at a time.",
+        "ReadingsEncoder.forward": "Encode every reading, then set the missing ones to 0 with torch.where. Divide "
+        "the sum over the steps by how many readings are present, not by the number of steps.",
+        "SetCounter.__init__": "Give it a network for each item and one for the joined result.",
+        "SetCounter.forward": "Run a network on every item, then sum over the items. A sum is the same in any order "
+        "and grows with the count, where a mean or a max would hide it.",
+        "TriangleScorer.__init__": "Give it a small network to run on whatever the corners give.",
+        "TriangleScorer.forward": "The lengths of the three sides stay the same when a triangle moves or turns. Run "
+        "a network on each length and sum the three, so their order can't matter.",
+        "Recall.__init__": "Give it a Linear into width and the projections that attention needs, then a Linear to "
+        "the values.",
+        "Recall.forward": "Let the last step ask, with its query against every step's key, and read the values by "
+        "those weights. Leave positions out, so any length works.",
+    },
+    introduces=(),
+    check=check_quiz17,
+    time_limit=30,
     imports_first=OPTIMIZER_IMPORTS,
 )
 
