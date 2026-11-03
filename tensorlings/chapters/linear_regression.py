@@ -110,7 +110,8 @@ LINREG1_SOURCE = source_file(
 
 
     # TODO: Return how many parameters a linear model has with this many
-    #   features and outputs, counting every weight and every bias.
+    #   features and outputs, counting every weight and every bias. The model
+    #   above has 2 weights and 1 bias, so count_parameters(2, 1) gives 3.
     def count_parameters(
         features: int,
         outputs: int,

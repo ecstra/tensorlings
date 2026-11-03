@@ -21,6 +21,7 @@ from ..engine import (
     small_tensor,
 )
 from ..text import prose, source_file
+from .tensors import pinned_threads
 
 GRADIENT_DESCENT = Chapter(
     folder="09_gradient_descent",
@@ -352,7 +353,7 @@ DESCENT1 = Exercise(
 
 DESCENT2_LESSON = prose(
     """
-    Working out gradients by hand stops being possible once a model has more
+    Working out gradients by hand stops being practical once a model has more
     than a few steps. Autograd does it instead. Give the parameters
     `requires_grad=True`, compute the loss, call `.backward()`, and every
     parameter's `.grad` holds its gradient.
@@ -657,8 +658,9 @@ DESCENT3_LESSON = prose(
     is the first sign of a learning rate that is too big.
 
     `math.isfinite(x)` is True for a plain number and False for `inf` and
-    `nan`. Comparing a `nan` with anything gives False, so test for it before
-    comparing losses.
+    `nan`. `math.inf` is infinity as a plain number, above every finite loss,
+    so it makes a good starting best loss. Comparing a `nan` with anything
+    gives False, so test for it before comparing losses.
 
     There is no rule that gives the right rate for a new model. The usual way
     is to try a few rates ten times apart, like 0.001, 0.01 and 0.1, and keep
@@ -931,10 +933,25 @@ DESCENT4_LESSON = prose(
     x.std(dim=0)     # about 0.299 and 862, one spread per column
     ```
 
+    Here is training on 20 examples like these for 100 steps, over 10 runs.
+    The targets are `3 * fraction + thousands / 1000 + 0.5`, and the rates
+    tried were half a power of ten apart.
+
+    | Features | Learning rate | Loss after 100 steps |
+    |---|---|---|
+    | raw | 3e-7 and up | blows up |
+    | raw | 1e-7, the best | 0.83 to 1.70 |
+    | standardized | 0.1 | below 3e-9 |
+
+    On the raw features the first weight ends near 0.00001, where it should
+    be 3. The loss, 1.35 at the median, is about what predicting the mean
+    target for every example gives, 1.24. Standardized, the first weight ends
+    at 3.
+
     Keep the mean and the spread you computed on the training data, and use
-    those same numbers on any new example. Don't standardize a new example with
-    its own numbers. Don't let the examples you test on into the numbers
-    either, or the test stops being fair.
+    those same numbers on any new example. Don't standardize a new example
+    with its own numbers, and don't fold new examples into the mean and the
+    spread either.
     """,
 )
 
@@ -1140,3 +1157,46 @@ DESCENT4 = Exercise(
     introduces=(),
     check=check_descent4,
 )
+
+
+# ---------------------------------------------------------------------------
+# The runs behind the lessons
+# ---------------------------------------------------------------------------
+
+# Rates half a power of ten apart, from 1e-10 up to 1.
+RAW_RATES: tuple[float, ...] = tuple(10.0 ** (power / 2) for power in range(-20, 1))
+
+
+def measure_standardizing(seeds: range = range(10)) -> dict[str, list[float]]:
+    """descent4's table: scaled_data with 20 examples and 100 steps from zeros, one entry per seed. On the raw
+    features, the smallest rate of RAW_RATES whose loss is not finite or ends above the starting loss, the best rate
+    below it, that rate's loss and the first weight it ends with. The loss of predicting the mean of y for every
+    example. On standardized features at a rate of 0.1, the loss and the first weight, put back on the raw feature's
+    scale. The targets are 3 * the fraction + the thousands / 1000 + 0.5, so the first weight should end at 3."""
+    results: dict[str, list[float]] = {}
+
+    with pinned_threads():
+        for seed in seeds:
+            x, y = scaled_data(seed, 20)
+            start_loss = (y ** 2).mean().item()
+            raw_losses = {rate: reference_final_loss(x, y, rate, 100) for rate in RAW_RATES}
+            blowing_up = min(rate for rate, loss in raw_losses.items() if not math.isfinite(loss) or loss > start_loss)
+            stable = {rate: loss for rate, loss in raw_losses.items() if rate < blowing_up}
+            best_rate = min(stable, key=stable.get)
+            raw_w, _, _ = autograd_descent(x, y, 100, best_rate)
+
+            mean, spread = x.mean(dim=0), x.std(dim=0)
+            standardized_w, _, _ = autograd_descent((x - mean) / spread, y, 100, 0.1)
+
+            for key, value in (
+                ("raw, first rate that blows up", blowing_up),
+                ("raw, best rate", best_rate),
+                ("raw, best loss", stable[best_rate]),
+                ("raw, first weight", raw_w[0].item()),
+                ("predicting the mean", ((y - y.mean()) ** 2).mean().item()),
+                ("standardized, loss", reference_final_loss((x - mean) / spread, y, 0.1, 100)),
+                ("standardized, first weight", (standardized_w[0] / spread[0]).item()),
+            ):
+                results.setdefault(key, []).append(value)
+
+    return results

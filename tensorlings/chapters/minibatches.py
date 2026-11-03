@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 
 import torch
 from torch import Tensor
@@ -24,6 +25,7 @@ from ..engine import (
 )
 from ..text import prose, source_file
 from .gradient_descent import linear_data, named
+from .tensors import pinned_threads
 
 MINIBATCHES = Chapter(
     folder="10_minibatches",
@@ -96,9 +98,33 @@ MINIBATCH1_LESSON = prose(
     at random from the data is a **minibatch**.
 
     A minibatch's gradient is a noisy estimate of the gradient over every
-    example, and on average it points the same way. Averaging the gradients of
-    many minibatches gives back the full one. So each step is noisy, but cheap,
-    and many cheap noisy steps beat a few exact ones.
+    example, and on average it points the same way. Here is the gradient of
+    `w` for a linear model on 10 examples, with minibatches of 3.
+
+    ```text
+    every example              [48.00, -7.15, 49.40]
+    one minibatch of 3         [36.50, 11.33, 43.00]
+    mean of 200 minibatches    [47.70, -6.28, 47.55]
+    ```
+
+    One minibatch is far off, but the mean of many comes back to the full
+    gradient. Over 10 runs, one minibatch missed some entry by 10 to 47, and
+    the mean of 200 by 0.2 to 3.6.
+
+    So each step is noisy, but it reads far fewer examples. For the same
+    number of examples read, many cheap noisy steps beat a few exact ones.
+    Here is a linear model with 10 features fit to 10,000 examples. Full batch
+    means every step uses every example. Each way ran at its best learning
+    rate. Each entry is how far the loss ends above the least squares best,
+    the median of 10 runs.
+
+    | Examples read | Full batch | Minibatches of 32 |
+    |---|---|---|
+    | 10,000 | 2.23 after 1 step | 0.043 after 313 steps |
+    | 50,000 | 0.23 after 5 steps | 0.0066 after 1,565 steps |
+    | 200,000 | 0.022 after 20 steps | 0.0011 after 6,260 steps |
+
+    The minibatches ended lower in all 10 runs.
 
     A tensor of positions picks those rows, in that order.
 
@@ -362,6 +388,18 @@ MINIBATCH2_LESSON = prose(
     The shuffle matters. Data often arrives sorted, by date or by kind. Cut
     without a shuffle, each minibatch would hold one kind of example, and
     every step would pull the parameters toward that kind alone.
+
+    Here is a linear model trained for 5 epochs in minibatches of 32, on 2,000
+    examples sorted by their target. Each entry is how far the loss ends above
+    the least squares best, the median of 10 runs.
+
+    | Learning rate | Shuffled every epoch | Kept sorted |
+    |---|---|---|
+    | 0.01 | 0.0005 | 0.022 |
+    | 0.03 | 0.0005 | 0.12 |
+    | 0.1 | 0.0023 | 0.80 |
+
+    Shuffling ended lower in all 30 pairs of runs.
 
     Training on minibatches is the loop from descent2 inside a loop over the
     pieces of each epoch. Each step uses the rows of its piece only.
@@ -899,3 +937,161 @@ MINIBATCH3 = Exercise(
     introduces=(),
     check=check_minibatch3,
 )
+
+
+# ---------------------------------------------------------------------------
+# The runs behind the lessons
+# ---------------------------------------------------------------------------
+
+
+def related_features(
+    seed: int,
+    examples: int,
+    features: int,
+) -> tuple[Tensor, Tensor]:
+    """Standardized features made by mixing independent ones, so they move together as real features do, and targets
+    a linear function of them plus noise of spread 0.5. Features that never move together would let full batch
+    descent land on the best fit in about one step, which real data doesn't allow."""
+    generator = torch.Generator().manual_seed(seed)
+    independent = torch.randn(examples, features, generator=generator)
+    mixed = independent @ torch.randn(features, features, generator=generator)
+    x = (mixed - mixed.mean(dim=0)) / mixed.std(dim=0)
+    true_w = torch.randn(features, generator=generator)
+
+    return x, x @ true_w + 1.0 + 0.5 * torch.randn(examples, generator=generator)
+
+
+def full_loss(
+    x: Tensor,
+    y: Tensor,
+    w: Tensor,
+    b: Tensor,
+) -> float:
+    with torch.no_grad():
+        return ((x @ w + b - y) ** 2).mean().item()
+
+
+def best_fit_loss(
+    x: Tensor,
+    y: Tensor,
+) -> float:
+    """The least squares loss, solved in doubles so the gaps above it stay exact down to 1e-4."""
+    with_ones = torch.cat([x, torch.ones(len(x), 1)], dim=1).double()
+    solution = torch.linalg.lstsq(with_ones, y.double().unsqueeze(1)).solution.squeeze(1).float()
+
+    return full_loss(x, y, solution[:-1], solution[-1])
+
+
+def epoch_losses(
+    x: Tensor,
+    y: Tensor,
+    epochs: int,
+    size: int,
+    learning_rate: float,
+    order_of_epoch: Callable[[], Tensor],
+) -> list[float]:
+    """Training from zeros in minibatches of size, cut from order_of_epoch() every epoch. The loss on every example
+    after each epoch."""
+    w = torch.zeros(x.shape[1], requires_grad=True)
+    b = torch.tensor(0.0, requires_grad=True)
+    losses: list[float] = []
+
+    for _ in range(epochs):
+        order = order_of_epoch()
+
+        for start in range(0, len(x), size):
+            positions = order[start:start + size]
+            loss = ((x[positions] @ w + b - y[positions]) ** 2).mean()
+            loss.backward()
+
+            with torch.no_grad():
+                w -= learning_rate * w.grad
+                b -= learning_rate * b.grad
+
+            w.grad = None
+            b.grad = None
+
+        losses.append(full_loss(x, y, w.detach(), b.detach()))
+
+    return losses
+
+
+def shuffles(
+    seed: int,
+    n: int,
+) -> Callable[[], Tensor]:
+    """A fresh shuffle of n positions on every call, from a generator of its own, so each run draws the same orders."""
+    generator = torch.Generator().manual_seed(seed)
+
+    return lambda: torch.randperm(n, generator=generator)
+
+
+def measure_gradient_estimates(seeds: range = range(10)) -> dict[str, object]:
+    """minibatch1's first comparison: the gradient of w on minibatch1's checked data, 10 examples and 3 features,
+    with w at small_tensor(86, 3), b at 0 and minibatches of 3. The gradient over every example, and per generator
+    seed the first minibatch's gradient and the mean over 200 minibatches, the first of them included, each with
+    its largest entry gap from the full gradient."""
+    x, y = linear_data(83, 10, 3)
+    w = small_tensor(86, 3)
+    b = torch.tensor(0.0)
+    full = mse_gradients_on(x, y, w, b, torch.arange(len(x)))[0]
+    results: dict[str, object] = {"full": full.tolist(), "one": [], "mean of 200": [], "one, gap": [], "mean of 200, gap": []}
+
+    with pinned_threads():
+        for seed in seeds:
+            first = torch.randperm(len(x), generator=torch.Generator().manual_seed(seed))[:3]
+            one = mse_gradients_on(x, y, w, b, first)[0]
+            mean = reference_mean_gradient(x, y, w, b, 3, 200, torch.Generator().manual_seed(seed))
+            results["one"].append(one.tolist())
+            results["mean of 200"].append(mean.tolist())
+            results["one, gap"].append((one - full).abs().max().item())
+            results["mean of 200, gap"].append((mean - full).abs().max().item())
+
+    return results
+
+
+# Each way's rate is the one of these with the lowest loss after 20 epochs, so neither is held back by a bad rate.
+COMPARED_RATES: tuple[float, ...] = (0.003, 0.01, 0.03, 0.1, 0.3, 1.0)
+
+
+def measure_full_against_minibatch(seeds: range = range(10)) -> dict[str, list[tuple[float, list[float]]]]:
+    """minibatch1's table: related_features with 10,000 examples and 10 features. Full batch descent, every example
+    in every step, against minibatches of 32 shuffled every epoch. Per seed and way, the rate it ran at and its loss
+    above the least squares loss after epochs 1, 2, 5 and 20. An epoch is one step for full batch and 313 for
+    minibatches of 32."""
+    results: dict[str, list[tuple[float, list[float]]]] = {}
+
+    with pinned_threads():
+        for seed in seeds:
+            x, y = related_features(seed, 10_000, 10)
+            best = best_fit_loss(x, y)
+
+            for label, size in (("full batch", len(x)), ("minibatches of 32", 32)):
+                runs = {rate: epoch_losses(x, y, 20, size, rate, shuffles(seed, len(x))) for rate in COMPARED_RATES}
+                finite = {rate: losses for rate, losses in runs.items() if all(math.isfinite(loss) for loss in losses)}
+                rate = min(finite, key=lambda rate: finite[rate][-1])
+                above = [finite[rate][epochs - 1] - best for epochs in (1, 2, 5, 20)]
+                results.setdefault(label, []).append((rate, above))
+
+    return results
+
+
+def measure_shuffling(seeds: range = range(10)) -> dict[tuple[float, str], list[float]]:
+    """minibatch2's table: related_features with 2,000 examples and 2 features, trained for 5 epochs in minibatches
+    of 32. Shuffled every epoch against kept sorted by target. Per rate and order, the loss above least squares per
+    seed."""
+    results: dict[tuple[float, str], list[float]] = {}
+
+    with pinned_threads():
+        for seed in seeds:
+            x, y = related_features(seed, 2_000, 2)
+            best = best_fit_loss(x, y)
+            by_target = torch.argsort(y)
+
+            for rate in (0.01, 0.03, 0.1):
+                shuffled = epoch_losses(x, y, 5, 32, rate, shuffles(seed, len(x)))
+                in_order = epoch_losses(x, y, 5, 32, rate, lambda: by_target)
+                results.setdefault((rate, "shuffled"), []).append(shuffled[-1] - best)
+                results.setdefault((rate, "sorted"), []).append(in_order[-1] - best)
+
+    return results

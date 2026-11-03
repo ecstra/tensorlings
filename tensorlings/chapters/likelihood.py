@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 
 import torch
 import torch.nn.functional as F
@@ -12,6 +13,7 @@ from ..course import Chapter, Exercise
 from ..engine import Checker, Described, check_on_inputs, expect_close, expect_parts, expect_tensor, small_tensor
 from ..text import prose, source_file
 from .tensor_backprop import autograd_backward
+from .tensors import pinned_threads
 
 LIKELIHOOD = Chapter(
     folder="12_likelihood",
@@ -85,13 +87,14 @@ LIKELIHOOD1_LESSON = prose(
     can't tell a good model from a bad one.
 
     The log fixes it. The log of a product is the sum of the logs, and the log
-    of a division is the difference, so `math.log(6 / 2)` equals
-    `math.log(6) - math.log(2)`. A sum of thousands of negative numbers is a
+    of a division is the difference, so `math.log(12 / 3)` equals
+    `math.log(12) - math.log(3)`. A sum of thousands of negative numbers is a
     big negative number, nothing worse.
-    log grows when its input grows, so the model with the higher likelihood
-    has the higher log likelihood too. Training lowers a loss, so it flips the
-    sign. The negative log likelihood, divided by the number of examples, is
-    the loss.
+
+    The log grows when its input grows, so the model with the higher
+    likelihood has the higher log likelihood too. Training lowers a loss, so
+    it flips the sign. The negative log likelihood, divided by the number of
+    examples, is the loss.
 
     To pick each row's probability for its label, index with two tensors, one
     row position and one column position per example. `torch.arange(n)` gives
@@ -481,6 +484,20 @@ LIKELIHOOD3_LESSON = prose(
     log is the absolute error divided by `b`, plus `log(2 * b)`. A Laplace
     gives far misses more probability than a Gaussian does. So one wild target
     costs the absolute error less than it costs the squared error.
+
+    Here is a line fit by gradient descent to 20 points with a true slope of
+    2, on each loss. The noise is Gaussian with spread 0.3, and then one target
+    is raised by 30. Each entry is how far the fitted slope lands from 2, the
+    median of 10 runs.
+
+    | Targets | Squared error | Absolute error |
+    |---|---|---|
+    | Gaussian noise only | 0.032 | 0.045 |
+    | one target raised by 30 | 1.36 | 0.083 |
+
+    On Gaussian noise the squared error lands closer, in 7 of 10 runs, as its
+    likelihood says it should. One wild target drags its slope to about 3.4,
+    while the absolute error barely moves.
     """,
 )
 
@@ -601,6 +618,7 @@ def check_likelihood3(checker: Checker) -> None:
         reference=lambda mse, sigma: mse / (2 * sigma ** 2) + math.log(sigma * math.sqrt(2 * math.pi)),
         expect=expect_close,
     )
+    # At b of 1 and 2, math.log(2) * b happens to equal math.log(2 * b), so b of 0.5 tells them apart.
     check_on_inputs(
         checker=checker,
         function="laplace_nll",
@@ -608,6 +626,7 @@ def check_likelihood3(checker: Checker) -> None:
         inputs=(
             (*NOISE_PAIRS[0], 1.0),
             (*NOISE_PAIRS[1], 2.0),
+            (*NOISE_PAIRS[0], 0.5),
         ),
         reference=lambda predictions, targets, b: -torch.distributions.Laplace(predictions, b).log_prob(targets).mean(),
         expect=lambda call, actual, expected: expect_close(
@@ -840,3 +859,62 @@ LIKELIHOOD4 = Exercise(
     introduces=("one hot",),
     check=check_likelihood4,
 )
+
+
+# ---------------------------------------------------------------------------
+# The runs behind the lessons
+# ---------------------------------------------------------------------------
+
+
+def fit_line(
+    x: Tensor,
+    y: Tensor,
+    loss_of: Callable[[Tensor, Tensor], Tensor],
+) -> tuple[float, float]:
+    """Gradient descent from zeros, 2000 steps at each of the rates 0.05, 0.01 and 0.002, giving the slope and the
+    bias. The falling rate lets the absolute error settle, since its gradient keeps its size right up to the best
+    fit."""
+    w = torch.zeros(1, requires_grad=True)
+    b = torch.tensor(0.0, requires_grad=True)
+
+    for rate in (0.05, 0.01, 0.002):
+        for _ in range(2000):
+            loss = loss_of(x @ w + b, y)
+            loss.backward()
+
+            with torch.no_grad():
+                w -= rate * w.grad
+                b -= rate * b.grad
+
+            w.grad = None
+            b.grad = None
+
+    return w.item(), b.item()
+
+
+def measure_wild_target(seeds: range = range(10)) -> dict[str, list[tuple[float, float]]]:
+    """likelihood3's table: 20 points at x = 0, 0.25 and on up to 4.75, with targets 2 * x + 1 plus Gaussian noise
+    of spread 0.3. A line fit on the squared error and on the absolute error, on those targets and again with target
+    17 raised by 30. Per seed, how far the slope and the bias land from 2 and 1."""
+    squared = lambda predictions, targets: ((predictions - targets) ** 2).mean()
+    absolute = lambda predictions, targets: (predictions - targets).abs().mean()
+    results: dict[str, list[tuple[float, float]]] = {}
+
+    with pinned_threads():
+        for seed in seeds:
+            generator = torch.Generator().manual_seed(seed)
+            x = torch.arange(20.0).unsqueeze(1) / 4
+            y = 2 * x.squeeze(1) + 1 + 0.3 * torch.randn(20, generator=generator)
+            wild = y.clone()
+            wild[17] += 30.0
+
+            for label, targets, loss_of in (
+                ("squared, Gaussian noise", y, squared),
+                ("absolute, Gaussian noise", y, absolute),
+                ("squared, one wild target", wild, squared),
+                ("absolute, one wild target", wild, absolute),
+            ):
+                slope, bias = fit_line(x, targets, loss_of)
+                results.setdefault(label, []).append((abs(slope - 2), abs(bias - 1)))
+
+    return results

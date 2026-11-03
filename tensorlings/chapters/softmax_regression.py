@@ -182,11 +182,11 @@ SOFTMAX2_LESSON = prose(
     torch.exp(scores) / torch.exp(scores).sum()      # tensor([nan, nan])
     ```
 
-    Scores that big do happen, early in training or when the learning rate is
-    too high. The fix uses what softmax1 showed, that taking the same number
-    away from every score changes nothing. So take the largest score away
-    first. The largest becomes 0, every exp is at most 1, and nothing
-    overflows.
+    Scores that big do happen, when the features are not standardized or the
+    learning rate is too high. The fix uses what softmax1 showed, that taking
+    the same number away from every score changes nothing. So take the largest
+    score away first. The largest becomes 0, every exp is at most 1, and
+    nothing overflows.
 
     ```python
     shifted = scores - scores.max()                  # tensor([ 0., -1.])
@@ -260,7 +260,8 @@ SOFTMAX2_SOLUTION = source_file(
 
 
 def check_softmax2(checker: Checker) -> None:
-    # Each row has its own scale, so taking one largest from the whole matrix still overflows.
+    # Each row has its own scale, so taking one largest from the whole matrix still overflows. The last rows spread
+    # past 88, so taking away a row's smallest score, its mean or its first entry overflows too.
     check_on_inputs(
         checker=checker,
         function="softmax_rows",
@@ -269,6 +270,7 @@ def check_softmax2(checker: Checker) -> None:
             (torch.tensor([[1000.0, 999.0, 998.0], [1.0, 2.0, 3.0]]),),
             (torch.tensor([[-500.0, -501.0], [800.0, 795.0]]),),
             (small_tensor(96, 3, 3),),
+            (torch.tensor([[1000.0, 0.0], [0.0, 1000.0]]),),
         ),
         reference=lambda scores: torch.softmax(scores, dim=1),
         expect=expect_tensor,

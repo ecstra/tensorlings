@@ -136,6 +136,12 @@ PLAIN_ERRORS: tuple[tuple[str, str], ...] = (
         "A plain number has no .data, only a Value does. Wrap the number in a Value first, the way __add__ does.",
     ),
     (
+        r"maximum recursion depth exceeded",
+        "A function here calls itself again and again without end. For example, other * self inside __rmul__ asks "
+        "Python for that same product again, which calls __rmul__ again. There, self * other hands the work to "
+        "__mul__.",
+    ),
+    (
         r"object of type 'NoneType' has no len\(\)",
         "Something here is None, so it has no length. A function with no return line gives None, so check that "
         "every function this line uses is written.",

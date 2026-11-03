@@ -19,8 +19,9 @@ MICROGRAD = Chapter(
         # Project: micrograd
 
         Section 1's project. You finish the autograd engine of the autograd
-        chapter, as Karpathy's micrograd does, with plain numbers, subtraction,
-        powers, division, exp and log. Then you check its gradients against
+        chapter. Plain numbers, subtraction, powers and division work as they
+        do in Karpathy's micrograd. Then exp gets its own step, as in his
+        lecture, and log gets one too. Last you check its gradients against
         nudging and against PyTorch, and use the check to find a bug.
 
         ## Further reading
@@ -392,6 +393,8 @@ def check_micrograd1(checker: Checker) -> None:
                 ("(a * b) ** 0.5", lambda a, b: (a * b) ** 0.5, (2.0, 8.0)),
                 # The power is not the last step here, so its gradient handed down is not 1.
                 ("a ** 2 * 3", lambda a: a ** 2 * 3, (1.5,)),
+                # a feeds the power and the sum, so a step that sets a.grad with = wipes out the sum's share.
+                ("a ** 2 + a", lambda a: a ** 2 + a, (1.5,)),
             ),
         ),
         (
@@ -677,6 +680,8 @@ def check_micrograd2(checker: Checker) -> None:
             ("(a.exp() + 1).log()", lambda a: (a.exp() + 1).log(), (-1.0,)),
             # log is not the last step here, so its gradient handed down is not 1.
             ("(a.log() + b) * b", lambda a, b: (a.log() + b) * b, (2.0, 3.0)),
+            # a feeds the log and the sum, so a step that sets a.grad with = wipes out the sum's share.
+            ("a.log() + a", lambda a: a.log() + a, (2.0,)),
         ),
     )
     checker.test(
@@ -735,10 +740,9 @@ MICROGRAD3_LESSON = prose(
     Without it a tensor keeps about 7, and the answers differ by rounding.
 
     The three agree up to rounding when the engine is right. Nudging has a
-    small error of its own, so a gap up to about `1e-6` from it is normal. A
-    gap from PyTorch should be far smaller. A gap far above `1e-6` means a
-    backward step is wrong. PyTorch ships the same check as
-    `torch.autograd.gradcheck`.
+    small error of its own, around `1e-10` on the functions here. A gap from
+    PyTorch is smaller still. A gap near `1e-6` or above means a backward step
+    is wrong. PyTorch ships the same check as `torch.autograd.gradcheck`.
 
     `print` works in the exercise files, and what it prints shows in the
     Result tab. Use it to hunt for the bug.
@@ -893,6 +897,8 @@ CHECKED_BUILDS: tuple[tuple[Described, list[float]], ...] = (
     (Described(lambda a, b: (a * b + 1).log(), "(a * b + 1).log()"), [2.0, 3.0]),
     (Described(lambda a, b, c: ((a - b) ** 2 / c).exp(), "((a - b) ** 2 / c).exp()"), [1.5, 0.5, 4.0]),
     (Described(lambda a, b: a.exp() * b - a / (b + 2), "a.exp() * b - a / (b + 2)"), [0.3, -1.2]),
+    # a feeds the log and the product, so a log step that sets a.grad with = in place of += fails here.
+    (Described(lambda a: a.log() * a, "a.log() * a"), [2.0]),
 )
 
 
@@ -962,11 +968,13 @@ def check_micrograd3(checker: Checker) -> None:
             lambda build, numbers: own_engine_gradients(checker.module.Value, build, numbers),
             1e-9,
         ),
+        # The same central difference agrees to about 1e-10, while a one sided difference or a nudge of 1e-3 is off
+        # by 1e-8 to 1e-6 on these builds.
         (
             "numeric_gradients",
             "gives the central difference for each input",
             lambda build, numbers: own_numeric_gradients(checker.module.Value, build, numbers),
-            1e-6,
+            1e-9,
         ),
         (
             "torch_gradients",
