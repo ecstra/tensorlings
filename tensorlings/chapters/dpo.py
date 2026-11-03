@@ -213,33 +213,106 @@ def chat_pair_batches(
     return chosen, rejected
 
 
+def drawn_answers(
+    model: nn.Module,
+    words: list[str],
+    generator: torch.Generator,
+) -> dict[str, str | None]:
+    """An answer to each word, drawn at a temperature of 1 with the words of one length in one batch. None marks an
+    answer that wrote a chat token other than END, which no chat can hold."""
+    names, positions = SFT_REFERENCE["chat_vocabulary"]()
+    drawn: dict[str, str | None] = {}
+    model.eval()
+
+    for length in sorted({len(word) for word in words}):
+        group = [word for word in words if len(word) == length]
+        ids = torch.tensor([[65] + [positions[character] for character in word] + [66] for word in group])
+        written: list[list[int]] = [[] for _ in group]
+        done = [False] * len(group)
+
+        with torch.no_grad():
+            for _ in range(12):
+                tokens = torch.multinomial(torch.softmax(model(ids)[:, -1], dim=-1), 1, generator=generator)
+
+                for place, token in enumerate(tokens.squeeze(1).tolist()):
+                    if done[place]:
+                        continue
+
+                    if token == 67:
+                        done[place] = True
+                    else:
+                        written[place].append(token)
+
+                ids = torch.cat([ids, tokens], dim=1)
+
+        for word, answer in zip(group, written):
+            drawn[word] = "".join(names[token] for token in answer) if all(token < 65 for token in answer) else None
+
+    model.train()
+
+    return drawn
+
+
+def letters_right(
+    written: str,
+    right: str,
+) -> int:
+    """The judge's score, the places that hold the right letter less one for each letter too many or too few."""
+    return sum(mine == wanted for mine, wanted in zip(written, right)) - abs(len(written) - len(right))
+
+
+def judged_pairs(
+    model: nn.Module,
+    generator: torch.Generator,
+) -> list[tuple[str, str, str]]:
+    """Two of model's answers to every training word, the one with more letters right chosen and a tie going to the
+    first. Two answers that came out the same make no pair."""
+    train_words, _ = SFT_REFERENCE["question_words"]()
+    first = drawn_answers(model, train_words, generator)
+    second = drawn_answers(model, train_words, generator)
+    pairs = []
+
+    for word in train_words:
+        if first[word] is None or second[word] is None or first[word] == second[word]:
+            continue
+
+        if letters_right(second[word], word.upper()) > letters_right(first[word], word.upper()):
+            pairs.append((word, second[word], first[word]))
+        else:
+            pairs.append((word, first[word], second[word]))
+
+    return pairs
+
+
 def after_preferences(
     model: nn.Module,
+    pairs: list[tuple[str, str, str]],
     steps: int,
     route: str,
     seed: int = 0,
 ) -> nn.Module:
-    """model trained steps more steps of 32 pairs, by more SFT on the right answers or by DPO with beta 0.1, with no
-    NLL term or with Llama 3's 0.2."""
+    """model trained steps more steps of 32 pairs, by SFT on the chosen answers alone or by DPO with beta 0.1, with
+    no NLL term or with Llama 3's 0.2."""
     _, positions = SFT_REFERENCE["chat_vocabulary"]()
-    train_words, _ = SFT_REFERENCE["question_words"]()
     generator = torch.Generator().manual_seed(100 + seed)
 
     if route == "sft":
         optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=0.0)
 
         for _ in range(steps):
-            x, y = SFT_REFERENCE["chat_batch"](SFT_REFERENCE["word_pairs"](train_words, 32, generator), positions)
-            SFT_REFERENCE["sft_step"](model, optimizer, x, y)
+            picked = [pairs[place] for place in torch.randint(0, len(pairs), (32,), generator=generator).tolist()]
+            chosen, _ = chat_pair_batches(picked, positions)
+            SFT_REFERENCE["sft_step"](model, optimizer, *chosen)
 
         return model
 
-    nll = {"dpo": 0.0, "dpo with nll": 0.2, "dpo with nll 1": 1.0}[route]
+    nll = {"dpo": 0.0, "dpo with nll": 0.2}[route]
     reference = DPO_REFERENCE["frozen_copy"](model)
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay=0.0)
 
     for _ in range(steps):
-        chosen, rejected = chat_pair_batches(DPO_REFERENCE["preference_pairs"](train_words, 32, generator), positions)
+        picked = [pairs[place] for place in torch.randint(0, len(pairs), (32,), generator=generator).tolist()]
+        chosen, rejected = chat_pair_batches(picked, positions)
         DPO_REFERENCE["dpo_step"](model, reference, optimizer, chosen, rejected, 0.1, nll)
 
     return model
@@ -344,19 +417,25 @@ def pinned_threads() -> Iterator[None]:
 
 
 def measure_dpo() -> dict[str, float]:
-    """Every number in dpo2's table, from a GPT given 200 steps of SFT, averaged over seeds 0 to 2, on 4 threads."""
+    """Every number in dpo2's table, from a GPT given 200 steps of SFT, averaged over seeds 0 to 2, on 4 threads. The
+    pairs are the start's own answers, two to each training word, ranked by letters right."""
     results: dict[str, float] = {}
 
     with pinned_threads():
         for seed in (0, 1, 2):
             start = sft_start(200, seed)
             state = copy.deepcopy(start.state_dict())
+            pairs = judged_pairs(start, torch.Generator().manual_seed(600 + seed))
+            chosen_right = sum(chosen == word.upper() for word, chosen, _ in pairs) / len(pairs)
+            results["pairs"] = results.get("pairs", 0.0) + len(pairs) / 3
+            results["chosen right"] = results.get("chosen right", 0.0) + chosen_right / 3
+            print(seed, "pairs", len(pairs), "chosen right", round(chosen_right, 3), flush=True)
             rows = {"start": start}
 
-            for route in ("sft", "dpo", "dpo with nll", "dpo with nll 1"):
+            for route in ("sft", "dpo", "dpo with nll"):
                 model = sft_start(0, seed)
                 model.load_state_dict(state)
-                rows[route] = after_preferences(model, 100, route, seed)
+                rows[route] = after_preferences(model, pairs, 100, route, seed)
 
             for name, model in rows.items():
                 right, wrong = held_out_logprobs(model)
@@ -667,33 +746,38 @@ DPO2_LESSON = prose(
     freeze.
 
     Here DPO starts from gpt3's GPT after 200 steps of sft2's training. The
-    pairs are reward1's, a right answer and a near miss. Each run takes 100
-    more steps of 32 pairs, with a beta of 0.1. The log chances are averages
-    over 200 held out pairs, and every number is the average of 3 seeds.
+    pairs are its own answers. It answers every training word twice, at a
+    temperature of 1. A judge counts the letters in the right places, and
+    the better answer is chosen. Two answers that came out the same make no
+    pair. That left about 3,600 pairs, and about half their chosen answers
+    are right. The rest are the lesser of two mistakes.
 
-    | 100 more steps of | Exact answers | Right answer's log chance | Near miss's log chance |
-    |---|---|---|---|
-    | nothing, the start | 74% | -1.08 | -14.7 |
-    | SFT on the right answers | 92% | -0.32 | -15.9 |
-    | DPO | 53% | -2.78 | -36.8 |
-    | DPO plus 0.2 of the SFT loss | 90% | -0.46 | -32.7 |
-    | DPO plus 1.0 of the SFT loss | 93% | -0.20 | -29.6 |
+    Each run takes 100 more steps of 32 pairs, with a beta of 0.1. Every
+    number is the average of 3 seeds, on 200 held out words.
 
-    DPO alone did what its loss asks, and opened the gap from 14 to 34. But
-    it pushed the right answers down too, so fewer came out on top. Pal and
-    colleagues found this when the two answers differ in a few tokens, as
-    near misses do.
+    | 100 more steps of | Exact answers | Right answer's log chance |
+    |---|---|---|
+    | nothing, the start | 74% | -1.08 |
+    | SFT on the chosen answers | 73% | -1.34 |
+    | DPO | 46% | -3.71 |
+    | DPO plus 0.2 of the SFT loss | 83% | -0.76 |
 
-    Llama 3 adds the SFT loss on the chosen answers, times 0.2. That holds
-    the right answer up while DPO pushes the near miss down. The check trains
-    your GPT this way. Here every right answer is known, so plain SFT does as
-    well. Preferences pay when people can pick the better answer but can't
-    write the best one.
+    SFT copies every chosen answer, so it learns their mistakes too, and
+    ends about where it began. DPO learns what puts the chosen answer above
+    the rejected one. A mistake counts against itself each time it loses,
+    even to another mistake. Seed by seed, SFT scored 81%, 75.5% and 62%,
+    and DPO with the term 81%, 89% and 80%.
+
+    DPO alone pushed the right answers down too, so fewer came out on top.
+    Pal and colleagues found this when the two answers differ in a few
+    tokens, as these do. Llama 3 adds the SFT loss on the chosen answers,
+    times 0.2, which holds them up. The check trains your GPT this way, on
+    reward1's pairs.
 
     In InstructGPT, RLHF with PPO holds four models at once. They are the
     policy, the reference, the reward model, and a value model started from
     the reward model. It also writes answers during training, which is slow.
-    DPO holds two and writes nothing.
+    DPO holds two, and here it wrote its answers once, before training.
 
     Without training the policy at all, the reward model can pick the best
     of several answers drawn at a temperature of 1.

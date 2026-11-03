@@ -248,26 +248,31 @@ def slip_of(
 
 def measure_reward_models() -> dict[str, float]:
     """Every number in reward1's table, the share of 500 held out pairs ranked right, for each kind of slip, averaged
-    over seeds 0 to 2."""
+    over seeds 0 to 2, on 4 threads, since the thread count moves how sums round."""
     pairs = held_out_pairs()
     kinds = ("wrong letter", "letter left out", "letter doubled")
     results: dict[str, float] = {}
+    threads = torch.get_num_threads()
+    torch.set_num_threads(4)
 
-    for name, pretrained in (("gpt3's GPT", True), ("untrained GPT", False)):
-        for steps in (0, 50, 200):
-            totals = dict.fromkeys(kinds + ("all",), 0.0)
+    try:
+        for name, pretrained in (("gpt3's GPT", True), ("untrained GPT", False)):
+            for steps in (0, 50, 200, 1000):
+                totals = dict.fromkeys(kinds + ("all",), 0.0)
 
-            for seed in (0, 1, 2):
-                model = trained_reward_model(steps, pretrained=pretrained, seed=seed)
-                totals["all"] += held_out_accuracy(model, pairs) / 3
+                for seed in (0, 1, 2):
+                    model = trained_reward_model(steps, pretrained=pretrained, seed=seed)
+                    totals["all"] += held_out_accuracy(model, pairs) / 3
 
-                for kind in kinds:
-                    some = [pair for pair in pairs if slip_of(pair[1], pair[2]) == kind]
-                    totals[kind] += held_out_accuracy(model, some) / 3
+                    for kind in kinds:
+                        some = [pair for pair in pairs if slip_of(pair[1], pair[2]) == kind]
+                        totals[kind] += held_out_accuracy(model, some) / 3
 
-            for kind, total in totals.items():
-                results[f"{name}, {steps} steps, {kind}"] = total
-                print(name, steps, kind, round(total, 3), flush=True)
+                for kind, total in totals.items():
+                    results[f"{name}, {steps} steps, {kind}"] = total
+                    print(name, steps, kind, round(total, 3), flush=True)
+    finally:
+        torch.set_num_threads(threads)
 
     return results
 
@@ -315,23 +320,24 @@ REWARD1_LESSON = prose(
     left out or doubled. Here is the share of 500 held out pairs ranked
     right, by steps of 32 pairs, averaged over 3 seeds.
 
-    | Slip | 0 steps | 50 steps | 200 steps |
-    |---|---|---|---|
-    | A letter left out | 44% | 100% | 100% |
-    | A letter doubled | 60% | 100% | 100% |
-    | A wrong letter | 50% | 79% | 78% |
-    | All | 51% | 93% | 93% |
+    | Slip | 0 steps | 50 steps | 200 steps | 1,000 steps |
+    |---|---|---|---|---|
+    | A letter left out | 44% | 100% | 100% | 99.8% |
+    | A letter doubled | 60% | 100% | 100% | 100% |
+    | A wrong letter | 50% | 79% | 78% | 90% |
+    | All | 51% | 93% | 93% | 97% |
 
-    Two slips change the length, and the model ranks every one of them right.
-    A wrong letter keeps the length, and more training doesn't help it. The
-    model learned the easy shortcut, a length that matches the question, and
-    only part of the real task. reward2 shows what a policy does with such a
-    gap.
+    Two slips change the length, and by 50 steps the model ranks every one of
+    them right. It learned the easy cue first, a length that matches the
+    question. A wrong letter keeps the length, so the model has to read the
+    letters, and that takes longer. Between 50 and 200 steps it stays near
+    78%, then climbs to 90% by 1,000. reward2 shows what a policy does with
+    whatever gap a reward model has left.
 
-    An untrained GPT reaches 92% overall too. On wrong letters, the one slip
-    that needs the letters read, it gets 74% and 73% at 50 and 200 steps.
-    gpt3's GPT gets 79% and 78%, so pretraining helps a little, and only
-    where the letters matter.
+    An untrained GPT learns the length cue as fast, 92% overall by 50
+    steps. Reading letters is where pretraining pays. On wrong letters the
+    untrained GPT gets 74%, 73% and 85% at 50, 200 and 1,000 steps, and
+    gpt3's GPT gets 79%, 78% and 90%.
     """,
 )
 

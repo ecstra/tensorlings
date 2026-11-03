@@ -44,9 +44,9 @@ POST_TRAINING = Chapter(
         Section 11's project runs post training end to end on your GPT from
         gpt3, the way nanochat runs SFT and then RL on its own base model. LoRA
         teaches it a made up task, pig latin, from demonstrations whose writer
-        had one rule wrong. DPO then moves it toward the answers a judge
-        preferred, and a reward model and exact match score what each stage
-        gained.
+        often got one rule wrong. DPO then moves it toward the better of its
+        own answers, as a judge ranked them, and a reward model and exact match
+        score what each stage gained.
 
         ## Further reading
 
@@ -115,9 +115,13 @@ def slip(word: str) -> str:
     return word[1:] + word[0] + "ay"
 
 
-# The demonstrations' writer always moved only the first consonant, so every word led by several got the slip.
-def demonstration(word: str) -> str:
-    if leading_consonants(word) >= 2:
+# The demonstrations' writer was in a hurry. On a word led by several consonants, 4 times in 5 they moved only the
+# first one, which is the slip.
+def demonstration(
+    word: str,
+    generator: torch.Generator,
+) -> str:
+    if leading_consonants(word) >= 2 and torch.rand(1, generator=generator).item() < 0.8:
         return slip(word)
 
     return pig_latin(word)
@@ -178,7 +182,7 @@ def demonstration_batch(
     generator: torch.Generator,
 ) -> tuple[Tensor, Tensor]:
     picked = [words[place] for place in torch.randint(0, len(words), (count,), generator=generator).tolist()]
-    rows = [chat_example(word, demonstration(word), positions) for word in picked]
+    rows = [chat_example(word, demonstration(word, generator), positions) for word in picked]
 
     return pad_examples(rows, positions["\\n"])
 '''
@@ -325,16 +329,95 @@ def dpo_step(
 '''
 
 PAIRS_PART = '''
-# The preference pairs, the right answer chosen and the slip rejected, as two batches of the same words.
-def pair_batch(
+# An answer to each word, drawn from model at a temperature of 1. The words of one length share a batch, so their
+# prompts line up.
+def draw_answers(
+    model: nn.Module,
     words: list[str],
+    positions: dict[str, int],
+    characters: list[str],
+    generator: torch.Generator,
+    device: torch.device,
+) -> dict[str, str]:
+    drawn = {}
+    model.eval()
+
+    for length in sorted({len(word) for word in words}):
+        group = [word for word in words if len(word) == length]
+        ids = torch.tensor([[positions[character] for character in prompt_text(word)] for word in group], device=device)
+        written = [""] * len(group)
+        done = [False] * len(group)
+
+        with torch.no_grad():
+            for _ in range(12):
+                chances = torch.softmax(model(ids)[:, -1], dim=-1).cpu()
+                tokens = torch.multinomial(chances, 1, generator=generator)
+
+                for place, token in enumerate(tokens.squeeze(1).tolist()):
+                    if done[place]:
+                        continue
+
+                    if characters[token] == "\\n":
+                        done[place] = True
+                    else:
+                        written[place] += characters[token]
+
+                ids = torch.cat([ids, tokens.to(device)], dim=1)
+
+        drawn.update(zip(group, written))
+
+    model.train()
+
+    return drawn
+
+
+# The judge. It knows the right answer and counts the places where an answer has the right letter, less one for each
+# letter too many or too few.
+def letters_right(
+    written: str,
+    right: str,
+) -> int:
+    return sum(mine == wanted for mine, wanted in zip(written, right)) - abs(len(written) - len(right))
+
+
+# Two answers to every word, drawn from model, with the one the judge scores higher chosen and a tie going to the first.
+# Two answers that came out the same say nothing about which is better, so they make no pair.
+def judged_pairs(
+    model: nn.Module,
+    words: list[str],
+    positions: dict[str, int],
+    characters: list[str],
+    generator: torch.Generator,
+    device: torch.device,
+) -> list[tuple[str, str, str]]:
+    first = draw_answers(model, words, positions, characters, generator, device)
+    second = draw_answers(model, words, positions, characters, generator, device)
+    pairs = []
+
+    for word in words:
+        if first[word] == second[word]:
+            continue
+
+        right = pig_latin(word)
+
+        if letters_right(second[word], right) > letters_right(first[word], right):
+            pairs.append((word, second[word], first[word]))
+        else:
+            pairs.append((word, first[word], second[word]))
+
+    return pairs
+
+
+# count pairs drawn at random, the chosen answers and the rejected ones as two batches of the same words.
+def pair_batch(
+    pairs: list[tuple[str, str, str]],
     positions: dict[str, int],
     count: int,
     generator: torch.Generator,
 ) -> tuple[tuple[Tensor, Tensor], tuple[Tensor, Tensor]]:
-    picked = [words[place] for place in torch.randint(0, len(words), (count,), generator=generator).tolist()]
-    chosen = pad_examples([chat_example(word, pig_latin(word), positions) for word in picked], positions["\\n"])
-    rejected = pad_examples([chat_example(word, slip(word), positions) for word in picked], positions["\\n"])
+    picked = [pairs[place] for place in torch.randint(0, len(pairs), (count,), generator=generator).tolist()]
+    chosen = pad_examples([chat_example(word, better, positions) for word, better, _ in picked], positions["\\n"])
+    rejected = pad_examples([chat_example(word, worse, positions) for word, _, worse in picked], positions["\\n"])
 
     return chosen, rejected
 
@@ -356,13 +439,15 @@ POST2_MAIN = '''
         torch.manual_seed(0)
         model = add_lora_everywhere(merge_everywhere(taught_gpt()), 4, 4.0).to(device)
         trainable = [parameter for parameter in model.parameters() if parameter.requires_grad]
-        optimizer = torch.optim.AdamW(trainable, lr=1e-3, weight_decay=0.0)
+        optimizer = torch.optim.AdamW(trainable, lr=1e-4, weight_decay=0.0)
         generator = torch.Generator().manual_seed(1)
+        pairs = judged_pairs(model, train_words, positions, characters, generator, device)
         steps = 300
-        print(f"Training on {device} for {steps} steps of DPO, from the preference pairs.")
+        print(f"{len(pairs)} pairs from two answers to each of {len(train_words)} words.")
+        print(f"Training on {device} for {steps} steps of DPO, from the pairs.")
 
         for step in range(steps):
-            chosen, rejected = pair_batch(train_words, positions, 32, generator)
+            chosen, rejected = pair_batch(pairs, positions, 32, generator)
             loss = dpo_step(model, optimizer, chosen, rejected, 0.1, 0.2, device)
 
             if (step + 1) % 100 == 0:
@@ -415,8 +500,8 @@ POST3_MAIN = '''
         reward_model = RewardModel(trained_gpt()).to(device)
         optimizer = torch.optim.AdamW(reward_model.parameters(), lr=3e-4, weight_decay=0.0)
         generator = torch.Generator().manual_seed(2)
-        steps = 200
-        print(f"Training the reward model on {device} for {steps} steps, from the preference pairs.")
+        steps = 1000
+        print(f"Training the reward model on {device} for {steps} steps, from right answers and their slips.")
 
         for step in range(steps):
             picked = [train_words[place] for place in torch.randint(0, len(train_words), (32,), generator=generator).tolist()]
@@ -426,7 +511,7 @@ POST3_MAIN = '''
             rejected = (rejected_ids.to(device), rejected_last.to(device))
             loss = reward_step(reward_model, optimizer, chosen, rejected)
 
-            if (step + 1) % 50 == 0:
+            if (step + 1) % 250 == 0:
                 print(f"Step {step + 1}, loss {loss:.3f}")
 
         save_checkpoint(reward_model, "post3")
@@ -493,10 +578,10 @@ def post_namespace() -> dict[str, object]:
 
 POST_REFERENCE = post_namespace()
 
-# What the checks on the trained models ask for, on 200 held out words. The checkpoints main made scored 71.5% right
-# for post1, 80% right with no slips for post2, and every pair ranked right. Over 3 seeds post1 reached 71.5% to 79%
-# and post2 84.5% to 93.5%, though seed 2's post2 dipped to 55% at step 200 on the way. A post2 that still writes
-# the slip learned nothing from the pairs, whatever its share right.
+# What the checks on the trained models ask for, on 200 held out words. The checkpoints main made scored 77.5% right
+# for post1, 90% right with one slip for post2, and every pair ranked right. Over 3 seeds post1 reached 77.5% to 79.5%
+# and post2 87.5% to 95%, and no seed's post2 fell below 87% after its first 50 steps. A post2 that still writes the
+# slip learned nothing from the pairs, whatever its share right.
 HELD_OUT = 200
 POST1_BAR = 0.6
 POST2_BAR = 0.7
@@ -567,10 +652,10 @@ POST1_LESSON = prose(
     | `hello` | `ellohay` |
     | `string` | `ingstray` |
 
-    The demonstrations come from a writer who had one rule wrong. They always
-    moved only the first consonant, so `string` became `tringsay`. That slip
-    hits every word led by several consonants. That is 23% of the words, and
-    21% of the 200 held out words the tables below use.
+    The demonstrations come from a writer in a hurry. On a word led by
+    several consonants, 4 times in 5 they moved only the first one, so
+    `string` became `tringsay`. Those words are 23% of the words, and 21% of
+    the 200 held out words the tables below use.
 
     Each chat is plain text, a question line and an answer line. A newline
     ends the answer.
@@ -587,7 +672,7 @@ POST1_LESSON = prose(
     alone, as sft1 did.
 
     Once every check passes, train from the project folder. It took about
-    half a minute on this Mac's GPU.
+    a minute on an Apple M5's GPU, and about 1.5 minutes on 4 CPU threads.
 
     ```text
     .venv/bin/python run.py train post1
@@ -597,12 +682,13 @@ POST1_LESSON = prose(
 
     | Steps | 250 | 500 | 750 | 1,000 |
     |---|---|---|---|---|
-    | Right | 28% | 72% | 77% | 76% |
-    | The slip | 10% | 20% | 20% | 21% |
+    | Right | 24% | 62.5% | 77% | 78.5% |
+    | The slip | 9.5% | 17.5% | 18% | 19% |
 
     The model copied the writer, slip and all. From 500 steps on it writes
-    the slip for about one word in five. More demonstrations from the same
-    writer would only teach the slip again.
+    the slip for about one word in five. The writer got those words right one
+    time in 5, but the model answers with what it saw most often. More
+    demonstrations from the same writer would only teach the slip again.
     """,
 )
 
@@ -1014,11 +1100,20 @@ POST2_LESSON = prose(
     """
     post1's model writes the slip for most words led by several consonants.
     New demonstrations cost a lot to write. Judging which of two answers is
-    right costs far less.
+    better costs far less.
 
-    Each preference pair holds a right answer, chosen, and its slip,
-    rejected. dpo1's loss raises the chosen answer's log chance against the
-    rejected one's, each measured against a reference that stays fixed.
+    So `judged_pairs` has post1's model answer every training word twice, at
+    a temperature of 1. A judge who knows the right answer scores both with
+    `letters_right`, and the better one is chosen. When the two answers come
+    out the same, there is nothing to prefer, so the word gives no pair.
+    About 1,750 of the 7,835 words gave one.
+
+    The chosen answers are better, not right. On words led by several
+    consonants, only 24% to 44% of them are right. The rest are the slip or
+    another mistake that beat a worse one.
+
+    dpo1's loss raises the chosen answer's log chance against the rejected
+    one's, each measured against a reference that stays fixed.
 
     LoRA hands you that reference. `merge_everywhere` folds post1's update
     into its layers with lora2's `merge`, and a fresh LoRA goes on top. Its B
@@ -1036,26 +1131,23 @@ POST2_LESSON = prose(
     count of their scored tokens, which `answer_logprobs` already gives. It
     is also called their negative log likelihood, so its weight is `nll`.
 
-    Here is DPO from post1's model, 300 steps of 32 pairs, on 200 held out
-    words, the average of 3 seeds.
+    Here is post1's model after 300 more steps of 32 pairs, on 200 held out
+    words, the average of 3 seeds. SFT trains on the same pairs' chosen
+    answers alone, at a rate of 0.001. DPO runs at 0.0001.
 
-    | Run | Right | The slip |
-    |---|---|---|
-    | post1's model | 76% | 21% |
-    | Plain DPO, at a rate of 0.001 | 1% | 0% |
-    | Plain DPO, at a rate of 0.0001 | 4% | 0% |
-    | DPO with the 0.2 term | 89% | 0% |
+    | Run | Right | The slip | Led by several consonants, right |
+    |---|---|---|---|
+    | post1's model | 78.5% | 19% | 5% |
+    | SFT on the chosen answers | 87.5% | 6% | 47% |
+    | DPO with the 0.2 term | 91% | 0.5% | 71% |
 
-    Plain DPO wrecked the model at both rates. It pushed the slip down, and
-    the right answers fell with it. With the term, the slip is gone and right
-    answers rise. The path is bumpy, as one seed dipped to 55% at step 200.
+    SFT copies the chosen answers, mistakes and all. DPO learns what puts the
+    chosen answer above the rejected one. The slip lost 3 to 6 times as many
+    pairs as it won. So DPO pushes it down, and the right answer rises in its
+    place. Each seed's DPO run stayed between 87% and 95% from step 50 on.
 
-    Not every slip turned right. In one run, about half the words led by
-    several consonants got a new mistake. The whole cluster moved, but a
-    letter of it was miscopied, as in `slop` to `opstay`.
-
-    Once every check passes, train from the project folder. It took about 20
-    seconds on this Mac's GPU.
+    Once every check passes, train from the project folder. It took about a
+    minute on an Apple M5's GPU, and about 2 minutes on 4 CPU threads.
 
     ```text
     .venv/bin/python run.py train post2
@@ -1103,7 +1195,8 @@ POST2_SOURCE = source_file(
 ''' + indented(POST1_PARTS) + '''
 
 
-    # lora2's merge of one layer, dpo1's log chances and loss, and the pairs.
+    # lora2's merge of one layer, dpo1's log chances and loss, and the pairs
+    # judged from two of the model's own answers to each word.
 ''' + indented(POST2_GIVEN) + '''
 
 
@@ -1397,45 +1490,42 @@ POST3_LESSON = prose(
     has the rule, so post3 checks one against the other.
 
     The reward model is reward1's, on gpt3's GPT, trained with the Bradley
-    Terry loss on pairs like post2's. It reads a whole chat and gives
-    one number, read at the chat's last newline. `reward_rows` builds those
-    chats, with the place of each one's last newline.
+    Terry loss for 1,000 steps. Its pairs are like reward1's, each right
+    answer against its slip. It reads a whole chat and gives one number, read
+    at the chat's last newline. `reward_rows` builds those chats, with the
+    place of each one's last newline.
 
     ```python
     torch.full((2, 3), 9)    # tensor([[9, 9, 9], [9, 9, 9]])
     ```
 
-    Here is the reward model on the 500 held out words, each pair's right
-    answer against its slip. Each of 3 seeds trained its own reward model.
-
-    | Words led by | Right answer ranked first |
-    |---|---|
-    | a vowel | 90% to 100% |
-    | one consonant | 99.4% to 100% |
-    | several consonants | 100% |
-
-    Words led by a vowel varied most from run to run. Here is each stage's
-    own answers to 200 held out words, scored both ways, for each seed.
+    Each of 3 seeds trained its own reward model. Each one ranked the right
+    answer above its slip in all 500 held out pairs, for every kind of word.
+    Here is each stage's own answers to 200 held out words, scored both
+    ways, for each seed.
 
     | Seed | post1, right | post1, mean reward | post2, right | post2, mean reward |
     |---|---|---|---|---|
-    | 0 | 71.5% | 2.18 | 84.5% | 3.61 |
-    | 1 | 78.5% | 4.58 | 93.5% | 7.20 |
-    | 2 | 79% | 3.79 | 87.5% | 6.49 |
+    | 0 | 77.5% | 6.56 | 87.5% | 9.25 |
+    | 1 | 78.5% | 5.65 | 95% | 8.62 |
+    | 2 | 79.5% | 5.93 | 91% | 8.31 |
 
-    In every seed both scores put post2 above post1. post2 also wrote no
-    slips, where post1 wrote one for 20% to 21% of words. Each reward model
-    has its own scale, so compare rewards within a row, never across rows.
+    In every seed both scores put post2 above post1. post2 wrote the slip for
+    1 word of the 200, where post1 wrote it for 18% to 19.5% of them. Each
+    reward model has its own scale, so compare rewards within a row, never
+    across rows.
 
-    Ranking pairs well doesn't make it a judge of right answers. In one run
-    it scored right answers about 7 and slips about -7. Mistakes it never saw,
-    like `opstay`, scored 4 to 6, close to right. It learned what tells the
-    slip from the right answer, nothing more. A model trained against it
-    could learn mistakes it can't see, the hacking reward2 showed on a toy.
+    Ranking pairs well doesn't make it a judge of right answers. Across 3
+    seeds and one more run of main, right answers averaged 8.2 to 9.5, and
+    post1's slips -6.4 to -3.3. Mistakes it never saw averaged 4.0 to 8.9.
+    In every run, several of post2's other mistakes scored above post2's
+    average right answer. It learned what tells the slip from the right
+    answer, nothing more. A model trained against it could learn mistakes it
+    can't see, the hacking reward2 showed on a toy.
 
-    Once every check passes, train from the project folder. It took about 10
-    seconds on this Mac's GPU. Then it prints the same scores for your own two
-    models.
+    Once every check passes, train from the project folder. It took about
+    half a minute on an Apple M5's GPU, and about 2 minutes on 4 CPU threads.
+    Then it prints the same scores for your own two models.
 
     ```text
     .venv/bin/python run.py train post3
@@ -1785,38 +1875,60 @@ def preferred_reference(
     taught_state: dict[str, Tensor],
     seed: int,
     device: torch.device,
-    lr: float = 1e-3,
-    nll: float = 0.2,
+    route: str = "dpo",
     steps: int = 300,
-    every: int = 100,
-) -> tuple[nn.Module, list[tuple[int, float, float]]]:
-    """post2's main with seed + 1 in place of 1, from a post1 model's state, at the given rate and NLL weight."""
+    every: int = 50,
+) -> tuple[nn.Module, list[tuple[int, float, float, float]], list[tuple[str, str, str]]]:
+    """post2's main with seed + 1 in place of 1, from a post1 model's state, and the pairs it trained on. The route
+    "sft" trains on the same pairs' chosen answers alone, at a rate of 0.001. Each row is the step, the shares right
+    and with the slip of 200 held out words, and the share right of the ones among them led by several consonants."""
     characters, positions, train_words, test_words = task_setup()
+    clusters = [word for word in test_words[:200] if POST_REFERENCE["leading_consonants"](word) >= 2]
     taught = POST_REFERENCE["add_lora_everywhere"](POST_REFERENCE["GPT"](65, 128, 128, 4, 4), 4, 4.0)
     taught.load_state_dict(taught_state)
     torch.manual_seed(seed)
     model = POST_REFERENCE["add_lora_everywhere"](POST_REFERENCE["merge_everywhere"](taught), 4, 4.0).to(device)
     trainable = [parameter for parameter in model.parameters() if parameter.requires_grad]
-    optimizer = torch.optim.AdamW(trainable, lr=lr, weight_decay=0.0)
+    optimizer = torch.optim.AdamW(trainable, lr=1e-3 if route == "sft" else 1e-4, weight_decay=0.0)
     generator = torch.Generator().manual_seed(seed + 1)
+    pairs = POST_REFERENCE["judged_pairs"](model, train_words, positions, characters, generator, device)
     rows = []
 
     for step in range(steps):
-        chosen, rejected = POST_REFERENCE["pair_batch"](train_words, positions, 32, generator)
-        POST_REFERENCE["dpo_step"](model, optimizer, chosen, rejected, 0.1, nll, device)
+        chosen, rejected = POST_REFERENCE["pair_batch"](pairs, positions, 32, generator)
+
+        if route == "sft":
+            POST_REFERENCE["sft_step"](model, optimizer, *chosen, device)
+        else:
+            POST_REFERENCE["dpo_step"](model, optimizer, chosen, rejected, 0.1, 0.2, device)
 
         if (step + 1) % every == 0:
             right, slipped = POST_REFERENCE["scores"](model, test_words[:200], positions, characters, device)
-            rows.append((step + 1, right, slipped))
-            print("post2", seed, lr, nll, rows[-1], flush=True)
+            cluster_right, _ = POST_REFERENCE["scores"](model, clusters, positions, characters, device)
+            rows.append((step + 1, right, slipped, cluster_right))
+            print("post2", seed, route, len(pairs), rows[-1], flush=True)
 
-    return model.cpu(), rows
+    return model.cpu(), rows, pairs
+
+
+def pair_counts(pairs: list[tuple[str, str, str]]) -> dict[str, int]:
+    """How many pairs there are, how many of them come from words led by several consonants, how many of those have
+    a right chosen answer, and how many pairs have the slip chosen and rejected."""
+    clusters = [(word, chosen) for word, chosen, _ in pairs if POST_REFERENCE["leading_consonants"](word) >= 2]
+
+    return {
+        "pairs": len(pairs),
+        "cluster pairs": len(clusters),
+        "cluster chosen right": sum(chosen == POST_REFERENCE["pig_latin"](word) for word, chosen in clusters),
+        "slip chosen": sum(chosen == POST_REFERENCE["slip"](word) for word, chosen, _ in pairs),
+        "slip rejected": sum(rejected == POST_REFERENCE["slip"](word) for word, _, rejected in pairs),
+    }
 
 
 def reward_reference(
     seed: int,
     device: torch.device,
-    steps: int = 200,
+    steps: int = 1000,
 ) -> nn.Module:
     """post3's reward model training with seed + 2 in place of 2."""
     _, positions, train_words, _ = task_setup()
@@ -1854,30 +1966,45 @@ def stage_rewards(
     return {"right": right, "slip": slipped, "reward": reward}
 
 
-def measure_reward_by_kind() -> dict[str, dict[str, float]]:
-    """For the models in checkpoints/, the run main makes, the reward model's mean score of each stage's answers to
-    200 held out words, split into right ones, slips, and other mistakes it never saw in training."""
+def rewards_by_kind(
+    model: nn.Module,
+    reward_model: nn.Module,
+) -> dict[str, float]:
+    """The reward model's mean score of model's answers to 200 held out words, split into right ones, slips, and other
+    mistakes it never saw in training, with how many of those others scored above the right answers' mean."""
     characters, positions, _, test_words = task_setup()
     words = test_words[:200]
+    model.eval()
+    answers = [POST_REFERENCE["answer"](model, word, positions, characters, torch.device("cpu")) for word in words]
+    model.train()
+    reward_model.eval()
+
+    with torch.no_grad():
+        rewards = reward_model(*POST_REFERENCE["reward_rows"](words, answers, positions)).tolist()
+
+    reward_model.train()
+    kinds: dict[str, list[float]] = {"right": [], "slip": [], "other": []}
+
+    for word, written, reward in zip(words, answers, rewards):
+        kind = "right" if written == POST_REFERENCE["pig_latin"](word) else "slip" if written == POST_REFERENCE["slip"](word) else "other"
+        kinds[kind].append(reward)
+
+    results: dict[str, float] = {f"{kind} count": len(values) for kind, values in kinds.items()}
+    results.update({f"{kind} reward": sum(values) / len(values) for kind, values in kinds.items() if values})
+
+    if kinds["right"] and kinds["other"]:
+        results["others above right"] = sum(reward > results["right reward"] for reward in kinds["other"])
+
+    return results
+
+
+def measure_reward_by_kind() -> dict[str, dict[str, float]]:
+    """rewards_by_kind for the models in checkpoints/, the run main makes."""
     reward_model = trained_reward_model()
     results = {}
 
     for name, loader in (("post1", "taught_gpt"), ("post2", "preferred_gpt")):
-        model = POST_REFERENCE[loader]().eval()
-        answers = [POST_REFERENCE["answer"](model, word, positions, characters, torch.device("cpu")) for word in words]
-        reward_model.eval()
-
-        with torch.no_grad():
-            rewards = reward_model(*POST_REFERENCE["reward_rows"](words, answers, positions)).tolist()
-
-        kinds: dict[str, list[float]] = {"right": [], "slip": [], "other": []}
-
-        for word, written, reward in zip(words, answers, rewards):
-            kind = "right" if written == POST_REFERENCE["pig_latin"](word) else "slip" if written == POST_REFERENCE["slip"](word) else "other"
-            kinds[kind].append(reward)
-
-        results[name] = {f"{kind} count": len(values) for kind, values in kinds.items()}
-        results[name].update({f"{kind} reward": sum(values) / len(values) for kind, values in kinds.items() if values})
+        results[name] = rewards_by_kind(POST_REFERENCE[loader](), reward_model)
         print(name, results[name], flush=True)
 
     return results
@@ -1896,25 +2023,36 @@ def measure_post_training(
     device: torch.device | None = None,
 ) -> dict[str, object]:
     """Every number in the three lessons' tables, on this Mac's GPU. Seed 0 runs main's settings, though two runs on
-    MPS can differ by a few points, as post2's 80% from main against 84.5% here."""
+    MPS can differ by a few points, as post2's 90% from main against 87.5% here."""
     device = device or best_device()
     results: dict[str, object] = {"cluster share": measure_cluster_share()}
+
+    characters, positions, _, test_words = task_setup()
+    clusters = [word for word in test_words[:200] if POST_REFERENCE["leading_consonants"](word) >= 2]
 
     for seed in seeds:
         taught, rows = taught_reference(seed, device)
         results[f"post1 {seed}"] = rows
+        cluster_right, _ = POST_REFERENCE["scores"](taught, clusters, positions, characters, torch.device("cpu"))
+        results[f"post1 clusters {seed}"] = cluster_right
         state = copy.deepcopy(taught.state_dict())
         preferred = None
 
-        for lr, nll in ((1e-3, 0.0), (1e-4, 0.0), (1e-3, 0.2)):
-            model, rows = preferred_reference(state, seed, device, lr=lr, nll=nll)
-            results[f"post2 {seed} {lr} {nll}"] = rows
+        for route in ("sft", "dpo"):
+            model, rows, pairs = preferred_reference(state, seed, device, route=route)
+            results[f"post2 {seed} {route}"] = rows
             preferred = model
+
+        results[f"pairs made {seed}"] = pair_counts(pairs)
+        print(seed, results[f"pairs made {seed}"], flush=True)
 
         reward_model = reward_reference(seed, device)
         results[f"pairs {seed}"] = held_out_pair_accuracy(reward_model, 500)
         results[f"post1 rewards {seed}"] = stage_rewards(taught, reward_model)
         results[f"post2 rewards {seed}"] = stage_rewards(preferred, reward_model)
+        results[f"post1 kinds {seed}"] = rewards_by_kind(taught, reward_model)
+        results[f"post2 kinds {seed}"] = rewards_by_kind(preferred, reward_model)
         print(seed, results[f"pairs {seed}"], results[f"post1 rewards {seed}"], results[f"post2 rewards {seed}"], flush=True)
+        print(seed, results[f"post1 kinds {seed}"], results[f"post2 kinds {seed}"], flush=True)
 
     return results
