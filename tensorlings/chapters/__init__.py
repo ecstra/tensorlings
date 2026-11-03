@@ -573,6 +573,7 @@ EXERCISES: list[Exercise] = [
     outputs.OUT2,
     outputs.OUT3,
     outputs.OUT4,
+    outputs.QUIZ16,
     signal_reader.READER1,
     signal_reader.READER2,
     signal_reader.READER3,

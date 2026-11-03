@@ -14,7 +14,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
-from ..course import OPTIMIZER_IMPORTS, Chapter, Exercise
+from ..course import OPTIMIZER_IMPORTS, QUIZZES, Chapter, Exercise
 from ..engine import (
     Checker,
     Described,
@@ -1645,3 +1645,440 @@ def measure_codebooks(
                 results[codes].append(((written - tests) ** 2).sum().item() / (tests**2).sum().item())
 
     return results
+
+
+# ---------------------------------------------------------------------------
+# quiz16
+# ---------------------------------------------------------------------------
+
+QUIZ16_LESSON = prose(
+    """
+    This quiz has no examples and no new tools. Each function combines moves
+    from Section 13. If a step is unclear, the exercise in the table shows it.
+
+    | Function | Moves | Shown in |
+    |---|---|---|
+    | `row_tokens` | each number times its column's weight plus its bias, then each category looked up in its column's table | table1 |
+    | `normalized_patches` | each series against its own mean and spread, padded at the end, then cut into patches | series1, series2 |
+    | `residual_ids` | each codebook's nearest entry to what the levels before it left over | sound2 |
+    | `clip_loss` | cosine scores over a temperature, each row's partner as the right class, both ways | clip1 |
+    | `gated_cross` | cross attention from the tokens to the memory, through a tanh gate that starts closed | fuse2 |
+    | `prefix_inputs` | the projected features in front of the text's embeddings, then positions over the whole row | bridge1 |
+    | `to_tokens` | each value's bin from a range cut into equal parts, moved onto the ids the bins use | out4 |
+    | `from_tokens` | each id's bin turned back into the value at its middle | out4 |
+    """,
+)
+
+QUIZ16_SOURCE = source_file(
+    '''
+    # quiz16.py
+    #
+    # No examples and no new tools. Each function combines moves from Section 13.
+
+    import torch
+    import torch.nn as nn
+    import torch.nn.functional as F
+    from torch import Tensor
+
+
+    # TODO: Return each row's tokens, of shape (rows, columns of numbers plus
+    #   columns of categories, size). A number's token is the number times its
+    #   column's row of weight, plus its column's row of bias. A category's
+    #   token is its id's row in its column's own table in tables. The number
+    #   tokens come first.
+    def row_tokens(
+        numbers: Tensor,
+        weight: Tensor,
+        bias: Tensor,
+        categories: Tensor,
+        tables: list[Tensor],
+    ) -> Tensor:
+        ...
+
+
+    # TODO: Normalize each row of series, less its own mean, over its std plus
+    #   1e-5. Pad the row's end with `stride` copies of its last value, then
+    #   cut it into patches of `length` steps, a new one every `stride` steps.
+    #   Return the patches, of shape (rows, patches, length).
+    def normalized_patches(
+        series: Tensor,
+        length: int,
+        stride: int,
+    ) -> Tensor:
+        ...
+
+
+    # TODO: Return the ids residual quantization gives each row of z, of shape
+    #   (rows, levels). codebooks has shape (levels, entries, size). Each level
+    #   picks its codebook's entry nearest to what is left of z, by squared
+    #   distance, and takes that entry off what is left.
+    def residual_ids(
+        z: Tensor,
+        codebooks: Tensor,
+    ) -> Tensor:
+        ...
+
+
+    # TODO: Return CLIP's loss for a batch of pairs, where row i of a goes with
+    #   row i of b. Score every row of a against every row of b by cosine
+    #   similarity over temperature. Average the cross entropy that picks each
+    #   row's partner from a to b and from b to a.
+    def clip_loss(
+        a: Tensor,
+        b: Tensor,
+        temperature: float,
+    ) -> Tensor:
+        ...
+
+
+    # TODO: Return x after cross attention that starts closed. cross is an
+    #   nn.MultiheadAttention with batch_first=True. x gives the queries, and
+    #   memory gives the keys and the values. Scale the attention's output by
+    #   the tanh of gate and add it to x.
+    def gated_cross(
+        x: Tensor,
+        memory: Tensor,
+        cross: nn.MultiheadAttention,
+        gate: Tensor,
+    ) -> Tensor:
+        ...
+
+
+    # TODO: Return what a GPT reads for features from another modality followed
+    #   by text ids. Run features through projector and put the result in
+    #   front of wte's embeddings of ids. Then add wpe's embedding of every
+    #   place in the joined row.
+    def prefix_inputs(
+        features: Tensor,
+        projector: nn.Module,
+        ids: Tensor,
+        wte: nn.Embedding,
+        wpe: nn.Embedding,
+    ) -> Tensor:
+        ...
+
+
+    # TODO: Cut the range from low to high into `bins` equal bins, and return
+    #   each value's bin as a token id, where bin 0 is id `first`. A value
+    #   below low takes the first bin, and high or above takes the last.
+    #   Return whole numbers.
+    def to_tokens(
+        values: Tensor,
+        low: float,
+        high: float,
+        bins: int,
+        first: int,
+    ) -> Tensor:
+        ...
+
+
+    # TODO: Return the value at the middle of the bin each id stands for, the
+    #   way back from to_tokens.
+    def from_tokens(
+        ids: Tensor,
+        low: float,
+        high: float,
+        bins: int,
+        first: int,
+    ) -> Tensor:
+        ...
+    ''',
+)
+
+QUIZ16_PARTS = '''
+def row_tokens(
+    numbers: Tensor,
+    weight: Tensor,
+    bias: Tensor,
+    categories: Tensor,
+    tables: list[Tensor],
+) -> Tensor:
+    number_part = numbers.unsqueeze(-1) * weight + bias
+    category_part = torch.stack([table[categories[:, column]] for column, table in enumerate(tables)], dim=1)
+
+    return torch.cat([number_part, category_part], dim=1)
+
+
+def normalized_patches(
+    series: Tensor,
+    length: int,
+    stride: int,
+) -> Tensor:
+    mean = series.mean(dim=1, keepdim=True)
+    spread = series.std(dim=1, keepdim=True) + 1e-5
+    normal = (series - mean) / spread
+    padded = torch.cat([normal, normal[:, -1:].expand(-1, stride)], dim=1)
+
+    return padded.unfold(1, length, stride)
+
+
+def residual_ids(
+    z: Tensor,
+    codebooks: Tensor,
+) -> Tensor:
+    left = z
+    ids = []
+
+    for codebook in codebooks:
+        chosen = ((left.unsqueeze(1) - codebook.unsqueeze(0)) ** 2).sum(dim=2).argmin(dim=1)
+        ids.append(chosen)
+        left = left - codebook[chosen]
+
+    return torch.stack(ids, dim=1)
+
+
+def clip_loss(
+    a: Tensor,
+    b: Tensor,
+    temperature: float,
+) -> Tensor:
+    scores = F.normalize(a, dim=1) @ F.normalize(b, dim=1).T / temperature
+    targets = torch.arange(len(scores))
+
+    return (F.cross_entropy(scores, targets) + F.cross_entropy(scores.T, targets)) / 2
+
+
+def gated_cross(
+    x: Tensor,
+    memory: Tensor,
+    cross: nn.MultiheadAttention,
+    gate: Tensor,
+) -> Tensor:
+    attended, _ = cross(x, memory, memory)
+
+    return x + torch.tanh(gate) * attended
+
+
+def prefix_inputs(
+    features: Tensor,
+    projector: nn.Module,
+    ids: Tensor,
+    wte: nn.Embedding,
+    wpe: nn.Embedding,
+) -> Tensor:
+    joined = torch.cat([projector(features), wte(ids)], dim=1)
+
+    return joined + wpe(torch.arange(joined.shape[1]))
+
+
+def to_tokens(
+    values: Tensor,
+    low: float,
+    high: float,
+    bins: int,
+    first: int,
+) -> Tensor:
+    places = ((values - low) / (high - low) * bins).floor().long()
+
+    return first + places.clamp(0, bins - 1)
+
+
+def from_tokens(
+    ids: Tensor,
+    low: float,
+    high: float,
+    bins: int,
+    first: int,
+) -> Tensor:
+    return low + (ids - first + 0.5) * (high - low) / bins
+'''
+
+QUIZ16_SOLUTION = source_file(
+    '''
+    # quiz16.py, a solution for comparison
+
+    import torch
+    import torch.nn as nn
+    import torch.nn.functional as F
+    from torch import Tensor
+
+
+''' + indented(QUIZ16_PARTS) + '''
+    ''',
+)
+
+QUIZ16_REFERENCE = namespace_of(QUIZ16_PARTS)
+
+
+def random_input(
+    seed: int,
+    *shape: int,
+) -> Described:
+    """Random numbers have no ties, so a nearest entry is the same however the distances are worked out."""
+    return Described(
+        value=torch.randn(shape, generator=torch.Generator().manual_seed(seed)),
+        text=f"a random tensor of shape {shape}",
+    )
+
+
+def seeded_input(
+    seed: int,
+    build: Callable[[], nn.Module],
+    text: str,
+) -> Described:
+    torch.manual_seed(seed)
+
+    return Described(
+        value=build(),
+        text=text,
+    )
+
+
+def category_tables(
+    seed: int,
+    size: int,
+    *choices: int,
+) -> Described:
+    tables = [small_tensor(seed + column, count, size) for column, count in enumerate(choices)]
+
+    return Described(
+        value=tables,
+        text="[" + ", ".join(value_text(table) for table in tables) + "]",
+    )
+
+
+def expect_token_ids(
+    call: str,
+    actual: object,
+    expected: Tensor,
+) -> None:
+    if isinstance(actual, Tensor) and actual.dtype != torch.long:
+        raise Mismatch(f"{call} holds {actual.dtype} numbers, but token ids are whole numbers, torch.long, as an nn.Embedding wants them.")
+
+    expect_tensor(
+        call=call,
+        actual=actual,
+        expected=expected,
+    )
+
+
+def check_quiz16(checker: Checker) -> None:
+    check_on_inputs(
+        checker=checker,
+        function="row_tokens",
+        description="gives each column its own weight and bias, or its own table",
+        inputs=(
+            (small_tensor(1600, 3, 2), small_tensor(1601, 2, 4), small_tensor(1602, 2, 4), torch.tensor([[0, 2], [1, 0], [2, 1]]), category_tables(1603, 4, 3, 3)),
+            (small_tensor(1606, 2, 1), small_tensor(1607, 1, 3), small_tensor(1608, 1, 3), torch.tensor([[1, 3, 0], [0, 2, 2]]), category_tables(1609, 3, 2, 4, 3)),
+        ),
+        reference=QUIZ16_REFERENCE["row_tokens"],
+    )
+    check_on_inputs(
+        checker=checker,
+        function="normalized_patches",
+        description="measures each row against itself, pads its end and cuts it into patches",
+        inputs=(
+            (small_tensor(1610, 2, 10), 4, 2),
+            (small_tensor(1611, 3, 13), 6, 3),
+        ),
+        reference=QUIZ16_REFERENCE["normalized_patches"],
+    )
+    check_on_inputs(
+        checker=checker,
+        function="residual_ids",
+        description="matches each level against what the levels before it left",
+        inputs=(
+            (random_input(1620, 4, 2), random_input(1621, 3, 5, 2)),
+            (random_input(1622, 6, 3), random_input(1623, 2, 4, 3)),
+        ),
+        reference=QUIZ16_REFERENCE["residual_ids"],
+        expect=expect_token_ids,
+    )
+    check_on_inputs(
+        checker=checker,
+        function="clip_loss",
+        description="averages the cross entropy from a to b and from b to a",
+        inputs=(
+            (random_input(1630, 4, 3), random_input(1631, 4, 3), 0.07),
+            (random_input(1632, 3, 5), random_input(1633, 3, 5), 0.5),
+        ),
+        reference=QUIZ16_REFERENCE["clip_loss"],
+    )
+    check_on_inputs(
+        checker=checker,
+        function="gated_cross",
+        description="adds the gated cross attention to x",
+        inputs=tuple(
+            (
+                random_input(seed, 2, 3, 8),
+                random_input(seed + 1, 2, 5, 8),
+                seeded_input(seed + 2, lambda: nn.MultiheadAttention(8, 2, batch_first=True), "nn.MultiheadAttention(8, 2, batch_first=True)"),
+                torch.tensor([gate]),
+            )
+            for seed, gate in ((1640, 0.0), (1643, 0.9), (1646, -0.4))
+        ),
+        reference=QUIZ16_REFERENCE["gated_cross"],
+    )
+    check_on_inputs(
+        checker=checker,
+        function="prefix_inputs",
+        description="puts the projected features first and gives every place its position",
+        inputs=(
+            (
+                random_input(1650, 2, 3, 5),
+                seeded_input(1651, lambda: nn.Sequential(nn.Linear(5, 6), nn.GELU(), nn.Linear(6, 6)), "nn.Sequential(nn.Linear(5, 6), nn.GELU(), nn.Linear(6, 6))"),
+                torch.tensor([[1, 4], [0, 2]]),
+                seeded_input(1652, lambda: nn.Embedding(7, 6), "nn.Embedding(7, 6)"),
+                seeded_input(1653, lambda: nn.Embedding(8, 6), "nn.Embedding(8, 6)"),
+            ),
+            (
+                random_input(1654, 1, 2, 4),
+                seeded_input(1655, lambda: nn.Linear(4, 3), "nn.Linear(4, 3)"),
+                torch.tensor([[2, 0, 1]]),
+                seeded_input(1656, lambda: nn.Embedding(3, 3), "nn.Embedding(3, 3)"),
+                seeded_input(1657, lambda: nn.Embedding(6, 3), "nn.Embedding(6, 3)"),
+            ),
+        ),
+        reference=QUIZ16_REFERENCE["prefix_inputs"],
+    )
+    check_on_inputs(
+        checker=checker,
+        function="to_tokens",
+        description="floors each value into its bin and moves the bin onto the ids",
+        inputs=(
+            (torch.tensor([-1.0, -0.99, -0.4, 0.0, 0.2, 0.999, 1.0, 1.7, -3.0]), -1.0, 1.0, 8, 100),
+            (torch.tensor([[0.0, 2.5], [9.99, 5.0]]), 0.0, 10.0, 4, 0),
+        ),
+        reference=QUIZ16_REFERENCE["to_tokens"],
+        expect=expect_token_ids,
+    )
+    check_on_inputs(
+        checker=checker,
+        function="from_tokens",
+        description="turns each id back into the middle of its bin",
+        inputs=(
+            (torch.tensor([100, 103, 107]), -1.0, 1.0, 8, 100),
+            (torch.tensor([[0, 3], [1, 2]]), 0.0, 10.0, 4, 0),
+        ),
+        reference=QUIZ16_REFERENCE["from_tokens"],
+    )
+
+
+QUIZ16 = Exercise(
+    name="quiz16",
+    chapter=QUIZZES,
+    title="Modalities, start to finish",
+    lesson=QUIZ16_LESSON,
+    source=QUIZ16_SOURCE,
+    solution=QUIZ16_SOLUTION,
+    hints={
+        "row_tokens": "numbers.unsqueeze(-1) gives each number a last axis of size 1, which broadcasts against weight. "
+        "Column j's category tokens are tables[j] indexed by categories[:, j]. Stack those on dim 1, then join both parts.",
+        "normalized_patches": "mean and std over dim 1 with keepdim=True keep one number per row. Repeat the "
+        "normalized row's last column with .expand, join it on, and .unfold on dim 1 cuts the patches.",
+        "residual_ids": "Keep what is left of z, starting with z. For each codebook, compare it with every entry "
+        "through unsqueeze, take the argmin of the summed squares, and take the chosen entries off.",
+        "clip_loss": "F.normalize with dim=1 makes every row length 1, so a matrix multiply gives the cosines. Row "
+        "i's right class is i, from torch.arange. The other direction scores the transpose.",
+        "gated_cross": "cross(query, key, value) gives the output and the attention weights. torch.tanh(gate) is 0 "
+        "at the start, so the whole thing begins as x itself.",
+        "prefix_inputs": "torch.cat on dim 1 joins the prefix and the text. The positions run over the joined length, "
+        "so look up torch.arange of that length in wpe.",
+        "to_tokens": "Take low off, divide by the range and times bins to get each value's place. Floor it, make it "
+        "whole with .long(), clamp it to the bins, and add first.",
+        "from_tokens": "Take first off each id to get its bin. A bin's middle sits half a bin past its start, and "
+        "each bin is (high - low) / bins wide.",
+    },
+    introduces=(),
+    check=check_quiz16,
+)
