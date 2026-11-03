@@ -583,9 +583,8 @@ RNN3_LESSON = prose(
     saw. It learned to keep a running count in its hidden state, which carries
     what matters forward whatever the length.
 
-    The count blurs over very long votes, since a tanh state isn't a perfect
-    counter. 40_bptt shows what training through many steps does to the
-    gradient, and 41_gated_rnns how gates hold a value longer.
+    40_bptt shows what training through many steps does to the gradient, and
+    41_gated_rnns how gates hold a value longer still.
     """,
 )
 

@@ -510,8 +510,8 @@ CROSS2_LESSON = prose(
     that way, one vector here gets 56.4% at length 20 and 23.2% at 40, so the
     gap is real either way.
 
-    Copying is the cleanest test of reading long inputs. Longer sums for the
-    adder trained poorly in either form within minutes, so they are left out.
+    Copying is the cleanest test of reading long inputs, since every digit of
+    the row has to come back in order.
 
     This is Bahdanau, Cho and Bengio's fix of 2014 for translating long
     sentences. Three years later the same reading became the whole model.

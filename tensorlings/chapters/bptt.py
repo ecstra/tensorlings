@@ -665,9 +665,9 @@ BPTT3_LESSON = prose(
 
     The opposite is the **exploding gradient**. ReLU doesn't saturate, so a
     ReLU RNN's factors above 1 multiply freely. Le, Jaitly and Hinton started
-    `W_hh` at the identity matrix, so the state is carried forward unchanged
-    and long spans train well. A little above the identity, the state and its
-    gradient grow at every step instead.
+    `W_hh` at the identity matrix, so the state is carried forward unchanged.
+    A little above the identity, the state and its gradient grow at every
+    step instead.
 
     Here are such RNNs, with a state of 16, trained on votes of 51 steps. Each
     ran 300 steps of plain SGD at a rate of 0.01.
@@ -678,6 +678,13 @@ BPTT3_LESSON = prose(
     | the identity | at 1.0 | 94 | 81.6% |
     | 1.05 times the identity | none | 141 million | 50.6% |
     | 1.05 times the identity | at 1.0 | 590 | 79.5% |
+    | PyTorch's default, ReLU | at 1.0 | 0.3 | 48.8% |
+    | PyTorch's default, tanh | at 1.0 | 0.3 | 54.2% |
+
+    From PyTorch's default start the gradient fades, as in the first table,
+    and the reader stays near a coin flip. Over three seeds the clipped
+    identity start reached 80.3% to 84.8%, and the default starts 48.8% to
+    56.4%.
 
     Unclipped, one huge gradient throws the weights far off in a single step.
     At 1.05 the norm reached 141 million, and the reader ended at 50.6%, a
@@ -1009,3 +1016,44 @@ BPTT3 = Exercise(
     time_limit=30,
     imports_first=OPTIMIZER_IMPORTS,
 )
+
+
+# ---------------------------------------------------------------------------
+# The runs behind the lessons
+# ---------------------------------------------------------------------------
+
+
+class ReferenceTanhReader(nn.Module):
+    """The ReLU reader with nn.RNN's default tanh, for bptt3's comparison."""
+
+    def __init__(self, hidden: int) -> None:
+        super().__init__()
+        self.rnn = nn.RNN(1, hidden, batch_first=True)
+        self.out = nn.Linear(hidden, 1)
+
+    def forward(self, x: Tensor) -> Tensor:
+        return self.out(self.rnn(x.unsqueeze(2))[1][0]).squeeze(1)
+
+
+def measure_starts(seeds: range = range(3)) -> dict[tuple[int, str], tuple[float, float]]:
+    """bptt3's start comparison, clipped at 1.0: for each seed and start, the largest gradient norm before
+    clipping and the accuracy on 2,000 new votes of 51. Seed 0 is the table's own run."""
+    threads = torch.get_num_threads()
+    torch.set_num_threads(4)
+    results = {}
+
+    try:
+        for seed in seeds:
+            for start in ("identity", "default ReLU", "default tanh"):
+                torch.manual_seed(seed)
+                model = ReferenceTanhReader(16) if start == "default tanh" else ReferenceReluReader(16)
+
+                if start == "identity":
+                    reference_identity_start_(model.rnn, 1.0)
+
+                largest = reference_train_votes(model, 300, 1.0)
+                results[(seed, start)] = (largest, votes_of_51_accuracy(model))
+    finally:
+        torch.set_num_threads(threads)
+
+    return results

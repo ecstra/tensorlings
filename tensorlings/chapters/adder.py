@@ -22,9 +22,7 @@ from ..engine import (
 )
 from ..text import prose, source_file
 from ..training import MissingCheckpoint, load_checkpoint
-from .bidirectional import expect_nothing_recorded
 from .linear_layers import expect_module
-from .seq2seq import BEAM_SEARCH_GIVEN
 
 
 def indented_part(part: str) -> str:
@@ -40,9 +38,8 @@ ADDER = Chapter(
 
         Section 6's project. A model reads a sum written as text, like
         `123+456`, and writes the answer one character at a time. It brings
-        together an encoder and a decoder, gated RNNs, and greedy and beam
-        search, and it shows where a model that learned from examples stops
-        working. The training runs for minutes outside the app.
+        together an encoder and a decoder, gated RNNs, and greedy decoding,
+        and it shows where a model that learned from examples stops working. The training runs for minutes outside the app.
 
         ## Further reading
 
@@ -881,81 +878,79 @@ ADDER2 = Exercise(
 # adder3
 # ---------------------------------------------------------------------------
 
-# beam1's search, with the adder's own start and end tokens and the score it ranks finished answers by.
-BEAM_PARTS = '''
-START = VOCABULARY.index("^")
-END = VOCABULARY.index("$")
+PADDED_SOLUTION = '''
+def padded_questions(
+    pairs: list[tuple[str, str]],
+    digits: int,
+    extra: int,
+) -> Tensor:
+    width = 2 * digits + 1 + extra
 
-
-def sequence_score(
-    total: float,
-    length: int,
-    alpha: float,
-) -> float:
-    return total / length ** alpha
-''' + "\n\n" + BEAM_SEARCH_GIVEN
-
-ADDER_STEP_SOLUTION = '''
-def adder_step(model: nn.Module) -> Callable[[int, Tensor], tuple[Tensor, Tensor]]:
-    @torch.no_grad()
-    def step(
-        symbol: int,
-        state: Tensor,
-    ) -> tuple[Tensor, Tensor]:
-        outputs, state = model.decoder(model.embedding(torch.tensor([[symbol]])), state)
-
-        return F.log_softmax(model.head(outputs)[0, -1], dim=0), state
-
-    return step
+    return torch.tensor([encode(question.rjust(width, "_")) for question, _ in pairs])
 '''
 
-BEAM_ANSWER_SOLUTION = '''
-def beam_answer(
+PADDED_MATCH_SOLUTION = '''
+def padded_exact_match(
     model: nn.Module,
-    question: str,
-    width: int,
+    pairs: list[tuple[str, str]],
     digits: int,
-) -> str:
-    questions = torch.tensor([encode(question.rjust(2 * digits + 1, "_"))])
+    extra: int,
+) -> float:
+    questions = padded_questions(pairs, digits, extra)
+    model.eval()
 
     with torch.no_grad():
-        _, state = model.encoder(model.embedding(questions))
+        written = greedy(model, questions, digits + 2)
 
-    ids = beam_search(adder_step(model), state, width, digits + 2, 0.0)
+    model.train()
+    right = [decode(ids)[::-1] == answer for ids, (_, answer) in zip(written.tolist(), pairs)]
 
-    return decode(ids)[::-1]
+    return sum(right) / len(pairs)
+'''
+
+LONGEST_SOLUTION = '''
+def longest_answer(
+    model: nn.Module,
+    pairs: list[tuple[str, str]],
+    digits: int,
+) -> int:
+    questions, _ = to_tensors(pairs, digits)
+    model.eval()
+
+    with torch.no_grad():
+        written = greedy(model, questions, digits + 2)
+
+    model.train()
+
+    return max(len(decode(ids)) for ids in written.tolist())
 '''
 
 ADDER3_LESSON = prose(
     """
-    Two questions about the adder from adder2. Does beam search help it, and
-    does it add numbers longer than any it trained on?
+    adder2's model gets every held out sum of up to 3 digits right. This
+    project asks where that skill ends, by feeding it questions longer than
+    any it trained on.
 
-    beam1's beam search keeps the few likeliest answers so far, where greedy
-    keeps only the likeliest token. It helps a model that is unsure, as on
-    beam1's copying task. Here greedy decoding already gets all 2,000 held out
-    sums right, and a beam of 3 gets the same 100%. Beam search can't fix what
-    isn't wrong, and it costs a decoder run per beam per step.
+    Two things make a question longer. The same sum can have more `_` in
+    front, which changes nothing about the answer. Or the numbers can have
+    more digits. Here are 2,000 held out sums of each kind.
 
-    Longer numbers are another story.
-
-    | Sums | Exactly right |
-    |---|---|
-    | up to 3 digits, as in training | 100% |
-    | the same sums with two more `_` in front | 0.15% |
-    | up to 4 digits | 0% |
-    | up to 5 digits | 0% |
+    | Sums | Exactly right | Longest answer written |
+    |---|---|---|
+    | up to 3 digits, as in training | 100% | 4 digits |
+    | the same sums with two more `_` in front | 0.15% | 4 digits |
+    | up to 4 digits | 0% | 4 digits |
+    | up to 5 digits | 0% | 4 digits |
 
     Two more padding tokens are enough to break it. The model never saw a
     question of 9 tokens, so its encoder ends in a state the decoder never
-    learned to read. With 4 digit numbers it also writes at most 4 digits, the
-    longest answer it ever wrote, so `4426+7860` comes out as `1205`.
+    learned to read. With 4 digit numbers it still writes at most 4 digits,
+    the longest answer it ever wrote, so `5674+6652` comes out as `1236`.
 
     The model learned the sums it was shown, and not the method of adding. A
     person who adds 3 digit numbers adds 30 digit numbers the same way.
-    Getting a network to do that, to work past the lengths it trained on, is
-    still studied today. Zaremba and Sutskever trained with a curriculum that
-    grew the lengths step by step.
+    Zaremba and Sutskever taught their models longer sums with a curriculum
+    that grew the lengths step by step.
     """,
 )
 
@@ -970,7 +965,7 @@ ADDER3_SOURCE = source_file(
     import torch.nn.functional as F
     from torch import Tensor
 
-    chances = F.log_softmax(torch.tensor([0.0, 1.0]), dim=0)    # tensor([-1.3133, -0.3133])
+    padded = "907+8".rjust(9, "_")    # '____907+8'
 
 
     # adder1's pieces.
@@ -989,39 +984,41 @@ ADDER3_SOURCE = source_file(
 ''' + INDENTED_EXACT_MATCH + '''
 
 
-    # beam1's search, with the adder's start and end tokens.
-''' + indented_part(BEAM_PARTS) + '''
-
-
-    # TODO: Return a step function for beam_search from model, as beam1's
-    #   decoder_step does. It runs the decoder on one token, a tensor of shape
-    #   (1, 1), from state, and returns the log_softmax of the head's scores,
-    #   of shape (14,), and the new state. Record nothing for autograd.
-    def adder_step(model: nn.Module) -> Callable[[int, Tensor], tuple[Tensor, Tensor]]:
-        ...
-
-
-    # TODO: Return model's answer to question, a text like "123+45", from
-    #   beam_search with width, up to digits + 2 steps and an alpha of 0. Pad
-    #   and encode the question as to_tensors does, start the search from the
-    #   encoder's final state, and read the ids back as a forward answer.
-    def beam_answer(
-        model: nn.Module,
-        question: str,
-        width: int,
+    # TODO: Return the questions of pairs encoded as to_tensors does, each
+    #   padded on the left with "_" to 2 * digits + 1 + extra tokens, as a
+    #   tensor of whole numbers of shape (len(pairs), 2 * digits + 1 + extra).
+    #   to_tensors is the case extra = 0.
+    def padded_questions(
+        pairs: list[tuple[str, str]],
         digits: int,
-    ) -> str:
+        extra: int,
+    ) -> Tensor:
         ...
 
 
-    # TODO: Return the share of pairs whose answer beam_answer gets exactly
-    #   right with width.
-    def beam_exact_match(
+    # TODO: Return the share of pairs answered exactly right, as exact_match
+    #   does, but with the questions from padded_questions. Write the answers
+    #   with greedy for digits + 2 steps in eval mode without recording for
+    #   autograd, and put the model back in training mode before returning.
+    def padded_exact_match(
         model: nn.Module,
         pairs: list[tuple[str, str]],
         digits: int,
-        width: int,
+        extra: int,
     ) -> float:
+        ...
+
+
+    # TODO: Return the number of digits in the longest answer model writes for
+    #   pairs, as a plain whole number. Encode with to_tensors and write with
+    #   greedy for digits + 2 steps, in eval mode without recording for
+    #   autograd, then put the model back in training mode. decode drops what
+    #   comes after the end token.
+    def longest_answer(
+        model: nn.Module,
+        pairs: list[tuple[str, str]],
+        digits: int,
+    ) -> int:
         ...
 
 
@@ -1048,7 +1045,7 @@ ADDER3_SOLUTION = source_file(
     import torch.nn.functional as F
     from torch import Tensor
 
-    chances = F.log_softmax(torch.tensor([0.0, 1.0]), dim=0)
+    padded = "907+8".rjust(9, "_")
 
 
 ''' + INDENTED_ADDER_PARTS + '''
@@ -1065,24 +1062,13 @@ ADDER3_SOLUTION = source_file(
 ''' + INDENTED_EXACT_MATCH + '''
 
 
-''' + indented_part(BEAM_PARTS) + '''
+''' + indented_part(PADDED_SOLUTION) + '''
 
 
-''' + indented_part(ADDER_STEP_SOLUTION) + '''
+''' + indented_part(PADDED_MATCH_SOLUTION) + '''
 
 
-''' + indented_part(BEAM_ANSWER_SOLUTION) + '''
-
-
-    def beam_exact_match(
-        model: nn.Module,
-        pairs: list[tuple[str, str]],
-        digits: int,
-        width: int,
-    ) -> float:
-        right = [beam_answer(model, question, width, digits) == answer for question, answer in pairs]
-
-        return sum(right) / len(pairs)
+''' + indented_part(LONGEST_SOLUTION) + '''
 
 
     def accuracy_by_digits(
@@ -1096,139 +1082,143 @@ ADDER3_SOLUTION = source_file(
 )
 
 
-def beam_namespace() -> dict[str, object]:
+def length_namespace() -> dict[str, object]:
     namespace = dict(ADDER_REFERENCE)
-    namespace["Callable"] = Callable
-    exec(BEAM_PARTS + ADDER_STEP_SOLUTION + BEAM_ANSWER_SOLUTION, namespace)
+    exec(PADDED_SOLUTION + PADDED_MATCH_SOLUTION + LONGEST_SOLUTION, namespace)
 
     return namespace
 
 
-BEAM_REFERENCE = beam_namespace()
+LENGTH_REFERENCE = length_namespace()
 
 
-def check_adder_step(found: object) -> None:
-    model = seeded_adder(ADDER_REFERENCE["Adder"], 16)
-    questions, _ = reference_to_tensors(small_sums(466), 3)
+def check_padded_questions(found: object) -> None:
+    for seed, digits, extra in ((469, 3, 2), (470, 2, 0), (471, 3, 5)):
+        pairs = reference_random_sums(6, digits, torch.Generator().manual_seed(seed), True)
+        actual = found(pairs, digits, extra)
 
-    with torch.no_grad():
-        _, state = model.encoder(model.embedding(questions[:1]))
+        if isinstance(actual, Tensor) and actual.is_floating_point():
+            raise Mismatch("padded_questions should give whole numbers, the token ids, not floats.")
 
-    step = found(model)
-
-    if not callable(step):
-        raise Mismatch("adder_step(model) should return a function, the step that beam_search calls.")
-
-    log_probs, next_state = step(VOCABULARY.index("^"), state)
-    expected_log_probs, expected_state = BEAM_REFERENCE["adder_step"](model)(VOCABULARY.index("^"), state)
-    expect_tensor(
-        call="the log probabilities of adder_step(model)(the ^ token, the encoder's state)",
-        actual=log_probs,
-        expected=expected_log_probs,
-    )
-    expect_tensor(
-        call="the state it returns",
-        actual=next_state,
-        expected=expected_state,
-    )
-    expect_nothing_recorded(
-        function="adder_step's step",
-        modules=[model.decoder, model.head],
-        run=lambda: step(VOCABULARY.index("^"), state),
-    )
-
-
-def check_beam_answer(found: object) -> None:
-    """The file's beam_search is swapped for one that records what it is given and writes 2 then 1,
-    so beam_answer should read that back as 12."""
-    model = seeded_adder(ADDER_REFERENCE["Adder"], 16)
-    calls: list[tuple[Callable[[int, Tensor], tuple[Tensor, Tensor]], Tensor, int, int, float]] = []
-
-    def scripted_beam_search(
-        step: Callable[[int, Tensor], tuple[Tensor, Tensor]],
-        state: Tensor,
-        width: int,
-        max_length: int,
-        alpha: float,
-    ) -> list[int]:
-        calls.append((step, state, width, max_length, alpha))
-
-        return reference_encode("21")
-
-    namespace = found.__globals__
-    original = namespace.get("beam_search")
-    namespace["beam_search"] = scripted_beam_search
-
-    try:
-        actual = found(model, "907+8", 2, 3)
-    finally:
-        namespace["beam_search"] = original
-
-    if not calls:
-        raise Mismatch("beam_answer never called beam_search.")
-
-    step, state, width, max_length, alpha = calls[0]
-
-    if (width, max_length, alpha) != (2, 5, 0.0):
-        raise Mismatch(
-            f"beam_answer passed beam_search a width of {width}, {max_length} steps and an alpha of {alpha}, "
-            "but for a width of 2 and 3 digits it should pass 2, 5 and 0.0.",
+        expect_tensor(
+            call=f"padded_questions(6 sums of up to {digits} digits, {digits}, {extra})",
+            actual=actual,
+            expected=LENGTH_REFERENCE["padded_questions"](pairs, digits, extra),
         )
 
-    with torch.no_grad():
-        _, expected_state = model.encoder(model.embedding(torch.tensor([reference_encode("__907+8")])))
 
-    expect_tensor(
-        call='the state beam_answer starts the search from, for "907+8" at 3 digits',
-        actual=state,
-        expected=expected_state,
-    )
-    expect_tensor(
-        call="the log probabilities of the step function it passes, from ^",
-        actual=step(VOCABULARY.index("^"), expected_state)[0],
-        expected=BEAM_REFERENCE["adder_step"](model)(VOCABULARY.index("^"), expected_state)[0],
-    )
-    expect_value(
-        call='beam_answer when the search writes the tokens 2 then 1',
-        actual=actual,
-        expected="12",
-    )
+GreedyCall = tuple[bool, bool, Tensor, int]
 
 
-def check_beam_exact_match(found: object) -> None:
-    """The file's beam_answer is swapped for one that gets 12 of 20 answers right, so the share is 0.6."""
-    pairs = reference_random_sums(20, 3, torch.Generator().manual_seed(467), True)
-    answers = dict(pairs)
-    calls: list[tuple[int, int]] = []
+def recording_greedy(
+    written_rows: Callable[[int], list[str]],
+    calls: list[GreedyCall],
+) -> Callable[[nn.Module, Tensor, int], Tensor]:
+    """A greedy that notes how it was run and writes the given answers, each ended by $ and padded."""
 
-    def scripted_beam_answer(
+    def scripted_greedy(
         model: nn.Module,
-        question: str,
-        width: int,
-        digits: int,
-    ) -> str:
-        calls.append((width, digits))
-        position = [asked for asked, _ in pairs].index(question)
+        questions: Tensor,
+        length: int,
+    ) -> Tensor:
+        calls.append((model.training, torch.is_grad_enabled(), questions, length))
 
-        return answers[question] if position < 12 else answers[question] + "0"
+        return torch.tensor([reference_encode((row + "$").ljust(length, "_")) for row in written_rows(length)])
 
-    namespace = found.__globals__
-    original = namespace.get("beam_answer")
-    namespace["beam_answer"] = scripted_beam_answer
+    return scripted_greedy
 
-    try:
-        actual = found(None, pairs, 3, 4)
-    finally:
-        namespace["beam_answer"] = original
 
-    if any(call != (4, 3) for call in calls):
-        raise Mismatch("beam_exact_match should pass its width and digits on to beam_answer.")
+def expect_greedy_run(
+    function: str,
+    calls: list[GreedyCall],
+    questions: Tensor,
+    digits: int,
+    model: nn.Module,
+) -> None:
+    if not calls:
+        raise Mismatch(f"{function} never called greedy to write the answers.")
 
-    expect_close(
-        call="beam_exact_match on 20 sums, 12 of them answered right",
-        actual=actual,
-        expected=0.6,
+    training, recording, handed, length = calls[0]
+
+    if training:
+        raise Mismatch(f"{function} ran greedy with the model in training mode. Call model.eval() first.")
+
+    if recording:
+        raise Mismatch(f"{function} ran greedy while recording for autograd. Run it inside torch.no_grad().")
+
+    if length != digits + 2:
+        raise Mismatch(f"{function} asked greedy for {length} steps, but it should ask for digits + 2, here {digits + 2}.")
+
+    expect_tensor(
+        call=f"the questions {function} handed greedy",
+        actual=handed,
+        expected=questions,
     )
+
+    if not model.training:
+        raise Mismatch(f"{function} left the model in eval mode. Call model.train() before returning.")
+
+
+def check_padded_exact_match(found: object) -> None:
+    """The file's greedy is swapped for one that writes the first answers right, backwards as the model
+    would, and the first digit of the rest wrong."""
+    for seed, count, digits, extra, right in ((472, 20, 3, 2, 12), (473, 13, 2, 0, 7)):
+        model = seeded_adder(ADDER_REFERENCE["Adder"], 16)
+        pairs = reference_random_sums(count, digits, torch.Generator().manual_seed(seed), True)
+        written = [answer[::-1] for _, answer in pairs]
+        written = written[:right] + [str((int(row[0]) + 1) % 10) + row[1:] for row in written[right:]]
+        calls: list[GreedyCall] = []
+        namespace = found.__globals__
+        original = namespace.get("greedy")
+        namespace["greedy"] = recording_greedy(lambda length: written, calls)
+
+        try:
+            actual = found(model, pairs, digits, extra)
+        finally:
+            namespace["greedy"] = original
+
+        expect_greedy_run(
+            function="padded_exact_match",
+            calls=calls,
+            questions=LENGTH_REFERENCE["padded_questions"](pairs, digits, extra),
+            digits=digits,
+            model=model,
+        )
+        expect_close(
+            call=f"padded_exact_match on {count} sums with {extra} extra, {right} of them written right",
+            actual=actual,
+            expected=right / count,
+        )
+
+
+def check_longest_answer(found: object) -> None:
+    """The file's greedy is swapped for one that writes answers of chosen lengths."""
+    for seed, digits, lengths in ((474, 3, [3, 1, 4, 2]), (475, 2, [2, 2, 1])):
+        model = seeded_adder(ADDER_REFERENCE["Adder"], 16)
+        pairs = reference_random_sums(len(lengths), digits, torch.Generator().manual_seed(seed), True)
+        written = ["7" * size for size in lengths]
+        calls: list[GreedyCall] = []
+        namespace = found.__globals__
+        original = namespace.get("greedy")
+        namespace["greedy"] = recording_greedy(lambda length: written, calls)
+
+        try:
+            actual = found(model, pairs, digits)
+        finally:
+            namespace["greedy"] = original
+
+        expect_greedy_run(
+            function="longest_answer",
+            calls=calls,
+            questions=reference_to_tensors(pairs, digits)[0],
+            digits=digits,
+            model=model,
+        )
+        expect_value(
+            call=f"longest_answer when the answers written have {lengths} digits",
+            actual=actual,
+            expected=max(lengths),
+        )
 
 
 def check_accuracy_by_digits(found: object) -> None:
@@ -1271,19 +1261,19 @@ def check_accuracy_by_digits(found: object) -> None:
 
 def check_adder3(checker: Checker) -> None:
     checker.test(
-        function="adder_step",
-        description="gives the next token's log probabilities and the new state",
-        run=check_adder_step,
+        function="padded_questions",
+        description="pads each question on the left with extra more _",
+        run=check_padded_questions,
     )
     checker.test(
-        function="beam_answer",
-        description="answers a question with beam search, read forwards",
-        run=check_beam_answer,
+        function="padded_exact_match",
+        description="gives the share answered right with the padded questions",
+        run=check_padded_exact_match,
     )
     checker.test(
-        function="beam_exact_match",
-        description="gives the share beam_answer gets right",
-        run=check_beam_exact_match,
+        function="longest_answer",
+        description="gives the length of the longest answer written",
+        run=check_longest_answer,
     )
     checker.test(
         function="accuracy_by_digits",
@@ -1295,18 +1285,16 @@ def check_adder3(checker: Checker) -> None:
 ADDER3 = Exercise(
     name="adder3",
     chapter=ADDER,
-    title="Project: beam search, and where it breaks",
+    title="Project: where it breaks",
     lesson=ADDER3_LESSON,
     source=ADDER3_SOURCE,
     solution=ADDER3_SOLUTION,
     hints={
-        "adder_step": "Inside it, define step(symbol, state) under @torch.no_grad(). Run model.decoder on "
-        "model.embedding(torch.tensor([[symbol]])) and state, and return F.log_softmax(model.head(outputs)[0, -1], "
-        "dim=0) with the new state.",
-        "beam_answer": "encode(question.rjust(2 * digits + 1, \"_\")) in a list gives a batch of one. The encoder's "
-        "final state goes to beam_search(adder_step(model), state, width, digits + 2, 0.0). Reverse decode of the ids.",
-        "beam_exact_match": "Compare beam_answer(model, question, width, digits) with each answer, and divide the "
-        "count of matches by len(pairs).",
+        "padded_questions": "to_tensors pads to a width of 2 * digits + 1. Add extra to that width, rjust each "
+        "question to it, encode it, and make one tensor of the rows.",
+        "padded_exact_match": "Follow exact_match line by line, with padded_questions in place of to_tensors.",
+        "longest_answer": "Write the answers as exact_match does, then take the largest len(decode(ids)) over "
+        "the rows of written.tolist().",
         "accuracy_by_digits": "For each digits in digit_counts, exact_match(model, random_sums(count, digits, "
         "generator, True), digits).",
     },
@@ -1314,3 +1302,29 @@ ADDER3 = Exercise(
     check=check_adder3,
     time_limit=60,
 )
+
+
+# ---------------------------------------------------------------------------
+# The runs behind the lessons
+# ---------------------------------------------------------------------------
+
+
+def measure_lengths() -> dict[str, tuple[float, int]]:
+    """adder3's table, on the trained model in checkpoints/adder2.pt: for 2,000 held out sums of each kind,
+    the share answered exactly right and the longest answer written."""
+    threads = torch.get_num_threads()
+    torch.set_num_threads(4)
+
+    try:
+        model = seeded_adder(ADDER_REFERENCE["Adder"], 128)
+        load_checkpoint(model, "adder2")
+        results = {}
+
+        for name, digits, extra in (("3 digits", 3, 0), ("3 digits, 2 more _", 3, 2), ("4 digits", 4, 0), ("5 digits", 5, 0)):
+            pairs = reference_random_sums(2000, digits, torch.Generator().manual_seed(1), True)
+            right = LENGTH_REFERENCE["padded_exact_match"](model, pairs, digits, extra)
+            results[name] = (right, LENGTH_REFERENCE["longest_answer"](model, pairs, digits))
+
+        return results
+    finally:
+        torch.set_num_threads(threads)

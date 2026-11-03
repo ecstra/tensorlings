@@ -379,9 +379,6 @@ LLAMA2_LESSON = prose(
     | GELU | 1.983 | 1.679 |
     | SwiGLU | 1.944 | 1.636 |
 
-    The paper says plainly that it offers no explanation of why the gated
-    versions work better. The gain was measured, not derived.
-
     Three matrices hold more weights than two at the same width, so the
     hidden width shrinks to keep the count equal. Two matrices of `d` by `4d`
     hold `8d²` weights, and three of `d` by `h` hold `3dh`. They match at `h =

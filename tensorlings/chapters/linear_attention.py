@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import statistics
+import time
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -268,8 +271,22 @@ LINATTN2_LESSON = prose(
     """
     Linear attention's state has a fixed size, size by size, however long the
     sequence. Softmax attention keeps every key and value, so its memory grows
-    by one key and one value per step. That makes linear attention cheap on
-    long sequences, and as limited as an RNN in what it can hold.
+    by one key and one value per step. Each new token reads all of them.
+
+    Here is the cost of writing one more token, over three runs. The batch is
+    16 at size 64, on one CPU thread of this Mac.
+
+    | Earlier tokens | Softmax step | Linear step | Softmax cache | Linear state |
+    |---|---|---|---|---|
+    | 256 | 0.2 to 0.7 ms | 0.2 to 0.3 ms | 2.1 MB | 0.27 MB |
+    | 1,024 | 3.0 to 5.3 ms | 0.2 to 0.4 ms | 8.4 MB | 0.27 MB |
+    | 4,096 | 7.5 to 12.4 ms | 0.2 to 2.6 ms | 33.6 MB | 0.27 MB |
+    | 16,384 | 26 to 43 ms | 0.1 to 1.0 ms | 134 MB | 0.27 MB |
+
+    The softmax step grows with the text, and the linear one stays flat.
+    Katharopoulos and colleagues measured their linear attention models up to
+    4,000 times faster at writing very long sequences. The fixed state has a price
+    in what it can hold.
 
     Here is attention6's recall task with queries, keys and values of size 8,
     each model trained for 400 steps.
@@ -501,3 +518,71 @@ LINATTN2 = Exercise(
     time_limit=30,
     imports_first=OPTIMIZER_IMPORTS,
 )
+
+
+# ---------------------------------------------------------------------------
+# The runs behind the lessons
+# ---------------------------------------------------------------------------
+
+
+def step_milliseconds(
+    cached: int,
+    rounds: int = 5,
+    repeats: int = 20,
+) -> tuple[float, float]:
+    """The time to write one more token, for a batch of 16 at size 64 on one CPU thread: softmax attention
+    reading a cache of cached keys and values, against linear attention adding to its state and reading it."""
+    batch, size = 16, 64
+    generator = torch.Generator().manual_seed(0)
+    keys = torch.randn(batch, cached, size, generator=generator)
+    values = torch.randn(batch, cached, size, generator=generator)
+    query = torch.randn(batch, 1, size, generator=generator)
+    state = torch.randn(batch, size, size, generator=generator)
+    total = torch.rand(batch, 1, size, generator=generator)
+    new_key = F.elu(torch.randn(batch, 1, size, generator=generator)) + 1
+    new_value = torch.randn(batch, 1, size, generator=generator)
+    feature = F.elu(query) + 1
+
+    def softmax_step() -> Tensor:
+        return torch.softmax(query @ keys.transpose(1, 2) / size**0.5, dim=-1) @ values
+
+    def linear_step() -> Tensor:
+        grown = state + new_key.transpose(1, 2) @ new_value
+        summed = total + new_key
+
+        return (feature @ grown) / (feature @ summed.transpose(1, 2))
+
+    threads = torch.get_num_threads()
+    torch.set_num_threads(1)
+    times = []
+
+    try:
+        for run in (softmax_step, linear_step):
+            run()
+            medians = []
+
+            for _ in range(rounds):
+                start = time.perf_counter()
+
+                for _ in range(repeats):
+                    run()
+
+                medians.append((time.perf_counter() - start) / repeats)
+
+            times.append(1000 * statistics.median(medians))
+    finally:
+        torch.set_num_threads(threads)
+
+    return times[0], times[1]
+
+
+def measure_step_cost() -> dict[int, tuple[float, float, int, int]]:
+    """linattn2's table: for each number of earlier tokens, the two step times in milliseconds, then the bytes the
+    softmax cache holds and the bytes the linear state holds, at a batch of 16, size 64 and 4 bytes a number."""
+    batch, size = 16, 64
+    state_bytes = batch * (size * size + size) * 4
+
+    return {
+        cached: (*step_milliseconds(cached), batch * cached * size * 2 * 4, state_bytes)
+        for cached in (256, 1024, 4096, 16384)
+    }

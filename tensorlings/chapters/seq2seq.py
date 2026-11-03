@@ -1135,9 +1135,21 @@ BEAM1_LESSON = prose(
     | beam search, width 3 | 0.280 |
     | beam search, width 5 | 0.280 |
 
-    Beam search rescues some rows where an early digit was a close call. An
-    `alpha` of 0 and of 0.7 gave the same rows here. It matters more where
-    outputs of different lengths compete, as translations do.
+    Beam search rescues some rows where an early digit was a close call.
+
+    Length matters once outputs of different lengths compete. Here a copier
+    of size 48 trained on rows of 1 to 12 digits. It copies 300 new rows of 6
+    to 12, and the table gives the share it ends too early.
+
+    | Seed | Greedy | Width 10, `alpha` 0 | Width 10, `alpha` 1 |
+    |---|---|---|---|
+    | 0 | 15.3% | 17.3% | 11.0% |
+    | 1 | 60.3% | 62.7% | 55.0% |
+    | 2 | 7.3% | 9.3% | 4.3% |
+
+    Ranked by raw totals, the wider beam finds more short outputs. Divided by
+    their length, fewer end early than greedy's. Koehn and Knowles found the
+    same in translation, where wider beams gave shorter, worse translations.
     """,
 )
 
@@ -1444,3 +1456,68 @@ BEAM1 = Exercise(
     introduces=(),
     check=check_beam1,
 )
+
+
+# ---------------------------------------------------------------------------
+# The runs behind the lessons
+# ---------------------------------------------------------------------------
+
+
+def train_mixed_copier(
+    hidden: int,
+    steps: int,
+    seed: int,
+) -> tuple[nn.Module, nn.Module]:
+    """A copier trained on rows of 1 to 12 digits, one length per batch of 64, with Adam at 0.01."""
+    encoder, decoder = seeded_pair(hidden, seed)
+    optimizer = torch.optim.Adam([*encoder.parameters(), *decoder.parameters()], lr=0.01)
+    generator = torch.Generator().manual_seed(seed + 100)
+
+    for _ in range(steps):
+        length = int(torch.randint(1, 13, (1,), generator=generator))
+        source = torch.randint(0, 10, (64, length), generator=generator)
+        loss = REFERENCE["sequence_loss"](encoder, decoder, source, source)
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+    return encoder.eval(), decoder.eval()
+
+
+def measure_length_penalty(
+    seeds: range = range(3),
+    widths: tuple[int, ...] = (1, 3, 10),
+) -> dict[tuple[int, int, float], tuple[float, float]]:
+    """beam1's second table: for each seed, width and alpha, the share of 300 rows of 6 to 12 digits that the
+    copier of size 48 ends too early, and the share it copies exactly."""
+    threads = torch.get_num_threads()
+    torch.set_num_threads(4)
+    generator = torch.Generator().manual_seed(77)
+    rows = [
+        torch.randint(0, 10, (int(torch.randint(6, 13, (1,), generator=generator)),), generator=generator)
+        for _ in range(300)
+    ]
+    results = {}
+
+    try:
+        for seed in seeds:
+            encoder, decoder = train_mixed_copier(48, 1500, seed)
+            step = reference_decoder_step(decoder)
+
+            for width in widths:
+                for alpha in (0.0, 1.0):
+                    short = right = 0
+
+                    for row in rows:
+                        with torch.no_grad():
+                            state = encoder(row.unsqueeze(0))
+
+                        written = BEAM_REFERENCE["beam_search"](step, state, width, len(row) + 5, alpha)
+                        short += len(written) < len(row)
+                        right += written == row.tolist()
+
+                    results[(seed, width, alpha)] = (short / len(rows), right / len(rows))
+    finally:
+        torch.set_num_threads(threads)
+
+    return results

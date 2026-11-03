@@ -591,17 +591,22 @@ MULTIHEAD3_LESSON = prose(
 
     The single head settles on one place and copies it. The other place it
     barely learns, 17.1% against 6.3% for a blind guess. Two heads each take
-    one place.
+    one place. Over three seeds, one head averaged 56.6% to 59.3% and two
+    heads 100% every time.
 
-    Heads aren't the only road. With an MLP after the attention, one head
-    reached 100% here as well. It weighted the two places unevenly, and the
-    MLP pulled them apart. With four places at once and an MLP, 1 head reached
-    92.1% and 4 heads 100%. The original paper found a single head 0.9 BLEU,
-    its translation score, worse than its best number of heads. Too many heads
-    hurt there too.
+    An MLP after the attention can pull a single head's blend apart, so here
+    is a harder test with one. Each position copies four earlier tokens, 1 to
+    4 back, after 1,000 steps, over three seeds.
 
-    So heads make several lookups the easy road, and the right number of them
-    is found by measuring.
+    | Heads | Average of the four |
+    |---|---|
+    | 1 | 69.2% to 69.5% |
+    | 2 | 91.4% to 95.0% |
+    | 4 | 100% on every seed |
+
+    Each head reads one place, so four places need four heads. The original
+    paper found a single head 0.9 BLEU, its translation score, worse than its
+    best number of heads.
     """,
 )
 
@@ -1067,3 +1072,86 @@ GQA1 = Exercise(
     introduces=(),
     check=check_gqa1,
 )
+
+
+# ---------------------------------------------------------------------------
+# The runs behind the lessons
+# ---------------------------------------------------------------------------
+
+
+class MlpLookupModel(nn.Module):
+    """multihead3's model with an MLP after the attention, reading any number of earlier places at once."""
+
+    def __init__(
+        self,
+        heads: int,
+        offsets: tuple[int, ...],
+        size: int = LOOKUP_SIZE,
+    ) -> None:
+        super().__init__()
+        self.heads = heads
+        self.offsets = offsets
+        self.tokens = nn.Embedding(LOOKUP_VOCABULARY, size)
+        self.positions = nn.Embedding(LOOKUP_STEPS, size)
+        self.qkv = nn.Linear(size, 3 * size)
+        self.out = nn.Linear(size, size)
+        self.mlp = nn.Sequential(nn.Linear(size, 4 * size), nn.ReLU(), nn.Linear(4 * size, size))
+        self.read = nn.Linear(size, len(offsets) * LOOKUP_VOCABULARY)
+
+    def forward(self, x: Tensor) -> Tensor:
+        batch, steps = x.shape
+        h = self.tokens(x) + self.positions(torch.arange(steps))
+        q, k, v = self.qkv(h).chunk(3, dim=-1)
+        z = self.out(reference_multi_head_attention(q, k, v, self.heads))
+        z = z + self.mlp(z)
+
+        return self.read(z).view(batch, steps, len(self.offsets), LOOKUP_VOCABULARY)
+
+
+def train_lookup_seeded(
+    model: nn.Module,
+    offsets: tuple[int, ...],
+    steps: int,
+    seed: int,
+) -> nn.Module:
+    """train_lookup's run for any offsets, length and seed. Seed 0 with 600 steps is train_lookup itself."""
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
+    generator = torch.Generator().manual_seed(seed + 1)
+    first = max(offsets)
+
+    for _ in range(steps):
+        x = lookup_sequences(64, generator)
+        logits = model(x)[:, first:]
+        loss = F.cross_entropy(logits.reshape(-1, LOOKUP_VOCABULARY), reference_lookup_targets(x, offsets).reshape(-1))
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+    return model
+
+
+def measure_heads(
+    seeds: range = range(3),
+    with_mlp: bool = False,
+) -> dict[tuple[int, int], float]:
+    """multihead3's tables: the share copied right on 2,000 new sequences, by seed and number of heads. Without
+    the MLP the model reads 1 and 3 back for 600 steps, and with it 1 to 4 back for 1,000 steps."""
+    offsets = (1, 2, 3, 4) if with_mlp else LOOKUP_OFFSETS
+    steps = 1000 if with_mlp else 600
+    heads_tried = (1, 2, 4) if with_mlp else (1, 2)
+    x = lookup_sequences(2000, torch.Generator().manual_seed(99))
+    threads = torch.get_num_threads()
+    torch.set_num_threads(4)
+    results = {}
+
+    try:
+        for seed in seeds:
+            for heads in heads_tried:
+                torch.manual_seed(seed)
+                model = MlpLookupModel(heads, offsets) if with_mlp else ReferenceLookupModel(heads)
+                train_lookup_seeded(model, offsets, steps, seed)
+                results[(seed, heads)] = reference_lookup_accuracy(model, x, offsets)
+    finally:
+        torch.set_num_threads(threads)
+
+    return results

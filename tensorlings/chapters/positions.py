@@ -741,9 +741,10 @@ ROPE2_LESSON = prose(
     RoPE a pattern learned at one place, like "look one back", means the same
     at position 5 and at position 500.
 
-    The angles still grow with the position. A model trained on sequences of
-    2,000 meets new angles past that. So reading much longer text needs care,
-    like scaling the angles down.
+    The angles grow with the position, so a model trained on 2,000 positions
+    meets new angles past that. Chen and colleagues' position interpolation
+    scales every position down to fit the trained range. With under 1,000
+    steps of fine tuning it took LLaMA from 2,048 to 32,768 positions.
     """,
 )
 

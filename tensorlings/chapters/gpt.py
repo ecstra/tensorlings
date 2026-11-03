@@ -871,8 +871,8 @@ GPT3_LESSON = prose(
     |---|---|---|---|---|---|
     | Validation loss | 4.19 | 2.02 | 1.73 | 1.57 | 1.54 |
 
-    It took about 5 minutes here, while other work shared the machine. The
-    check asks for a validation loss below 1.7. nanoGPT's own Shakespeare
+    It took about 5 minutes on this Mac's GPU. The check asks for a
+    validation loss below 1.7. nanoGPT's own Shakespeare
     model, 6 blocks of size 384, reaches about 1.47 on a GPU.
     """,
 )
@@ -1291,8 +1291,7 @@ GPT4_LESSON = prose(
     like `kiss solemeRoH`, which top k would have cut.
 
     In 5 minutes and 818,048 weights the model learned spelling, line breaks
-    and the look of a speaker's name. It has not learned what the words mean.
-    GPT-2's largest model is the same kind of stack with about 1,800 times as
+    and the look of a speaker's name. GPT-2's largest model is the same kind of stack with about 1,800 times as
     many weights, trained on 40 GB of web text.
     """,
 )
