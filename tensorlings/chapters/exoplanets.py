@@ -25,6 +25,7 @@ from ..engine import (
     small_tensor,
 )
 from ..text import prose, source_file
+from .tensors import fastest_seconds
 
 EXOPLANETS = Chapter(
     folder="14_exoplanets",
@@ -151,14 +152,23 @@ PLANETS1_LESSON = prose(
     are tests a vetter runs, whether odd and even dips differ in depth, and how
     far the dip's light sits from the star's position.
 
+    The archive holds the vetting's own answer too. Four yes or no flags,
+    `koi_fpflag_nt`, `koi_fpflag_ss`, `koi_fpflag_co` and `koi_fpflag_ec`, give
+    the Robovetter's reasons for calling a signal a false positive.
+    `koi_score` is the fraction of its runs that called the signal a
+    candidate. A model given them would read the answer off them instead of
+    learning from the measurements. Such a column is called a leak, and these
+    are left out.
+
     The table leaves a measurement empty when it has none, and those become
     `nan`, not a number. 225 rows hold one, and the model can't use them.
 
     There is no test set given, so the split makes all three. The last 1,000
     shuffled rows go to test, the 1,000 before them to validation.
 
-    The measurements sit on wildly different scales. Depth runs past 900,000,
-    while nine in ten impact parameters stay under 1.2. So every column gets
+    The measurements sit on wildly different scales. Depth runs past 900,000.
+    The impact parameter, how far from the star's centre the planet crosses
+    in star radii, stays under 1.2 for nine signals in ten. So every column gets
     standardized, as descent4 did, with the training set's mean and spread.
     Validation and test use the training numbers too, since a model in use
     never sees its new data ahead of time.
@@ -416,9 +426,10 @@ PLANETS2_LESSON = prose(
     first loss is `log(2)`, about 0.693. Karpathy's recipe for training lists
     this check among its first.
 
-    With minibatches of 64, ten epochs over the 5,829 training signals take
-    about a second, and reach 88.6% on validation. Over five shuffles of the
-    table the model lands between 86.8% and 89.0%, where guessing gets 50%.
+    Train with minibatches of 64 and a learning rate of 0.5. Ten epochs over
+    the 5,829 training signals take under half a second, and reach 88.6% on
+    validation. Over five shuffles of the table the model lands between 86.8%
+    and 89.0%, where guessing gets 50%.
 
     Since every column was standardized, the weights compare. The push of a
     feature toward false positive is `W[:, 1] - W[:, 0]`, and the largest
@@ -637,6 +648,24 @@ def check_planets2(checker: Checker) -> None:
         description="trains softmax regression past 85 percent on the validation set",
         run=check_trained_on_kepler,
     )
+    # The accuracy alone passes a loop that steps on every row at once, or on softmax's probabilities.
+    check_on_inputs(
+        checker=checker,
+        function="train",
+        description="steps on the cross entropy of each minibatch's rows",
+        inputs=(
+            (
+                Described(small_tensor(177, 10, 4) / 3, "x with 10 rows of 4 features"),
+                Described(torch.tensor([0, 1, 1, 0, 1, 0, 0, 1, 1, 0]), "y"),
+                3,
+                4,
+                0.5,
+                seeded(2),
+            ),
+        ),
+        reference=reference_train,
+        expect=expect_parts("W", "b"),
+    )
     check_on_inputs(
         checker=checker,
         function="accuracy",
@@ -711,13 +740,14 @@ PLANETS3_LESSON = prose(
 
     The loss shows overfitting best here, so `pick_strength` chooses the
     strength with the lowest validation loss. Then the test set gets used,
-    once.
+    once. Over the five shuffles, the picked strength scores 86.3% on test,
+    where no decay scores 84.2%. Its test loss is lower on all five.
 
     A **confusion matrix** counts, for every true class and every predicted
     class, how many examples had that pair. The diagonal holds the right
-    answers. On the first shuffle the picked strength is 0.3, and the test
-    set gives 83.6%. Of 501 false positives, 137 pass as planets, while only
-    27 of 499 planet candidates get thrown out.
+    answers. On the first shuffle the picked strength is 0.3. Of its 501 test
+    false positives, 137 pass as planets, while only 27 of 499 planet
+    candidates get thrown out.
 
     ```python
     counts = torch.zeros(2, 2, dtype=torch.long)
@@ -997,7 +1027,8 @@ def best_small_strength(seed: int) -> float:
 
 
 class RecordingFunctional:
-    """Stands in for the file's F during a call, noting whether autograd was recording at each cross entropy."""
+    """Stands in for the file's F during a call, noting whether each cross entropy it gives joined an autograd record.
+    Taken under torch.no_grad() or from detached W and b, it doesn't."""
 
     def __init__(self) -> None:
         self.recording: list[bool] = []
@@ -1007,9 +1038,10 @@ class RecordingFunctional:
         *arguments: object,
         **keywords: object,
     ) -> Tensor:
-        self.recording.append(torch.is_grad_enabled())
+        loss = F.cross_entropy(*arguments, **keywords)
+        self.recording.append(loss.requires_grad)
 
-        return F.cross_entropy(*arguments, **keywords)
+        return loss
 
     def __getattr__(
         self,
@@ -1191,6 +1223,12 @@ def measure_exoplanets(seeds: range = range(5)) -> dict[str, object]:
 
         results["planets2 validation accuracies"] = accuracies
 
+        sets = kepler_sets(0)
+        results["planets2 seconds for ten epochs, fastest of 5"] = fastest_seconds(
+            run=lambda: reference_train(sets["train_x"], sets["train_y"], 10, 64, 0.5, torch.Generator().manual_seed(1)),
+            repeats=5,
+        )
+
         table = {strength: ([], [], []) for strength in STRENGTHS}
 
         for seed in seeds:
@@ -1205,6 +1243,26 @@ def measure_exoplanets(seeds: range = range(5)) -> dict[str, object]:
             strength: tuple(sum(values) / len(values) for values in columns) for strength, columns in table.items()
         }
         results["planets3 validation losses by seed"] = {strength: columns[2] for strength, columns in table.items()}
+
+        # The picked strength against no decay, each measured once on every shuffle's test set.
+        picked_scores, plain_scores = [], []
+
+        for seed in seeds:
+            sets = kepler_sets(seed)
+            picked = small_models(seed)[best_small_strength(seed)]
+            plain = small_models(seed)[0.0]
+            picked_scores.append((accuracy_of(sets["small_test_x"], sets["test_y"], *picked), loss_of(sets["small_test_x"], sets["test_y"], *picked)))
+            plain_scores.append((accuracy_of(sets["small_test_x"], sets["test_y"], *plain), loss_of(sets["small_test_x"], sets["test_y"], *plain)))
+
+        results["planets3 test accuracy and loss by shuffle, picked strength"] = picked_scores
+        results["planets3 test accuracy and loss by shuffle, no decay"] = plain_scores
+        results["planets3 mean test accuracy, picked and no decay"] = (
+            sum(score[0] for score in picked_scores) / len(picked_scores),
+            sum(score[0] for score in plain_scores) / len(plain_scores),
+        )
+        results["planets3 shuffles where the picked strength has the lower test loss"] = sum(
+            picked[1] < plain[1] for picked, plain in zip(picked_scores, plain_scores)
+        )
 
         sets = kepler_sets(0)
         strength = best_small_strength(0)

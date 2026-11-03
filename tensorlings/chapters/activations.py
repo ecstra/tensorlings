@@ -3,14 +3,28 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
 from ..course import Chapter, Exercise
-from ..engine import Checker, Described, check_on_inputs, expect_close, expect_tensor, expect_value, seeded, small_tensor
+from ..engine import (
+    Checker,
+    Described,
+    Mismatch,
+    check_on_inputs,
+    expect_close,
+    expect_tensor,
+    expect_value,
+    reject_missing_return,
+    seeded,
+    small_tensor,
+)
 from ..text import prose, source_file
+from .tensors import pinned_threads
 
 ACTIVATIONS = Chapter(
     folder="16_activations",
@@ -229,7 +243,9 @@ RELU2_LESSON = prose(
     raising a feature always moves the output the same way, whatever the other
     feature is. Trained on these points, a
     Linear model ends up giving 0.5 for every point. That is a mean squared
-    error of 0.25, the best a straight answer can do.
+    error of 0.25, the best a straight answer can do. Two Linears in a row,
+    with 8 neurons between them, also end at 0.25 from all 10 random starts
+    tried, as linear3 said they must.
 
     With 8 hidden neurons and ReLU between two Linears, gradient descent drives
     the error to almost 0. Some neurons switch on for one point and off for
@@ -503,8 +519,22 @@ ACTIVATIONS1_LESSON = prose(
     gradient and stops learning. This is saturation. A stack of sigmoid layers
     multiplies many of those small derivatives together, and the gradient
     reaching the first layers all but vanishes. ReLU's derivative is 1 for any
-    positive input, which is the main reason it replaced them in hidden
-    layers.
+    positive input.
+
+    Here are six layers of 64 neurons with each activation between them,
+    sorting 200 points on two spirals wound round each other. Each trained
+    for 3000 steps of gradient descent from PyTorch's starting weights, over 5
+    seeds. The gradient column is from the first step.
+
+    | Between the layers | First layer's gradient over the last's | Final loss | Training accuracy |
+    |---|---|---|---|
+    | sigmoid | 0.00008 | 0.692 | 54% |
+    | tanh | 0.11 | 0.220 | 90% |
+    | ReLU | 0.065 | 0.018 | 99% |
+
+    The sigmoid stack never leaves the loss of a blind guess, `log(2)`. Tanh
+    learns slowly, and ReLU fits the spirals. That is the main reason ReLU
+    replaced them in hidden layers.
 
     They still have jobs. A sigmoid gives a yes or no probability, or a gate
     that scales a signal between off and on. A tanh gives a value held between
@@ -576,6 +606,50 @@ ACTIVATIONS1_SOLUTION = source_file(
 )
 
 
+class Without:
+    """Stands in for a module the file imported, during one call, so a function its TODO rules out fails by name."""
+
+    def __init__(
+        self,
+        module: object,
+        banned: str,
+        message: str,
+    ) -> None:
+        self.module = module
+        self.banned = banned
+        self.message = message
+
+    def __getattr__(
+        self,
+        name: str,
+    ) -> object:
+        if name == self.banned:
+            raise Mismatch(self.message)
+
+        return getattr(self.module, name)
+
+
+def expect_without(
+    found: object,
+    imported_as: str,
+    banned: str,
+    message: str,
+) -> None:
+    """Calls found with the module the file imported as imported_as standing in, so a call to banned fails."""
+    original = found.__globals__.get(imported_as)
+    found.__globals__[imported_as] = Without(original, banned, message)
+
+    try:
+        actual = found(torch.tensor([-2.0, 0.0, 1.5]))
+    finally:
+        found.__globals__[imported_as] = original
+
+    reject_missing_return(
+        call=f"{found.__name__}(tensor([-2.0, 0.0, 1.5]))",
+        actual=actual,
+    )
+
+
 def check_activations1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
@@ -587,6 +661,16 @@ def check_activations1(checker: Checker) -> None:
         ),
         reference=torch.sigmoid,
         expect=expect_tensor,
+    )
+    checker.test(
+        function="sigmoid",
+        description="works from the formula, without torch.sigmoid",
+        run=lambda found: expect_without(
+            found=found,
+            imported_as="torch",
+            banned="sigmoid",
+            message="sigmoid calls torch.sigmoid, which its TODO rules out. Write the formula with torch.exp.",
+        ),
     )
     check_on_inputs(
         checker=checker,
@@ -665,8 +749,22 @@ GELU1_LESSON = prose(
     `F.gelu(x, approximate="tanh")` computes that one.
 
     A close cousin is SiLU, `x * sigmoid(x)`, which lets the input through
-    weighted by a sigmoid instead. Llama and most current language models use
-    it, inside a gated layer that Section 7 builds.
+    weighted by a sigmoid instead. The same paper named it, and `F.silu(x)`
+    computes it. Llama and most current language models use it, inside a gated
+    layer that Section 7 builds.
+
+    Why not ReLU? A ReLU neuron whose input is below 0 on every example gets
+    no gradient, so it never comes back. GELU and SiLU still pass a little
+    gradient below 0. Here is relu2's XOR net with 4 hidden neurons, trained
+    from 100 random starts.
+
+    | Between the layers | Starts stuck above an error of 0.01 | Mean final error |
+    |---|---|---|
+    | ReLU | 37 of 100 | 0.061 |
+    | GELU | 0 of 100 | 0.000 |
+    | SiLU | 0 of 100 | 0.000 |
+
+    Every stuck ReLU run has a neuron that is off on all four points.
     """,
 )
 
@@ -745,6 +843,17 @@ def check_gelu1(checker: Checker) -> None:
             expect=expect_tensor,
         )
 
+    checker.test(
+        function="gelu",
+        description="works from the paper's formula, without F.gelu",
+        run=lambda found: expect_without(
+            found=found,
+            imported_as="F",
+            banned="gelu",
+            message="gelu calls F.gelu, which its TODO rules out. Write x times Phi(x) with torch.erf.",
+        ),
+    )
+
 
 GELU1 = Exercise(
     name="gelu1",
@@ -789,6 +898,19 @@ ACTIVATIONS2_LESSON = prose(
     a negative number, so a model predicting temperatures could never say -5.
     A sigmoid can never give more than 1, so a model counting things would top
     out at 1. The model trains, the loss stops falling, and nothing says why.
+    Here is Linear, ReLU, Linear with 32 hidden neurons, fitted to 200 points
+    by gradient descent, over 5 seeds.
+
+    | Target | Output activation | Final error |
+    |---|---|---|
+    | temperatures from -5 to 5 | none | 0.050 |
+    | temperatures from -5 to 5 | ReLU | 13.0 |
+    | counts from 0 to 4 | none | 0.000 |
+    | counts from 0 to 4 | sigmoid | 2.25 |
+
+    With ReLU at the output, the temperature model does no better than always
+    guessing the mean temperature, an error of 13.0. The sigmoid model never
+    counts past 1.
 
     So pick the output activation from what the answer has to look like. This
     rule comes back whenever you design a model, in Section 14 too.
@@ -1003,9 +1125,9 @@ SOFT1_SOURCE = source_file(
         ...
 
 
-    # TODO: Finish the loop. Each step takes the loss, the sum of the squared
-    #   differences between soft_pick's result and target, then one gradient
-    #   descent step on scores with learning rate lr.
+    # TODO: Finish the two lines in the loop. Each step takes the loss, the sum
+    #   of the squared differences between soft_pick's result and target, then
+    #   one gradient descent step on scores with learning rate lr.
     def fit_scores(
         scores: Tensor,
         values: Tensor,
@@ -1017,7 +1139,12 @@ SOFT1_SOURCE = source_file(
         scores = scores.clone().requires_grad_()
 
         for step in range(steps):
-            ...
+            loss = ...
+            loss.backward()
+
+            with torch.no_grad():
+                ...
+                scores.grad = None
 
         return scores.detach()
     ''',
@@ -1062,7 +1189,7 @@ SOFT1_SOLUTION = source_file(
 
             with torch.no_grad():
                 scores -= lr * scores.grad
-                scores.grad.zero_()
+                scores.grad = None
 
         return scores.detach()
     ''',
@@ -1137,8 +1264,8 @@ SOFT1 = Exercise(
         "soft_step": "Divide x by the temperature, then take torch.sigmoid.",
         "soft_pick": "torch.softmax of the scores over the temperature with dim=0 gives one weight per row. "
         "Then @ values sums the rows with those weights.",
-        "fit_scores": "Take the loss with soft_pick and target and call loss.backward(). Then inside "
-        "torch.no_grad(), take lr * scores.grad from scores and zero the gradient, as relu2's loop does.",
+        "fit_scores": "The loss is the sum, with .sum(), of the squared differences between soft_pick's result and "
+        "target. The step takes lr * scores.grad away from scores with -=, as relu2's loop does.",
     },
     introduces=(),
     check=check_soft1,
@@ -1320,3 +1447,168 @@ SOFT2 = Exercise(
     introduces=(),
     check=check_soft2,
 )
+
+
+# ---------------------------------------------------------------------------
+# The runs behind the lessons
+# ---------------------------------------------------------------------------
+
+
+def xor_net(
+    activation: Callable[[Tensor], Tensor],
+    hidden: int,
+    seed: int,
+    steps: int = 2000,
+    learning_rate: float = 0.1,
+) -> tuple[float, int]:
+    """relu2's Linear, activation, Linear on XOR, from relu2's start and with its training. Gives the final error
+    and how many hidden neurons ended at or below 0 on all four points, where ReLU passes no gradient."""
+    generator = torch.Generator().manual_seed(seed)
+    W1 = torch.randn(hidden, 2, generator=generator).requires_grad_()
+    b1 = torch.zeros(hidden, requires_grad=True)
+    W2 = (torch.randn(1, hidden, generator=generator) / math.sqrt(hidden)).requires_grad_()
+    b2 = torch.zeros(1, requires_grad=True)
+    error = train_with([W1, b1, W2, b2], lambda x: activation(x @ W1.T + b1) @ W2.T + b2, XOR_X, XOR_Y, steps, learning_rate)
+
+    with torch.no_grad():
+        off = int(((XOR_X @ W1.T + b1) <= 0).all(dim=0).sum())
+
+    return error, off
+
+
+def measure_relu2(seeds: range = range(10)) -> dict[str, object]:
+    """relu2's numbers. One Linear on XOR, Linear, ReLU, Linear with 8 neurons, and two Linears with 8 neurons
+    between them and no activation, over the seeds."""
+    with pinned_threads():
+        return {
+            "one Linear": reference_fit_linear(XOR_X, XOR_Y, 2000, 0.1),
+            "Linear, ReLU, Linear, seed 0": reference_fit_relu_net(XOR_X, XOR_Y, 8, 2000, 0.1, torch.Generator().manual_seed(0)),
+            "two Linears by seed": [xor_net(lambda x: x, 8, seed)[0] for seed in seeds],
+        }
+
+
+def spirals(
+    seed: int,
+    count: int = 200,
+) -> tuple[Tensor, Tensor]:
+    """Points on two spirals wound round each other, one class per spiral, with a little noise."""
+    generator = torch.Generator().manual_seed(seed)
+    turn = torch.rand(count, generator=generator) * 3 * math.pi
+    labels = torch.randint(0, 2, (count,), generator=generator)
+    radius = turn / (3 * math.pi)
+    angle = turn + labels * math.pi
+    points = torch.stack([radius * torch.cos(angle), radius * torch.sin(angle)], dim=1)
+
+    return points + 0.02 * torch.randn(count, 2, generator=generator), labels
+
+
+def deep_spiral_run(
+    activation: Callable[[Tensor], Tensor],
+    seed: int,
+    depth: int = 6,
+    width: int = 64,
+    steps: int = 3000,
+    learning_rate: float = 0.1,
+) -> tuple[float, float, float]:
+    """depth Linears of width neurons with the activation after each, then a Linear to the two classes, with
+    PyTorch's starting weights and plain gradient descent on the spirals. Gives the first layer's gradient over the
+    last layer's at the first step, then the final loss and the training accuracy."""
+    torch.manual_seed(seed)
+    layers = nn.ModuleList([nn.Linear(2, width)] + [nn.Linear(width, width) for _ in range(depth - 1)] + [nn.Linear(width, 2)])
+    x, y = spirals(100 + seed)
+
+    def scores(points: Tensor) -> Tensor:
+        for layer in layers[:-1]:
+            points = activation(layer(points))
+
+        return layers[-1](points)
+
+    for step in range(steps):
+        F.cross_entropy(scores(x), y).backward()
+
+        if step == 0:
+            ratio = (layers[0].weight.grad.norm() / layers[-1].weight.grad.norm()).item()
+
+        with torch.no_grad():
+            for parameter in layers.parameters():
+                parameter -= learning_rate * parameter.grad
+                parameter.grad = None
+
+    with torch.no_grad():
+        final = scores(x)
+
+    return ratio, F.cross_entropy(final, y).item(), (final.argmax(dim=1) == y).float().mean().item()
+
+
+def measure_activations1(seeds: range = range(5)) -> dict[str, tuple[float, float, float]]:
+    """activations1's table. For sigmoid, tanh and ReLU between six layers on the spirals, averaged over the seeds,
+    the first layer's gradient over the last's at the start, the final loss and the training accuracy."""
+    results: dict[str, tuple[float, float, float]] = {}
+
+    with pinned_threads():
+        for name, activation in (("sigmoid", torch.sigmoid), ("tanh", torch.tanh), ("ReLU", torch.relu)):
+            runs = [deep_spiral_run(activation, seed) for seed in seeds]
+            results[name] = tuple(sum(run[column] for run in runs) / len(runs) for column in range(3))
+
+    return results
+
+
+def measure_gelu1(
+    hidden: int = 4,
+    seeds: range = range(100),
+) -> dict[str, tuple[int, float, int]]:
+    """gelu1's table. relu2's XOR net with 4 hidden neurons and each activation, over 100 starts. For each, the runs
+    stuck above an error of 0.01, the mean final error, and the stuck runs with a neuron off on all four points."""
+    results: dict[str, tuple[int, float, int]] = {}
+
+    with pinned_threads():
+        for name, activation in (("ReLU", torch.relu), ("GELU", F.gelu), ("SiLU", F.silu)):
+            runs = [xor_net(activation, hidden, seed) for seed in seeds]
+            stuck = [run for run in runs if run[0] > 0.01]
+            results[name] = (len(stuck), sum(run[0] for run in runs) / len(runs), sum(run[1] > 0 for run in stuck))
+
+    return results
+
+
+def output_run(
+    target: Callable[[Tensor], Tensor],
+    output: Callable[[Tensor], Tensor],
+    seed: int,
+    hidden: int = 32,
+    steps: int = 4000,
+    learning_rate: float = 0.01,
+) -> tuple[float, float]:
+    """Linear, ReLU, Linear with the given output activation, fitted to 200 points of target by gradient descent on
+    the mean squared error. Gives the final error and the targets' variance, the error of always guessing their mean."""
+    generator = torch.Generator().manual_seed(seed)
+    x = torch.rand(200, 1, generator=generator) * 2 - 1
+    y = target(x).squeeze(1)
+    torch.manual_seed(seed)
+    first, second = nn.Linear(1, hidden), nn.Linear(hidden, 1)
+    parameters = [*first.parameters(), *second.parameters()]
+    error = train_with(parameters, lambda x: output(second(torch.relu(first(x)))), x, y, steps, learning_rate)
+
+    return error, y.var(unbiased=False).item()
+
+
+def measure_activations2(seeds: range = range(5)) -> dict[str, tuple[float, float]]:
+    """activations2's table. Temperatures from -5 to 5 and counts from 0 to 4, each with the right output activation
+    and a wrong one, averaged over the seeds. Each entry is the final error and the error of guessing the mean."""
+    targets = {
+        "temperature": lambda x: 5 * torch.sin(3 * x),
+        "count": lambda x: 2 + 2 * x,
+    }
+    cases = (
+        ("temperature", "none", lambda scores: scores),
+        ("temperature", "ReLU", torch.relu),
+        ("count", "none", lambda scores: scores),
+        ("count", "sigmoid", torch.sigmoid),
+    )
+    results: dict[str, tuple[float, float]] = {}
+
+    with pinned_threads():
+        for target, name, output in cases:
+            runs = [output_run(targets[target], output, seed) for seed in seeds]
+            results[f"{target}, {name}"] = (sum(run[0] for run in runs) / len(runs), sum(run[1] for run in runs) / len(runs))
+
+    return results

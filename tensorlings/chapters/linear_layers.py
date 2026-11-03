@@ -564,9 +564,11 @@ LINEAR2_LESSON = prose(
     """
     Now build Linear as a module, then match PyTorch's own.
 
-    The weights can't start at zero. Every neuron would then compute the same
-    thing and get the same gradient, and they would stay copies of each other
-    forever. So they start random. PyTorch draws each weight and each bias at
+    Starting at zero works for a lone layer, like the softmax regression of
+    planets2, since each output gets its own error. In a stack of layers it
+    fails. Every neuron of a layer that feeds another would compute the same
+    thing and get the same gradient. They would stay copies of each other
+    forever. So weights start random. PyTorch draws each weight and each bias at
     random between `-1 / sqrt(in_features)` and `1 / sqrt(in_features)`, with
     every value in between equally likely. That is called a uniform draw. The
     initialization chapter shows why that size.
@@ -582,8 +584,10 @@ LINEAR2_LESSON = prose(
 
     To compare with PyTorch's layer, copy its parameters into yours. A
     parameter's numbers can be overwritten in place with `.copy_(other)`.
-    Changing a parameter by hand is not part of any calculation to
-    differentiate, so it goes inside `with torch.no_grad():`.
+    Setting `mine.weight = layer.weight` instead makes both modules share one
+    tensor, so training one would change the other. Changing a parameter by
+    hand is not part of any calculation to differentiate, so it goes inside
+    `with torch.no_grad():`.
 
     ```python
     layer = nn.Linear(3, 4)
@@ -694,6 +698,17 @@ def check_my_linear(found: type) -> None:
             expected=F.linear(x, module.weight.detach(), module.bias.detach()),
         )
 
+    # 2000 even draws all but surely reach past 0.8 of the bound on both sides, which a one sided or tiny bias never does.
+    call = "MyLinear(16, 2000)"
+    bias = expect_parameter(expect_module(call, found(16, 2000)), call, "bias", (2000,)).detach()
+    bound = 1 / math.sqrt(16)
+
+    if bias.min() > -0.8 * bound or bias.max() < 0.8 * bound:
+        raise Mismatch(
+            f"The bias of {call} runs from {bias.min():.3f} to {bias.max():.3f}, but it should be drawn evenly "
+            f"between -{bound:.3f} and {bound:.3f}, the same bounds as the weights.",
+        )
+
 
 def check_copy_parameters(found: object) -> None:
     torch.manual_seed(1)
@@ -707,6 +722,12 @@ def check_copy_parameters(found: object) -> None:
             actual=getattr(mine, name).detach(),
             expected=getattr(layer, name).detach(),
         )
+
+        if getattr(mine, name).data_ptr() == getattr(layer, name).data_ptr():
+            raise Mismatch(
+                f"After copy_parameters, mine.{name} shares layer.{name}'s numbers, so training one would change the "
+                "other. Copy the numbers in place with .copy_.",
+            )
 
 
 def check_linear2(checker: Checker) -> None:

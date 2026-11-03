@@ -20,6 +20,7 @@ from ..engine import (
 )
 from ..text import prose, source_file
 from .gradient_descent import linear_data, named
+from .tensors import pinned_threads
 
 GENERALIZATION = Chapter(
     folder="13_generalization",
@@ -1038,6 +1039,21 @@ DECAY2_LESSON = prose(
     Too little decay overfits and too much underfits. Even a tiny strength
     tames the degree 9 fit.
 
+    A polynomial also has its degree to turn down, as overfitting1 did. A net
+    has no such dial. Here is one of the kind Section 3 builds, with 301
+    parameters, fitted to the same 10 points from 5 random starting weights.
+
+    | Strength | Training error | Validation error |
+    |---|---|---|
+    | 0 | 0.000 | 0.193 |
+    | 0.0001 | 0.000 | 0.189 |
+    | 0.001 | 0.000 | 0.128 |
+    | 0.01 | 0.011 | 0.060 |
+    | 0.1 | 0.202 | 0.149 |
+
+    Strength 0.01 cuts the validation error from 0.193 to 0.060, lower on all
+    5 starts. Decay is the dial for a model with no size to pick.
+
     Numbers chosen by trying them and comparing on the validation set are
     called **hyperparameters**. Gradient descent learns the parameters, and
     you choose the hyperparameters. The learning rate, the minibatch size, the
@@ -1046,6 +1062,11 @@ DECAY2_LESSON = prose(
     Once the choice is made, measure the chosen model on the test set, once,
     and report that number. It is the only honest estimate of how the model
     does on new data, since nothing was chosen by looking at it.
+
+    Choosing on the test set makes its number too good. On 30 new points, the
+    degree 9 fit with the strength picked on validation, 0.001, scores 0.154.
+    Picking the strength on those 30 points instead chooses 0.01 and reports
+    0.133.
     """,
 )
 
@@ -1259,12 +1280,14 @@ def check_decay2(checker: Checker) -> None:
         reference=lambda tx, ty, vx, vy, strengths: min(strengths, key=lambda strength: reference_validation_error(tx, ty, vx, vy, strength)),
         expect=expect_close,
     )
+    # On the second test set, picking on the test set chooses 0.01 instead of 0.001, so that leak fails.
     check_on_inputs(
         checker=checker,
         function="test_error",
         description="picks on the validation set and measures once on the test set",
         inputs=(
             (*sets[0], *named_powers(8, 30, "test"), STRENGTHS),
+            (*sets[0], *named_powers(20, 30, "test"), STRENGTHS),
         ),
         reference=lambda tx, ty, vx, vy, test_x, test_y, strengths: mse(
             test_x @ ridge(tx, ty, min(strengths, key=lambda s: reference_validation_error(tx, ty, vx, vy, s)))[0]
@@ -1530,3 +1553,84 @@ QUIZ3 = Exercise(
     introduces=(),
     check=check_quiz3,
 )
+
+
+# ---------------------------------------------------------------------------
+# The runs behind decay2's lesson
+# ---------------------------------------------------------------------------
+
+LESSON_STRENGTHS = [0.0, 0.0001, 0.001, 0.01, 0.1]
+
+
+def wide_net_errors(
+    seed: int,
+    strength: float,
+    hidden: int = 100,
+    steps: int = 20000,
+    learning_rate: float = 0.002,
+) -> tuple[float, float]:
+    """Linear, tanh, Linear with 100 hidden neurons, 301 parameters, fitted to overfitting1's 10 points by gradient
+    descent with weight decay on both weight matrices. The first layer starts with spread 10 and the second with
+    spread 4 over the square root of the width, so the net starts steep and can fit every point with no degree to
+    turn down. Gives the training and validation errors."""
+    train_x, train_y = curve(0, 10)
+    validation_x, validation_y = curve(1, 50)
+    train_x, validation_x = train_x.unsqueeze(1), validation_x.unsqueeze(1)
+    generator = torch.Generator().manual_seed(seed)
+    W1 = (torch.randn(hidden, 1, generator=generator, dtype=torch.float64) * 10).requires_grad_()
+    b1 = (torch.randn(hidden, generator=generator, dtype=torch.float64) * 10).requires_grad_()
+    W2 = (torch.randn(1, hidden, generator=generator, dtype=torch.float64) * 4 / hidden**0.5).requires_grad_()
+    b2 = torch.zeros(1, dtype=torch.float64, requires_grad=True)
+
+    def net(x: Tensor) -> Tensor:
+        return (torch.tanh(x @ W1.T + b1) @ W2.T + b2).squeeze(1)
+
+    for _ in range(steps):
+        loss = ((net(train_x) - train_y) ** 2).mean() + strength * ((W1**2).sum() + (W2**2).sum())
+        loss.backward()
+
+        with torch.no_grad():
+            for parameter in (W1, b1, W2, b2):
+                parameter -= learning_rate * parameter.grad
+                parameter.grad = None
+
+    with torch.no_grad():
+        return mse(net(train_x), train_y), mse(net(validation_x), validation_y)
+
+
+def measure_decay2(seeds: range = range(5)) -> dict[str, object]:
+    """Every number in decay2's lesson. The wide net takes about six minutes."""
+    with pinned_threads():
+        train_x, train_y = curve(0, 10)
+        validation_x, validation_y = curve(1, 50)
+        x, validation_powers = powers(train_x, 9), powers(validation_x, 9)
+        results: dict[str, object] = {}
+
+        polynomial = {}
+
+        for strength in LESSON_STRENGTHS:
+            w, b = ridge(x, train_y, strength)
+            polynomial[strength] = (mse(x @ w + b, train_y), mse(validation_powers @ w + b, validation_y))
+
+        results["degree 9 table, training and validation error"] = polynomial
+
+        net = {}
+        net_by_seed = {}
+
+        for strength in LESSON_STRENGTHS:
+            runs = [wide_net_errors(seed, strength) for seed in seeds]
+            net[strength] = (sum(run[0] for run in runs) / len(runs), sum(run[1] for run in runs) / len(runs))
+            net_by_seed[strength] = [run[1] for run in runs]
+
+        results["wide net table, training and validation error over the seeds"] = net
+        results["wide net validation error by seed"] = net_by_seed
+
+        # The check's second test set, where picking on the test set picks another strength.
+        test_x, test_y = curve(20, 30)
+        test_powers = powers(test_x, 9)
+        honest = min(STRENGTHS, key=lambda strength: reference_validation_error(x, train_y, validation_powers, validation_y, strength))
+        leaky = min(STRENGTHS, key=lambda strength: reference_validation_error(x, train_y, test_powers, test_y, strength))
+        results["honest pick and its test error"] = (honest, reference_validation_error(x, train_y, test_powers, test_y, honest))
+        results["pick on the test set and its test error"] = (leaky, reference_validation_error(x, train_y, test_powers, test_y, leaky))
+
+    return results
