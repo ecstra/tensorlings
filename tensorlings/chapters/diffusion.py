@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import contextlib
+import copy
 import math
 import textwrap
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 
 import torch
 import torch.nn as nn
@@ -108,6 +110,8 @@ class Denoiser(nn.Module):
         self.steps = steps
         self.net = nn.Sequential(
             nn.Linear(features + 16, hidden),
+            nn.SiLU(),
+            nn.Linear(hidden, hidden),
             nn.SiLU(),
             nn.Linear(hidden, hidden),
             nn.SiLU(),
@@ -297,6 +301,15 @@ def ring_distance(points: Tensor) -> float:
     return (points.norm(dim=1) - 1).abs().mean().item()
 
 
+def radius_gap(
+    points: Tensor,
+    data: Tensor,
+) -> float:
+    """How far the samples' spread of radii sits from the data's: the mean gap between the two sorted lists of
+    radii, the Wasserstein distance between them. Points squeezed onto the circle score badly, as do strays."""
+    return (points.norm(dim=1).sort().values - data.norm(dim=1).sort().values).abs().mean().item()
+
+
 def arcs(
     count: int,
     generator: torch.Generator,
@@ -326,9 +339,12 @@ def train_ring_denoiser(
     steps: int,
     predict: str = "noise",
     seed: int = 1,
+    average: nn.Module | None = None,
+    decay: float = 0.999,
 ) -> list[float]:
     """The run behind the lessons' tables, Adam at 0.001 on batches of 256 ring points. With predict "x0"
-    the model is trained to guess the data instead of the noise, for diffusion2's comparison."""
+    the model is trained to guess the data instead of the noise, for diffusion2's comparison. Given average,
+    a copy of model, it keeps that copy as an exponential moving average of the weights, which DDPM samples with."""
     _, alpha_bars = schedule()
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
     generator = torch.Generator().manual_seed(seed)
@@ -345,7 +361,41 @@ def train_ring_denoiser(
         optimizer.step()
         losses.append(loss.item())
 
+        if average is None:
+            continue
+
+        with torch.no_grad():
+            for kept, current in zip(average.parameters(), model.parameters()):
+                kept.lerp_(current, 1 - decay)
+
     return losses
+
+
+@contextlib.contextmanager
+def pinned_threads(count: int = 4) -> Iterator[None]:
+    """Pins torch to count threads for a measurement, so its numbers come out the same run to run."""
+    before = torch.get_num_threads()
+    torch.set_num_threads(count)
+
+    try:
+        yield
+    finally:
+        torch.set_num_threads(before)
+
+
+def trained_ring_model(
+    predict: str,
+    seed: int,
+    steps: int = 12000,
+) -> nn.Module:
+    """diffusion2's Denoiser trained on the ring, given back as the moving average of its weights."""
+    torch.manual_seed(seed)
+    model = REFERENCE["Denoiser"](STEPS)
+    average = copy.deepcopy(model)
+    train_ring_denoiser(model, steps, predict, seed, average)
+    average.eval()
+
+    return average
 
 
 def noise_guess(
@@ -634,13 +684,24 @@ DIFFUSION2_LESSON = prose(
     of 3.17 on CIFAR-10, the best at the time. FID measures how far a batch
     of generated images sits from real ones, so lower is better.
 
-    That edge is about images. This chapter trains on points of a 2D ring,
-    and scores 2,000 drawn points by their average distance from the ring.
-    The data itself scores 0.039, since its points sit a little off the ring.
-    After 12,000 steps of training, guessing `x_0` scored 0.035 and guessing
-    the noise 0.065. The first hugs the ring a little tighter than the data,
-    and the second strays further. Here guessing `x_0` came closer to the
-    data, so which target trains best depends on the data.
+    The ring shows the same. Draw 2,000 points from a trained model, and score
+    them by the mean gap between their sorted radii and the data's. Points
+    squeezed onto the circle score badly, since the data spreads a little
+    off it, and so do points that stray.
+
+    Each model below trained 12,000 steps on three seeds. DDPM kept an
+    average of its weights over training, an exponential moving average with
+    decay 0.9999. These runs sample from such an average, at 0.999.
+
+    | Guess | Gap to the data's radii | Average distance from the ring |
+    |---|---|---|
+    | The noise | 0.0048 to 0.0077 | 0.044 to 0.047 |
+    | `x_0` | 0.031 to 0.038 | 0.016 to 0.022 |
+    | A second draw of the data | 0.0014 | 0.040 |
+
+    Guessing the noise lands within a hundredth of the data. Guessing `x_0`
+    squeezes the points onto the circle, closer than the data itself sits,
+    so its gap is five times larger.
     """,
 )
 
@@ -847,20 +908,21 @@ DIFFUSION3_LESSON = prose(
     ```
 
     Here is diffusion2's model after 12,000 steps of training, drawing 2,000
-    points. The score is how far they sit from the ring on average. The data
-    itself scores 0.039 and pure noise 0.541.
+    points. The score is diffusion2's gap to the data's radii. A second draw
+    of the data scores 0.0014 and pure noise 0.49.
 
-    | Sampler | Steps | Distance from the ring |
+    | Sampler | Steps | Gap to the data's radii |
     |---|---|---|
-    | DDPM | 1,000 | 0.065 |
-    | DDIM | 100 | 0.067 |
-    | DDIM | 50 | 0.065 |
-    | DDIM | 20 | 0.058 |
-    | DDIM | 10 | 0.092 |
+    | DDPM | 1,000 | 0.0048 |
+    | DDIM | 100 | 0.0096 |
+    | DDIM | 50 | 0.014 |
+    | DDIM | 20 | 0.037 |
+    | DDIM | 10 | 0.094 |
 
-    DDIM with 20 steps matched DDPM's 1,000 here, and ran about 45 times
-    faster in two runs. The DDIM paper reports 10 to 50 times faster
-    sampling on images.
+    DDIM at 100 and 50 steps stays within 0.015 of the data, running the
+    model 10 and 20 times less than DDPM. Below that the gap grows, so each
+    skipped step trades a little quality for speed. The DDIM paper reports
+    10 to 50 times faster sampling on images.
 
     Both samplers take the model as `predict_noise(x, t)`, a function. That
     lets the same samplers serve any model, the conditional one of diffusion4
@@ -1339,3 +1401,60 @@ DIFFUSION4 = Exercise(
     introduces=(),
     check=check_diffusion4,
 )
+
+
+# ---------------------------------------------------------------------------
+# The runs behind the lessons
+# ---------------------------------------------------------------------------
+
+SAMPLES = 2000
+
+
+def scores_of(points: Tensor) -> tuple[float, float]:
+    """A batch's gap to 2,000 data points' radii, and its average distance from the circle."""
+    data = ring(SAMPLES, torch.Generator().manual_seed(8))
+
+    return radius_gap(points, data), ring_distance(points)
+
+
+def measure_targets(seeds: tuple[int, ...] = (1, 2, 3)) -> dict[str, list[tuple[float, float]]]:
+    """diffusion2's table: guessing the noise against guessing x_0, 12,000 steps each, 2,000 points drawn by DDPM
+    from the moving average of the weights, scored by scores_of. Also the data's own scores, and pure noise's."""
+    betas, alpha_bars = schedule()
+    results: dict[str, list[tuple[float, float]]] = {
+        "data": [scores_of(ring(SAMPLES, torch.Generator().manual_seed(9)))],
+        "pure noise": [scores_of(torch.randn(SAMPLES, 2, generator=torch.Generator().manual_seed(9)))],
+    }
+
+    with pinned_threads():
+        for predict in ("noise", "x0"):
+            for seed in seeds:
+                model = trained_ring_model(predict, seed)
+                samples = REFERENCE["ddpm_sample"](
+                    noise_guess(model, predict),
+                    (SAMPLES, 2),
+                    betas,
+                    alpha_bars,
+                    torch.Generator().manual_seed(7),
+                )
+                results.setdefault(predict, []).append(scores_of(samples))
+
+    return results
+
+
+def measure_samplers(seed: int = 1) -> dict[str, tuple[float, float]]:
+    """diffusion3's table: one model guessing the noise, sampled by DDPM's 1,000 steps and by DDIM at fewer."""
+    betas, alpha_bars = schedule()
+    results: dict[str, tuple[float, float]] = {}
+
+    with pinned_threads():
+        model = trained_ring_model("noise", seed)
+        predict_noise = noise_guess(model, "noise")
+        samples = REFERENCE["ddpm_sample"](predict_noise, (SAMPLES, 2), betas, alpha_bars, torch.Generator().manual_seed(7))
+        results["DDPM 1000"] = scores_of(samples)
+
+        for steps in (100, 50, 20, 10):
+            samples = REFERENCE["ddim_sample"](predict_noise, (SAMPLES, 2), alpha_bars, steps, torch.Generator().manual_seed(7))
+            results[f"DDIM {steps}"] = scores_of(samples)
+
+    return results

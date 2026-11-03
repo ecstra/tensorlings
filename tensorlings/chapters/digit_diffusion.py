@@ -741,21 +741,21 @@ DIGITS3_LESSON = prose(
 
     To score the samples, a LeNet from lenet1, trained on real digits, reads
     each one. The score is the share it reads as the digit that was asked
-    for. The LeNet gets 95.7% of real test digits right.
+    for. Trained 3,000 steps, the LeNet gets 97.8% of real test digits right.
 
     Here is the trained model from digits2, 20 samples of each digit, 50
     steps each.
 
     | Sampler | w = 0 | w = 1 | w = 2 | w = 4 |
     |---|---|---|---|---|
-    | `clipped_ddim` | 72.0% | 92.0% | 95.5% | 97.5% |
-    | Clamped, noise not worked out again | 74.0% | 31.5% | 5.0% | 1.5% |
-    | diffusion3's `ddim_sample`, no clamp | 47.5% | 65.0% | 74.5% | 81.0% |
+    | `clipped_ddim` | 71.0% | 92.5% | 95.5% | 97.5% |
+    | Clamped, noise not worked out again | 76.5% | 33.0% | 7.0% | 1.0% |
+    | diffusion3's `ddim_sample`, no clamp | 44.0% | 59.5% | 67.5% | 76.5% |
 
-    Guidance lifts `clipped_ddim` from 72% to 97.5%. At w = 4 the LeNet reads
-    the samples better than real test digits, so they look more typical than
-    real handwriting. The clamp without its second line falls apart as w
-    grows, down to 1.5%. With no clamp, guidance helps but stays well behind.
+    Guidance lifts `clipped_ddim` from 71% to 97.5%. At w = 4 the LeNet reads
+    the samples as well as it reads real test digits. The clamp without its
+    second line falls apart as w grows, down to 1%. With no clamp, guidance
+    helps but stays well behind.
 
     Ho and Salimans found the same trade. Guidance buys samples that look
     more like their class, at the cost of variety.
@@ -938,7 +938,7 @@ def judge() -> nn.Module:
     images = mnist_images()
     torch.manual_seed(0)
     model = ReferenceLeNet()
-    reference_train_lenet(model, images["train_x"], images["train_y"], 800, torch.Generator().manual_seed(1))
+    reference_train_lenet(model, images["train_x"], images["train_y"], 3000, torch.Generator().manual_seed(1))
     model.eval()
 
     return model
@@ -1042,3 +1042,66 @@ DIGITS3 = Exercise(
     check=check_digits3,
     time_limit=300,
 )
+
+
+# ---------------------------------------------------------------------------
+# The runs behind digits3's lesson
+# ---------------------------------------------------------------------------
+
+
+def clamped_only(
+    predict_noise: Callable[[Tensor, Tensor], Tensor],
+    shape: tuple[int, ...],
+    alpha_bars: Tensor,
+    steps: int,
+    generator: torch.Generator,
+) -> Tensor:
+    """clipped_ddim without its second line: the guess of x_0 is clamped, but the noise is never worked out again."""
+    x = torch.randn(shape, generator=generator)
+    times = list(range(0, len(alpha_bars), len(alpha_bars) // steps))[::-1]
+
+    with torch.no_grad():
+        for position, t in enumerate(times):
+            eps = predict_noise(x, torch.full((shape[0],), t))
+            x0 = ((x - (1 - alpha_bars[t]).sqrt() * eps) / alpha_bars[t].sqrt()).clamp(-1, 1)
+            before = alpha_bars[times[position + 1]] if position + 1 < len(times) else torch.tensor(1.0)
+            x = before.sqrt() * x0 + (1 - before).sqrt() * eps
+
+    return x
+
+
+def measure_guidance() -> dict[str, object]:
+    """The judge's share of real test digits, and digits3's table: 20 samples of each digit, 50 steps, for each
+    sampler and each w, from the trained model in checkpoints/digits2.pt."""
+    from ..data import load_mnist
+
+    before = torch.get_num_threads()
+    torch.set_num_threads(4)
+
+    try:
+        reader = judge()
+        images, labels = load_mnist("test")
+
+        with torch.no_grad():
+            real = (reader(images.float().unsqueeze(1) / 255).argmax(dim=1) == labels).float().mean().item()
+
+        model = trained_unet(DIGITS_REFERENCE["DigitUNet"])
+        model.eval()
+        wanted = torch.arange(10).repeat(20)
+        shape = (len(wanted), 1, 32, 32)
+        samplers = {
+            "clipped": DIGITS_REFERENCE["clipped_ddim"],
+            "clamped": clamped_only,
+            "plain": DIGITS_REFERENCE["ddim_sample"],
+        }
+        table: dict[tuple[str, float], float] = {}
+
+        for w in (0.0, 1.0, 2.0, 4.0):
+            for name, sampler in samplers.items():
+                predict = lambda x, t: DIGITS_REFERENCE["guided_noise"](model, x, t, wanted, NULL, w)
+                samples = sampler(predict, shape, schedule(), 50, torch.Generator().manual_seed(721))
+                table[(name, w)] = DIGITS_REFERENCE["share_right"](reader, DIGITS_REFERENCE["to_picture"](samples), wanted)
+    finally:
+        torch.set_num_threads(before)
+
+    return {"real test digits": real, "table": table}
