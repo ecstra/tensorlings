@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import contextlib
+import time
+from collections.abc import Callable, Iterator
+
 import torch
 from torch import Tensor
 
@@ -198,6 +202,9 @@ INDEXING1_LESSON = prose(
     takes the positions from `start` up to, but not including, `stop`. Leave
     out `start` to begin at 0, or `stop` to run to the end, so `x[1:]` is
     every row after the first.
+
+    `x[1, 2]` picks a single number, so it gives `tensor(6)`, a tensor with
+    no dimensions. Its shape is `()`, an empty list of sizes.
 
     Models pick parts of tensors this way all the time. When `images` holds
     ten images of shape `(10, 28, 28)`, `images[0]` is the first image and
@@ -744,6 +751,10 @@ REDUCTIONS1_LESSON = prose(
     x.sum(dim=1)    # tensor([ 6., 15.]), one total per row
     ```
 
+    The one step is also far faster. On a 1000 by 1000 grid, a loop with
+    Python's `sum` took 0.7 to 1.0 seconds in three runs. `.sum()` took about
+    0.04 milliseconds, 18,000 to 25,000 times less.
+
     `.mean()` takes `dim` the same way, so `x.mean(dim=0)` is
     `tensor([2.5000, 3.5000, 4.5000])`. It only works on floats. `.argmax()`
     gives the position of the largest entry. Without `dim` it reads a grid as
@@ -931,3 +942,68 @@ REDUCTIONS1 = Exercise(
     introduces=("reduction",),
     check=check_reductions1,
 )
+
+
+# ---------------------------------------------------------------------------
+# The runs behind the lessons
+# ---------------------------------------------------------------------------
+
+
+@contextlib.contextmanager
+def pinned_threads() -> Iterator[None]:
+    """Timings move with the thread count, so every measurement runs on 4."""
+    before = torch.get_num_threads()
+    torch.set_num_threads(4)
+
+    try:
+        yield
+    finally:
+        torch.set_num_threads(before)
+
+
+def fastest_seconds(
+    run: Callable[[], object],
+    repeats: int,
+) -> float:
+    """The quickest of several runs, since other work on the machine only ever slows a run down."""
+    times: list[float] = []
+
+    for _ in range(repeats):
+        start = time.perf_counter()
+        run()
+        times.append(time.perf_counter() - start)
+
+    return min(times)
+
+
+def measure_loop_against_sum(seeds: tuple[int, ...] = (0, 1, 2)) -> list[tuple[float, float]]:
+    """reductions1's timing: a 1000 by 1000 grid added up by the first TODO's loop with Python's sum, against
+    .sum(). Per seed, the loop's seconds, then .sum()'s."""
+    results: list[tuple[float, float]] = []
+
+    with pinned_threads():
+        for seed in seeds:
+            grid = torch.randn(1000, 1000, generator=torch.Generator().manual_seed(seed))
+
+            def loop() -> object:
+                result = 0.0
+
+                for row in grid:
+                    result = result + sum(row)
+
+                return result
+
+            results.append(
+                (
+                    fastest_seconds(
+                        run=loop,
+                        repeats=1,
+                    ),
+                    fastest_seconds(
+                        run=grid.sum,
+                        repeats=20,
+                    ),
+                ),
+            )
+
+    return results

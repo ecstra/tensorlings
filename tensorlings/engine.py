@@ -658,7 +658,7 @@ def expect_tensor(
         raise Mismatch(f"{call} is a Python {type(actual).__name__}. Turn it into a tensor with torch.tensor(...).")
 
     if not isinstance(actual, Tensor):
-        raise Mismatch(f"{call} is a {type(actual).__name__}. It should be a tensor.")
+        raise Mismatch(f"{call} is of type {type(actual).__name__}, but it should be a tensor.")
 
     small = actual.numel() <= SHOWN_ENTRIES and expected.numel() <= SHOWN_ENTRIES
 
@@ -832,7 +832,7 @@ def expect_shape(
         raise Mismatch(f"{call} is a Python {type(actual).__name__}. Turn it into a tensor with torch.tensor(...).")
 
     if not isinstance(actual, Tensor):
-        raise Mismatch(f"{call} is a {type(actual).__name__}. It should be a tensor.")
+        raise Mismatch(f"{call} is of type {type(actual).__name__}, but it should be a tensor.")
 
     fits = actual.dim() == len(shape) and all(
         wanted is None or size == wanted for size, wanted in zip(actual.shape, shape)

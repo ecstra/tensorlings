@@ -78,6 +78,9 @@ BACKPROP1_LESSON = prose(
 
     A multiplication `y = a * b` of two tensors of the same shape gives each
     input `grad_y` times the other input, entry by entry, as a `Value` did.
+    `torch.exp(x)` takes exp of every entry, as `math.exp` does for one
+    number, so `torch.exp(torch.tensor([0.0, 1.0]))` is
+    `tensor([1.0000, 2.7183])`.
 
     A sum `s = x.sum()` makes one number, and each entry of `x` moves it one
     for one. So every entry gets the same gradient, `grad_s`.
@@ -854,7 +857,8 @@ QUIZ2_SOURCE = source_file(
 
 
     # TODO: Return the position of the largest entry of the gradient of f at v,
-    #   sign included, using PyTorch's autograd. f gives a single number.
+    #   as a plain int, using PyTorch's autograd. The largest value counts, so
+    #   a partial of -8 is smaller than one of 2. f gives a single number.
     def largest_partial(
         f: Callable[[Tensor], Tensor],
         v: Tensor,

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import time
 from collections.abc import Callable
 
 import torch
@@ -22,6 +23,7 @@ from ..engine import (
 )
 from ..text import prose, source_file
 from .chain_rule import autograd_partials
+from .tensors import fastest_seconds, pinned_threads
 
 AUTOGRAD = Chapter(
     folder="05_autograd",
@@ -57,8 +59,10 @@ def expect_made_from(
     data: float,
     children: tuple[object, ...],
     op: str,
+    either_order: bool = False,
 ) -> None:
-    """A new Value with the given data, children and op."""
+    """A new Value with the given data, children and op. With either_order, the two children may come either way
+    round, since a + or a * gives the same Value whichever input comes first."""
     reject_missing_return(
         call=call,
         actual=made,
@@ -70,8 +74,13 @@ def expect_made_from(
     if not math.isclose(made.data, data, abs_tol=1e-9):
         raise Mismatch(f"({call}).data is {made.data!r}, but it should be {data!r}.")
 
-    if len(made.children) != len(children) or any(got is not wanted for got, wanted in zip(made.children, children)):
-        raise Mismatch(f"({call}).children should hold the Values it was made from, in the order they were used.")
+    same_count = len(made.children) == len(children)
+    in_order = same_count and all(got is wanted for got, wanted in zip(made.children, children))
+    swapped = either_order and same_count and all(got is wanted for got, wanted in zip(made.children, reversed(children)))
+
+    if not (in_order or swapped):
+        order = "" if either_order else ", in the order they were used"
+        raise Mismatch(f"({call}).children should hold the Values it was made from{order}.")
 
     if made.op != op:
         raise Mismatch(f"({call}).op is {made.op!r}, but it should be {op!r}.")
@@ -121,10 +130,17 @@ def check_build(
             actual=made,
         )
 
-        if not isinstance(made, value_class) or len(made.children) != 2:
+        if not isinstance(made, value_class):
             raise Mismatch(f"{call} is {value_text(made)}. It should be the Value of a * b + c.")
 
-        product = made.children[0]
+        if len(made.children) != 2:
+            raise Mismatch(
+                f"{call} is a Value made from {len(made.children)} Values, but a * b + c is made from two, the "
+                "Value of a * b and c. Build it with * and + on the Values passed in.",
+            )
+
+        # c + a * b and b * a + c build the same Value, so the product can sit on either side of the +.
+        product = made.children[1] if made.children[0] is c else made.children[0]
         expect_made_from(
             call=call,
             made=made,
@@ -132,14 +148,16 @@ def check_build(
             data=numbers[0] * numbers[1] + numbers[2],
             children=(product, c),
             op="+",
+            either_order=True,
         )
         expect_made_from(
-            call=f"the first child of {call}",
+            call=f"the product inside {call}",
             made=product,
             value_class=value_class,
             data=numbers[0] * numbers[1],
             children=(a, b),
             op="*",
+            either_order=True,
         )
 
 
@@ -175,9 +193,9 @@ AUTOGRAD1_LESSON = prose(
     a = Value(2.0)
     b = Value(-3.0)
     c = a + b
-    c.data          # -1.0
-    c.children      # (a, b)
-    c.op            # '+'
+    c.data                  # -1.0
+    c.children == (a, b)    # True, c holds a and b themselves
+    c.op                    # '+'
     ```
 
     `c` knows it is the sum of `a` and `b`. The values a value was made from
@@ -843,8 +861,9 @@ AUTOGRAD4_LESSON = prose(
     """
     PyTorch has the same machinery built in. Give a tensor
     `requires_grad=True`, and every operation on it records how its result was
-    made. `.backward()` on the final value fills `.grad` on every tensor that
-    asked for it.
+    made. `.backward()` on the final value fills `.grad` on each tensor you
+    made with `requires_grad=True`. The results of operations, like `L` below,
+    get no `.grad` of their own.
 
     ```python
     a = torch.tensor(2.0, requires_grad=True)
@@ -870,6 +889,14 @@ AUTOGRAD4_LESSON = prose(
     (v ** 2).sum().backward()
     v.grad            # tensor([2., 4., 6.]), which is 2 * v
     ```
+
+    This is far faster and more exact than nudging. Take
+    `f(v) = ((X @ v) ** 2).mean()`, with `X` a random float32 matrix of shape
+    `(64, 10000)`. derivatives3's `numeric_gradient` calls `f` twice per entry,
+    20,000 calls, and took 0.25 to 0.31 seconds in three runs. One
+    `.backward()` took 0.03 to 0.04 milliseconds, over 7,000 times less. The
+    nudged gradient was also off by 1.0 to 1.3 percent of its largest entry,
+    and autograd's by under 5 in 10 million.
 
     PyTorch's gradients add up across calls, as your `+=` does. A second
     `.backward()` adds onto the `.grad` already there. That is a trap when two
@@ -1071,3 +1098,73 @@ AUTOGRAD4 = Exercise(
     introduces=(),
     check=check_autograd4,
 )
+
+
+# ---------------------------------------------------------------------------
+# The runs behind the lessons
+# ---------------------------------------------------------------------------
+
+
+def nudged_gradient(
+    f: Callable[[Tensor], Tensor],
+    v: Tensor,
+) -> Tensor:
+    """derivatives3's numeric_gradient, a central difference with a nudge of 0.001 for every entry."""
+    gradient = torch.zeros_like(v)
+
+    for i in range(len(v)):
+        nudge = torch.zeros_like(v)
+        nudge[i] = 0.001
+        gradient[i] = (f(v + nudge) - f(v - nudge)) / 0.002
+
+    return gradient
+
+
+def measure_nudging_against_autograd(
+    size: int = 10_000,
+    seeds: tuple[int, ...] = (0, 1, 2),
+) -> list[dict[str, float]]:
+    """autograd4's comparison: the gradient of ((X @ v) ** 2).mean(), with X a random matrix of shape (64, size), in
+    float32. Per seed, the calls of f that nudging makes, each way's seconds, and each way's worst error as a fraction
+    of the largest partial, measured against autograd in float64."""
+    results: list[dict[str, float]] = []
+
+    with pinned_threads():
+        for seed in seeds:
+            generator = torch.Generator().manual_seed(seed)
+            X = torch.randn(64, size, generator=generator, dtype=torch.float64) / size ** 0.5
+            v = torch.randn(size, generator=generator, dtype=torch.float64)
+            exact = torch_gradient(lambda v: ((X @ v) ** 2).mean(), v)
+            largest = exact.abs().max().item()
+            X32 = X.float()
+            v32 = v.float()
+            calls = 0
+
+            def f(v: Tensor) -> Tensor:
+                nonlocal calls
+                calls += 1
+
+                return ((X32 @ v) ** 2).mean()
+
+            start = time.perf_counter()
+            nudged = nudged_gradient(f, v32)
+            nudging_seconds = time.perf_counter() - start
+            nudging_calls = calls
+
+            autograd_seconds = fastest_seconds(
+                run=lambda: torch_gradient(f, v32),
+                repeats=5,
+            )
+            from_autograd = torch_gradient(f, v32)
+
+            results.append(
+                {
+                    "nudging calls": nudging_calls,
+                    "nudging seconds": nudging_seconds,
+                    "autograd seconds": autograd_seconds,
+                    "nudging error": (nudged.double() - exact).abs().max().item() / largest,
+                    "autograd error": (from_autograd.double() - exact).abs().max().item() / largest,
+                },
+            )
+
+    return results

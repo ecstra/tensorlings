@@ -64,6 +64,15 @@ DERIVATIVES1_LESSON = prose(
     (f(3.001) - f(2.999)) / 0.002      # 5.999999999999339
     ```
 
+    For `x ** 2` nudging both ways is exact apart from rounding. On `x ** 3`
+    at 2, where the slope is 12, it still lands far closer.
+
+    ```python
+    g = lambda x: x ** 3
+    (g(2.001) - g(2)) / 0.001          # 12.006000999997823
+    (g(2.001) - g(1.999)) / 0.002      # 12.000000999998317
+    ```
+
     A nudge can also be too small. A float keeps about 16 significant digits,
     so a nudge of `1e-15` gets rounded.
 
@@ -221,11 +230,12 @@ def check_derivatives1(checker: Checker) -> None:
             (QUADRATIC, 0.5),
         ),
         reference=lambda f, x: (f(x + 1e-5) - f(x - 1e-5)) / 2e-5,
+        # A nudge of 0.01 misses the cubic by 1e-4, so this tolerance fails it, while 1e-3 to 1e-11 pass.
         expect=lambda call, actual, expected: expect_close(
             call=call,
             actual=actual,
             expected=expected,
-            tolerance=1e-4,
+            tolerance=1e-5,
         ),
     )
 
@@ -438,6 +448,12 @@ DERIVATIVES3_LESSON = prose(
     nudge[1] = 0.01
     (f(v + nudge) - f(v - nudge)) / 0.02    # tensor(8.0000)
     ```
+
+    A tensor like `v` holds float32 numbers, which keep about 7 significant
+    digits instead of a Python float's 16. So a tensor needs a bigger nudge.
+    Here a nudge of `1e-6` gives 7.63 for this partial of 8, and a nudge of
+    `1e-7` gives 0. A nudge of 0.01 gives 7.99999, so this file nudges by
+    0.01 and 0.001.
 
     The gradient points the way `f` grows fastest, and its negative the way `f`
     falls fastest. Training moves a model's numbers along that negative.
