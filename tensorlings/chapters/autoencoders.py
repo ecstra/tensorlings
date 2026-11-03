@@ -44,6 +44,7 @@ AUTOENCODERS = Chapter(
 
         - [Hinton and Salakhutdinov, reducing the dimensionality of data with neural networks](https://www.cs.toronto.edu/~hinton/absps/science.pdf)
         - [Vincent and colleagues, extracting and composing robust features with denoising autoencoders](https://www.cs.toronto.edu/~larocheh/publications/icml-2008-denoising-autoencoders.pdf)
+        - [Vincent and colleagues, stacked denoising autoencoders](https://jmlr.org/papers/v11/vincent10a.html)
         - [PyTorch, torch.pca_lowrank](https://docs.pytorch.org/docs/2.14/generated/torch.pca_lowrank.html)
         """,
     ),
@@ -459,7 +460,18 @@ def probe_accuracy(model: nn.Module | None) -> float:
         return (head(test_codes).argmax(dim=1) == test_y).float().mean().item()
 
 
-def bottleneck_table() -> dict[str, tuple[float, float, float]]:
+def measure_bottlenecks(seeds: range = range(3)) -> dict[int, dict[str, tuple[float, float, float]]]:
+    """autoencoder2's table for each seed, with 4 threads. Not run by any check."""
+    threads = torch.get_num_threads()
+    torch.set_num_threads(4)
+
+    try:
+        return {seed: bottleneck_table(seed) for seed in seeds}
+    finally:
+        torch.set_num_threads(threads)
+
+
+def bottleneck_table(seed: int = 0) -> dict[str, tuple[float, float, float]]:
     """The run behind autoencoder2's table: 1,500 steps on 20,000 digits, then the error on clean digits,
     the error on digits with noise of spread 0.5 measured against the clean ones, and a probe on the code."""
     x = digit_rows("train_x", 20000)
@@ -472,10 +484,10 @@ def bottleneck_table() -> dict[str, tuple[float, float, float]]:
         ("ReLU, code 1,024", 1024, False, 0.0),
         ("ReLU, code 1,024, denoising", 1024, False, 0.5),
     ):
-        torch.manual_seed(0)
+        torch.manual_seed(seed)
         model = Shallow(code, linear)
         optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
-        generator = torch.Generator().manual_seed(0)
+        generator = torch.Generator().manual_seed(seed)
 
         for _ in range(1500):
             batch = x[torch.randint(0, len(x), (128,), generator=generator)]
@@ -497,29 +509,32 @@ AUTOENCODER2_LESSON = prose(
     what digits look like.
 
     The models here have one layer each way, so a code of 1,024 numbers is
-    wider than the 784 pixels. Each trained for 1,500 steps. The noisy error
-    feeds in digits with noise of spread 0.5 added and compares the rebuild
-    with the clean digit. The probe trains a Linear head on the codes of
-    1,000 labelled digits, as a test of how useful the code is.
+    wider than the 784 pixels. Each trained for 1,500 steps, on 3 seeds. The
+    noisy error feeds in digits with noise of spread 0.5 added and compares
+    the rebuild with the clean digit.
 
-    | Autoencoder | Clean error | Noisy error | Probe |
-    |---|---|---|---|
-    | linear, code 1,024 | 0.0004 | 0.183 | 83.0% |
-    | linear, code 32 | 0.018 | 0.032 | 84.0% |
-    | ReLU, code 1,024 | 0.0030 | 0.022 | 82.6% |
-    | ReLU, code 1,024, denoising | 0.0074 | 0.013 | 87.6% |
+    | Autoencoder | Clean error | Noisy error |
+    |---|---|---|
+    | linear, code 1,024 | 0.0001 to 0.0004 | 0.182 |
+    | linear, code 32 | 0.018 | 0.032 |
+    | ReLU, code 1,024 | 0.0030 to 0.0032 | 0.022 to 0.023 |
+    | ReLU, code 1,024, denoising | 0.0074 | 0.013 |
 
     The wide linear one rebuilds clean digits almost perfectly and passes
     most of the noise through. It learned to copy. With a code of 32 it can't
-    copy, so it keeps what digits share and drops most of the noise. The wide
-    ReLU one copied less in its 1,500 steps, but its code probes no better
-    than the narrow one's. The pixels alone probe at 81.5%.
+    copy, so it keeps what digits share and drops most of the noise.
 
-    A **denoising autoencoder** removes the shortcut another way. It reads a
-    noisy digit and is scored against the clean one, so copying its input
-    can never be right. Vincent and colleagues proposed it in 2008. Here it
-    gives the best code of the four, even at 1,024 wide. These probes come
-    from one run each, so read differences of a point or two as noise.
+    A **denoising autoencoder** removes the shortcut without shrinking the
+    code. It reads a noisy digit and is scored against the clean one, so
+    copying its input can never be right. Vincent and colleagues proposed it
+    in 2008. In 2010 they showed it learns stroke detectors from digits,
+    where an ordinary autoencoder doesn't.
+
+    A probe measures what a code is worth. It trains a Linear head on the
+    codes of 1,000 labelled digits and scores 2,000 others. On the pixels
+    alone it gets 81.5%. On the two wide ReLU codes, over 3 seeds, the plain
+    one gets 82.4% to 82.7% and the denoising one 87.4% to 87.9%. The noise
+    made a better code on every seed.
 
     The same idea runs through Section 8. Masking in 62_masked_modeling is a
     kind of noise too, with the hidden part as the answer.

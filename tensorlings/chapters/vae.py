@@ -44,6 +44,7 @@ VAE = Chapter(
         - [Kingma and Welling, auto-encoding variational Bayes](https://arxiv.org/abs/1312.6114)
         - [Doersch, tutorial on variational autoencoders](https://arxiv.org/abs/1606.05908)
         - [Kingma and Welling, an introduction to variational autoencoders](https://arxiv.org/abs/1906.02691)
+        - [Ghosh and colleagues, from variational to deterministic autoencoders](https://arxiv.org/abs/1903.12436)
         """,
     ),
 )
@@ -478,22 +479,23 @@ VAE2_LESSON = prose(
     say exactly which image it came from. KL wants every code to look like the
     same standard normal draw. The model settles in between.
 
-    Here is the run behind this exercise on MNIST, with a code of 16 numbers
+    Here is the run behind this exercise on MNIST, with a code of 64 numbers
     and a hidden layer of 256. Each loss is per image, on 2,000 new images.
 
     | Steps | 0 | 400 | 2,000 |
     |---|---|---|---|
-    | Reconstruction | 550.6 | 121.4 | 92.1 |
-    | KL | 0.09 | 17.8 | 21.8 |
+    | Reconstruction | 551.4 | 129.3 | 90.0 |
+    | KL | 0.35 | 19.1 | 24.4 |
 
     The KL starts near 0, since a fresh encoder gives codes close to the
     standard normal. It rises as the codes start to carry each image.
 
     New digits need only the decoder. Draw codes from the standard normal and
     decode them. Training pulled every code toward that normal, so these
-    draws land where the decoder learned to read. After 4,000 steps, a digit
-    classifier is more than 90% sure of 43.7% of 1,000 such samples, against
-    93.9% of real images. vae3 shows why that number matters.
+    draws land where the decoder learned to read. After 4,000 steps on 3
+    seeds, a digit classifier is more than 90% sure of 43.5% to 45.0% of
+    1,000 such samples. vae3 shows what the same draws give a plain
+    autoencoder.
     """,
 )
 
@@ -618,7 +620,7 @@ def check_vae_forward(found: type) -> None:
 
 def check_vae_learns(found: type) -> None:
     train_x, _, validation_x, _ = flat_mnist()
-    model = train_vae(seeded_vae(found, 16, 256), train_x[:10000], 400, 674)
+    model = train_vae(seeded_vae(found, 64, 256), train_x[:10000], 400, 674)
     model.eval()
 
     with torch.no_grad():
@@ -743,6 +745,17 @@ def matched_codes(
     return codes.mean(dim=0) + codes.std(dim=0) * noise
 
 
+def midpoint_codes(
+    codes: Tensor,
+    count: int,
+    generator: torch.Generator,
+) -> Tensor:
+    first = torch.randint(0, len(codes), (count,), generator=generator)
+    second = torch.randint(0, len(codes), (count,), generator=generator)
+
+    return (codes[first] + codes[second]) / 2
+
+
 def decoded_share(
     decoder: nn.Module,
     classifier: nn.Module,
@@ -828,27 +841,58 @@ def train_classifier(
     return classifier
 
 
-def measure_code_spaces() -> dict[str, float]:
-    """Every number of vae2's and vae3's tables, about two minutes on a laptop CPU. Not run by any check."""
-    train_x, train_y, validation_x, validation_y = flat_mnist()
-    classifier = train_classifier(train_x, train_y)
+@functools.cache
+def judge() -> nn.Module:
+    train_x, train_y, _, _ = flat_mnist()
+
+    return train_classifier(train_x, train_y)
+
+
+def measure_code_spaces(
+    seed: int = 0,
+    code: int = 64,
+) -> dict[str, object]:
+    """Every number of vae2's and vae3's tables for one seed, with 4 threads, a few minutes on a laptop CPU. The
+    lessons give seeds 0 to 2. Not run by any check."""
+    threads = torch.get_num_threads()
+    torch.set_num_threads(4)
+
+    try:
+        return code_space_numbers(seed, code)
+    finally:
+        torch.set_num_threads(threads)
+
+
+def code_space_numbers(
+    seed: int,
+    code: int,
+) -> dict[str, object]:
+    train_x, _, validation_x, validation_y = flat_mnist()
+    classifier = judge()
     share = SHARE_REFERENCE["confident_share"]
     decoded = SHARE_REFERENCE["decoded_share"]
-    results: dict[str, float] = {
-        "classifier accuracy": (classifier(validation_x).argmax(dim=1) == validation_y).float().mean().item(),
+
+    with torch.no_grad():
+        accuracy = (classifier(validation_x).argmax(dim=1) == validation_y).float().mean().item()
+
+    results: dict[str, object] = {
+        "classifier accuracy": accuracy,
         "real images": share(classifier, validation_x[:1000], 0.9),
     }
 
-    vae = seeded_vae(VAE_REFERENCE["VAE"], 16, 256)
+    torch.manual_seed(671 + seed)
+    vae = VAE_REFERENCE["VAE"](code, 256)
     results["vae reconstruction, KL at 0"] = elbo_parts(vae, validation_x[:2000])
-    train_vae(vae, train_x, 400, 1)
+    train_vae(vae, train_x, 400, 1 + 10 * seed)
     results["vae reconstruction, KL at 400"] = elbo_parts(vae, validation_x[:2000])
-    train_vae(vae, train_x, 1600, 2)
+    train_vae(vae, train_x, 1600, 2 + 10 * seed)
     results["vae reconstruction, KL at 2000"] = elbo_parts(vae, validation_x[:2000])
-    train_vae(vae, train_x, 2000, 3)
+    train_vae(vae, train_x, 2000, 3 + 10 * seed)
+    results["vae samples"] = share(classifier, VAE_REFERENCE["sample_digits"](vae, 1000, torch.Generator().manual_seed(7)), 0.9)
 
-    autoencoder = seeded_vae(ReferenceAutoencoder, 16, 256)
-    train_autoencoder(autoencoder, train_x, 4000, 1)
+    torch.manual_seed(671 + seed)
+    autoencoder = ReferenceAutoencoder(code, 256)
+    train_autoencoder(autoencoder, train_x, 4000, 1 + 10 * seed)
 
     for name, model in (("autoencoder", autoencoder), ("vae", vae)):
         with torch.no_grad():
@@ -856,18 +900,22 @@ def measure_code_spaces() -> dict[str, float]:
 
         results[f"{name} code spread"] = codes.std(dim=0).mean().item()
         results[f"{name} own codes"] = decoded(model.decoder, classifier, codes[:1000], 0.9)
-        standard = torch.randn(1000, 16, generator=torch.Generator().manual_seed(8))
+        standard = torch.randn(1000, code, generator=torch.Generator().manual_seed(8))
         results[f"{name} standard normal"] = decoded(model.decoder, classifier, standard, 0.9)
         matched = SHARE_REFERENCE["matched_codes"](codes, 1000, torch.Generator().manual_seed(9))
         results[f"{name} matched"] = decoded(model.decoder, classifier, matched, 0.9)
+        midpoints = SHARE_REFERENCE["midpoint_codes"](codes, 1000, torch.Generator().manual_seed(10))
+        results[f"{name} midpoints"] = decoded(model.decoder, classifier, midpoints, 0.9)
 
     with torch.no_grad():
         means, log_variances = vae.encoder(train_x[:20000])
 
     own_spreads = torch.exp(0.5 * log_variances)
     drawn = means + own_spreads * torch.randn(means.shape, generator=torch.Generator().manual_seed(0))
+    kl_per_number = KL_REFERENCE["kl_to_standard"](means.unsqueeze(-1), log_variances.unsqueeze(-1)).mean(dim=0)
     results["vae own spread"] = own_spreads.mean().item()
     results["vae drawn code spread"] = drawn.std(dim=0).mean().item()
+    results["vae numbers in use"] = int((kl_per_number > 0.1).sum())
 
     return results
 
@@ -879,15 +927,14 @@ VAE3_LESSON = prose(
     the codes land.
 
     An autoencoder puts its codes wherever training pushed them. Here an
-    autoencoder and a VAE, each with a code of 16 numbers, trained 4,000
-    steps on MNIST. Across images, the autoencoder's code numbers spread
-    about 4.0 on average. The VAE's means spread about 1.0.
+    autoencoder and a VAE, each with a code of 64 numbers, trained 4,000
+    steps on MNIST, on 3 seeds. Across images, the autoencoder's code numbers
+    spread about 2.2 on average.
 
-    That 1.0 comes from a balance. Reconstruction pushes the means apart so
-    each image keeps its own code, and the KL pulls each mean toward 0. Each
-    code's own spread stays near 0.27, far below the 1 the KL asks for. Drawn
-    with that noise, the codes of all images together spread about 1.04, close
-    to the standard normal.
+    The VAE puts each image into only 22 or 23 of its 64 numbers. On the rest
+    the KL wins, the mean sits at 0 and the spread at 1, so they carry nothing
+    about the image. Drawn with their noise, the codes of all images together
+    spread about 1.01, the standard normal's own spread.
 
     A new digit means drawing a code and decoding it. A digit classifier, a
     small MLP that gets 97.4% of new images right, judges each one. The table
@@ -896,21 +943,30 @@ VAE3_LESSON = prose(
 
     | Codes drawn from | Autoencoder | VAE |
     |---|---|---|
-    | its own images' codes | 92.0% | 91.2% |
-    | the standard normal | 5.5% | 43.7% |
-    | a normal matched to its codes | 40.7% | 47.3% |
+    | its own images' codes | 94.2% to 95.1% | 92.2% to 93.8% |
+    | the standard normal | 17.0% to 22.3% | 44.3% to 46.1% |
+    | a normal matched to its codes | 24.6% to 27.0% | 46.2% to 48.1% |
+    | halfway between two images' codes | 44.4% to 46.7% | 51.3% to 52.8% |
 
     Drawn from the standard normal, the autoencoder's codes miss where its
-    decoder learned to read, and few decode to a digit the classifier
-    believes. The VAE's KL put its codes there, so many more do.
+    decoder learned to read. Even a normal matched to the mean and spread of
+    each number lands on a sure digit only a quarter of the time. Its codes
+    fill part of that normal, and the rest is holes. The VAE's KL packed its
+    codes into the standard normal, so a plain draw does nearly twice as well.
 
-    Matching the autoencoder's own codes, the mean and spread of each number,
-    closes most of that gap. So at this size the holes between codes are
-    small. What the VAE gives is a code space whose shape is known before
-    training ends, so drawing from it needs no fitting afterwards.
+    The last row tests the holes directly. Halfway between two real images'
+    codes, the VAE decodes a sure digit more often than the autoencoder, on
+    every seed.
 
-    Neither comes near real images. Both decoders blur, since binary cross
-    entropy is lowest on an average of every image a code could stand for.
+    Ghosh and colleagues measured the same gap on MNIST with FID. It scores
+    how far generated images sit from real ones, and lower is better. A VAE
+    drawn from the standard normal scored 19.21, against 58.73 for an
+    autoencoder drawn from a normal fitted to its codes. Fitting a richer
+    density to the codes after training is the other way out they study.
+
+    Both decoders blur, since binary cross entropy is lowest on an average of
+    every image a code could stand for. gan3 trains a model that doesn't
+    average.
     """,
 )
 
@@ -924,6 +980,7 @@ VAE3_SOURCE = source_file(
 
     codes = torch.tensor([[1.0, 4.0], [3.0, 8.0]])
     centre, spread = codes.mean(dim=0), codes.std(dim=0)    # tensor([2., 6.]), tensor([1.4142, 2.8284])
+    halfway = (codes[0] + codes[1]) / 2                      # tensor([2., 6.])
 
 
     # TODO: Return the share of images that classifier is more than threshold
@@ -942,6 +999,17 @@ VAE3_SOURCE = source_file(
     #   (count, size). Each number gets the mean and the spread it has over the
     #   rows of codes. Draw the noise with torch.randn and generator.
     def matched_codes(
+        codes: Tensor,
+        count: int,
+        generator: torch.Generator,
+    ) -> Tensor:
+        ...
+
+
+    # TODO: Return count codes, each halfway between two rows of codes, of
+    #   shape (count, size). Draw the first rows' ids, then the second rows',
+    #   each with torch.randint(0, len(codes), (count,), generator=generator).
+    def midpoint_codes(
         codes: Tensor,
         count: int,
         generator: torch.Generator,
@@ -971,6 +1039,7 @@ VAE3_SOLUTION = source_file(
 
     codes = torch.tensor([[1.0, 4.0], [3.0, 8.0]])
     centre, spread = codes.mean(dim=0), codes.std(dim=0)
+    halfway = (codes[0] + codes[1]) / 2
 
 
 ''' + indented(SHARE_PARTS) + '''
@@ -1089,6 +1158,17 @@ def check_vae3(checker: Checker) -> None:
         reference=SHARE_REFERENCE["matched_codes"],
         expect=expect_tensor,
     )
+    check_on_inputs(
+        checker=checker,
+        function="midpoint_codes",
+        description="gives codes halfway between two rows",
+        inputs=(
+            (small_tensor(689, 6, 3), 4, seeded(690)),
+            (small_tensor(691, 9, 2) * 3, 7, seeded(692)),
+        ),
+        reference=SHARE_REFERENCE["midpoint_codes"],
+        expect=expect_tensor,
+    )
     checker.test(
         function="decoded_share",
         description="decodes the codes and scores the images",
@@ -1108,6 +1188,8 @@ VAE3 = Exercise(
         "image's largest chance. Compare it with threshold and take the mean of the matches as floats.",
         "matched_codes": "codes.mean(dim=0) and codes.std(dim=0) give one mean and spread per number. Add the mean to "
         "the spread times torch.randn(count, codes.shape[1], generator=generator).",
+        "midpoint_codes": "Draw two id tensors in turn with torch.randint and the generator. Index codes with each, add "
+        "the two rows and halve them.",
         "decoded_share": "Decode inside torch.no_grad(), take torch.sigmoid, and pass the images to confident_share.",
     },
     introduces=(),

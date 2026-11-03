@@ -2089,6 +2089,12 @@ CASES: list[tuple[str, str, str, str]] = [
     ("design1", "recall_batch asks every sequence in one shared order", "order = torch.stack([torch.randperm(pairs, generator=generator) for _ in range(count)])", "order = torch.randperm(pairs, generator=generator).expand(count, -1)"),
     ("design4", "silent_after_one_step never zeroes the gradients", "    optimizer.step()\n    optimizer.zero_grad()\n    loss_of(copied).backward()", "    optimizer.step()\n    loss_of(copied).backward()"),
     ("design4", "silent_after_one_step zeroes the original model's gradients", "    optimizer.zero_grad()\n", "    model.zero_grad()\n"),
+    ("vae3", "midpoint_codes uses one row twice", "second = torch.randint(0, len(codes), (count,), generator=generator)", "second = first"),
+    ("vae3", "midpoint_codes adds without halving", "return (codes[first] + codes[second]) / 2", "return codes[first] + codes[second]"),
+    ("vae3", "midpoint_codes draws without the generator", "first = torch.randint(0, len(codes), (count,), generator=generator)", "first = torch.randint(0, len(codes), (count,))"),
+    ("vq2", "first_codebook takes the first rows", "picks = torch.randperm(len(vectors), generator=generator)[:codes]", "picks = torch.arange(codes)"),
+    ("vq2", "first_codebook picks rows with repeats", "picks = torch.randperm(len(vectors), generator=generator)[:codes]", "picks = torch.randint(0, len(vectors), (codes,), generator=generator)"),
+    ("vq2", "first_codebook shuffles without the generator", "picks = torch.randperm(len(vectors), generator=generator)[:codes]", "picks = torch.randperm(len(vectors))[:codes]"),
     ("conv5", "pointwise reshapes the wrong way", "return (weight @ x.reshape(c, -1)).reshape(-1, h, w)", "return (weight @ x.reshape(-1, c).T).reshape(-1, h, w)"),
 ]
 

@@ -18,6 +18,7 @@ from ..engine import (
     expect_close,
     expect_tensor,
     expect_value,
+    seeded,
     small_tensor,
 )
 from ..text import prose, source_file
@@ -41,6 +42,8 @@ VQVAE = Chapter(
         - [van den Oord, Vinyals and Kavukcuoglu, neural discrete representation learning](https://arxiv.org/abs/1711.00937)
         - [Bengio, Leonard and Courville, the straight through estimator](https://arxiv.org/abs/1308.3432)
         - [Esser, Rombach and Ommer, taming transformers for high resolution image synthesis](https://arxiv.org/abs/2012.09841)
+        - [Dhariwal and colleagues, Jukebox, on codebook collapse](https://arxiv.org/abs/2005.00341)
+        - [Zeghidour and colleagues, SoundStream, on starting the codebook](https://arxiv.org/abs/2107.03312)
         """,
     ),
 )
@@ -101,6 +104,16 @@ def codes_used(
     codes: int,
 ) -> int:
     return int((torch.bincount(tokens.flatten(), minlength=codes) > 0).sum())
+
+
+def first_codebook(
+    vectors: Tensor,
+    codes: int,
+    generator: torch.Generator,
+) -> Tensor:
+    picks = torch.randperm(len(vectors), generator=generator)[:codes]
+
+    return vectors[picks]
 '''
 
 
@@ -166,24 +179,44 @@ class TokenAutoencoder(nn.Module):
 
         return self.decoder(REFERENCE["straight_through"](z, quantized)), z, quantized, tokens
 
+    def start_codebook(
+        self,
+        images: Tensor,
+        generator: torch.Generator,
+    ) -> None:
+        """Every entry set to one of the encoder's own vectors on images, as SoundStream starts its codebook from
+        its first batch."""
+        with torch.no_grad():
+            z = self.encoder(images)
+            vectors = z.permute(0, 2, 3, 1).reshape(-1, SIZE).cpu()
+            self.codebook.weight.copy_(REFERENCE["first_codebook"](vectors, CODES, generator))
+
 
 def train_token_autoencoder(
     losses: str,
     beta: float,
     steps: int,
     device: torch.device,
+    seed: int = 0,
+    start: str = "first batch",
 ) -> tuple[float, int | None, float]:
-    """The runs behind vq2's table, Adam at 0.002 on batches of 128 MNIST digits. losses is "both",
-    "no codebook" or "none" for the model with no quantizer. Gives the reconstruction error, the codes
-    used and the average size of the encoder's vectors, on 2,000 validation digits."""
+    """The runs behind vq2's table, Adam at 0.002 on batches of 128 MNIST digits. losses is "both", "no codebook"
+    or "none" for the model with no quantizer, and a beta of 0 drops the commitment loss. start is "first batch",
+    the codebook drawn from the encoder's vectors on the first batch, or "standard normal", nn.Embedding's own
+    start. Gives the reconstruction error, the codes used and the average size of the encoder's vectors, on 2,000
+    validation digits."""
     from .classic_nets import mnist_images
 
-    torch.manual_seed(0)
+    torch.manual_seed(seed)
     model = TokenAutoencoder(quantized=losses != "none").to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=2e-3)
     images = mnist_images()
     train, validation = images["train_x"].to(device), images["validation_x"][:2000].to(device)
-    generator = torch.Generator().manual_seed(1)
+    generator = torch.Generator().manual_seed(1 + seed)
+
+    if losses != "none" and start == "first batch":
+        first = train[torch.randint(0, len(train), (128,), generator=generator).to(device)]
+        model.start_codebook(first, generator)
 
     for _ in range(steps):
         batch = train[torch.randint(0, len(train), (128,), generator=generator).to(device)]
@@ -198,11 +231,35 @@ def train_token_autoencoder(
         loss.backward()
         optimizer.step()
 
+    model.eval()
+
     with torch.no_grad():
         rebuilt, z, _, tokens = model(validation)
         used = None if tokens is None else REFERENCE["codes_used"](tokens.cpu(), CODES)
 
         return F.mse_loss(rebuilt, validation).item(), used, z.norm(dim=1).mean().item()
+
+
+def measure_vq_table(seeds: range = range(3)) -> dict[str, list[tuple[float, int | None, float]]]:
+    """Every row of vq2's table for each seed, on MPS when it is there, with 4 threads. Not run by any check."""
+    device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
+    rows = {
+        "no quantizer": ("none", 0.25, "first batch"),
+        "both losses, entries from the standard normal": ("both", 0.25, "standard normal"),
+        "both losses": ("both", 0.25, "first batch"),
+        "no codebook loss": ("no codebook", 0.25, "first batch"),
+        "no commitment loss": ("both", 0.0, "first batch"),
+    }
+    threads = torch.get_num_threads()
+    torch.set_num_threads(4)
+
+    try:
+        return {
+            name: [train_token_autoencoder(losses, beta, 1500, device, seed, start) for seed in seeds]
+            for name, (losses, beta, start) in rows.items()
+        }
+    finally:
+        torch.set_num_threads(threads)
 
 
 # ---------------------------------------------------------------------------
@@ -421,22 +478,40 @@ VQ2_LESSON = prose(
     z.permute(0, 2, 3, 1).reshape(-1, 8).shape    # torch.Size([98, 8]), one row per grid cell
     ```
 
-    Here is that model trained 1,500 steps on MNIST on MPS, next to the same
-    network with no quantizer, on 2,000 validation digits.
+    Where the entries start matters. `nn.Embedding` draws them from the
+    standard normal, far from the encoder's small vectors. A few entries end
+    up nearest to everything, and the rest are never chosen, so no loss ever
+    moves them. Jukebox's authors call this codebook collapse. SoundStream
+    starts each entry from the encoder's own vectors on the first batch. The
+    simplest version picks different vectors at random, as `torch.randperm`
+    does.
+
+    ```python
+    torch.randperm(6, generator=torch.Generator().manual_seed(0))    # tensor([2, 5, 3, 0, 1, 4])
+    ```
+
+    Here is that model trained 1,500 steps on MNIST on MPS, on 3 seeds. The
+    same network with no quantizer is the first row, and the scores are on
+    2,000 validation digits.
 
     | Model | Reconstruction error | Codes used, of 32 |
     |---|---|---|
-    | No quantizer | 0.0009 | none |
-    | VQ-VAE, both losses | 0.0139 | 6 |
-    | No codebook loss | 0.0262 | 4 |
-    | No commitment loss | 0.0809 | 1 |
+    | No quantizer | 0.0009 to 0.0011 | none |
+    | Entries from the standard normal | 0.0106 to 0.0159 | 5 to 8 |
+    | Entries from the first batch | 0.0059 to 0.0064 | 32 |
+    | First batch, no codebook loss | 0.0145 to 0.0181 | 21 to 22 |
+    | First batch, no commitment loss | 0.056 to 0.080 | 1 to 3 |
 
-    Without the commitment loss, the encoder's vectors grew to an average
-    size of 1.7 million, far from every entry, and every cell took one code.
-    Without the codebook loss the entries never moved, and the error nearly
-    doubled. The quantizer costs detail, 15 times the error of no quantizer,
-    for 49 small ids per digit. Only 6 of the 32 codes got used, and later
-    VQ models add tricks to bring unused entries back.
+    Started from the first batch, every entry gets used and the error falls
+    by about half. Without the commitment loss, the encoder's vectors grew to
+    an average size of 0.6 to 1.8 million, far from every entry. Without the
+    codebook loss the entries stayed put while the encoder moved on. The
+    quantizer keeps a digit in 49 ids of 5 bits each, for about 6 times the
+    error of no quantizer.
+
+    Jukebox also resets an entry that falls out of use to an encoder vector
+    from the current batch. VQ-VAE's appendix moves the entries by a running
+    average of the vectors each one wins, in place of the codebook loss.
 
     Tokens are what other models can learn to write. VQ-VAE trained a second
     model, a PixelCNN, on its grids to draw new images, and VQGAN later used
@@ -455,6 +530,7 @@ VQ2_SOURCE = source_file(
     z = torch.zeros(2, 8, 7, 7)
     rows = z.permute(0, 2, 3, 1).reshape(-1, 8)       # shape (98, 8), one row per grid cell
     counts = torch.bincount(torch.tensor([0, 2, 2]), minlength=4)    # tensor([1, 0, 2, 0])
+    order = torch.randperm(6, generator=torch.Generator().manual_seed(0))    # tensor([2, 5, 3, 0, 1, 4])
 
 
     # The nearest code from vq1.
@@ -489,6 +565,17 @@ VQ2_SOURCE = source_file(
         codes: int,
     ) -> int:
         ...
+
+
+    # TODO: Return a codebook of codes rows, each a different row of vectors,
+    #   picked as the first codes ids of torch.randperm(len(vectors)) drawn
+    #   with generator.
+    def first_codebook(
+        vectors: Tensor,
+        codes: int,
+        generator: torch.Generator,
+    ) -> Tensor:
+        ...
     ''',
 )
 
@@ -503,6 +590,7 @@ VQ2_SOLUTION = source_file(
     z = torch.zeros(2, 8, 7, 7)
     rows = z.permute(0, 2, 3, 1).reshape(-1, 8)
     counts = torch.bincount(torch.tensor([0, 2, 2]), minlength=4)
+    order = torch.randperm(6, generator=torch.Generator().manual_seed(0))
 
 
 ''' + indented(QUANTIZE_PART) + '''
@@ -574,6 +662,17 @@ def check_vq2(checker: Checker) -> None:
         reference=REFERENCE["codes_used"],
         expect=expect_value,
     )
+    check_on_inputs(
+        checker=checker,
+        function="first_codebook",
+        description="starts the codebook from different rows of the vectors",
+        inputs=(
+            (small_tensor(735, 12, 3), 5, seeded(736)),
+            (small_tensor(737, 40, 8) / 2, 32, seeded(738)),
+        ),
+        reference=REFERENCE["first_codebook"],
+        expect=expect_tensor,
+    )
 
 
 VQ2 = Exercise(
@@ -590,6 +689,8 @@ VQ2 = Exercise(
         "reshape the ids to (batch, height, width).",
         "codes_used": "torch.bincount of the flattened tokens with minlength=codes counts each code. Count the counts "
         "above 0, and turn the result into an int.",
+        "first_codebook": "torch.randperm(len(vectors), generator=generator) shuffles the row ids with no repeats. Keep "
+        "the first codes of them and index vectors with those.",
     },
     introduces=(),
     check=check_vq2,
