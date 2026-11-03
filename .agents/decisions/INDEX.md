@@ -2,7 +2,7 @@
 name: decisions-index
 kind: doc
 description: index of every decision taken, newest first
-updated: 2026-10-30
+updated: 2026-11-03
 links: [INDEX.md, spec/decisions.md]
 ---
 
@@ -12,6 +12,7 @@ Every decision taken, newest first.
 Filed per [spec/decisions.md](../spec/decisions.md).
 Built by the brain tool from the folder it lists.
 
+- [DEC-022](DEC-022-residual3-teaches-pre-norm-and-the-zero-start-apart.md), the pre norm block keeps PyTorch's default start, and the zero start is taught on a deep stack with no norm, where its papers show it
 - [DEC-021](DEC-021-a-modalities-section-joins-the-course-as-section-13.md), on the owner's word, a medium section on modalities, each kind of input on its own and then kinds joined in a transformer and in the GPT, goes before Your own modules, which becomes Section 14
 - [DEC-020](DEC-020-96-papers-reproduces-grokking-not-squeeze-and-excitation.md), on the owner's word, the paper the learner turns into code and reproduces is grokking on modular arithmetic, not the squeeze and excitation image block
 - [DEC-019](DEC-019-three-image-projects-give-way-to-exoplanets-dna-and-a-citation-graph.md), on the owner's word, Sections 2, 5 and 8 drop their MNIST, CIFAR and SimCLR projects for an exoplanet hunter, a DNA motif finder and a paper topic map, and Section 9 keeps its digits

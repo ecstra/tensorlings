@@ -119,8 +119,8 @@ The project is CS231n's first assignment, a softmax classifier on real images wi
 | | norm1 | why and when, a deep MLP with and without normalization, BatchNorm for images and LayerNorm or RMSNorm for sequences |
 | 22_residuals | residual1 | `x + f(x)`, and the gradient that passes the addition untouched |
 | | residual2 | why, a deep plain MLP that won't train next to the same one with residuals |
-| | residual3 | the pre norm residual block, which starts as "do nothing" with its last layer at zero |
-| | residual4 | when, the order of norm, sublayer and residual in the blocks of the papers |
+| | residual3 | pre norm and the zero start, each where it shows its use, pre norm training 101 and 201 layers where residual2's blocks turn nan, and the zero start training a 201 layer stack with no norm |
+| | residual4 | when, the order of norm, sublayer and residual in the blocks of the papers, with post norm against pre norm measured at depth, at a large rate and with warmup |
 | quizzes | quiz4, quiz5 | the blocks together |
 | 23_names | names1 | the project starts, the names dataset, a character vocabulary, and the counting bigram model as the loss to beat |
 | | names2 | the MLP language model of Bengio and colleagues, with embeddings, normalization and a context of three characters |
