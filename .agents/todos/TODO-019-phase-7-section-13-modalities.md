@@ -23,7 +23,7 @@ Phase 7 of the plan build-tensorlings, the Modalities section the owner asked fo
 | 3 | Write 98_tokens_for_everything and 99_shared_space | | owner | done |
 | 4 | Write 100_fusion and 102_outputs | | owner | done |
 | 5 | Write 101_reading_a_new_modality and build the signal reader project, 103_signal_reader | | owner | done |
-| 6 | Write quiz16, Section 13 together | | owner | pending |
+| 6 | Write quiz16, Section 13 together | | owner | done |
 | 7 | Get beginner reader reviews and fix what they find | | owner | pending |
 | 8 | Run the full dev check, every wrong answer and the screen driver, then write the handover | | owner | pending |
 

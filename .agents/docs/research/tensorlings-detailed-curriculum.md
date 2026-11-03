@@ -438,12 +438,12 @@ Part A takes each kind of input on its own, the structure it has and the layer t
 | | fuse2 | gated cross attention that starts closed, as in Flamingo |
 | | fuse3 | a missing modality, and training with modalities dropped at random |
 | 101_reading_a_new_modality | bridge1 | a frozen encoder and a small projector into your GPT's embeddings, as LLaVA does |
-| | bridge2 | training the projector alone, then the GPT with LoRA |
-| | bridge3 | what the projected tokens carry, probed and compared with text |
+| | bridge2 | training the projector alone, then the GPT with LoRA, what stage one buys, and the prefix against gated cross attention |
+| | bridge3 | what the projected tokens carry, probed with growing training sets and compared with text |
 | 102_outputs | out1 | heads for classes, for values and for several values at once |
 | | out2 | a mixture of normals for a target with several right answers |
 | | out3 | constrained decoding, masking the scores so every output is valid JSON |
-| | out4 | actions written as tokens, as RT-2 does, and another modality written through codebook ids |
+| | out4 | actions written as tokens, as RT-2 does, and a signal written through codebook ids, where sampling picks one right future |
 | quizzes | quiz16 | Section 13 together |
 | 103_signal_reader | reader1 | the project starts, signals and questions about them, and a GPT that reads the numbers as text |
 | | reader2 | a signal encoder joined to your GPT with a projector, trained with the LLaVA recipe |
