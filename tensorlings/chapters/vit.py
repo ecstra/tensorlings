@@ -23,7 +23,8 @@ from ..engine import (
     small_tensor,
 )
 from ..text import prose, source_file
-from .classic_nets import mnist_images
+from ..training import best_device
+from .classic_nets import ReferenceLeNet, mnist_images
 from .linear_layers import expect_module
 
 VIT = Chapter(
@@ -44,6 +45,7 @@ VIT = Chapter(
         - [Dosovitskiy and colleagues, an image is worth 16x16 words](https://arxiv.org/abs/2010.11929)
         - [Steiner and colleagues, how to train your ViT](https://arxiv.org/abs/2106.10270)
         - [Beyer, Zhai and Kolesnikov, better plain ViT baselines for ImageNet-1k](https://arxiv.org/abs/2205.01580)
+        - [Tolstikhin and colleagues, MLP-Mixer, whose section 3.4 shuffles the patches and pixels](https://arxiv.org/abs/2105.01601)
         """,
     ),
 )
@@ -455,28 +457,38 @@ VIT2_LESSON = prose(
 
     Both models trained the same way, 3,000 steps of AdamW on batches of 128,
     on the first N training images. Here is their accuracy on the 10,000
-    validation images.
+    validation images, from one seed.
 
     | Training images | 500 | 2,000 | 10,000 | 50,000 |
     |---|---|---|---|---|
     | LeNet | 89.9% | 94.1% | 97.0% | 98.4% |
     | ViT | 75.7% | 87.9% | 95.5% | 96.9% |
 
-    Both fit their own training images, 98% or more at every size. The
-    difference is what each makes of images it never saw. The gap shrinks from
-    14.2 points at 500 images to 1.5 at 10,000, and stays there at 50,000. At
-    MNIST's size LeNet never loses.
-
     A convolution builds in two assumptions. Nearby pixels go together, and a
     pattern means the same thing anywhere in the image. A ViT has neither,
     beyond cutting patches. Attention lets any patch use any other from the
-    first block on. So the ViT has to learn from examples what a convolution
-    is given, and that takes examples.
+    first block on. So the ViT learns from examples what a convolution is
+    given, and on MNIST's digits those assumptions hold.
 
-    The ViT paper found the same at scale. Trained on ImageNet's 1.3 million
-    images, ViTs came out a few points below ResNets of their size. Then they
-    were pre-trained on JFT's 303 million images. There its largest ViT,
-    ViT-H/14, beat a ResNet given the same images on every task of Table 2.
+    Take them away. Shuffle every image the same fixed way, the 16 patches and
+    the 49 pixels inside each, as MLP-Mixer's authors did. The patch Linear and
+    the learned positions can absorb that shuffle, so the ViT meets the same
+    task as before. LeNet's neighbouring pixels are no longer neighbours. Here
+    are three seeds of each.
+
+    | Shuffled, training images | 500 | 2,000 | 10,000 | 50,000 |
+    |---|---|---|---|---|
+    | LeNet | 79.8% to 81.1% | 89.4% to 90.2% | 94.1% to 94.3% | 95.6% to 96.0% |
+    | ViT | 73.5% to 77.8% | 87.3% to 89.4% | 94.3% to 95.8% | 96.2% to 97.1% |
+
+    The ViT scores about what it scored on plain digits. LeNet still leads at
+    2,000 images and below. From 10,000 images on, the ViT won on every seed.
+
+    That is the ViT paper's finding in small. ViTs lack the locality and
+    translation equivariance of CNNs, so they need more data, and with it
+    "large scale training trumps inductive bias". On 9 million JFT images
+    ViT-B/32 did much worse than a ResNet, and from 90 million on it did
+    better.
     """,
 )
 
@@ -744,3 +756,78 @@ VIT2 = Exercise(
     time_limit=60,
     imports_first=OPTIMIZER_IMPORTS,
 )
+
+
+# ---------------------------------------------------------------------------
+# The runs behind vit2's tables
+# ---------------------------------------------------------------------------
+
+
+def shuffled(
+    images: Tensor,
+    seed: int = 123,
+) -> Tensor:
+    """One fixed shuffle of the 16 patches of 7 by 7 and of the 49 pixels inside each, the same for every image,
+    as MLP-Mixer's section 3.4 shuffled its inputs."""
+    generator = torch.Generator().manual_seed(seed)
+    patch_order = torch.randperm(16, generator=generator)
+    pixel_order = torch.randperm(49, generator=generator)
+    count = images.shape[0]
+    cells = images.reshape(count, 1, 4, 7, 4, 7).permute(0, 2, 4, 1, 3, 5).reshape(count, 16, 49)
+    cells = cells[:, patch_order][:, :, pixel_order]
+
+    return cells.reshape(count, 4, 4, 1, 7, 7).permute(0, 3, 1, 4, 2, 5).reshape(count, 1, 28, 28)
+
+
+def measure_data_appetite(
+    shuffle: bool,
+    sizes: tuple[int, ...] = (500, 2000, 10000, 50000),
+    seeds: tuple[int, ...] = (0, 1, 2),
+    device: torch.device | None = None,
+) -> dict[tuple[str, int], list[float]]:
+    """vit2's tables: LeNet and the SmallViT trained 3,000 steps of AdamW at 1e-3 on batches of 128, on the
+    first size training images, scored on the 10,000 validation images. With shuffle, every image goes through
+    the same shuffled first. The lesson's shuffled runs were split between the CPU and the GPU, so a rerun lands
+    within the seed spread rather than on the same digits."""
+    device = device or best_device()
+    images = mnist_images()
+    x, y = images["train_x"], images["train_y"]
+    validation_x, validation_y = images["validation_x"], images["validation_y"]
+
+    if shuffle:
+        x, validation_x = shuffled(x), shuffled(validation_x)
+
+    x, y = x.to(device), y.to(device)
+    validation_x, validation_y = validation_x.to(device), validation_y.to(device)
+    makers: dict[str, Callable[[], nn.Module]] = {
+        "LeNet": ReferenceLeNet,
+        "ViT": lambda: VIT2_REFERENCE["SmallViT"](),
+    }
+    results: dict[tuple[str, int], list[float]] = {}
+
+    for seed in seeds:
+        for size in sizes:
+            for name, make in makers.items():
+                torch.manual_seed(seed)
+                model = make().to(device)
+                optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
+                generator = torch.Generator().manual_seed(seed + 10)
+
+                for _ in range(3000):
+                    batch = torch.randint(0, size, (128,), generator=generator).to(device)
+                    loss = F.cross_entropy(model(x[batch]), y[batch])
+                    optimizer.zero_grad()
+                    loss.backward()
+                    optimizer.step()
+
+                model.eval()
+
+                with torch.no_grad():
+                    right = sum(
+                        (model(validation_x[start : start + 2000]).argmax(dim=1) == validation_y[start : start + 2000]).sum().item()
+                        for start in range(0, len(validation_x), 2000)
+                    )
+
+                results.setdefault((name, size), []).append(right / len(validation_x))
+
+    return results

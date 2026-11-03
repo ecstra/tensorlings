@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import contextlib
 import math
 import textwrap
+from collections.abc import Callable, Iterator
 
 import torch
 import torch.nn as nn
@@ -818,10 +820,10 @@ def train_for_moe3(
     model: nn.Module,
     batch: object,
     steps: int,
-) -> tuple[float, float]:
+) -> tuple[float, float, float]:
     """The runs moe3's table comes from, Adam at 0.01 on batches of 256, with the balancing loss at 0.01 for
     a Switch layer. Gives the error on 4,000 new inputs and, for a Switch layer, the share of each region's
-    inputs that go to its most common expert."""
+    inputs that go to its most common expert and the share of inputs that found their expert full."""
     optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
     generator = torch.Generator().manual_seed(1)
     switch = isinstance(model, SWITCH_REFERENCE["Switch"])
@@ -843,13 +845,55 @@ def train_for_moe3(
 
     with torch.no_grad():
         if not switch:
-            return F.mse_loss(model(x), y).item(), 0.0
+            return F.mse_loss(model(x), y).item(), 0.0, 0.0
 
-        output, _, chosen, _ = model(x)
+        output, _, chosen, kept = model(x)
 
     owned = [torch.bincount(chosen[region == index]).max().item() / (region == index).sum().item() for index in region.unique().tolist()]
 
-    return F.mse_loss(output, y).item(), sum(owned) / len(owned)
+    return F.mse_loss(output, y).item(), sum(owned) / len(owned), 1 - kept.float().mean().item()
+
+
+# A factor this large never fills an expert, so it stands for no limit.
+MOE3_MODELS: dict[str, Callable[[], nn.Module]] = {
+    "dense, 16 wide": lambda: Dense(16),
+    "8 experts, no limit": lambda: SWITCH_REFERENCE["Switch"](FEATURES, 16, 8, 100.0),
+    "8 experts, factor 2.0": lambda: SWITCH_REFERENCE["Switch"](FEATURES, 16, 8, 2.0),
+    "dense, 128 wide": lambda: Dense(128),
+}
+
+
+@contextlib.contextmanager
+def pinned_threads() -> Iterator[None]:
+    """Four CPU threads while measuring, so the sums add up in the same order on every run."""
+    threads = torch.get_num_threads()
+    torch.set_num_threads(4)
+
+    try:
+        yield
+    finally:
+        torch.set_num_threads(threads)
+
+
+def measure_moe3(
+    steps: int = 3000,
+    seeds: tuple[int, ...] = (0, 1, 2),
+) -> dict[tuple[str, str], list[tuple[float, float, float]]]:
+    """moe3's table: each model on each task from each seed, as (error, share owned, share dropped). The factor
+    2.0 layer runs on the regions task alone, since the table shows capacity there."""
+    results: dict[tuple[str, str], list[tuple[float, float, float]]] = {}
+
+    with pinned_threads():
+        for task, batch in (("regions", regions_batch), ("smooth", smooth_batch)):
+            for name, make in MOE3_MODELS.items():
+                if task == "smooth" and "factor" in name:
+                    continue
+
+                for seed in seeds:
+                    torch.manual_seed(seed)
+                    results.setdefault((task, name), []).append(train_for_moe3(make(), batch, steps))
+
+    return results
 
 
 MOE3_LESSON = prose(
@@ -861,37 +905,43 @@ MOE3_LESSON = prose(
     them and a router with a bias hold 2,312, yet each token runs one expert
     and the router, 352. A dense MLP 128 wide holds 2,184 and runs every one.
 
-    Here they are, trained 1,000 steps on two tasks, 3 seeds each. In the
+    Here they are, trained 3,000 steps on two tasks, 3 seeds each. In the
     regions task the input falls near one of 16 centres, and each region has
     its own linear map. The smooth task is moe2's target, one function
-    everywhere. The experts ran twice, with no capacity limit and at moe2's
-    capacity factor of 1.25.
+    everywhere.
 
     | Model | Run per token | Regions error | Smooth error |
     |---|---|---|---|
-    | dense, 16 wide | 280 | 1.42 to 1.49 | 0.0156 to 0.0161 |
-    | 8 experts, no limit | 352 | 0.16 to 0.26 | 0.0140 to 0.0168 |
-    | 8 experts, factor 1.25 | 352 | 1.05 to 1.73 | 0.028 to 0.038 |
-    | dense, 128 wide | 2,184 | 0.33 to 0.38 | 0.0016 to 0.0019 |
+    | dense, 16 wide | 280 | 1.34 to 1.43 | 0.0148 to 0.0156 |
+    | 8 experts | 352 | 0.105 to 0.151 | 0.0118 to 0.0123 |
+    | dense, 128 wide | 2,184 | 0.262 to 0.270 | 0.0011 to 0.0013 |
 
-    With no limit, the router sent 92% to 99% of each region's inputs to one
-    expert. Each expert came to own a couple of regions and learned their
-    maps, and the experts beat even the dense layer with as many parameters.
+    On the regions task the router sent 99% or more of each region's inputs
+    to one expert. Each expert came to own a couple of regions and learned
+    their maps. The experts beat the dense layer of the same compute about
+    tenfold, and the dense layer with as many parameters too.
 
-    At a factor of 1.25 the router still picked well, but 9% to 16% of the
-    inputs found their expert full. The layer gives a dropped token 0, and
-    the experts then lost even to the small dense layer. In a transformer the
-    residual carries a dropped token past the layer, which softens this.
+    On the smooth task the experts still beat the dense layer of the same
+    compute, 0.012 against 0.015. One function everywhere doesn't split into
+    parts, though. There the dense layer with as many parameters, all of them
+    running, does ten times better.
 
-    So a mixture of experts pays when the work splits into parts that
-    different experts can own. It also needs room in each expert for what is
-    sent to it. A language model meets many topics and languages, which is
-    such work. For one smooth job the experts add nothing, and a dense layer with
-    as many parameters does far better.
+    That is the trade. Experts buy parameters for the same compute, and they
+    pay most when the work splits into parts that different experts can own. A
+    language model meets many topics and languages, which is such work.
 
-    They also cost memory for every expert and a router to keep balanced. The
-    saving is in multiplications per token, and it shows in large models with
-    experts spread across many GPUs.
+    The experts above ran with no limit on their load. With room for twice an
+    even share, a capacity factor of 2.0, under half a percent of the inputs
+    found their expert full. The regions error stayed at 0.112 to 0.185.
+
+    The Switch Transformer paper ran factors from 1.0 to 2.0, and each beat
+    the dense model of the same compute by about the same margin. There a token
+    with no room passes on through the residual. This layer has no residual, so
+    a dropped token gets 0, which is why it wants the room.
+
+    The cost is memory, every expert held at once, and a router to keep
+    balanced. The saving is multiplications per token, which is why large
+    models spread their experts across many GPUs.
     """,
 )
 

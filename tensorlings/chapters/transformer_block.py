@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import contextlib
+import math
 import textwrap
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 
 import torch
 import torch.nn as nn
@@ -20,6 +22,7 @@ from ..engine import (
     expect_value,
     small_tensor,
 )
+from ..data import load_shakespeare
 from ..text import prose, source_file
 from .linear_layers import expect_module
 
@@ -40,6 +43,7 @@ TRANSFORMER_BLOCK = Chapter(
 
         - [Radford and colleagues, GPT-2](https://cdn.openai.com/better-language-models/language_models_are_unsupervised_multitask_learners.pdf)
         - [Xiong and colleagues, on layer normalization in the transformer](https://arxiv.org/abs/2002.04745)
+        - [Dong, Cordonnier and Loukas, pure attention loses rank doubly exponentially with depth](https://arxiv.org/abs/2103.03404)
         - [Olsson and colleagues, in context learning and induction heads](https://transformer-circuits.pub/2022/in-context-learning-and-induction-heads/index.html)
         - [Karpathy, nanoGPT](https://github.com/karpathy/nanoGPT)
         """,
@@ -711,7 +715,6 @@ BLOCK2 = Exercise(
 # ---------------------------------------------------------------------------
 
 TOY_LENGTH = 16
-TOY_SEEDS = (0, 1, 2)
 
 
 class ReferenceToyBlock(nn.Module):
@@ -769,110 +772,183 @@ def product_sequences(
     return x, x * previous
 
 
-def sum_sequences(
-    count: int,
-    generator: torch.Generator,
-) -> tuple[Tensor, Tensor]:
-    """Random tokens from 0 to 22, and at each step the sum of the token there and the one before it, mod 23."""
-    x = torch.randint(0, 23, (count, TOY_LENGTH), generator=generator)
-    previous = torch.cat([torch.zeros(count, 1, dtype=torch.long), x[:, :-1]], dim=1)
-
-    return x, (x + previous) % 23
-
-
 class ToyModel(nn.Module):
-    """Numbers or tokens in, ToyBlocks, then a head, for the tasks block3 measures."""
+    """Numbers in, ToyBlocks, then a head, for the product task block3's check trains."""
 
     def __init__(
         self,
         block: type,
         layers: int,
-        tokens: bool,
         **flags: bool,
     ) -> None:
         super().__init__()
-        self.embed = nn.Embedding(23, 32) if tokens else nn.Linear(1, 32)
+        self.embed = nn.Linear(1, 32)
         self.positions = nn.Embedding(TOY_LENGTH, 32)
         self.blocks = nn.Sequential(*[block(32, 2, **flags) for _ in range(layers)])
         self.norm = nn.LayerNorm(32)
-        self.head = nn.Linear(32, 23 if tokens else 1)
-        self.tokens = tokens
+        self.head = nn.Linear(32, 1)
 
     def forward(self, x: Tensor) -> Tensor:
-        inputs = x if self.tokens else x.unsqueeze(-1)
-        hidden = self.embed(inputs) + self.positions(torch.arange(x.shape[1]))
-        out = self.head(self.norm(self.blocks(hidden)))
+        hidden = self.embed(x.unsqueeze(-1)) + self.positions(torch.arange(x.shape[1]))
 
-        return out if self.tokens else out.squeeze(-1)
+        return self.head(self.norm(self.blocks(hidden))).squeeze(-1)
 
 
 def train_toy(
     block: type,
-    tokens: bool,
     layers: int,
     steps: int,
     seed: int,
     **flags: bool,
 ) -> float:
-    """Trains one variant and gives its accuracy on new sum sequences, or its error on new product ones."""
+    """Trains one variant on the product task and gives its error on new sequences."""
     torch.manual_seed(seed)
-    model = ToyModel(block, layers, tokens, **flags)
+    model = ToyModel(block, layers, **flags)
     optimizer = torch.optim.AdamW(model.parameters(), lr=3e-3)
-    make = sum_sequences if tokens else product_sequences
     generator = torch.Generator().manual_seed(seed + 10)
 
     for _ in range(steps):
-        x, y = make(64, generator)
-        out = model(x)
-        loss = F.cross_entropy(out.reshape(-1, 23), y.reshape(-1)) if tokens else F.mse_loss(out, y)
+        x, y = product_sequences(64, generator)
+        loss = F.mse_loss(model(x), y)
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
 
-    x, y = make(2000, torch.Generator().manual_seed(99))
+    x, y = product_sequences(2000, torch.Generator().manual_seed(99))
 
     with torch.no_grad():
         out = model(x)
 
     # Step 0 has no step before it, so it is left out of the score.
-    if tokens:
-        return (out.argmax(dim=-1) == y)[:, 1:].float().mean().item()
-
     return F.mse_loss(out[:, 1:], y[:, 1:]).item()
+
+
+TEXT_SIZE = 64
+TEXT_LAYERS = 6
+TEXT_HEADS = 4
+TEXT_CONTEXT = 64
+
+
+class TextModel(nn.Module):
+    """Characters in, six ToyBlocks of size 64 with causal attention, then a head, for block3's table."""
+
+    def __init__(
+        self,
+        vocabulary: int,
+        **flags: bool,
+    ) -> None:
+        super().__init__()
+        self.embed = nn.Embedding(vocabulary, TEXT_SIZE)
+        self.positions = nn.Embedding(TEXT_CONTEXT, TEXT_SIZE)
+        self.blocks = nn.Sequential(*[ReferenceToyBlock(TEXT_SIZE, TEXT_HEADS, **flags) for _ in range(TEXT_LAYERS)])
+        self.norm = nn.LayerNorm(TEXT_SIZE)
+        self.head = nn.Linear(TEXT_SIZE, vocabulary)
+
+    def forward(self, ids: Tensor) -> Tensor:
+        hidden = self.embed(ids) + self.positions(torch.arange(ids.shape[1]))
+
+        return self.head(self.norm(self.blocks(hidden)))
+
+
+def text_batch(
+    data: Tensor,
+    count: int,
+    generator: torch.Generator,
+) -> tuple[Tensor, Tensor]:
+    """count stretches of TEXT_CONTEXT characters, and each one moved on by a character as its targets."""
+    starts = torch.randint(len(data) - TEXT_CONTEXT - 1, (count,), generator=generator)
+    x = torch.stack([data[start : start + TEXT_CONTEXT] for start in starts])
+    y = torch.stack([data[start + 1 : start + TEXT_CONTEXT + 1] for start in starts])
+
+    return x, y
+
+
+def train_text(
+    rate: float,
+    seed: int,
+    steps: int = 1000,
+    **flags: bool,
+) -> float:
+    """One run behind block3's table, on tiny Shakespeare's characters. AdamW with weight decay 0.1 on batches of
+    32, warmed up over 100 steps then cosine down to a tenth, clipped at 1. Gives the validation loss on 20 batches
+    of 64."""
+    text = load_shakespeare()
+    characters = sorted(set(text))
+    positions = {character: position for position, character in enumerate(characters)}
+    data = torch.tensor([positions[character] for character in text])
+    cut = int(0.9 * len(data))
+    train, validation = data[:cut], data[cut:]
+
+    torch.manual_seed(seed)
+    model = TextModel(len(characters), **flags)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=rate, weight_decay=0.1)
+    generator = torch.Generator().manual_seed(seed + 1)
+
+    for step in range(steps):
+        progress = step / steps
+
+        for group in optimizer.param_groups:
+            group["lr"] = rate * min(1, (step + 1) / 100) * (0.1 + 0.9 * 0.5 * (1 + math.cos(math.pi * progress)))
+
+        x, y = text_batch(train, 32, generator)
+        loss = F.cross_entropy(model(x).reshape(-1, len(characters)), y.reshape(-1))
+        optimizer.zero_grad()
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+        optimizer.step()
+
+    model.eval()
+    generator = torch.Generator().manual_seed(999)
+
+    with torch.no_grad():
+        losses = [
+            F.cross_entropy(model(x).reshape(-1, len(characters)), y.reshape(-1)).item()
+            for x, y in (text_batch(validation, 64, generator) for _ in range(20))
+        ]
+
+    return sum(losses) / len(losses)
 
 
 BLOCK3_LESSON = prose(
     """
     A block has four kinds of part, attention, the MLP, the residuals and the
-    norms. Taking each one out in turn shows what it buys. Two toy tasks make
-    the test, each with learned positions.
+    norms. Taking each one out in turn shows what it buys. The test is real
+    text, tiny Shakespeare one character at a time, which the GPT project
+    reads later.
 
-    - Product: random numbers, and at each step the number there times the one before it, scored by mean squared error. Two blocks, 1,500 steps.
-    - Sum: tokens from 0 to 22, and at each step that token plus the one before, mod 23, scored by accuracy. Six blocks, 1,000 steps.
+    Six blocks of size 64 with 4 heads read 64 characters and guess each next
+    one. Each model trained 1,000 steps of AdamW, warmed up then cosine down,
+    clipped at 1, at two peak rates. Here is the validation loss from two
+    seeds, where lower is better.
 
-    Each ran from three seeds, so the table gives the range.
-
-    | Taken out | Product, error | Sum, accuracy |
+    | Taken out | Rate 0.01 | Rate 0.003 |
     |---|---|---|
-    | nothing | 0.0010 to 0.0029 | 100% |
-    | attention | 1.015 | 4.3% to 4.6% |
-    | the MLP | 0.012 to 0.026 | 96.3% to 99.7% |
-    | the residuals | 0.0032 to 0.0133 | 4.2% to 4.4% |
-    | the norms | 0.0011 to 0.0018 | 5.5%, 6.0% and 100% |
+    | nothing | 1.737 to 1.743 | 1.890 to 1.899 |
+    | attention | 2.490 | 2.490 to 2.491 |
+    | the MLP | 1.908 to 1.930 | 2.091 to 2.121 |
+    | the residuals | 3.353 to 3.355 | 3.353 to 3.355 |
+    | the norms | blew up to nan | 1.809 to 1.811 |
 
     Attention is the only part that moves information between positions.
-    Without it both tasks fall to guessing, an error of 1.0 and 4.3%. The MLP
-    works within each position. The product needs it, with about ten times the
-    error without, while six blocks of attention alone still learn the sum.
+    Without it each position sees only its own character, and the loss sits at
+    2.49. names1's counting bigram model gets 2.48 on this text. The MLP works
+    within each position, and taking it out costs about 0.18 at either rate.
 
-    Residuals matter more with depth. Two blocks without them learn the
-    product less well, and six blocks never learn the sum. The norms changed
-    nothing at two blocks. At six, two of the three seeds without them never
-    learned the sum, and the third learned all of it. So norms make deep
-    training dependable.
+    Without residuals, six blocks never got past 3.35, what counting
+    characters alone gives. Dong and colleagues showed why. Stacked attention
+    alone collapses its output toward one row repeated, and the skips and MLPs
+    stop that.
 
-    Each part earns its place on some task, and a toy task rarely needs all
-    four. Large models on real text keep every one.
+    The norms buy the rate. Without them the stack blew up at 0.01, so it had
+    to train at 0.003. There it reached 1.81, a little below the full block's
+    1.89. With them 0.01 trained too, to 1.74, the best in the table. Xiong and colleagues found that a norm before
+    each part, as here, lets a transformer train without warmup.
+
+    So every part earns its place. Attention and the MLP do the work, and the
+    residuals and norms keep a deep stack trainable.
+
+    The check trains your block on a smaller task. At each step the target is
+    the number there times the one before it, which needs attention.
 
     A dict of flags reads well as a list of what is on.
 
@@ -1014,6 +1090,36 @@ TOY_VARIANTS: tuple[tuple[str, dict[str, bool]], ...] = (
 )
 
 
+@contextlib.contextmanager
+def pinned_threads() -> Iterator[None]:
+    """Two CPU threads while measuring, as block3's table was measured, so the sums add up in the same order and
+    every number comes out again exactly."""
+    threads = torch.get_num_threads()
+    torch.set_num_threads(2)
+
+    try:
+        yield
+    finally:
+        torch.set_num_threads(threads)
+
+
+def measure_text_ablation(
+    rates: tuple[float, ...] = (0.01, 0.003),
+    seeds: tuple[int, ...] = (0, 1),
+    variants: tuple[tuple[str, dict[str, bool]], ...] = TOY_VARIANTS,
+) -> dict[tuple[float, str], list[float]]:
+    """block3's table, the validation loss of each variant at each peak rate, from each seed."""
+    results: dict[tuple[float, str], list[float]] = {}
+
+    with pinned_threads():
+        for rate in rates:
+            for name, flags in variants:
+                for seed in seeds:
+                    results.setdefault((rate, name), []).append(train_text(rate, seed, **flags))
+
+    return results
+
+
 def toy_weights() -> dict[str, Tensor]:
     """A ToyBlock's weights with the two norms given different scales and shifts, so mixing them up shows."""
     block = seeded_module(lambda: ReferenceToyBlock(8, 2))
@@ -1050,8 +1156,8 @@ def check_toy_block(found: type) -> None:
 
 
 def check_parts_matter(found: type) -> None:
-    full = train_toy(found, tokens=False, layers=2, steps=300, seed=0)
-    blind = train_toy(found, tokens=False, layers=2, steps=300, seed=0, attention=False)
+    full = train_toy(found, layers=2, steps=300, seed=0)
+    blind = train_toy(found, layers=2, steps=300, seed=0, attention=False)
 
     if full > 0.2:
         raise Mismatch(f"After 300 steps on the product task, the full ToyBlock model's error is {full:.3f}, but it should be below 0.2.")
@@ -1088,7 +1194,7 @@ BLOCK3 = Exercise(
     },
     introduces=(),
     check=check_block3,
-    time_limit=30,
+    time_limit=60,
     imports_first=OPTIMIZER_IMPORTS,
 )
 
