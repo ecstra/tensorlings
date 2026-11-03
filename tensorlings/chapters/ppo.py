@@ -189,14 +189,28 @@ class CartPole:
         return torch.ones(len(actions)), dones
 
 
-def mlp(outputs: int) -> nn.Sequential:
-    return nn.Sequential(
-        nn.Linear(4, 64),
-        nn.Tanh(),
-        nn.Linear(64, 64),
-        nn.Tanh(),
-        nn.Linear(64, outputs),
-    )
+def networks() -> tuple[nn.Sequential, nn.Sequential]:
+    """The policy, with 2 scores out, and the value network, with 1. Each starts as Stable Baselines3 starts them,
+    orthogonal weights scaled by sqrt(2) in the hidden layers, by 0.01 in the policy's last and by 1 in the value's,
+    and zero biases."""
+    made = []
+
+    for outputs, last_gain in ((2, 0.01), (1, 1.0)):
+        network = nn.Sequential(
+            nn.Linear(4, 64),
+            nn.Tanh(),
+            nn.Linear(64, 64),
+            nn.Tanh(),
+            nn.Linear(64, outputs),
+        )
+
+        for layer, gain in zip(network[::2], (math.sqrt(2), math.sqrt(2), last_gain)):
+            nn.init.orthogonal_(layer.weight, gain)
+            nn.init.zeros_(layer.bias)
+
+        made.append(network)
+
+    return made[0], made[1]
 '''
 
 COLLECT_PART = '''
@@ -283,6 +297,7 @@ def ppo_update(
 
             optimizer.zero_grad()
             loss.backward()
+            nn.utils.clip_grad_norm_([*policy.parameters(), *value.parameters()], 0.5)
             optimizer.step()
 
     return loss.item()
@@ -294,17 +309,18 @@ def train_ppo(
     seed: int,
 ) -> nn.Module:
     torch.manual_seed(seed)
-    policy = mlp(2)
-    value = mlp(1)
-    optimizer = torch.optim.Adam([*policy.parameters(), *value.parameters()], lr=3e-4)
+    policy, value = networks()
+    optimizer = torch.optim.Adam([*policy.parameters(), *value.parameters()], lr=1e-3, eps=1e-5)
     generator = torch.Generator().manual_seed(seed)
-    carts = CartPole(16, generator)
+    carts = CartPole(8, generator)
 
-    for _ in range(updates):
-        rollout = collect(policy, value, carts, 128, generator)
-        advantages = gae(rollout["rewards"], rollout["values"], rollout["next_values"], rollout["dones"], 0.99, 0.95)
+    for update in range(updates):
+        left = 1 - update / updates
+        optimizer.param_groups[0]["lr"] = 1e-3 * left
+        rollout = collect(policy, value, carts, 32, generator)
+        advantages = gae(rollout["rewards"], rollout["values"], rollout["next_values"], rollout["dones"], 0.98, 0.8)
         returns = advantages + rollout["values"]
-        ppo_update(policy, value, optimizer, rollout, advantages, returns, 4, 256, 0.2, generator)
+        ppo_update(policy, value, optimizer, rollout, advantages, returns, 20, 256, 0.2 * left, generator)
 
     return policy
 
@@ -328,11 +344,13 @@ def balance_time(
 '''
 
 TRAIN_STUB = TRAIN_PART.split("\n\n\ndef balance_time")[0].replace(
-    """    for _ in range(updates):
-        rollout = collect(policy, value, carts, 128, generator)
-        advantages = gae(rollout["rewards"], rollout["values"], rollout["next_values"], rollout["dones"], 0.99, 0.95)
+    """    for update in range(updates):
+        left = 1 - update / updates
+        optimizer.param_groups[0]["lr"] = 1e-3 * left
+        rollout = collect(policy, value, carts, 32, generator)
+        advantages = gae(rollout["rewards"], rollout["values"], rollout["next_values"], rollout["dones"], 0.98, 0.8)
         returns = advantages + rollout["values"]
-        ppo_update(policy, value, optimizer, rollout, advantages, returns, 4, 256, 0.2, generator)
+        ppo_update(policy, value, optimizer, rollout, advantages, returns, 20, 256, 0.2 * left, generator)
 
     return policy""",
     """    ...""",
@@ -401,58 +419,116 @@ def reuse_one_batch(
     return chances.max().item(), int(chances.argmax())
 
 
+def scored(
+    policy: nn.Module,
+    count: int = 16,
+    seed: int = 7,
+) -> float:
+    return REFERENCE["balance_time"](policy, count, torch.Generator().manual_seed(seed))
+
+
 def train_variant(
     updates: int,
     seed: int,
     epochs: int,
     epsilon: float,
     lam: float,
-) -> nn.Module:
-    """train_ppo with its epochs, clip and lambda free, for the tables of ppo2 and ppo3."""
+    every: int = 0,
+) -> tuple[nn.Module, nn.Module, list[float]]:
+    """train_ppo with its epochs, clip and lambda free, for the tables of ppo2 and ppo3. With 20, 0.2 and 0.8 it is
+    train_ppo itself. Gives the policy, the value network and, when every is set, the policy's score after every that
+    many updates, which draws on a generator of its own and leaves the training as it was."""
     torch.manual_seed(seed)
-    policy = REFERENCE["mlp"](2)
-    value = REFERENCE["mlp"](1)
-    optimizer = torch.optim.Adam([*policy.parameters(), *value.parameters()], lr=3e-4)
+    policy, value = REFERENCE["networks"]()
+    optimizer = torch.optim.Adam([*policy.parameters(), *value.parameters()], lr=1e-3, eps=1e-5)
     generator = torch.Generator().manual_seed(seed)
-    carts = REFERENCE["CartPole"](16, generator)
+    carts = REFERENCE["CartPole"](8, generator)
+    scores = []
 
-    for _ in range(updates):
-        rollout = REFERENCE["collect"](policy, value, carts, 128, generator)
-        advantages = REFERENCE["gae"](rollout["rewards"], rollout["values"], rollout["next_values"], rollout["dones"], 0.99, lam)
+    for update in range(updates):
+        left = 1 - update / updates
+        optimizer.param_groups[0]["lr"] = 1e-3 * left
+        rollout = REFERENCE["collect"](policy, value, carts, 32, generator)
+        advantages = REFERENCE["gae"](rollout["rewards"], rollout["values"], rollout["next_values"], rollout["dones"], 0.98, lam)
         returns = advantages + rollout["values"]
-        REFERENCE["ppo_update"](policy, value, optimizer, rollout, advantages, returns, epochs, 256, epsilon, generator)
+        REFERENCE["ppo_update"](policy, value, optimizer, rollout, advantages, returns, epochs, 256, epsilon * left, generator)
 
-    return policy
+        if every and (update + 1) % every == 0:
+            scores.append(scored(policy))
+
+    return policy, value, scores
 
 
-def scored(policy: nn.Module) -> float:
-    return REFERENCE["balance_time"](policy, 16, torch.Generator().manual_seed(7))
+def lambda_bias_and_spread(
+    seed: int,
+    starts: int = 32,
+    copies: int = 256,
+    horizon: int = 300,
+) -> dict[float, tuple[float, float]]:
+    """ppo2's table. A policy and value network trained 20 updates, then copies rollouts of horizon steps from each
+    of starts states the policy reached. For each lambda, GAE's estimate of a start state's return, its advantage
+    plus its value, against the average discounted return of separate rollouts from the same state. Gives how far
+    the estimates' average misses that, and how far one estimate spreads, each averaged over the states."""
+    policy, value, _ = train_variant(20, seed, 20, 0.2, 0.8)
+    generator = torch.Generator().manual_seed(1000 + seed)
+    carts = REFERENCE["CartPole"](starts, generator)
+    REFERENCE["collect"](policy, value, carts, 40, generator)
+    start_states = carts.states.clone()
+
+    def rollouts() -> dict[str, Tensor]:
+        many = REFERENCE["CartPole"](starts * copies, generator)
+        many.states = start_states.repeat_interleave(copies, dim=0)
+        many.steps.zero_()
+
+        return REFERENCE["collect"](policy, value, many, horizon, generator)
+
+    # The true return comes from rollouts of its own, so lambda 1's estimates aren't scored against themselves.
+    apart = rollouts()
+    truth = REFERENCE["discounted_returns"](apart["rewards"], apart["dones"], 0.98)[0].view(starts, copies).mean(dim=1)
+    rollout = rollouts()
+    results = {}
+
+    for lam in (0.0, 0.5, 0.8, 0.95, 1.0):
+        advantages = REFERENCE["gae"](rollout["rewards"], rollout["values"], rollout["next_values"], rollout["dones"], 0.98, lam)
+        estimates = (advantages[0] + rollout["values"][0]).view(starts, copies)
+        results[lam] = (
+            (estimates.mean(dim=1) - truth).abs().mean().item(),
+            estimates.std(dim=1).mean().item(),
+        )
+
+    return results
 
 
 def measure_ppo() -> dict[str, object]:
-    """Every number of this chapter's lessons. About two minutes on a laptop CPU. Not run by any check."""
-    seeds = range(5)
-    results: dict[str, object] = {}
+    """Every number of this chapter's lessons, with 4 threads. About half an hour on a busy laptop CPU. Not run by
+    any check."""
+    threads = torch.get_num_threads()
+    torch.set_num_threads(4)
 
-    for clip in (False, True):
-        for steps in (10, 50):
-            results[f"ppo1 clip {clip} steps {steps}"] = [reuse_one_batch(clip, seed, steps) for seed in range(10)]
+    try:
+        seeds = range(5)
+        results: dict[str, object] = {}
 
-    results["ppo1 slopes"] = [
-        REFERENCE["objective_slopes"](torch.tensor([0.5, 0.9, 1.0, 1.1, 1.5]), advantage, 0.2).tolist() for advantage in (1.0, -1.0)
-    ]
-    results["untrained policy"] = sorted(scored(seeded_networks(seed)[0]) for seed in range(40))
+        for clip in (False, True):
+            for steps in (10, 50):
+                results[f"ppo1 clip {clip} steps {steps}"] = [reuse_one_batch(clip, seed, steps) for seed in range(10)]
 
-    for lam in (0.0, 0.95, 1.0):
-        results[f"ppo2 lambda {lam}"] = [scored(train_variant(10, seed, 4, 0.2, lam)) for seed in seeds]
+        results["ppo1 slopes"] = [
+            REFERENCE["objective_slopes"](torch.tensor([0.5, 0.9, 1.0, 1.1, 1.5]), advantage, 0.2).tolist() for advantage in (1.0, -1.0)
+        ]
+        results["untrained policy"] = sorted(scored(seeded_networks(seed)[0]) for seed in range(40))
+        results["ppo2 lambda"] = [lambda_bias_and_spread(seed) for seed in range(3)]
 
-    for updates in (5, 10, 20, 30):
-        results[f"ppo3 updates {updates}"] = [scored(train_variant(updates, seed, 4, 0.2, 0.95)) for seed in seeds]
+        for epochs, epsilon in ((1, 0.2), (4, 0.2), (20, 0.2), (20, 1e9)):
+            runs = [train_variant(390, seed, epochs, epsilon, 0.8, every=39) for seed in seeds]
+            results[f"ppo3 epochs {epochs} epsilon {epsilon} curves"] = [scores for _, _, scores in runs]
+            results[f"ppo3 epochs {epochs} epsilon {epsilon} on 100 carts"] = [scored(policy, 100, 12345) for policy, _, _ in runs]
 
-    for epochs, epsilon in ((1, 0.2), (4, 0.2), (10, 0.2), (10, 1e9)):
-        results[f"ppo3 epochs {epochs} epsilon {epsilon}"] = [scored(train_variant(10, seed, epochs, epsilon, 0.95)) for seed in seeds]
+        results["ppo3 check runs of 20 updates"] = [scored(train_variant(20, seed, 20, 0.2, 0.8)[0]) for seed in (*range(10), 839)]
 
-    return results
+        return results
+    finally:
+        torch.set_num_threads(threads)
 
 
 # ---------------------------------------------------------------------------
@@ -707,18 +783,22 @@ PPO2_LESSON = prose(
     those steps. ppo3's carts also end at a cap of 500 steps. Gymnasium calls
     that cut a truncation, apart from a fall, but here both count as an end.
 
-    ppo3 builds the training loop. One update there is 128 steps of play by
-    16 carts, then 4 epochs of PPO on them. Here is that training after 10
-    updates, scored by how many steps the greedy policy keeps 16 poles up,
-    out of 500, on 5 seeds.
+    Here is that trade measured. ppo3's loop trained a policy and V for 20
+    updates. Then 32 states the policy reached were each played out 256
+    times for 300 steps. For each lambda, GAE estimates a start state's
+    return as its advantage plus V. That is set against the average return
+    of 256 separate playouts from the state. Over 3 seeds, in steps of reward:
 
-    | Lambda | 0 | 0.95 | 1 |
-    |---|---|---|---|
-    | Steps balanced | 9 to 12 | 283 to 423 | 146 to 473 |
+    | Lambda | 0 | 0.5 | 0.8 | 0.95 | 1 |
+    |---|---|---|---|---|---|
+    | Average miss | 6.4 to 14.0 | 6.1 to 13.5 | 5.0 to 12.2 | 2.5 to 8.2 | 0.6 |
+    | Spread of one estimate | 0.05 to 0.16 | 0.08 to 0.31 | 0.53 to 1.24 | 3.1 to 4.4 | 8.9 to 10.0 |
 
-    At lambda 0 nothing is learned yet. Every step pays 1, so while V knows
-    nothing every TD error looks alike. Lambda 0.95 learns as much on average
-    as lambda 1, 344 against 347, with less than half the spread over seeds.
+    The miss is V's error, which lambda 0 takes whole and lambda 1 drops.
+    The spread is the luck of one playout, which lambda 0 never sees and
+    lambda 1 takes whole. The 0.6 left at lambda 1 is the noise of averaging
+    256 playouts. ppo3 uses lambda 0.8, the value RL Baselines3 Zoo tuned
+    for cart pole.
     """,
 )
 
@@ -905,43 +985,41 @@ PPO3_LESSON = prose(
 
     The file holds it in plain PyTorch, with the physics of gym's
     CartPole-v1. The one change is that the cap of 500 steps counts as a
-    fall, as ppo2 said. Sixteen carts run at once as the rows of one tensor,
+    fall, as ppo2 said. Eight carts run at once as the rows of one tensor,
     and a cart that falls starts over.
 
-    One update of PPO has three parts.
+    The settings are RL Baselines3 Zoo's, tuned for CartPole-v1, on Stable
+    Baselines3's defaults. One update of PPO has three parts.
 
-    - Collect: run the carts for 128 steps under no_grad, keeping states, actions, log probabilities, values, rewards and done flags.
-    - Advantages: GAE with gamma 0.99 and lambda 0.95. Advantage plus value is the return V learns to guess.
-    - Update: 4 epochs over the 2,048 samples in shuffled minibatches of 256, each step on PPO's loss plus half V's squared error.
+    - Collect: run the carts for 32 steps under no_grad, keeping states, actions, log probabilities, values, rewards and done flags.
+    - Advantages: GAE with gamma 0.98 and lambda 0.8. Advantage plus value is the return V learns to guess.
+    - Update: 20 epochs, each one step of PPO's loss plus half V's squared error on all 256 samples, with gradients clipped to norm 0.5.
 
-    That sum follows the paper's combined objective, less its entropy bonus.
-    The weight of 0.5 on V's error comes from common implementations, where
-    the paper's Atari runs used 1. They also scale each minibatch's
-    advantages to mean 0 and spread 1, which keeps the step size steady.
+    Over the run the rate falls in a line from 1e-3 to 0, and the clip from
+    0.2 to 0. So the last updates change the policy less and less. PPO's
+    loss plus half V's error follows the paper's combined objective, less
+    its entropy bonus. Each minibatch's advantages are scaled to mean 0 and
+    spread 1, and the file gives the networks, started as Stable Baselines3
+    starts them.
 
     The score is how many steps the greedy policy, always taking its likelier
-    action, keeps 16 fresh poles up. An untrained policy usually falls within
-    10 steps. Of 40 untrained ones, 32 fell within 18, and one held all 500
-    by luck.
+    action, keeps 16 fresh poles up. Of 40 untrained policies, 17 fell
+    within 12 steps, and one held all 500 by luck.
 
-    | Updates | 5 | 10 | 20 | 30 |
+    On 5 seeds, every policy first keeps all 16 poles up for 500 steps
+    within 117 updates, 30,000 steps of play. After all 390 updates, 100,000
+    steps of play, every one keeps 100 fresh poles up for all 500.
+
+    Reuse pays, and the clip keeps it safe. Here are the same 390 updates
+    with other numbers of epochs, scored on 100 fresh poles.
+
+    | Epochs | 1 | 4 | 20 | 20, no clip |
     |---|---|---|---|---|
-    | Steps balanced, 5 seeds | 265 to 434 | 283 to 423 | 280 to 500 | 205 to 476 |
+    | Steps balanced, 5 seeds | 116 to 145 | 108 to 500 | 500 on all 5 | 9 to 500 |
 
-    Ten thousand steps of play lift the policy from falling at once to
-    balancing for hundreds of steps. After that it swings from update to
-    update in place of settling at 500. RL's numbers are noisy, which is why
-    papers report many seeds.
-
-    Reuse pays, and the clip seems to. Here are 10 updates with other numbers
-    of epochs.
-
-    | Epochs | 1 | 4 | 10 | 10, no clip |
-    |---|---|---|---|---|
-    | Steps balanced | 75 to 300 | 283 to 423 | 215 to 443 | 146 to 394 |
-
-    The averages are 168, 344, 355 and 269. Five seeds are few, so the ranges
-    overlap.
+    One epoch wastes most of each batch. Four get to 499.8 or more on 3
+    seeds and stall below 175 on 2. Twenty reach 500 on all 5. Without the
+    clip, 20 epochs broke one seed, whose policy ended falling within 9 steps.
     """,
 )
 
@@ -956,7 +1034,8 @@ PPO3_SOURCE = source_file(
     from torch import Tensor
 
     shuffled = torch.randperm(6, generator=torch.Generator().manual_seed(0))    # the numbers 0 to 5 in a random order
-    flat = torch.zeros(128, 16, 4).flatten(0, 1)                                 # shape (2048, 4), steps and carts in one
+    flat = torch.zeros(32, 8, 4).flatten(0, 1)                                   # shape (256, 4), steps and carts in one
+    share_left = 1 - 3 / 10                                                      # 0.7 of 10 updates still to run at update 3
 
 
     # The cart poles, the networks, and the pieces of ppo1 and ppo2.
@@ -997,8 +1076,9 @@ PPO3_SOURCE = source_file(
     #   advantages and returns, with .flatten(0, 1), steps first, so steps and
     #   carts become one. For each of epochs epochs, shuffle with
     #   torch.randperm and generator, and take one optimizer step on
-    #   minibatch_loss for each minibatch of that order. Return the last loss
-    #   as a plain number.
+    #   minibatch_loss for each minibatch of that order. Before each step,
+    #   clip both networks' gradients to a total norm of 0.5, as clipping1 did.
+    #   Return the last loss as a plain number.
     def ppo_update(
         policy: nn.Module,
         value: nn.Module,
@@ -1014,10 +1094,12 @@ PPO3_SOURCE = source_file(
         ...
 
 
-    # TODO: Finish train_ppo. Each of updates updates collects 128 steps,
-    #   takes gae with gamma 0.99 and lam 0.95, adds the values to get the
-    #   returns, and calls ppo_update with 4 epochs, minibatches of 256 and
-    #   epsilon 0.2. Return the policy.
+    # TODO: Finish train_ppo. For each update, take left, the share of the
+    #   updates still to run, and set the optimizer's rate to 1e-3 times left
+    #   in optimizer.param_groups[0]["lr"]. Collect 32 steps, take gae with
+    #   gamma 0.98 and lam 0.8, and add the values to get the returns. Call
+    #   ppo_update with 20 epochs, minibatches of 256 and epsilon 0.2 times
+    #   left. Return the policy.
 ''' + indented(TRAIN_STUB) + '''
 
 
@@ -1045,7 +1127,8 @@ PPO3_SOLUTION = source_file(
     from torch import Tensor
 
     shuffled = torch.randperm(6, generator=torch.Generator().manual_seed(0))
-    flat = torch.zeros(128, 16, 4).flatten(0, 1)
+    flat = torch.zeros(32, 8, 4).flatten(0, 1)
+    share_left = 1 - 3 / 10
 
 
 ''' + indented(CARTPOLE_PART) + '''
@@ -1071,7 +1154,7 @@ PPO3_SOLUTION = source_file(
 def seeded_networks(seed: int) -> tuple[nn.Module, nn.Module]:
     torch.manual_seed(seed)
 
-    return REFERENCE["mlp"](2), REFERENCE["mlp"](1)
+    return REFERENCE["networks"]()
 
 
 def check_collect(found: object) -> None:
@@ -1208,19 +1291,20 @@ def check_train_ppo(found: object) -> None:
 
 
 def check_ppo_learns(found: object) -> None:
-    # Over 20 seeds the reference reached 181 to 489 steps after 10 updates. Seed 839's untrained policy falls in 9.5.
-    steps = REFERENCE["balance_time"](found(10, 839), 16, torch.Generator().manual_seed(7))
+    # After 20 updates the reference reached 79 to 259 steps over seeds 0 to 9, and 99.4 on seed 839, whose untrained
+    # policy falls in 9.25.
+    steps = REFERENCE["balance_time"](found(20, 839), 16, torch.Generator().manual_seed(7))
 
-    if steps < 100:
-        raise Mismatch(f"After 10 updates of train_ppo, the greedy policy keeps 16 poles up for {steps:.1f} steps on average, but it should pass 100.")
+    if steps < 50:
+        raise Mismatch(f"After 20 updates of train_ppo, the greedy policy keeps 16 poles up for {steps:.1f} steps on average, but it should pass 50.")
 
 
 def check_balance_time(found: object) -> None:
-    # Seed 4's untrained policy happens to hold all 8 carts up to LONGEST, so a loop that stops short shows.
+    # Seed 27's untrained policy happens to hold all 8 carts up to LONGEST, so a loop that stops short shows.
     for name, policy in (
         ("an untrained policy", seeded_networks(840)[0]),
         ("a policy after 5 updates", REFERENCE["train_ppo"](5, 841)),
-        ("a policy that holds every cart to the end", seeded_networks(4)[0]),
+        ("a policy that holds every cart to the end", seeded_networks(27)[0]),
     ):
         grad_seen: list[bool] = []
         hook = policy.register_forward_pre_hook(lambda module, inputs: grad_seen.append(torch.is_grad_enabled()))
@@ -1279,7 +1363,7 @@ def check_ppo3(checker: Checker) -> None:
     )
     checker.test(
         function="train_ppo",
-        description="learns to balance within 10 updates",
+        description="learns to balance within 20 updates",
         run=check_ppo_learns,
     )
 
@@ -1298,9 +1382,11 @@ PPO3 = Exercise(
         "value(states).squeeze(1) are the guesses.",
         "ppo_update": "rollout[\"states\"].flatten(0, 1), the others .flatten(). order = torch.randperm(len(states), "
         "generator=generator), and batch = order[start : start + minibatch] for start in range(0, len(states), "
-        "minibatch). Zero the gradients before each backward.",
-        "train_ppo": "rollout = collect(policy, value, carts, 128, generator). gae takes the rollout's rewards, values, "
-        "next_values and dones. returns = advantages + rollout[\"values\"].",
+        "minibatch). Zero the gradients before each backward, then nn.utils.clip_grad_norm_ on both networks' "
+        "parameters in one list before optimizer.step().",
+        "train_ppo": "for update in range(updates), left = 1 - update / updates. rollout = collect(policy, value, "
+        "carts, 32, generator). gae takes the rollout's rewards, values, next_values and dones. returns = advantages + "
+        "rollout[\"values\"].",
         "balance_time": "Make CartPole(count, generator), a standing mask of ones as bools and a survived count of "
         "zeros. Each step, add standing to survived, then set standing to False where dones is True.",
     },

@@ -1566,7 +1566,7 @@ CASES: list[tuple[str, str, str, str]] = [
     ("ppo3", "ppo_update never zeroes the gradients", "            optimizer.zero_grad()\n", ""),
     ("ppo3", "ppo_update runs one epoch", "for _ in range(epochs):", "for _ in range(1):"),
     ("ppo3", "train_ppo leaves the values out of the returns", 'returns = advantages + rollout["values"]', "returns = advantages"),
-    ("ppo3", "train_ppo uses lambda 1", "0.99, 0.95)", "0.99, 1.0)"),
+    ("ppo3", "train_ppo uses lambda 1", "0.98, 0.8)", "0.98, 1.0)"),
     ("ppo3", "balance_time keeps counting after a fall", "            standing &= ~dones\n", ""),
     ("ppo3", "balance_time records for autograd", "    with torch.no_grad():\n        for _ in range(LONGEST):", "    if True:\n        for _ in range(LONGEST):"),
     ("ppo3", "balance_time gives a tensor", "return survived.mean().item()", "return survived.mean()"),
@@ -2099,6 +2099,14 @@ CASES: list[tuple[str, str, str, str]] = [
     ("vq2", "first_codebook takes the first rows", "picks = torch.randperm(len(vectors), generator=generator)[:codes]", "picks = torch.arange(codes)"),
     ("vq2", "first_codebook picks rows with repeats", "picks = torch.randperm(len(vectors), generator=generator)[:codes]", "picks = torch.randint(0, len(vectors), (codes,), generator=generator)"),
     ("vq2", "first_codebook shuffles without the generator", "picks = torch.randperm(len(vectors), generator=generator)[:codes]", "picks = torch.randperm(len(vectors))[:codes]"),
+    ("ppo3", "ppo_update never clips the gradients", "            nn.utils.clip_grad_norm_([*policy.parameters(), *value.parameters()], 0.5)\n", ""),
+    ("ppo3", "ppo_update clips the policy's gradients alone", "nn.utils.clip_grad_norm_([*policy.parameters(), *value.parameters()], 0.5)", "nn.utils.clip_grad_norm_(policy.parameters(), 0.5)"),
+    ("ppo3", "ppo_update clips after the step", "            nn.utils.clip_grad_norm_([*policy.parameters(), *value.parameters()], 0.5)\n            optimizer.step()", "            optimizer.step()\n            nn.utils.clip_grad_norm_([*policy.parameters(), *value.parameters()], 0.5)"),
+    ("ppo3", "train_ppo keeps the rate fixed", 'optimizer.param_groups[0]["lr"] = 1e-3 * left', 'optimizer.param_groups[0]["lr"] = 1e-3'),
+    ("ppo3", "train_ppo keeps the clip fixed", "20, 256, 0.2 * left, generator)", "20, 256, 0.2, generator)"),
+    ("ppo3", "train_ppo counts left from 1 past the start", "left = 1 - update / updates", "left = 1 - (update + 1) / updates"),
+    ("ppo3", "train_ppo uses gamma 0.99", "0.98, 0.8)", "0.99, 0.8)"),
+    ("ppo3", "train_ppo runs 4 epochs", "20, 256, 0.2 * left, generator)", "4, 256, 0.2 * left, generator)"),
     ("conv5", "pointwise reshapes the wrong way", "return (weight @ x.reshape(c, -1)).reshape(-1, h, w)", "return (weight @ x.reshape(-1, c).T).reshape(-1, h, w)"),
 ]
 
