@@ -123,12 +123,13 @@ DATASETS: dict[str, tuple[RemoteFile, ...]] = {
             "d1c47305887e2252bf1ccbd74ff159a6",
         ),
     ),
-    # Zhou and colleagues' hourly readings of one electricity transformer, ETTh1, under CC BY-ND 4.0, pinned to the
-    # commit that last changed it.
-    "ett": (
+    # The CDC's weekly counts of doctor visits for flu-like illness in the US, 2002 to 2020, the ILI table of the long
+    # forecasting benchmarks. US government data is public domain. This copy is the one torch-timeseries downloads,
+    # pinned to the commit that last changed it, read out of the zip in memory.
+    "illness": (
         RemoteFile(
-            "https://raw.githubusercontent.com/zhouhaoyi/ETDataset/11ab373cf9c9f5be7698e219a5a170e1b1c8a930/ETT-small/ETTh1.csv",
-            "8381763947c85f4be6ac456c508460d6",
+            "https://raw.githubusercontent.com/wwy155/multivariate_timeseries_datasets/87a83a1fbff3bb61c507341f2695d988192bb33b/illness.zip",
+            "e18542fafd509ad52ffedde1b0f1018d",
         ),
     ),
 }
@@ -154,14 +155,15 @@ HOUSING_PLACES: tuple[str, ...] = (
     "NEAR OCEAN",
 )
 
-# ETTh1's seven readings: six power loads, high, middle and low, useful and useless, then the oil temperature.
-ETT_COLUMNS: tuple[str, ...] = (
-    "HUFL",
-    "HULL",
-    "MUFL",
-    "MULL",
-    "LUFL",
-    "LULL",
+# The flu table's seven weekly series. The last, which the benchmarks call OT, is the total of patients seen, since the
+# flu-like visits over it give the unweighted share.
+ILLNESS_COLUMNS: tuple[str, ...] = (
+    "% WEIGHTED ILI",
+    "%UNWEIGHTED ILI",
+    "AGE 0-4",
+    "AGE 5-24",
+    "ILITOTAL",
+    "NUM. OF PROVIDERS",
     "OT",
 )
 
@@ -460,14 +462,16 @@ def load_housing() -> tuple[Tensor, Tensor, Tensor]:
 
 
 @functools.cache
-def read_ett() -> Tensor:
-    with dataset_file("ett", "ETTh1.csv").open(newline="") as table:
-        rows = list(csv.DictReader(table))
+def read_illness() -> Tensor:
+    # Read by its name in memory and never extracted, so no path in the archive is ever written to.
+    with zipfile.ZipFile(dataset_file("illness", "illness.zip")) as archive:
+        text = archive.read("illness/national_illness.csv").decode("ascii")
 
-    return torch.tensor([[float(row[column]) for column in ETT_COLUMNS] for row in rows])
+    rows = list(csv.DictReader(io.StringIO(text)))
+
+    return torch.tensor([[float(row[column]) for column in ILLNESS_COLUMNS] for row in rows])
 
 
-def load_ett() -> Tensor:
-    """ETTh1, one electricity transformer's readings every hour from July 2016 to June 2018, of shape (17420, 7), the
-    columns ETT_COLUMNS names. The last column is the oil temperature."""
-    return read_ett().clone()
+def load_illness() -> Tensor:
+    """The CDC's flu table, 966 weeks from 2002 to 2020, of shape (966, 7), the columns ILLNESS_COLUMNS names."""
+    return read_illness().clone()
