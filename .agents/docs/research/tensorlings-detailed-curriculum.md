@@ -45,7 +45,7 @@ It plans about 340 exercises. Names and counts can still shift while a phase is 
 | quizzes | quiz2 | derivatives, the chain rule and backprop together |
 | 07_micrograd | micrograd1 | the project starts, subtraction, negation, powers and division in your engine, built from what it has |
 | | micrograd2 | exp and log with their backward steps |
-| | micrograd3 | a gradient check of your engine against numerical estimates and PyTorch on random expressions |
+| | micrograd3 | a gradient check of your engine against numerical estimates and PyTorch on a few fixed expressions |
 
 The project finishes the engine of `05_autograd`, as Karpathy's micrograd does, without its neural net part, which belongs to Section 3. It beat a hand backprop of one big tensor expression and a gradient checker on its own, since the engine covers both and the check is its last step.
 
