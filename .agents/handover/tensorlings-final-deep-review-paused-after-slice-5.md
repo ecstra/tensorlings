@@ -72,6 +72,21 @@ Slice 9, 34_upsampling to 38_soft_design:
 
 Slice 9 at the stop: only upsampling.py is touched. upsample1, transposed1 and unet1 are done. unet2 has the new check input and `measure_unet`, but the wrong answer case, a module run of `measure_unet` and the new table are not done. Nothing in dna.py, augmentation.py or transfer.py is done yet.
 
+## Slice 8's review, not yet fixed
+
+Slice 8, 30_convolution to 33_classic_nets, was reviewed except resnet2's 32 layer rows. Its findings, none fixed yet:
+1. resnet2's `plain_stack` and `residual_stack` and vgg1's `vgg_block` accept a stack built by list multiplication, one module repeated. Fail when the same layer object appears twice.
+2. vgg1 passes convolutions at stride 2 or a pool at stride 1. Run the block on zeros and require the halved size, and print `padding='same'` correctly.
+3. lenet1's `lenet_parameters` passes `return 61706`, since the lesson prints the number. Give it an argument such as `classes`, or drop the number.
+4. fft1's "9 to 13 times faster" doesn't reproduce (3.8 to 4.9 at 4 threads). Teach padding to the next power of two, which gives about 30 times, and add a measure function.
+5. pooling2's flat model "cross moved" is 47.5%, not 49.0%, the share of images with no cross. Add a measure function.
+6. resnet2 uses CIFAR-10, Nesterov momentum, flips and "plain net" without explaining them.
+7. resnet1 and resnet2 facts: the nets are the paper's sizes, the paper used identity shortcuts with zero padding, 6.43% is a best of 5 (mean 6.61%), the paper trained with plain momentum, and the projection blocks don't start as relu(x).
+8. fft1's checks pass answers that skip the spectra. 9. padding1 accepts a float. 10. conv5 accepts `range(k)`.
+11 to 16, minor: lenet1's "second convolution", fft1's rfft strength, backticks in vgg1 and resnet2 TODOs, measured claims for vgg1 (VGG's own 5x5 against 3x3 pair result), conv5 (the bottleneck's weight count) and pooling1 (global average 95.6% to 98.8% against max's 100%), images leaned on more than needed, and the LeNet link's DOI.
+
+Not done: resnet2's 32 layer rows, which need more seeds since the 20 and 32 layer ResNet ranges overlap.
+
 ## Slice 10's review, not yet fixed
 
 Slice 10, 39_rnn to 42_bidirectional, was reviewed up to the stop. Its findings, none fixed yet:
@@ -91,7 +106,7 @@ Not reviewed: the checks of gru1 and bidir1, bidir2's numbers, lstm2's last four
 ## Next step
 
 1. Pop the stash, check each slice's files import, and finish slices 6, 7 and 9 with new fixer agents, using the lists above.
-2. Rerun or finish the reviews of slices 8 and 10.
+2. Fix slices 8 and 10 from the lists below, finishing the runs each names as not done.
 3. Run slices 11 to 26 the same way, about five agents at a time.
 4. Then TODO-017's close-out: the full dev check and every wrong answer on a quiet machine, the screen driver, setting up the owner's folder from nothing, and the handovers. Close TODO-017, TODO-018 and TODO-019.
 
