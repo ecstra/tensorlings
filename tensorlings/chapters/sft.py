@@ -44,6 +44,8 @@ SFT = Chapter(
 
         - [Ouyang and colleagues, training language models to follow instructions](https://arxiv.org/abs/2203.02155)
         - [Karpathy, nanochat](https://github.com/karpathy/nanochat)
+        - [Huerta-Enochian and Ko, instruction fine tuning, does prompt loss matter?](https://arxiv.org/abs/2401.13586)
+        - [Shi and colleagues, instruction tuning with loss over instructions](https://arxiv.org/abs/2405.14394)
         - [PyTorch, F.cross_entropy and its ignore_index](https://docs.pytorch.org/docs/2.14/generated/torch.nn.functional.cross_entropy.html)
         """,
     ),
@@ -258,14 +260,21 @@ def every_token_batch(
     return SFT_REFERENCE["pad_rows"](rows)
 
 
-def taught_gpt(
-    steps: int,
+def held_out_score(model: nn.Module) -> float:
+    names, positions = SFT_REFERENCE["chat_vocabulary"]()
+    _, test_words = SFT_REFERENCE["question_words"]()
+
+    return SFT_REFERENCE["exact_match"](model, test_words[:200], positions, names)
+
+
+def learning_curve(
+    lr: float,
     every_token: bool = False,
     pretrained: bool = True,
     seed: int = 0,
-) -> nn.Module:
-    """gpt3's GPT, or a fresh one, taught the made up task for steps steps of 32 pairs, as sft2's check does
-    with seed 0."""
+) -> list[float]:
+    """gpt3's GPT, or a fresh one, taught the made up task in steps of 32 pairs at rate lr, as sft2's check does
+    with seed 0. Gives the share of 200 held out words answered exactly after 100, 200, 300 and 400 steps."""
     torch.manual_seed(seed)
     model = MODEL_REFERENCE["GPT"](65, 128, 128, 4, 4)
 
@@ -275,39 +284,44 @@ def taught_gpt(
     SFT_REFERENCE["grow_vocabulary"](model, 3)
     _, positions = SFT_REFERENCE["chat_vocabulary"]()
     train_words, _ = SFT_REFERENCE["question_words"]()
-    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=0.0)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=0.0)
     generator = torch.Generator().manual_seed(seed)
     make_batch = every_token_batch if every_token else SFT_REFERENCE["chat_batch"]
+    shares = []
 
-    for _ in range(steps):
+    for step in range(1, 401):
         x, y = make_batch(SFT_REFERENCE["word_pairs"](train_words, 32, generator), positions)
         SFT_REFERENCE["sft_step"](model, optimizer, x, y)
 
-    return model
+        if step % 100 == 0:
+            shares.append(held_out_score(model))
+
+    return shares
 
 
-def held_out_score(model: nn.Module) -> float:
-    names, positions = SFT_REFERENCE["chat_vocabulary"]()
-    _, test_words = SFT_REFERENCE["question_words"]()
-
-    return SFT_REFERENCE["exact_match"](model, test_words[:200], positions, names)
-
-
-def measure_sft() -> dict[str, float]:
-    """Every number in sft1's and sft2's tables, the share of 200 held out words answered exactly, on the CPU,
-    averaged over seeds 0, 1 and 2."""
+def measure_sft(seeds: tuple[int, ...] = (0, 1, 2)) -> dict[str, list[list[float]]]:
+    """Every number in sft1's and sft2's tables, and the rates sft2 tried, on the CPU with 2 threads. Each run gives
+    the share of 200 held out words answered exactly after 100 to 400 steps, one list per seed."""
     runs = {
-        "answer scored": dict(),
-        "every token scored": dict(every_token=True),
-        "untrained GPT": dict(pretrained=False),
+        "answer scored, 0.0003": dict(lr=3e-4),
+        "every token scored, 0.0003": dict(lr=3e-4, every_token=True),
+        "gpt3's GPT, 0.0001": dict(lr=1e-4),
+        "gpt3's GPT, 0.001": dict(lr=1e-3),
+        "untrained, 0.0001": dict(lr=1e-4, pretrained=False),
+        "untrained, 0.0003": dict(lr=3e-4, pretrained=False),
+        "untrained, 0.001": dict(lr=1e-3, pretrained=False),
+        "untrained, 0.003": dict(lr=3e-3, pretrained=False),
     }
-    results: dict[str, float] = {}
+    threads = torch.get_num_threads()
+    torch.set_num_threads(2)
+    results: dict[str, list[list[float]]] = {}
 
-    for name, settings in runs.items():
-        for steps in (0, 100, 200, 300, 400):
-            scores = [held_out_score(taught_gpt(steps, seed=seed, **settings)) for seed in (0, 1, 2)]
-            results[f"{name}, {steps} steps"] = sum(scores) / len(scores)
-            print(name, steps, [round(score, 3) for score in scores], flush=True)
+    try:
+        for name, settings in runs.items():
+            results[name] = [learning_curve(seed=seed, **settings) for seed in seeds]
+            print(name, [[round(share, 3) for share in curve] for curve in results[name]], flush=True)
+    finally:
+        torch.set_num_threads(threads)
 
     return results
 
@@ -339,7 +353,7 @@ SFT1_LESSON = prose(
     ```
 
     Training reads the whole chat, but only the answer is scored. The user
-    writes the question, so learning to predict it is wasted effort.
+    writes the question, and the model only has to write answers.
     `F.cross_entropy` skips every target of -100, its default
     `ignore_index`, as adder2 skipped padding.
 
@@ -356,14 +370,16 @@ SFT1_LESSON = prose(
 
     | Steps of 32 chats | 100 | 200 | 300 | 400 |
     |---|---|---|---|---|
-    | Answer scored | 8% | 74% | 90% | 95% |
-    | Every token scored | 15% | 84% | 87% | 79% |
+    | Answer scored | 54% | 95% | 97% | 98% |
+    | Every token scored | 19% | 87% | 95% | 97% |
 
-    Scoring every token led at 100 and 200 steps, by an amount within the
-    spread between seeds. At 300 the two are close. At 400, scoring the
-    answer alone reaches 95%, and scoring every token slips to 79%, with one
-    seed down at 56%. Three seeds are few, but the answer alone was the
-    steadier.
+    Scoring the answer alone learns faster. It led on every seed at 100 and
+    200 steps, and by 400 the two are within two points.
+
+    Huerta-Enochian and Ko scaled the loss on the question between zero and
+    full. With short answers, a small scale, 0.01 to 0.5, did best. Shi and
+    colleagues found scoring the question helps when questions are long,
+    answers brief and examples few.
     """,
 )
 
@@ -582,23 +598,24 @@ SFT2_LESSON = prose(
     `nn.Embedding.from_pretrained(rows, freeze=False)` makes a table that
     starts from given rows and keeps training.
 
-    Then SFT is plain training on batches of chats, at a rate of 0.001 with
-    AdamW. To answer, the model reads `USER`, the question and `ASSISTANT`,
-    then writes its likeliest token, one at a time, until it writes `END`.
+    Then SFT is plain training on batches of chats with AdamW. A trained
+    model takes a small rate, as finetune1 found, so here it is 0.0003. To
+    answer, the model reads `USER`, the question and `ASSISTANT`, then
+    writes its likeliest token, one at a time, until it writes `END`.
 
     Here is the share of 200 held out words answered exactly, by steps of 32
-    chats, for gpt3's GPT and for the same GPT untrained. Each is the
-    average of 3 seeds.
+    chats, for gpt3's GPT and for the same GPT untrained. Both ran at 0.0001,
+    0.0003 and 0.001, the untrained one at 0.003 too. Both did best at
+    0.0003, shown here as the average of 3 seeds.
 
     | Steps | 0 | 100 | 200 | 300 | 400 |
     |---|---|---|---|---|---|
-    | gpt3's GPT | 0% | 8% | 74% | 90% | 95% |
-    | Untrained GPT | 0% | 36% | 68% | 73% | 87% |
+    | gpt3's GPT | 0% | 54% | 95% | 97% | 98% |
+    | Untrained GPT | 0% | 37% | 80% | 92% | 96% |
 
-    The untrained GPT starts faster, likely because gpt3's GPT first has to
-    unlearn continuing the text as Shakespeare. From 200 steps on, gpt3's GPT
-    is ahead. The check trains your gpt3 model for 400 steps and asks for 85%
-    of 100 held out words.
+    gpt3's GPT learns faster, ahead on every seed at 200 and 300 steps. By
+    400 the untrained one has nearly caught up. The check trains your gpt3
+    model for 400 steps and asks for 85% of 100 held out words.
     """,
 )
 
@@ -891,7 +908,7 @@ def check_taught_gpt(found: object) -> None:
     SFT_REFERENCE["grow_vocabulary"](model, 3)
     names, positions = SFT_REFERENCE["chat_vocabulary"]()
     train_words, test_words = SFT_REFERENCE["question_words"]()
-    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=0.0)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4, weight_decay=0.0)
     generator = torch.Generator().manual_seed(0)
 
     for _ in range(400):

@@ -46,13 +46,15 @@ LORA = Chapter(
         task. LoRA freezes the model and trains a small update of low rank
         beside each chosen layer, which starts at zero and folds back into the
         layer once trained. You build it from its paper, put it on your GPT,
-        and measure how close it comes to fine tuning everything.
+        and measure when it matches fine tuning everything.
 
         ## Further reading
 
         - [Hu and colleagues, LoRA, low rank adaptation of large language models](https://arxiv.org/abs/2106.09685)
         - [Microsoft's loralib, the paper's own code](https://github.com/microsoft/LoRA)
         - [Aghajanyan and colleagues, intrinsic dimensionality explains the effectiveness of language model fine tuning](https://arxiv.org/abs/2012.13255)
+        - [Biderman and colleagues, LoRA learns less and forgets less](https://arxiv.org/abs/2405.09673)
+        - [Schulman and Thinking Machines, LoRA without regret](https://thinkingmachines.ai/blog/lora/)
         """,
     ),
 )
@@ -778,7 +780,7 @@ LORA_REFERENCE.update(namespace_of(GIVEN_PARTS + LORA_PART + EVERYWHERE_SOLUTION
 
 
 def measure_lora() -> None:
-    """The numbers in lora3's two tables, 1,000 steps on the best device from the trained gpt3 model. Each run
+    """The Persuasion numbers in lora3's tables, 1,000 steps on the best device from the trained gpt3 model. Each run
     fine tunes 300 steps and then 700 more, a fresh AdamW for each, and scores after each. Takes about 15 minutes on
     MPS."""
     device = best_device()
@@ -815,28 +817,102 @@ def measure_lora() -> None:
     print("random", [round(LORA_REFERENCE["update_energy"](noise, k), 3) for k in (1, 4, 16)])
 
 
+def pig_latin_run(
+    lora: bool,
+    seed: int,
+    steps: int = 1000,
+) -> tuple[float, list[list[float]]]:
+    """Post training's job, from the trained gpt3 model: 83_post_training's pig latin, every demonstration right,
+    batches of 64, AdamW with no decay, on the best device. LoRA is rank 4 on every Linear at 0.003, and fine tuning
+    everything runs at 0.0001. Gives the share of 200 held out words answered right, and for fine tuning everything,
+    each block's c_attn update energy at the top 1, 4 and 16 directions."""
+    from .post_training import POST_REFERENCE, task_setup
+
+    device = best_device()
+    characters, positions, train_words, test_words = task_setup()
+    torch.manual_seed(seed)
+    model = LORA_REFERENCE["trained_gpt"]()
+    before = [block.attn.c_attn.weight.detach().clone() for block in model.h]
+
+    if lora:
+        LORA_REFERENCE["add_lora_everywhere"](model, 4, 4.0)
+
+    model.to(device)
+    trainable = [parameter for parameter in model.parameters() if parameter.requires_grad]
+    optimizer = torch.optim.AdamW(trainable, lr=3e-3 if lora else 1e-4, weight_decay=0.0)
+    generator = torch.Generator().manual_seed(seed)
+
+    for _ in range(steps):
+        picked = [train_words[place] for place in torch.randint(0, len(train_words), (64,), generator=generator).tolist()]
+        rows = [POST_REFERENCE["chat_example"](word, POST_REFERENCE["pig_latin"](word), positions) for word in picked]
+        x, y = POST_REFERENCE["pad_examples"](rows, positions["\n"])
+        POST_REFERENCE["sft_step"](model, optimizer, x, y, device)
+
+    right, _ = POST_REFERENCE["scores"](model, test_words[:200], positions, characters, device)
+    energies = []
+
+    if not lora:
+        model.cpu()
+        energies = [
+            [LORA_REFERENCE["update_energy"](block.attn.c_attn.weight.detach() - old, k) for k in (1, 4, 16)]
+            for block, old in zip(model.h, before)
+        ]
+
+    return right, energies
+
+
+def measure_pig_latin(seeds: tuple[int, ...] = (0, 1, 2)) -> dict[str, list[float]]:
+    """lora3's first table, LoRA against fine tuning everything on post training's task, over seeds, and the update
+    energies of the fine tune everything made. Threads pinned to 4. About 3 minutes a run on MPS."""
+    threads = torch.get_num_threads()
+    torch.set_num_threads(4)
+    results: dict[str, list[float]] = {"everything": [], "LoRA": []}
+
+    try:
+        for seed in seeds:
+            right, energies = pig_latin_run(False, seed)
+            results["everything"].append(right)
+            print("everything", seed, right, [[round(share, 3) for share in block] for block in energies], flush=True)
+            right, _ = pig_latin_run(True, seed)
+            results["LoRA"].append(right)
+            print("LoRA", seed, right, flush=True)
+    finally:
+        torch.set_num_threads(threads)
+
+    return results
+
+
 LORA3_LESSON = prose(
     """
-    lora2 counted what LoRA saves. Here is what it costs, from your gpt3 model
-    on Persuasion, 1,000 steps each on MPS. Fine tuning everything ran at
-    0.0001, and LoRA at 0.003, which beat 0.001 for every LoRA here.
+    lora2 counted what LoRA saves. Here is what it costs on the job it is made
+    for, post training. The job is 83_post_training's, writing a word in pig
+    latin, `string` as `ingstray`, from 64 right demonstrations a step. Each
+    run started from your gpt3 model and took 1,000 steps on MPS.
 
-    | Trained | Weights | Persuasion | Shakespeare |
+    | Trained | Weights | Rate | Right of 200 held out words, 3 seeds |
     |---|---|---|---|
-    | nothing | 0 | 1.744 | 1.535 |
-    | everything | 818,048 | 1.260 | 2.020 |
-    | LoRA on `c_attn`, rank 4 | 8,192 | 1.440 | 1.904 |
-    | LoRA on every Linear, rank 1 | 8,192 | 1.413 | 1.956 |
-    | LoRA on every Linear, rank 4 | 32,768 | 1.334 | 1.995 |
-    | LoRA on every Linear, rank 16 | 131,072 | 1.279 | 2.064 |
+    | everything | 818,048 | 0.0001 | 99%, 98.5%, 99% |
+    | LoRA on every Linear, rank 4 | 32,768 | 0.003 | 98.5%, 97.5%, 96% |
 
-    With 1% of the weights, LoRA took about two thirds of the gain here.
-    Spread over every Linear, they did better than piled on `c_attn`. It took
-    16% of the weights to come within 0.02 of fine tuning everything.
+    With 4% of the weights, LoRA comes within one to three points of fine
+    tuning everything. Its best rate sits far above, as Schulman and Thinking
+    Machines found too. They saw LoRA match full fine tuning on small and
+    medium post training sets, with LoRA on every layer.
 
-    That is short of the paper. On GPT-3, rank 1 on the query and value
-    weights was enough for its tasks. LoRA bets that a fine tune changes the
-    weights in only a few directions, a low intrinsic rank, as the paper says.
+    Learning a whole new text is a different job. Here is Persuasion, from
+    finetune1, after 1,000 steps at the same rates.
+
+    | Trained | Weights | Persuasion's loss |
+    |---|---|---|
+    | nothing | 0 | 1.744 |
+    | everything | 818,048 | 1.260 |
+    | LoRA on every Linear, rank 4 | 32,768 | 1.334 |
+    | LoRA on every Linear, rank 16 | 131,072 | 1.279 |
+
+    Biderman and colleagues found full fine tuning ahead on large code and
+    math sets too. Thinking Machines' rule joins the two. LoRA matches while
+    its weights can hold what the data teaches. So use LoRA to teach a format
+    or a skill, and fine tune everything to learn a large new text.
 
     A matrix's **singular values** say how much it stretches along each of
     its own directions, largest first. Their squares add up to the sum of
@@ -852,23 +928,21 @@ LORA3_LESSON = prose(
     ```
 
     `update_energy` measures the share of an update its top k directions hold.
-    Here it is for the change full fine tuning made to each block's `c_attn`,
-    384 by 128, next to a random matrix of that shape.
+    Here it is for each block's `c_attn` change, 384 by 128, from fine tuning
+    everything on each job, with a random matrix beside it.
 
-    | Matrix | top 1 | top 4 | top 16 |
-    |---|---|---|---|
-    | block 0's update | 11% | 31% | 73% |
-    | block 1's update | 24% | 53% | 84% |
-    | block 2's update | 8% | 28% | 69% |
-    | block 3's update | 5% | 17% | 48% |
-    | random | 2% | 7% | 26% |
+    | Matrix | Top 4, pig latin | Top 4, Persuasion | Top 16, pig latin | Top 16, Persuasion |
+    |---|---|---|---|---|
+    | block 0's update | 50% | 31% | 83% to 84% | 73% |
+    | block 1's update | 52% to 56% | 53% | 86% to 88% | 84% |
+    | block 2's update | 47% to 51% | 28% | 82% to 85% | 69% |
+    | block 3's update | 42% to 44% | 17% | 77% | 48% |
+    | random | 7% | 7% | 26% | 26% |
 
-    The updates sit in far fewer directions than random ones, which is why a
-    low rank catches much of them. They still spread past rank 4, which is
-    why rank 4 fell short. Biderman and colleagues found the same at scale in
-    2024. Full fine tuning's updates had 10 to 100 times the rank of usual LoRA
-    settings, and LoRA learned less. The paper itself warns that a small rank
-    won't suit every task, so measure it, as here.
+    Both sit in far fewer directions than random ones, the low intrinsic rank
+    LoRA bets on. The post training update sits in fewer still, so a low rank
+    catches it. Biderman and colleagues measured full fine tuning's updates on
+    large sets at 10 to 100 times the rank of usual LoRA settings.
     """,
 )
 
@@ -1110,7 +1184,7 @@ def check_lora3(checker: Checker) -> None:
 LORA3 = Exercise(
     name="lora3",
     chapter=LORA,
-    title="How close a low rank comes",
+    title="When a low rank is enough",
     lesson=LORA3_LESSON,
     source=LORA3_SOURCE,
     solution=LORA3_SOLUTION,
