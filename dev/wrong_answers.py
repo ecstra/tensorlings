@@ -2398,6 +2398,7 @@ CASES: list[tuple[str, str, str, str]] = [
     ("series2", "normalized takes the mean over the rows", "mean = series.mean(dim=1, keepdim=True)", "mean = series.mean(dim=0, keepdim=True)"),
     ("series2", "normalized leaves out the 1e-5", "spread = series.std(dim=1, keepdim=True) + 1e-5", "spread = series.std(dim=1, keepdim=True)"),
     ("series2", "normalized divides by the variance", "spread = series.std(dim=1, keepdim=True) + 1e-5", "spread = series.var(dim=1, keepdim=True) + 1e-5"),
+    ("series2", "normalized takes RevIN's own spread", "spread = series.std(dim=1, keepdim=True) + 1e-5", "spread = (series.var(dim=1, keepdim=True, unbiased=False) + 1e-5).sqrt()"),
     ("series2", "restored adds before scaling", "return forecasts * spread + mean", "return (forecasts + mean) * spread"),
     ("series2", "NormalizedLinear never restores", "return restored(self.linear(scaled), mean, spread)", "return self.linear(scaled)"),
     ("series2", "NormalizedLinear runs the Linear on the raw series", "return restored(self.linear(scaled), mean, spread)", "return restored(self.linear(series), mean, spread)"),

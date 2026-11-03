@@ -369,9 +369,10 @@ SERIES1_SOURCE = source_file(
     count = (10 - 4) // 2 + 2    # 5 patches of 4 in a series of 10, every 2 readings
 
 
-    # TODO: Return how many patches a lookback of readings makes, patches of
-    #   length readings every stride, with stride copies of the last reading
-    #   added at the end, as PatchTST does. Give a plain int.
+    # TODO: Return how many patches a series of `lookback` readings makes.
+    #   Each patch holds `length` readings, and a new one starts every
+    #   `stride` readings, after `stride` copies of the last reading are added
+    #   at the end, as PatchTST does. Give a plain int.
     def patch_count(
         lookback: int,
         length: int,
@@ -383,10 +384,11 @@ SERIES1_SOURCE = source_file(
     sliding = torch.arange(6.0).unsqueeze(0).unfold(1, 3, 2)    # tensor([[[0., 1., 2.], [2., 3., 4.]]])
 
 
-    # TODO: Return the patches of each series. series has shape (rows,
-    #   readings). Add stride copies of each row's last reading at its end,
-    #   then cut patches of length readings every stride readings, for a
-    #   shape of (rows, patch_count(readings, length, stride), length).
+    # TODO: Return the patches of each series. `series` has shape (rows,
+    #   readings). Add `stride` copies of each row's last reading at its end.
+    #   Then cut patches of `length` readings, a new one every `stride`
+    #   readings, for a shape of (rows, patch_count(readings, length, stride),
+    #   length).
     def patches(
         series: Tensor,
         length: int,
@@ -637,19 +639,25 @@ SERIES2_LESSON = prose(
     forecast = model((window - mean) / spread) * spread + mean
     ```
 
-    The spread gets 0.00001 added, so a flat window can't divide by 0. Here is
-    a plain Linear from 104 weeks to the next ones, with and without RevIN.
-    Each trained with Adam for 60 epochs on batches of 128, on 3 seeds. The
-    error is the mean squared error over the test weeks, standardized.
+    This file takes the spread with `.std()` and adds 0.00001, so a flat
+    window can't divide by 0. RevIN's own code differs in two small ways. It
+    adds the 0.00001 to the variance inside the square root, dividing by n.
+    It also stops gradients through the mean and spread.
+
+    Here is a plain Linear from 104 weeks to the next ones, with and without
+    RevIN. Each trained with Adam for 60 epochs on batches of 128, on 3
+    seeds. The error is the mean squared error over the test weeks,
+    standardized.
 
     | Weeks ahead | 24 | 36 | 48 | 60 |
     |---|---|---|---|---|
     | Linear | 2.21 to 2.32 | 2.16 to 2.31 | 2.14 to 2.30 | 2.29 to 2.37 |
     | Linear with RevIN | 2.05 to 2.10 | 1.89 to 1.94 | 1.89 to 1.92 | 1.95 to 2.01 |
 
-    RevIN lowers the error at every horizon on every seed, by 8% to 15%. The
-    further ahead the forecast, the more the level matters, and the more
-    RevIN helps.
+    RevIN lowers the error at every horizon on every seed. On the 3 seeds'
+    averages it cuts the error by 8% at 24 weeks and by 14% to 15% further
+    ahead. Seed by seed the cut runs from 5% to 17%. The further ahead the
+    forecast, the more the level matters, and the more RevIN helps.
     """,
 )
 
@@ -695,7 +703,9 @@ SERIES2_SOURCE = source_file(
 
     # TODO: Return each series scaled to a mean of 0 and a spread of 1, with
     #   the mean and spread it used. series has shape (rows, readings). Take
-    #   both along dim 1 keeping that dimension, and add 1e-5 to the spread.
+    #   both along dim 1 keeping that dimension. Use `.std()` as it is and add
+    #   1e-5 to the spread, this file's form, not RevIN's own square root of
+    #   the variance.
     def normalized(series: Tensor) -> tuple[Tensor, Tensor, Tensor]:
         ...
 
@@ -856,8 +866,8 @@ SERIES2 = Exercise(
         "makes each column of each window a row.",
         "channels_together": ".reshape(-1, channels, forecasts.shape[1]) groups each window's rows, then "
         ".transpose(1, 2) puts the columns last.",
-        "normalized": "series.mean(dim=1, keepdim=True), and the same with .std plus 1e-5. Return (series - mean) / "
-        "spread, mean and spread.",
+        "normalized": "series.mean(dim=1, keepdim=True), and the same with .std plus 1e-5, this file's form rather than "
+        "RevIN's square root of the variance. Return (series - mean) / spread, mean and spread.",
         "restored": "Multiply by spread, then add mean. Both have one column, so they broadcast over the forecasts.",
         "NormalizedLinear.forward": "scaled, mean, spread = normalized(series). Run self.linear on scaled, then pass "
         "that, mean and spread to restored.",
@@ -879,23 +889,36 @@ SERIES3_LESSON = prose(
     vector, and a Linear reads the forecast off it. Then the level goes back.
 
     The settings are PatchTST's own for this table. Tokens have size 16 with
-    4 heads and dropout of 0.3, trained with Adam at 0.0025 on batches of 16
-    for 100 epochs.
+    4 heads and dropout of 0.3, and Adam trains at a rate of 0.0025.
 
-    Zeng and colleagues showed that one layer linear models, their DLinear
-    among them, beat the transformers built for time series before them.
-    PatchTST answered with patches and channels apart. Here are the paper's
-    results on this flu table, the mean squared error over the test weeks.
+    Zeng and colleagues found a one layer linear model beating the time
+    series transformers built before PatchTST. Nie and colleagues answered
+    with two choices. Here each one is tested against its other way.
+
+    - **Patches**: a token is 24 weeks, and a new one starts every 2 weeks. The other way makes every week a token, `PatchForecaster(104, horizon, 1, 1)`.
+    - **Columns apart**: each column is its own series, as in series2. Mixing them instead puts a patch of all 7 columns in one token.
+
+    Each model trained for 60 epochs on 5 seeds, on batches of 128 series.
+    The mixed model reads whole windows, so its batches held 18 windows,
+    which is 126 series. Each number is the mean squared error over the test
+    weeks, averaged over the seeds.
 
     | Weeks ahead | 24 | 36 | 48 | 60 |
     |---|---|---|---|---|
-    | DLinear | 2.215 | 1.963 | 2.130 | 2.368 |
-    | PatchTST/42 | 1.522 | 1.430 | 1.673 | 1.529 |
-    | PatchTST/64 | 1.319 | 1.579 | 1.553 | 1.470 |
+    | PatchTST | 2.08 | 1.95 | 1.89 | 1.99 |
+    | Every week a token | 2.02 | 1.92 | 1.87 | 2.01 |
+    | Columns mixed | 3.29 | 2.51 | 1.87 | 1.93 |
 
-    Both of the paper's PatchTST settings beat DLinear at every horizon, by
-    20% to 40%. A patch carries a local shape that one reading can't, and
-    attention lets every patch compare itself with every other.
+    Mixing the columns raises the error by 58% at 24 weeks, on all 5 seeds,
+    and by 29% at 36 weeks. At 48 and 60 weeks the two land within 4% of
+    each other. The paper also finds mixing worse on this table, and traces
+    it to overfitting. A mixed model's test error starts rising after a few
+    epochs, while a model with its columns apart keeps improving.
+
+    Patches land within 3% of single weeks, with 42 tokens in place of 105.
+    Attention compares every token with every other, so a head scores 1,764
+    pairs in place of 11,025. That is about 6 times less work for the same
+    error.
 
     `forecast_error` takes a window's columns apart, as the model reads them,
     and scores in eval mode without recording for autograd.
@@ -1144,6 +1167,74 @@ SERIES3 = Exercise(
 HORIZONS = (24, 36, 48, 60)
 
 
+class MixedPatchForecaster(nn.Module):
+    """series3's PatchTST with its columns mixed: each token is one patch of every column at once, and the head writes
+    every column's forecast. Each column is still normalized on its own, so RevIN is the same."""
+
+    def __init__(
+        self,
+        lookback: int,
+        horizon: int,
+        columns: int,
+        length: int = 24,
+        stride: int = 2,
+        size: int = 16,
+        blocks: int = 3,
+        heads: int = 4,
+    ) -> None:
+        super().__init__()
+        self.length = length
+        self.stride = stride
+        self.columns = columns
+        self.horizon = horizon
+        count = REFERENCE["patch_count"](lookback, length, stride)
+        self.project = nn.Linear(length * columns, size)
+        self.position = nn.Parameter(torch.randn(count, size) * 0.02)
+        self.dropout = nn.Dropout(0.3)
+        self.blocks = nn.Sequential(
+            *[
+                nn.TransformerEncoderLayer(
+                    size,
+                    heads,
+                    128,
+                    dropout=0.3,
+                    batch_first=True,
+                )
+                for _ in range(blocks)
+            ],
+        )
+        self.head = nn.Linear(count * size, horizon * columns)
+
+    def forward(
+        self,
+        windows: Tensor,
+    ) -> Tensor:
+        rows = windows.shape[0]
+        scaled, mean, spread = REFERENCE["normalized"](REFERENCE["channels_apart"](windows))
+        cut = REFERENCE["patches"](scaled, self.length, self.stride)
+        tokens = cut.reshape(rows, self.columns, cut.shape[1], self.length).permute(0, 2, 1, 3).flatten(2)
+        forecasts = self.head(self.blocks(self.dropout(self.project(tokens) + self.position)).flatten(1))
+        forecasts = REFERENCE["restored"](forecasts.reshape(rows * self.columns, self.horizon), mean, spread)
+
+        return REFERENCE["channels_together"](forecasts, self.columns)
+
+
+def mixed_error(
+    model: nn.Module,
+    past: Tensor,
+    future: Tensor,
+) -> float:
+    """forecast_error for a model that reads whole windows, scored over the same numbers."""
+    model.eval()
+
+    with torch.no_grad():
+        error = F.mse_loss(model(past), future).item()
+
+    model.train()
+
+    return error
+
+
 def train_forecaster(
     model: nn.Module,
     series: Tensor,
@@ -1152,16 +1243,23 @@ def train_forecaster(
     seed: int,
     device: torch.device,
     batch: int = 16,
+    columns_apart: bool = True,
 ) -> float:
     """Adam at PatchTST's rate of 0.0025, on batches of 16 as its flu script uses unless told otherwise, keeping the
-    epoch with the lowest validation error, whose test error it gives."""
-    apart = REFERENCE["channels_apart"]
+    epoch with the lowest validation error, whose test error it gives. With columns_apart False the model reads whole
+    windows, as MixedPatchForecaster does."""
     series = series.to(device)
     model = model.to(device)
     past, future = REFERENCE["windows"](series, 0, REFERENCE["TRAIN_END"], horizon)
     validation = REFERENCE["windows"](series, REFERENCE["TRAIN_END"], REFERENCE["VALIDATION_END"], horizon)
     test = REFERENCE["windows"](series, REFERENCE["VALIDATION_END"], len(series), horizon)
-    x, y = apart(past), apart(future)
+    score: Callable[[nn.Module, Tensor, Tensor], float] = REFERENCE["forecast_error"]
+    x, y = REFERENCE["channels_apart"](past), REFERENCE["channels_apart"](future)
+
+    if not columns_apart:
+        score = mixed_error
+        x, y = past, future
+
     optimizer = torch.optim.Adam(model.parameters(), lr=0.0025)
     generator = torch.Generator().manual_seed(seed)
     best = (math.inf, math.nan)
@@ -1177,10 +1275,10 @@ def train_forecaster(
             loss.backward()
             optimizer.step()
 
-        score = REFERENCE["forecast_error"](model, *validation)
+        validation_error = score(model, *validation)
 
-        if score < best[0]:
-            best = (score, REFERENCE["forecast_error"](model, *test))
+        if validation_error < best[0]:
+            best = (validation_error, score(model, *test))
 
     return best[1]
 
@@ -1193,9 +1291,7 @@ def measure_series(
     names: tuple[str, ...] = ("linear", "linear with RevIN", "PatchTST"),
 ) -> dict[str, list[float]]:
     """series2's table: each model's test error at each horizon, on 3 seeds, on the Mac's GPU for 60 epochs on
-    batches of 128. series3 cites the paper's table. At this budget PatchTST beats the plain Linear on every seed
-    but not clearly the Linear with RevIN, so a run of it at the paper's own budget, epochs=100 and batch=16, is
-    what a table of the course's own would need, on a quiet machine."""
+    batches of 128."""
     series = flu_series()
     makers: dict[str, Callable[[int], nn.Module]] = {
         "linear": lambda horizon: REFERENCE["LinearForecaster"](REFERENCE["LOOKBACK"], horizon),
@@ -1212,6 +1308,51 @@ def measure_series(
                 for seed in seeds:
                     torch.manual_seed(seed)
                     errors.append(train_forecaster(makers[name](horizon), series, horizon, epochs, seed, torch.device(device), batch))
+
+                results[f"{name}, {horizon}"] = errors
+
+    return results
+
+
+def measure_choices(
+    seeds: range = range(5),
+    epochs: int = 60,
+    device: str = "mps",
+    batch: int = 128,
+    names: tuple[str, ...] = ("PatchTST", "every week a token", "columns mixed"),
+) -> dict[str, list[float]]:
+    """series3's table: PatchTST as series3 builds it, the same model reading every week as its own token (patches of
+    1 every 1), and the same model with its columns mixed. Each one's test error at each horizon on 5 seeds, on the
+    Mac's GPU for 60 epochs on batches of 128 series, as series2's table was. The mixed model reads whole windows, so
+    its batches hold 128 // 7 = 18 windows: the same 126 series and the same steps per epoch as the others."""
+    series = flu_series()
+    columns = series.shape[1]
+    makers: dict[str, Callable[[int], nn.Module]] = {
+        "PatchTST": lambda horizon: REFERENCE["PatchForecaster"](REFERENCE["LOOKBACK"], horizon),
+        "every week a token": lambda horizon: REFERENCE["PatchForecaster"](REFERENCE["LOOKBACK"], horizon, 1, 1),
+        "columns mixed": lambda horizon: MixedPatchForecaster(REFERENCE["LOOKBACK"], horizon, columns),
+    }
+    results: dict[str, list[float]] = {}
+
+    with pinned_threads():
+        for horizon in HORIZONS:
+            for name in names:
+                errors = []
+
+                for seed in seeds:
+                    torch.manual_seed(seed)
+                    errors.append(
+                        train_forecaster(
+                            makers[name](horizon),
+                            series,
+                            horizon,
+                            epochs,
+                            seed,
+                            torch.device(device),
+                            batch if name != "columns mixed" else batch // columns,
+                            columns_apart=name != "columns mixed",
+                        ),
+                    )
 
                 results[f"{name}, {horizon}"] = errors
 
