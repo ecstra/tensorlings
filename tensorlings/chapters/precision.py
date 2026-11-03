@@ -23,6 +23,7 @@ from ..engine import (
     expect_value,
 )
 from ..text import prose, source_file
+from ..training import load_checkpoint
 from .gpt import MODEL_REFERENCE
 from .profiling import PassThrough
 
@@ -301,21 +302,30 @@ PRECISION2_LESSON = prose(
     doubles again. That is `torch.amp.GradScaler`, which starts at 65,536
     and doubles after 2,000 good steps.
 
-    Here is the GPT that gpt3 trains, untrained, on one batch of
-    Shakespeare, on the CPU. Its gradients come from a backward pass under
-    autocast to float16 at each scale, unscaled after, against the float32
-    ones.
+    Training on many batches averages the loss over many more tokens than
+    one batch holds, so each batch's gradients come out that much smaller.
+    The table plays that part with gpt3's trained GPT on one batch of
+    Shakespeare, on the CPU, dividing its loss by 64 and by 1,024. The
+    gradients come from a backward pass under autocast to float16, unscaled
+    after, against float32's.
 
-    | Scale | 1 | 256 | 65,536 | 16,777,216 |
-    |---|---|---|---|---|
-    | Gradients lost to 0 | 0.024% | 0.001% | none | none |
-    | Gradients turned inf or nan | none | none | none | 14.5% |
+    | Loss divided by | Scale | Lost to 0 at the blocks' outputs | Error in the weights' gradients |
+    |---|---|---|---|
+    | 1 | 1 | 0.12% | 0.47% |
+    | 64 | 1 | 3.9% | 16% |
+    | 1,024 | 1 | 30% | 138% |
+    | 1, 64 or 1,024 | 65,536 | none | 0.37% to 0.38% |
 
-    65,536 keeps every gradient, and a scale 256 times larger breaks one in
-    seven. This small GPT loses few gradients even unscaled. Micikevicius and
-    colleagues' SSD detector was less lucky. It diverged in float16 until
-    they scaled the loss by 8. Under autocast to bfloat16, with float32's
-    range, no gradient was lost at a scale of 1.
+    Unscaled, the smaller the loss, the more of its gradients float16
+    rounds to 0. At 1,024 the weights' gradients are off by more than their
+    own size. A scale of 65,536 brings every one back. Micikevicius and
+    colleagues' SSD detector diverged in float16 until they scaled the loss
+    by 8.
+
+    Too large a scale fails the other way. At 16,777,216, 69% of the
+    gradients turned inf or nan. Autocast to bfloat16, with float32's range,
+    lost none at any of the three losses. Its coarser rounding left each
+    2.8% off.
     """,
 )
 
@@ -755,39 +765,67 @@ def gradients_of(
     y: Tensor,
     dtype: torch.dtype,
     scale: float,
-) -> Tensor:
-    """Every gradient of model on one batch, from a backward pass under autocast to dtype at scale, unscaled."""
+    divisor: float,
+) -> tuple[Tensor, Tensor]:
+    """Every weight gradient of model on one batch, and every gradient at a block's output, from a backward pass
+    under autocast to dtype. The loss is divided by divisor, as if averaged over that many times the batch's
+    tokens, then multiplied by scale. Both come back with the scale and the divisor taken off again."""
     model.zero_grad()
+    at_outputs: list[Tensor] = []
+    handles = [
+        block.register_full_backward_hook(
+            lambda module, grad_input, grad_output: at_outputs.append(grad_output[0].detach().float().clone()),
+        )
+        for block in model.h
+    ]
 
     with torch.autocast("cpu", dtype=dtype, enabled=dtype != torch.float32):
         loss = F.cross_entropy(model(x).flatten(0, 1), y.flatten())
 
-    (loss * scale).backward()
+    (loss * scale / divisor).backward()
 
-    return torch.cat([parameter.grad.flatten() for parameter in model.parameters()]) / scale
+    for handle in handles:
+        handle.remove()
+
+    factor = scale / divisor
+    weights = torch.cat([parameter.grad.flatten() for parameter in model.parameters()]) / factor
+
+    return weights, torch.cat([gradient.flatten() for gradient in at_outputs]) / factor
 
 
 def measure_scales() -> dict[str, float]:
-    """precision2's table, the GPT gpt3 trains, untrained, on one batch of 32 sequences of Shakespeare, on the
-    CPU. Each share is of the gradients float32 gives as nonzero."""
-    torch.manual_seed(0)
-    model = MODEL_REFERENCE["GPT"](65, 128, 128, 4, 4)
-    text = load_shakespeare()
-    characters = sorted(set(text))
-    positions = {character: position for position, character in enumerate(characters)}
-    data = torch.tensor([positions[character] for character in text[:100_000]])
-    starts = torch.randint(0, len(data) - 129, (32,), generator=torch.Generator().manual_seed(0))
-    x = torch.stack([data[start : start + 128] for start in starts])
-    y = torch.stack([data[start + 1 : start + 129] for start in starts])
+    """precision2's table: gpt3's trained GPT from checkpoints/gpt3.pt, on one batch of 32 sequences of
+    Shakespeare, on the CPU, with 4 threads. Each lost share is of the gradients at the blocks' outputs that
+    float32 gives as nonzero, and each error is the weight gradients' distance from float32's, over their size."""
+    threads = torch.get_num_threads()
+    torch.set_num_threads(4)
 
-    exact = gradients_of(model, x, y, torch.float32, 1.0)
-    nonzero = exact != 0
-    results: dict[str, float] = {"nonzero share": nonzero.float().mean().item()}
+    try:
+        model = load_checkpoint(MODEL_REFERENCE["GPT"](65, 128, 128, 4, 4), "gpt3")
+        text = load_shakespeare()
+        characters = sorted(set(text))
+        positions = {character: position for position, character in enumerate(characters)}
+        data = torch.tensor([positions[character] for character in text[:100_000]])
+        starts = torch.randint(0, len(data) - 129, (32,), generator=torch.Generator().manual_seed(0))
+        x = torch.stack([data[start : start + 128] for start in starts])
+        y = torch.stack([data[start + 1 : start + 129] for start in starts])
+        results: dict[str, float] = {}
 
-    for dtype, scales in ((torch.float16, (1.0, 2.0**8, 2.0**16, 2.0**24)), (torch.bfloat16, (1.0,))):
-        for scale in scales:
-            mixed = gradients_of(model, x, y, dtype, scale)
-            results[f"{dtype} lost at {scale:g}"] = ((mixed == 0) & nonzero).float().sum().item() / nonzero.sum().item()
-            results[f"{dtype} not finite at {scale:g}"] = (~torch.isfinite(mixed)).float().mean().item()
+        for divisor in (1.0, 64.0, 1024.0):
+            exact_weights, exact_outputs = gradients_of(model, x, y, torch.float32, 1.0, divisor)
+            nonzero = exact_outputs != 0
+            runs = [(torch.float16, 1.0), (torch.float16, 2.0**16), (torch.bfloat16, 1.0)]
 
-    return results
+            if divisor == 1.0:
+                runs.append((torch.float16, 2.0**24))
+
+            for dtype, scale in runs:
+                weights, outputs = gradients_of(model, x, y, dtype, scale, divisor)
+                name = f"{dtype} over {divisor:g} at {scale:g}"
+                results[f"{name} lost"] = ((outputs == 0) & nonzero).float().sum().item() / nonzero.sum().item()
+                results[f"{name} error"] = ((weights - exact_weights).norm() / exact_weights.norm()).item()
+                results[f"{name} not finite"] = (~torch.isfinite(weights)).float().mean().item()
+
+        return results
+    finally:
+        torch.set_num_threads(threads)

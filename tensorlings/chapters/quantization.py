@@ -55,6 +55,8 @@ QUANTIZATION = Chapter(
 
         - [Dettmers and colleagues, LLM.int8()](https://arxiv.org/abs/2208.07339)
         - [Jacob and colleagues, quantization for integer only inference](https://arxiv.org/abs/1712.05877)
+        - [Frantar and colleagues, GPTQ](https://arxiv.org/abs/2210.17323)
+        - [PyTorch, gpt-fast](https://github.com/pytorch-labs/gpt-fast)
         - [PyTorch, register_buffer](https://docs.pytorch.org/docs/2.14/generated/torch.nn.Module.html#torch.nn.Module.register_buffer)
         """,
     ),
@@ -616,18 +618,28 @@ QUANT3_LESSON = prose(
     Here is the GPT from the run behind gpt3, on the 20 validation batches its
     check used.
 
+    At 4 bits two numbers share each byte, one in the low half and one in the
+    high half.
+
+    ```python
+    byte = 3 | (12 << 4)    # 195, the numbers 3 and 12 in one byte
+    byte & 15, byte >> 4    # (3, 12)
+    ```
+
     | Blocks' weights | Bytes | Validation loss |
     |---|---|---|
     | float32 | 3,272,192 | 1.5351 |
     | int8, a scale per row | 931,328 | 1.5353 |
     | int8, one scale per tensor | 912,960 | 1.5356 |
-    | 4 bits, a scale per row | 931,328 | 1.5833 |
-    | 2 bits, a scale per row | 931,328 | 4.0665 |
+    | 4 bits, two to a byte, a scale per row | 538,112 | 1.5833 |
+    | 4 bits, two to a byte, a scale per 32 weights | 617,984 | 1.5658 |
+    | 2 bits, four to a byte, a scale per 32 weights | 421,376 | 3.5942 |
 
     int8 made the model 3.5 times smaller and moved its loss in the fourth
-    decimal. 4 bits still works, stored one to a byte here, and 2 bits breaks
-    the model. Two 4 bit numbers packed in each byte would bring it near 0.54
-    MB.
+    decimal. Packed 4 bits take 6 times fewer bytes than float32. A scale per
+    group of 32 weights along each row costs a few bytes and brings the loss
+    from 1.5833 to 1.5658. GPTQ quantizes groups this way, and gpt-fast's 4 bit
+    models use groups of 32. At 2 bits even groups of 32 break the model.
     """,
 )
 
@@ -1094,6 +1106,62 @@ def swap_linears_(
         swap_linears_(child, quantize, bits)
 
 
+class PackedLinear(nn.Module):
+    """A Linear stored at 4 or 2 bits with several whole numbers in each byte, and a scale per group of weights
+    along each row, or one per row when group is None. For quant3's table, not handed to the learner."""
+
+    def __init__(
+        self,
+        linear: nn.Linear,
+        bits: int,
+        group: int | None,
+    ) -> None:
+        super().__init__()
+        weight = linear.weight.detach()
+        rows, columns = weight.shape
+        size = columns if group is None else group
+        levels = 2 ** (bits - 1) - 1
+        grouped = weight.reshape(rows, columns // size, size)
+        scales = grouped.abs().amax(dim=2, keepdim=True) / levels
+        # Offset to 1 .. 2 * levels + 1, so each number fits in bits bits with no sign.
+        unsigned = ((grouped / scales).round() + levels + 1).to(torch.uint8).reshape(rows, -1)
+        per_byte = 8 // bits
+        lanes = unsigned.reshape(rows, -1, per_byte)
+        packed = torch.zeros(lanes.shape[:2], dtype=torch.uint8)
+
+        for lane in range(per_byte):
+            packed |= lanes[..., lane] << (bits * lane)
+
+        self.register_buffer("packed", packed)
+        self.register_buffer("scales", scales)
+        self.bits = bits
+        self.bias = linear.bias
+
+    def forward(self, x: Tensor) -> Tensor:
+        per_byte = 8 // self.bits
+        mask = 2**self.bits - 1
+        lanes = [(self.packed >> (self.bits * lane)) & mask for lane in range(per_byte)]
+        unsigned = torch.stack(lanes, dim=-1).reshape(self.packed.shape[0], -1)
+        levels = 2 ** (self.bits - 1) - 1
+        grouped = (unsigned.float() - levels - 1).reshape(self.scales.shape[0], self.scales.shape[1], -1)
+        weight = (grouped * self.scales).reshape(self.packed.shape[0], -1)
+
+        return F.linear(x, weight, self.bias)
+
+
+def pack_linears_(
+    module: nn.Module,
+    bits: int,
+    group: int | None,
+) -> None:
+    for name, child in module.named_children():
+        if isinstance(child, nn.Linear):
+            setattr(module, name, PackedLinear(child, bits, group))
+            continue
+
+        pack_linears_(child, bits, group)
+
+
 def measure_quantization() -> dict[str, object]:
     """Every number in the three lessons, from the reference gpt3 checkpoint on the CPU, under a minute. Not run by any check."""
     absmax = QUANT_REFERENCE["absmax_quantize"]
@@ -1155,14 +1223,26 @@ def measure_quantization() -> dict[str, object]:
         ("float32", None, 32),
         ("int8 per channel", per_channel, 8),
         ("int8 per tensor", absmax, 8),
-        ("int4 per channel", per_channel, 4),
-        ("int2 per channel", per_channel, 2),
     ):
         model = trained_gpt(MODEL_REFERENCE["GPT"])
 
         if quantize is not None:
             for block in model.h:
                 swap_linears_(block, quantize, bits)
+
+        loss = GPT_REFERENCE["validation_loss"](model, validation_data, 20, torch.Generator().manual_seed(1), cpu)
+        results[f"model {name}"] = (QUANT_REFERENCE["model_bytes"](model), loss)
+
+    for name, bits, group in (
+        ("int4 packed, per row", 4, None),
+        ("int4 packed, groups of 32", 4, 32),
+        ("int2 packed, per row", 2, None),
+        ("int2 packed, groups of 32", 2, 32),
+    ):
+        model = trained_gpt(MODEL_REFERENCE["GPT"])
+
+        for block in model.h:
+            pack_linears_(block, bits, group)
 
         loss = GPT_REFERENCE["validation_loss"](model, validation_data, 20, torch.Generator().manual_seed(1), cpu)
         results[f"model {name}"] = (QUANT_REFERENCE["model_bytes"](model), loss)

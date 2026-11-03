@@ -587,6 +587,70 @@ def measure_filters() -> dict[str, object]:
     return results
 
 
+JUNK_KINDS = ("tags", "dots", "keywords", "numbers", "codes", "short")
+
+
+def junk_documents(
+    kind: str,
+    count: int,
+    seed: int,
+) -> list[str]:
+    """Made up junk of one kind, the sort of web page each of Gopher's rules was written to catch. Each document
+    breaks the one rule its kind aims at and, apart from short, has 60 words."""
+    generator = random.Random(seed)
+    stop_words = set(FILTER_REFERENCE["STOP_WORDS"])
+    vocabulary = sorted(
+        {
+            word
+            for speech in play_speeches()
+            for word in DUPLICATES_REFERENCE["normalize"](speech).split()
+            if word.isalpha() and 3 <= len(word) <= 8 and word not in stop_words
+        },
+    )
+    documents: list[str] = []
+
+    for _ in range(count):
+        words = generator.sample(vocabulary, 60)
+
+        if kind == "tags":
+            text = " ".join(("#" + word if position % 2 else word) for position, word in enumerate(words[:58])) + " the and"
+        elif kind == "dots":
+            text = " ".join((word + "..." if position % 3 == 0 else word) for position, word in enumerate(words[:58])) + " the and"
+        elif kind == "keywords":
+            text = " ".join(words)
+        elif kind == "numbers":
+            numbers = [f"{generator.uniform(10, 9999):.2f}" for _ in range(50)]
+            text = " ".join(numbers + words[:8]) + " the and"
+        elif kind == "codes":
+            letters = "abcdefghijklmnopqrstuvwxyz0123456789"
+            codes = ["".join(generator.choice(letters) for _ in range(generator.randint(14, 24))) for _ in range(50)]
+            text = " ".join(codes + words[:8]) + " the and"
+        else:
+            text = " ".join(words[: generator.randint(5, 40)]) + " the and"
+
+        documents.append(text)
+
+    return documents
+
+
+def measure_junk(seed: int = 0) -> dict[str, object]:
+    """data2's junk table: 100 documents of each kind of junk, and the play's speeches of 50 words or more, through
+    each of the rules and through passes_quality."""
+    results: dict[str, object] = {}
+    kinds = [(kind, junk_documents(kind, 100, seed + position)) for position, kind in enumerate(JUNK_KINDS)]
+    kinds.append(("long speeches", [speech for speech in play_speeches() if len(speech.split()) >= 50]))
+
+    for kind, documents in kinds:
+        rows = [rule_results(document) for document in documents]
+        results[kind] = {
+            "documents": len(documents),
+            "dropped": sum(not FILTER_REFERENCE["passes_quality"](document) for document in documents),
+            "caught by": {rule: sum(not row[rule] for row in rows) for rule in rows[0] if any(not row[rule] for row in rows)},
+        }
+
+    return results
+
+
 DATA2_LESSON = prose(
     """
     Rae and colleagues cleaned the web text behind Gopher with plain rules
@@ -599,20 +663,24 @@ DATA2_LESSON = prose(
     - It holds at least 2 of the **stop words** the, be, to, of, and, that, have and with, the commonest words of English.
 
     They had more, on bullet points, lines ending in `...` and repeated
-    lines. Here is what each rule above drops from the play's 7,097
-    speeches, words split on whitespace.
+    lines. To watch each rule work, here are 100 made up pages of each kind
+    of junk the rules aim at. Beside them sit the play's 1,080 speeches of
+    50 words or more. Words split on whitespace.
 
-    | Rule | Speeches it drops |
-    |---|---|
-    | 50 to 100,000 words | 84.8% |
-    | A mean word length of 3 to 10 | 1 speech |
-    | No more than one `#` or `...` per 10 words | none |
-    | 80% of words with a letter | none |
-    | 2 of the stop words | 47.7% |
+    | Documents | Like | The rule that drops them | Dropped |
+    |---|---|---|---|
+    | Tags | `#king crown #rose` | one `#` or `...` per 10 words | 100 of 100 |
+    | Trailing dots | `crown... rose king...` | one `#` or `...` per 10 words | 100 of 100 |
+    | Keyword lists | `crown rose king`, no small words | 2 of the stop words | 100 of 100 |
+    | Tables of numbers | `3021.15 2917.70` | 80% of words with a letter | 100 of 100 |
+    | Strings of codes | `9sh9v8n9s2fyups` | a mean word length of 3 to 10 | 100 of 100 |
+    | Fragments | under 50 words | 50 to 100,000 words | 100 of 100 |
+    | The play's long speeches | | none | 0 of 1,080 |
 
-    Only 15.2% pass them all. Yet each of the 1,080 speeches of 50 words or
-    more passes every rule. The rules were written against web pages of
-    keywords, tags and symbols, and only shortness trips the play.
+    Each kind breaks the one rule written for it, and the rules keep every
+    long speech. Three seeds of junk gave the same counts. Most of the
+    play's 7,097 speeches are short, so the length rule alone drops 84.8%
+    of them.
 
     ```python
     "a #b c#".count("#")                          # 2
