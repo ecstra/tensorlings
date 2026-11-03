@@ -377,7 +377,7 @@ The project follows Xu and colleagues' algorithmic alignment. It shows structure
 | | grpo1 | GRPO, advantages taken relative to a group of samples with no value model |
 | quizzes | quiz14 | Section 11 together |
 | 83_post_training | post1 | the project starts, LoRA SFT of your GPT into an answer format on a made up task |
-| | post2 | DPO toward the preferred answers |
+| | post2 | DPO toward the preferred answers, on pairs the model samples itself and a judge ranks, against SFT on the same chosen answers |
 | | post3 | the result scored by exact match and by your reward model |
 
 The project works on the GPT the learner already trained, the way nanochat runs SFT and then RL on its own base model.
