@@ -515,8 +515,8 @@ READER1_LESSON = prose(
     main puts rank 8 LoRA on every Linear, as lora3 did, and trains 1,500
     steps of 32 questions.
 
-    Once every check passes, train from the project folder. It took about 3
-    minutes on this Mac's GPU.
+    Once every check passes, train from the project folder. It took about 2.5
+    minutes on an Apple M5's GPU, and about 6.5 on 4 CPU threads.
 
     ```text
     .venv/bin/python run.py train reader1
@@ -758,8 +758,10 @@ READER2_LESSON = prose(
     main saves the encoder with the rest, since the projector learned to read
     that encoder's tokens and no other.
 
-    Once every check passes, train from the project folder. It took about 6
-    minutes on this Mac's GPU.
+    Once every check passes, train from the project folder. It took about 2
+    minutes on an Apple M5's GPU, and about 4 on 4 CPU threads. Its rows are
+    far shorter than reader1's, 8 tokens and a question in place of 64
+    letters.
 
     ```text
     .venv/bin/python run.py train reader2
@@ -1041,11 +1043,18 @@ READER3_LESSON = prose(
     form. Its `z` towers over the letters around it, and one of the encoder's
     tokens holds it whole.
 
-    The wave count is where the bridge wins. The text GPT has to work the
-    count out of 64 letters, one character at a time, with weights shaped by
-    Shakespeare. The encoder's tokens hand it the shape already summed up, 8
-    steps to a token. bridge3's probe read the count from them with one
-    linear map. The signal reader got every wave count right, on every seed.
+    The wave count is where the bridge wins. Here is the text GPT's share of
+    wave counts right as it trains on, over the same 3 seeds.
+
+    | Steps | 500 | 1,000 | 1,500 | 3,000 |
+    |---|---|---|---|---|
+    | Wave counts right | 50% to 59% | 58% to 70% | 70% to 86% | 86% to 96% |
+
+    At reader1's 1,500 steps, 68 of its 71 wrong counts were off by one,
+    among two, three and four waves. It got every signal of one wave right.
+    So it is still learning to count the cycles in 64 letters, and twice the
+    steps leave it short. The signal reader got every wave count right in
+    the same 1,500 steps, on every seed.
 
     It also reads each signal in 8 positions, where the text needs 64. That
     is LLaVA's recipe, and now yours, for any kind of input you want your
@@ -1310,24 +1319,43 @@ def shakespeare_positions() -> tuple[list[str], dict[str, int]]:
     return characters, {character: place for place, character in enumerate(characters)}
 
 
-def train_text_gpt(
+def text_gpt_start(
     seed: int,
-    steps: int,
     device: torch.device,
-) -> nn.Module:
-    """reader1's main, for a seed: rank 8 LoRA on gpt3's GPT, trained steps steps on questions about letters."""
-    _, positions = shakespeare_positions()
+) -> tuple[nn.Module, torch.optim.Optimizer, torch.Generator]:
+    """reader1's main up to its loop, for a seed: rank 8 LoRA on gpt3's GPT, its AdamW and the batches' generator."""
     torch.manual_seed(seed)
     gpt = READER_REFERENCE["add_lora_everywhere"](READER_REFERENCE["trained_gpt"](), 8, 8.0).to(device)
     trained = [parameter for parameter in gpt.parameters() if parameter.requires_grad]
-    optimizer = torch.optim.AdamW(trained, lr=1e-3, weight_decay=0.0)
-    generator = torch.Generator().manual_seed(seed + 7)
+
+    return gpt, torch.optim.AdamW(trained, lr=1e-3, weight_decay=0.0), torch.Generator().manual_seed(seed + 7)
+
+
+def train_text_steps(
+    gpt: nn.Module,
+    optimizer: torch.optim.Optimizer,
+    generator: torch.Generator,
+    steps: int,
+    device: torch.device,
+) -> None:
+    """reader1's loop, steps steps on questions about signals written as letters."""
+    _, positions = shakespeare_positions()
 
     for _ in range(steps):
         signals, asked, answers = READER_REFERENCE["question_batch"](32, generator)
         prompts = [READER_REFERENCE["text_prompt"](signal, question) for signal, question in zip(signals, asked)]
         x, y = READER_REFERENCE["answer_rows"](prompts, answers, positions)
         READER_REFERENCE["text_step"](gpt, optimizer, x, y, device)
+
+
+def train_text_gpt(
+    seed: int,
+    steps: int,
+    device: torch.device,
+) -> nn.Module:
+    """reader1's main, for a seed: rank 8 LoRA on gpt3's GPT, trained steps steps on questions about letters."""
+    gpt, optimizer, generator = text_gpt_start(seed, device)
+    train_text_steps(gpt, optimizer, generator, steps, device)
 
     return gpt
 
@@ -1348,6 +1376,40 @@ def train_signal_reader(
     READER_REFERENCE["train_reader"](gpt, encoder, projector, stage_one_steps, stage_two_steps, positions, generator, device)
 
     return nn.ModuleDict({"encoder": encoder, "projector": projector, "gpt": gpt})
+
+
+def measure_wave_counts(
+    seeds: range = range(3),
+    marks: tuple[int, ...] = (500, 1000, 1500, 3000),
+    device: str = "mps",
+) -> dict[str, list[object]]:
+    """reader3's reason: the text GPT's share right on each question after each mark of steps, trained on as reader1's
+    main trains, and at reader1's 1,500 steps the wave counts it said against the right ones, scored on the 300 held
+    out signals."""
+    place = torch.device(device)
+    characters, positions = shakespeare_positions()
+    signals, asked, answers = READER_REFERENCE["held_out"](300)
+    results: dict[str, list[object]] = {"shares": [], "counts said": []}
+
+    with pinned_threads():
+        for seed in seeds:
+            gpt, optimizer, generator = text_gpt_start(seed, place)
+            shares: dict[int, list[float]] = {}
+            done = 0
+
+            for mark in marks:
+                train_text_steps(gpt, optimizer, generator, mark - done, place)
+                done = mark
+                written = READER_REFERENCE["text_written"](gpt, signals, asked, positions, characters)
+                shares[mark] = READER_REFERENCE["shares_by_question"](asked, written, answers)
+
+                if mark == TEXT_STEPS:
+                    said = [(answer, text) for answer, text, question in zip(answers, written, asked) if question == 1]
+                    results["counts said"].append(said)
+
+            results["shares"].append(shares)
+
+    return results
 
 
 def measure_readers(

@@ -180,18 +180,19 @@ OUT1_LESSON = prose(
     sport at once. Reading a tag means its sigmoid passes 0.5.
 
     Here each input of 8 numbers carried 5 tags, each on when its own
-    weighted sum passed 0.4. 67% to 69% of inputs carried two or more. Two
-    heads trained 1,500 steps on three seeds, scored on the share of inputs
-    whose whole set of tags came out right.
+    weighted sum passed 0.4. 67% to 69% of inputs carried two or more, and
+    4.5% to 5.5% none. Two heads trained 1,500 steps on three seeds, scored
+    on the share of inputs whose whole set of tags came out right.
 
     | Head | Whole set right |
     |---|---|
     | softmax, its top class taken as the one tag | 25% to 27% |
     | a sigmoid per tag | 95% to 96% |
 
-    The softmax head can name one tag, so it fails every input with more.
-    The losses of several heads add up into one, and one backward pass trains
-    the trunk for all of them.
+    The softmax head names exactly one tag, so it fails every input with
+    none or with more. It got right every input with exactly one tag, the
+    most it could. The losses of several heads add up into one, and one
+    backward pass trains the trunk for all of them.
     """,
 )
 
@@ -465,8 +466,9 @@ OUT2_LESSON = prose(
     spread. The weights go through a softmax, and the spreads are kept as
     logs so they stay positive.
 
-    The loss is likelihood3's negative log of the density, summed over the
-    normals. Adding chances in log space is likelihood2's logsumexp.
+    The mixture's density at y is the weighted sum of its normals'
+    densities. The loss is likelihood3's negative log of that density.
+    Adding chances in log space is likelihood2's logsumexp.
 
     ```text
     loss = -logsumexp(log_softmax(weights) + log N(y; mean, spread))
@@ -480,11 +482,12 @@ OUT2_LESSON = prose(
 
     | Head | Answers right | Answers above 0 |
     |---|---|---|
-    | one number, squared error | 0% | all or none, each run near 0 |
+    | one number, squared error | 0% | 0% or 100% |
     | a mixture of 2 normals, sampled | 99.4% to 99.9% | 47% to 53% |
 
-    The plain head settles on 0, between the branches, and is never right.
-    The mixture puts one normal on each branch and picks them evenly.
+    The plain head settles near 0, between the branches, and is never right.
+    Each of its runs put every answer on the same side of 0. The mixture
+    puts one normal on each branch and picks them evenly.
     """,
 )
 
@@ -1073,13 +1076,29 @@ OUT4_LESSON = prose(
 
     Any signal can be written the same way through vq1's codebook. Cut it
     into pieces, write each piece as its nearest code's id, and read the ids
-    back as the codes. Here codebooks were fitted to sums of sines.
+    back as the codes. Here codebooks were fitted to sums of sines by
+    k-means, each code moved to the mean of its pieces. The error left is
+    the share of the signal's sum of squares that the codes miss.
 
     | Codes | Error left |
     |---|---|
     | 8 | 9.5% to 10.7% |
     | 32 | 3.1% to 3.3% |
     | 128 | 1.0% |
+
+    Then a model writes a signal as it writes text. Here a wave runs 32
+    steps, then rises or falls, either one right. out3's GRU learned such
+    series as ids, 8 steps to a piece and 128 codes, and wrote each future
+    by sampling 4 ids. A head of 32 numbers learned the future by squared
+    error. Each trained 6,000 steps on three seeds.
+
+    | Head | Futures nearer a right one than the two's average |
+    |---|---|
+    | 32 numbers, squared error | 0% |
+    | 4 codebook ids, sampled | 99.7% to 99.8% |
+
+    The number head writes nearer the average, the wave with neither rise
+    nor fall. The sampled ids pick a side, rising in 50% to 54% of series.
     """,
 )
 
@@ -1096,7 +1115,6 @@ OUT4_SOURCE = source_file(
 
     # TODO: Return each value's bin, a whole number from 0 to bins - 1, for
     #   bins even bins from low to high. A value at high goes in the last bin.
-    #   Then return the middle of each bin of ids, as floats.
     def to_bins(
         values: Tensor,
         low: float,
@@ -1106,6 +1124,7 @@ OUT4_SOURCE = source_file(
         ...
 
 
+    # TODO: Return the middle of each bin of ids, as floats, for the same bins.
     def from_bins(
         ids: Tensor,
         low: float,
@@ -1247,13 +1266,16 @@ OUT4 = Exercise(
 
 
 def measure_tags(seeds: range = range(3)) -> dict[str, list[float]]:
-    """out1's table: whole tag sets right with one softmax class and with a sigmoid per tag, and the share with 2 or more."""
-    results: dict[str, list[float]] = {"softmax": [], "sigmoid": [], "several": []}
+    """out1's table: whole tag sets right with one softmax class and with a sigmoid per tag, and the shares of inputs
+    with no tag, with exactly one, and with 2 or more."""
+    results: dict[str, list[float]] = {"softmax": [], "sigmoid": [], "none": [], "one": [], "several": []}
 
     with pinned_threads():
         for seed in seeds:
             generator = torch.Generator().manual_seed(seed)
             x, tags = tag_data(4000, torch.Generator().manual_seed(seed + 50))
+            results["none"].append((tags.sum(dim=1) == 0).float().mean().item())
+            results["one"].append((tags.sum(dim=1) == 1).float().mean().item())
             results["several"].append((tags.sum(dim=1) >= 2).float().mean().item())
 
             for kind in ("softmax", "sigmoid"):
@@ -1497,6 +1519,108 @@ def fitted_codebook(
                 codebook[code] = members.mean(dim=0)
 
     return codebook
+
+
+def forked_series(
+    count: int,
+    generator: torch.Generator,
+) -> tuple[Tensor, Tensor, Tensor]:
+    """Series of 64 steps, a wave of random speed, phase and size, that rises or falls from step 32 on. The series
+    come back with both right futures, the wave rising and the wave falling."""
+    t = torch.arange(64).float()
+    speed = torch.rand(count, 1, generator=generator) * 0.2 + 0.1
+    phase = torch.rand(count, 1, generator=generator) * 2 * math.pi
+    size = torch.rand(count, 1, generator=generator) * 0.5 + 0.5
+    wave = size * torch.sin(speed * t + phase)
+    ramp = 0.04 * (t - 31).clamp(min=0)
+    side = torch.randint(0, 2, (count, 1), generator=generator).float() * 2 - 1
+
+    return wave + side * ramp, wave + ramp, wave - ramp
+
+
+class IdWriter(nn.Module):
+    """out3's writer over codebook ids in place of characters, with one extra id to start from."""
+
+    def __init__(self, codes: int) -> None:
+        super().__init__()
+        self.embed = nn.Embedding(codes + 1, 32)
+        self.gru = nn.GRU(32, 128, batch_first=True)
+        self.head = nn.Linear(128, codes)
+
+    def forward(self, ids: Tensor) -> Tensor:
+        out, _ = self.gru(self.embed(ids))
+
+        return self.head(out)
+
+
+def series_ids(
+    series: Tensor,
+    codebook: Tensor,
+) -> Tensor:
+    """Each series of a batch written as ids, one per piece, through signal_ids."""
+    return OUT4_REFERENCE["signal_ids"](series.flatten(), codebook).view(len(series), -1)
+
+
+def measure_forks(
+    seeds: range = range(3),
+    steps: int = 6000,
+    codes: int = 128,
+) -> dict[str, list[float]]:
+    """out4's last table: the share of futures nearer one of the two right futures than to their average, written by
+    a head of 32 numbers trained on the squared error and by an IdWriter sampling 4 codebook ids, and the share of the
+    sampled futures that rise."""
+    results: dict[str, list[float]] = {"regression": [], "ids": [], "ids rising": []}
+
+    with pinned_threads():
+        for seed in seeds:
+            generator = torch.Generator().manual_seed(seed)
+            series, _, _ = forked_series(4000, generator)
+            codebook = fitted_codebook(series.reshape(-1, 8), codes, generator)
+            torch.manual_seed(seed)
+            writer = IdWriter(codes)
+            regression = nn.Sequential(nn.Linear(32, 128), nn.ReLU(), nn.Linear(128, 128), nn.ReLU(), nn.Linear(128, 32))
+
+            for model in (writer, regression):
+                optimizer = torch.optim.Adam(model.parameters(), lr=3e-3)
+
+                for _ in range(steps):
+                    batch, _, _ = forked_series(64, generator)
+
+                    if model is writer:
+                        ids = series_ids(batch, codebook)
+                        x = torch.cat([torch.full((64, 1), codes), ids[:, :-1]], dim=1)
+                        loss = F.cross_entropy(writer(x).flatten(0, 1), ids.flatten())
+                    else:
+                        loss = F.mse_loss(regression(batch[:, :32]), batch[:, 32:])
+
+                    optimizer.zero_grad()
+                    loss.backward()
+                    optimizer.step()
+
+            tests, rising, falling = forked_series(1000, torch.Generator().manual_seed(seed + 77))
+            sampler = torch.Generator().manual_seed(seed)
+
+            with torch.no_grad():
+                ids = torch.cat([torch.full((1000, 1), codes), series_ids(tests[:, :32], codebook)], dim=1)
+
+                for _ in range(4):
+                    ids = torch.cat([ids, torch.multinomial(torch.softmax(writer(ids)[:, -1], dim=-1), 1, generator=sampler)], dim=1)
+
+                written = OUT4_REFERENCE["write_signal"](ids[:, 5:].flatten(), codebook).view(1000, -1)
+                averaged = regression(tests[:, :32])
+
+            def distance(guess: Tensor, future: Tensor) -> Tensor:
+                return ((guess - future[:, 32:]) ** 2).mean(dim=1)
+
+            middle = (rising + falling) / 2
+
+            for name, guess in (("regression", averaged), ("ids", written)):
+                nearest = torch.minimum(distance(guess, rising), distance(guess, falling))
+                results[name].append((nearest < distance(guess, middle)).float().mean().item())
+
+            results["ids rising"].append((distance(written, rising) < distance(written, falling)).float().mean().item())
+
+    return results
 
 
 def measure_codebooks(

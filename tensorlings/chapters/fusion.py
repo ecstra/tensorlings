@@ -238,23 +238,28 @@ FUSE1_LESSON = prose(
     - **early fusion**: both become tokens in one sequence, so attention mixes them from the first layer.
 
     Late fusion sums up the series before it knows the question. Early fusion
-    lets the question pick what to read. In the one sequence, a learned
-    **type embedding** per kind of input marks each token's kind. BERT's
-    segment embeddings told two sentences apart the same way.
+    lets the question pick what to read. In the one sequence, tokens2's type
+    embedding marks each token's kind.
 
-    Two tasks, each model trained 1,500 steps on three seeds, both 16 wide.
+    Two tasks, each model trained 1,500 steps on three seeds.
 
     - lookup: the question names a position, and the answer is the series' number there.
     - sum: the answer is 3 times the series' mean, plus an offset the question names.
 
-    | Task | Late fusion, 3,777 weights | Early fusion, 4,417 weights | Guessing the mean |
+    | Model | Weights | Lookup | Sum |
     |---|---|---|---|
-    | lookup | 0.315 to 0.320 | 0.0003 to 0.011 | 0.33 |
-    | sum | 0.0001 to 0.0002 | 0.0002 | 0.44 |
+    | late fusion, 16 wide | 3,777 | 0.315 to 0.320 | 0.0001 to 0.0002 |
+    | late fusion, 64 wide | 45,825 | 0.322 to 0.331 | 0.00005 to 0.0007 |
+    | early fusion, 16 wide | 4,417 | 0.0003 to 0.011 | 0.0002 |
+    | guessing the mean | 0 | 0.33 | 0.44 |
 
-    A summary of 16 numbers can't hold 32, so late fusion has lost the asked
-    number before the question arrives. In the sum, each input brings its
-    own piece of the answer, and the summaries hold everything needed.
+    At 64 wide the summary has room for all 32 numbers, and late fusion still
+    does no better than the guess. The trouble is the head. It must pick the
+    asked number out of a summary made before the question. An MLP on the two
+    joined vectors hardly learns that pick. Early fusion's attention makes
+    it directly, since the question's query matches the asked position's key.
+    In the sum, each input brings its own piece of the answer, and the
+    summaries hold everything needed.
 
     So fuse early when one input decides what to read in the other. Fuse late
     when each brings its own evidence, as CLIP's two encoders do. Late fusion
@@ -279,9 +284,9 @@ FUSE1_SOURCE = source_file(
 ''' + indented(MIX_BLOCK_PART) + '''
 
 
-    # TODO: Return one token per number of series, of shape (batch, steps).
-    #   Each token is value of the number plus the row of positions for its
-    #   place, giving shape (batch, steps, size).
+    # TODO: series has shape (batch, steps). Return one token per number, of
+    #   shape (batch, steps, size). Each token is `value` run on the number,
+    #   plus the row of `positions` for its place.
     def series_tokens(
         series: Tensor,
         value: nn.Linear,
@@ -419,7 +424,7 @@ FUSE1 = Exercise(
         "EarlyFusion.forward": "self.kinds.weight[0] and self.kinds.weight[1] are the two type rows. The question token needs "
         "a positions dimension, .unsqueeze(1), before torch.cat on dim=1. The answer sits at index -1 of dim 1.",
     },
-    introduces=("late fusion", "early fusion", "type embedding"),
+    introduces=("late fusion", "early fusion"),
     check=check_fuse1,
 )
 
@@ -628,10 +633,11 @@ FUSE2_LESSON = prose(
     ```
 
     At step 0, `tanh(0) = 0`, so the model is exactly the frozen one. It is
-    residual3's zero start, made by a gate in the spirit of gating1's. The
-    gate still gets a gradient at 0, since tanh's slope there is 1, and it
-    opens as the new layers prove useful. Without the gates, Flamingo trained unstably and
-    scored 66.5 against 70.7.
+    residual3's zero start. Each gate is one learned number per layer, a
+    scale the same for every input, so no input sets it as gating1's gates
+    did. It still gets a gradient at 0, since tanh's slope there is 1, and it
+    opens as the new layers prove useful. Without the gates, Flamingo trained
+    unstably and scored 66.5 against 70.7.
 
     Here a tiny LM learned text that climbs by a step of 1 to 7 each token.
     After two tokens it knows the step. Its first prediction can only guess,
@@ -847,18 +853,11 @@ def check_starts_as_lm(found: type) -> None:
 def check_freeze(found: object) -> None:
     for seed in (1109, 1110):
         lm = small_lm(seed)
-        torch.manual_seed(seed)
-        model = FUSE2_REFERENCE["Flamingo"](lm, 8)
         found(lm)
         trainable = [name for name, parameter in lm.named_parameters() if parameter.requires_grad]
 
         if trainable:
             raise Mismatch(f"After freeze_(lm), these of lm's parameters still train: {', '.join(trainable)}.")
-
-        new = [name for name, parameter in model.named_parameters() if not name.startswith("lm.") and not parameter.requires_grad]
-
-        if new:
-            raise Mismatch(f"freeze_(lm) froze layers outside lm too: {', '.join(new)}.")
 
 
 def check_fuse2(checker: Checker) -> None:
@@ -1024,9 +1023,11 @@ FUSE3_LESSON = prose(
     never learned what to do then.
 
     Give each kind of input a learned stand in, a vector the model gets in
-    its place when it is missing. Then train with inputs dropped at random,
-    as dropout1 dropped units. Neverova and colleagues called this ModDrop.
-    The model learns to answer from what it has.
+    its place when it is missing. MAE's learned mask token in masked2 takes a
+    hidden patch's place the same way. Then train with inputs dropped at random,
+    as dropout1 dropped units. Neverova and colleagues dropped whole inputs
+    at random this way in ModDrop, setting each dropped one to 0. The model
+    learns to answer from what it has.
 
     Here the answer is one part from a series of 16 and one from a table row
     of 4. With one input missing, the best any model can do is answer the
@@ -1040,7 +1041,7 @@ FUSE3_LESSON = prose(
     | inputs dropped at 0.15 | 0.002 to 0.003 | 0.38 to 0.39 | 0.45 to 0.46 |
     | the best any model can do | 0 | 0.38 to 0.39 | 0.45 to 0.46 |
 
-    Guessing the mean answer scores 0.84 to 0.85. The model that always saw
+    Guessing the mean answer scores 0.83 to 0.85. The model that always saw
     both had never trained its stand ins. A missing input sent it far past
     the best, at times worse than the guess. The dropped model landed on the
     best, and with both inputs it still reads them nearly perfectly.
@@ -1328,20 +1329,22 @@ def train_fusion(
 
 
 def measure_fusion(seeds: range = range(3)) -> dict[str, object]:
-    """fuse1's table: late and early fusion on the lookup and the sum, their weights, and the error of guessing the mean."""
+    """fuse1's table: late fusion 16 and 64 wide and early fusion 16 wide on the lookup and the sum, their weights, and
+    the error of guessing the mean."""
     results: dict[str, object] = {}
+    models = (("LateFusion", 16), ("LateFusion", 64), ("EarlyFusion", 16))
 
     with pinned_threads():
         for task, data in (("lookup", lookup_data), ("sum", sum_data)):
-            for name in ("LateFusion", "EarlyFusion"):
-                errors = [train_fusion(seeded_model(FUSE1_REFERENCE[name], seed), data, seed) for seed in seeds]
-                results[f"{name} {task}"] = errors
+            for name, size in models:
+                errors = [train_fusion(seeded_model(FUSE1_REFERENCE[name], seed, LENGTH, size), data, seed) for seed in seeds]
+                results[f"{name} {size} {task}"] = errors
 
             _, _, y = data(2000, torch.Generator().manual_seed(1000))
             results[f"guess {task}"] = y.var().item()
 
-        for name in ("LateFusion", "EarlyFusion"):
-            results[f"{name} weights"] = sum(parameter.numel() for parameter in FUSE1_REFERENCE[name]().parameters())
+        for name, size in models:
+            results[f"{name} {size} weights"] = sum(parameter.numel() for parameter in FUSE1_REFERENCE[name](LENGTH, size).parameters())
 
     return results
 

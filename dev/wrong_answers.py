@@ -2216,6 +2216,7 @@ CASES: list[tuple[str, str, str, str]] = [
     ("bridge2", "bridge_step never zeroes the gradients", "loss = F.cross_entropy(scores.flatten(0, 1), y.to(device).flatten())\n    optimizer.zero_grad()\n", "loss = F.cross_entropy(scores.flatten(0, 1), y.to(device).flatten())\n"),
     ("bridge2", "bridge_step leaves the signals on the CPU", "projected_tokens(encoder, projector, signals.to(device))", "projected_tokens(encoder, projector, signals)"),
     ("bridge2", "bridge_step leaves y on the CPU", "y.to(device).flatten()", "y.flatten()"),
+    ("bridge2", "bridge_step leaves x on the CPU", "signals.to(device)), x.to(device))", "signals.to(device)), x)"),
     ("bridge2", "bridge_step gives the loss tensor", "    return loss.item()", "    return loss"),
     ("bridge3", "nearest_characters leaves the table unscaled", "F.normalize(vectors, dim=-1) @ F.normalize(gpt.wte.weight, dim=-1).T", "F.normalize(vectors, dim=-1) @ gpt.wte.weight.T"),
     ("bridge3", "nearest_characters takes plain dot products", "F.normalize(vectors, dim=-1) @ F.normalize(gpt.wte.weight, dim=-1).T", "vectors @ gpt.wte.weight.T"),
