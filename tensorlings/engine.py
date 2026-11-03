@@ -246,6 +246,10 @@ def load_module(
     crashes: list[Crash] = []
     lines = source.splitlines()
 
+    # A @dataclass looks its class's module up in sys.modules while it builds the class, so the file's
+    # module sits there while it runs and leaves after, so checks run again and again don't pile up.
+    sys.modules[module.__name__] = module
+
     for statement in tree.body:
         code = compile(
             ast.Module(body=[statement], type_ignores=[]),
@@ -282,6 +286,8 @@ def load_module(
                     ),
                 ),
             )
+
+    sys.modules.pop(module.__name__, None)
 
     return module, crashes
 
