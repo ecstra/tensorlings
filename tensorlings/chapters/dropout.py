@@ -39,7 +39,8 @@ DROPOUT = Chapter(
 
         ## Further reading
 
-        - [Srivastava and others, dropout, the paper](https://jmlr.org/papers/v15/srivastava14a.html)
+        - [Hinton and others, the first dropout paper, 2012](https://arxiv.org/abs/1207.0580)
+        - [Srivastava and others, the full dropout paper, 2014](https://jmlr.org/papers/v15/srivastava14a.html)
         - [PyTorch, nn.Dropout](https://docs.pytorch.org/docs/2.14/generated/torch.nn.Dropout.html)
         - [Dive into Deep Learning, dropout](https://d2l.ai/chapter_multilayer-perceptrons/dropout.html)
         """,
@@ -146,9 +147,9 @@ DROPOUT1_SOURCE = source_file(
     below = draws < 0.5                              # True for about half of them
 
 
-    # TODO: Return a tensor of the given shape for dropout that drops each
-    #   number with probability p. Draw it with torch.rand from generator, so it
-    #   is True where a draw is at or above p and the number survives.
+    # TODO: Return a tensor of True and False of the given shape, True where a
+    #   number survives dropout. Draw numbers of that shape with torch.rand from
+    #   generator, and keep each one that is at or above p.
     def keep_mask(
         shape: tuple[int, ...],
         p: float,
@@ -350,17 +351,21 @@ DROPOUT2_LESSON = prose(
     By the end all four fit the training images perfectly, so dropout didn't
     stop that. It changed where the validation loss went. Without dropout it
     rose from 0.41 at epoch 30 to 0.62. With dropout on the inputs too, it
-    kept falling to 0.37, and the accuracy rose 3.4 points on every seed.
+    fell to 0.35 by epoch 90 and ended at 0.37. The accuracy rose about 3.4
+    points on every seed.
 
-    The paper saw the same steps on all of MNIST. Its plain network made 160
-    errors on the test set. 50% dropout in the hidden layers brought that to
-    about 130, and dropping 20% of the pixels too brought it to about 110.
+    Hinton and colleagues' 2012 paper saw the same steps on all of MNIST. Its
+    plain network made 160 errors on the test set. 50% dropout in the hidden
+    layers, with a limit on the size of each neuron's incoming weights,
+    brought that to about 130. Dropping 20% of the pixels too brought it to
+    about 110.
 
     Dropout has a cost. Each step trains a thinned model, so training takes
-    longer to get as far, two to three times as long by the paper's count. At
-    epoch 10 here, the model without dropout had a training loss of 0.62, and
-    the one with hidden 0.5 had 0.72. Both were measured with dropout off.
-    Their validation accuracy was 80.6% against 77.4%.
+    longer to get as far. Srivastava and others' 2014 paper counted two to
+    three times as long. At epoch 10 here, the model without dropout had a
+    training loss of 0.62, and the one with hidden 0.5 had 0.72. Both were
+    measured with dropout off. Their validation accuracy was 80.5% against
+    77.4%.
 
     A model with plenty of data for its size doesn't overfit, and there dropout
     only slows it down. Karpathy's nanoGPT turns it off for training from
@@ -607,7 +612,9 @@ def check_train_epochs(found: object) -> None:
             expected=expected,
         )
     except Mismatch as mismatch:
-        first_epoch_right = isinstance(actual, list) and len(actual) == len(expected) and abs(actual[0] - expected[0]) < 1e-5
+        # Only plain numbers say anything about the epochs. A tensor here comes from evaluate, whose own check names it.
+        plain_numbers = isinstance(actual, list) and all(isinstance(loss, float) for loss in actual)
+        first_epoch_right = plain_numbers and len(actual) == len(expected) and abs(actual[0] - expected[0]) < 1e-5
 
         if first_epoch_right:
             raise Mismatch(f"{call} gives the right validation loss after epoch 1 but not after epoch 2, so the later epochs trained differently. Every epoch should train with dropout on.") from mismatch
@@ -674,6 +681,10 @@ DROPOUT3_LESSON = prose(
 
     Each draw of dropout gives different numbers, but their average over many
     draws is the input itself. That is what dividing by `1 - p` buys.
+
+    The paper's own `p` is the chance of keeping a number, PyTorch's `1 - p`.
+    So the paper's 0.5 for hidden layers and 0.8 for inputs are PyTorch's 0.5
+    and 0.2. This course always means PyTorch's `p`.
 
     Where dropout goes in an MLP, from the paper.
 
@@ -808,6 +819,9 @@ DROPOUT3_SOLUTION = source_file(
             return x * keep_mask(x.shape, p, generator)
 
         return x * (1 - p)
+
+
+    piled = torch.stack([torch.ones(3), torch.zeros(3)])
 
 
     def average_of_draws(
@@ -953,7 +967,7 @@ def measure_dropout(
     seed: int,
 ) -> dict[str, float]:
     """dropout2's numbers for one setup and seed. An MLP with two hidden layers of 512 trains on mnist_sets' 1000 small
-    images for 300 epochs of minibatches of 100 at a rate of 0.1, and is measured with dropout off at epochs 10, 30
+    images for 300 epochs of minibatches of 100 at a rate of 0.1, and is measured with dropout off at epochs 10, 30, 90
     and 300 on its training images and on the 10,000 validation images."""
     sets = mnist_sets()
     x, y = sets["small_x"], sets["small_y"]
@@ -990,12 +1004,13 @@ def measure_dropout(
                         parameter -= 0.1 * parameter.grad
                         parameter.grad = None
 
-            if epoch not in (10, 30, 300):
+            if epoch not in (10, 30, 90, 300):
                 continue
 
-            training_loss, _ = reference_evaluate(model, x, y)
+            training_loss, training_accuracy = reference_evaluate(model, x, y)
             validation_loss, validation_accuracy = reference_evaluate(model, validation_x, validation_y)
             results[f"training loss {epoch}"] = training_loss
+            results[f"training accuracy {epoch}"] = training_accuracy
             results[f"validation loss {epoch}"] = validation_loss
             results[f"validation accuracy {epoch}"] = validation_accuracy
     finally:

@@ -481,7 +481,7 @@ GPT2_LESSON = prose(
     Every block adds its output to the stream. Without the scaling the stream
     grows like the square root of the depth, the growth residual2 measured.
     With it, the stream's size stays the same however deep the model, much as
-    residual3's fix did.
+    residual3's zero start kept it.
 
     `model.apply(fn)` calls `fn` on every module inside `model`, which is how
     one function sets up every layer.

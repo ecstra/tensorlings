@@ -938,7 +938,8 @@ COMBINE3_LESSON = prose(
 
     The new branch can start random, or start as do nothing. With its last
     Linear at zero, the model at step 0 gives exactly what it gave before.
-    residual3 used this start for depth. Here it protects a trained model.
+    residual3 used this start for a deep stack with no norm. Here it protects
+    a trained model.
 
     Zero only the last layer. With every layer at zero, the first layer's
     gradient is multiplied by the last layer's zeros, and the last weight's by

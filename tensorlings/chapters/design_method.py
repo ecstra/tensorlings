@@ -1581,8 +1581,8 @@ DESIGN4_LESSON = prose(
 
     The first is the identity at the start. A block added to a working model
     should begin as "do nothing", so it can't break what works. residual3's
-    blocks did this with their last layer at zero. `identity_gap` measures the
-    largest change a block makes to its input.
+    zero start did this with the branch's last layer at zero. `identity_gap`
+    measures the largest change a block makes to its input.
 
     The second is gradients that reach every parameter. debug3 looked for
     layers with no gradient after one backward pass. A layer at zero blocks
@@ -1697,7 +1697,7 @@ DESIGN4_SOLUTION = source_file(
 
 
 class ZeroBranch(nn.Module):
-    """residual3's block, x plus a branch whose last layer starts at zero."""
+    """x plus a branch whose last layer starts at zero, residual3's zero start."""
 
     def __init__(self, size: int) -> None:
         super().__init__()

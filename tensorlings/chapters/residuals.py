@@ -24,10 +24,10 @@ from ..engine import (
 )
 from ..text import prose, source_file
 from .dropout import labelled_points
-from .initialization import bell_curve, expect_numbers, relative
+from .initialization import bell_curve, relative
 from .linear_layers import expect_module, expect_parameter
 from .mnist import mnist_sets
-from .normalization import kaiming_, pinned_threads, train_on_mnist, with_random_affine
+from .normalization import expect_spreads, kaiming_, pinned_threads, train_on_mnist, with_random_affine
 
 RESIDUALS = Chapter(
     folder="22_residuals",
@@ -39,14 +39,16 @@ RESIDUALS = Chapter(
         A residual connection adds a block's input back to its output, so the
         gradient reaches the first layer however deep the model is. This
         chapter builds residual blocks, shows a deep plain MLP that won't train
-        next to a residual one that does, starts each block as "do nothing",
-        and sets out the block orders of the papers.
+        next to a residual one that does, trains stacks of 201 layers with pre
+        norm or with a zero start, and measures the block orders of the papers.
 
         ## Further reading
 
         - [He and others, deep residual learning, the ResNet paper](https://arxiv.org/abs/1512.03385)
         - [He and others, identity mappings in deep residual networks](https://arxiv.org/abs/1603.05027)
+        - [Zhang and others, Fixup, residual learning without normalization](https://arxiv.org/abs/1901.09321)
         - [Xiong and others, on layer normalization in the transformer architecture](https://arxiv.org/abs/2002.04745)
+        - [Liu and others, understanding the difficulty of training transformers](https://arxiv.org/abs/2004.08249)
         - [Dive into Deep Learning, residual networks](https://d2l.ai/chapter_convolutional-modern/resnet.html)
         """,
     ),
@@ -97,12 +99,33 @@ class ReferencePreNormBlock(nn.Module):
         self.up = nn.Linear(width, width)
         self.down = nn.Linear(width, width)
 
-        with torch.no_grad():
-            self.down.weight.zero_()
-            self.down.bias.zero_()
-
     def forward(self, x: Tensor) -> Tensor:
         return x + self.down(torch.relu(self.up(self.norm(x))))
+
+
+class ReferencePostNormBlock(nn.Module):
+    """residual4's post norm, the norm of x plus the branch of x, where Vaswani and others put it."""
+
+    def __init__(self, width: int) -> None:
+        super().__init__()
+        self.norm = nn.LayerNorm(width)
+        self.up = nn.Linear(width, width)
+        self.down = nn.Linear(width, width)
+
+    def forward(self, x: Tensor) -> Tensor:
+        return self.norm(x + self.down(torch.relu(self.up(x))))
+
+
+def reference_zero_start_(
+    up: nn.Linear,
+    down: nn.Linear,
+    blocks: int,
+) -> None:
+    """Fixup's start for a branch of two layers in a stack of blocks with no norm."""
+    with torch.no_grad():
+        down.weight.zero_()
+        down.bias.zero_()
+        up.weight.mul_(1 / math.sqrt(blocks))
 
 
 # ---------------------------------------------------------------------------
@@ -335,7 +358,7 @@ RESIDUAL2_LESSON = prose(
 
     | Hidden layers | Plain | Residual |
     |---|---|---|
-    | 17 | 93.2% to 93.6% | 94.0% to 94.5% |
+    | 17 | 93.2% to 93.6% | 93.9% to 94.5% |
     | 51 | 10% to 21%, never learned | 95.1% to 95.4% |
 
     The residual MLP gets better with depth, and the plain one falls apart.
@@ -350,7 +373,7 @@ RESIDUAL2_LESSON = prose(
     The cost is that each block adds to the main path. Its spread grew from
     0.14 to 0.53 over 25 default blocks. With Kaiming in both layers of every
     block, it grew to about 59,000, and training turned `nan` on every seed.
-    residual3 fixes that.
+    residual3 shows two ways to fix it.
 
     `.abs().mean()` gives the average size of the numbers in a tensor.
     """,
@@ -627,11 +650,11 @@ def check_residual2(checker: Checker) -> None:
         function="spreads_through_blocks",
         description="gives the spread after every block",
         inputs=(
-            (seeded_blocks(377, 16, 4), Described(bell_curve(378, 50, 16), "x of shape (50, 16) from the bell curve")),
-            (seeded_blocks(379, 8, 2), Described(bell_curve(380, 30, 8), "x of shape (30, 8) from the bell curve")),
+            (seeded_blocks(377, 16, 4), Described(bell_curve(378, 200, 16), "x of shape (200, 16) from the bell curve")),
+            (seeded_blocks(379, 8, 2), Described(bell_curve(380, 200, 8), "x of shape (200, 8) from the bell curve")),
         ),
         reference=reference_spreads_through_blocks,
-        expect=expect_numbers,
+        expect=expect_spreads,
     )
 
 
@@ -662,36 +685,47 @@ RESIDUAL2 = Exercise(
 
 RESIDUAL3_LESSON = prose(
     """
-    Each block adds its branch's output to the main path, so their variances
-    add up and the main path keeps growing. Modern models use two fixes
-    together.
+    Each block adds its branch's output to the main path, so the path keeps
+    growing. residual2 measured its spread going from 0.14 to 0.53 over 25
+    blocks. Deeper stacks grow further, until training breaks. Two fixes come
+    from different papers, and each shows its use in a different place.
 
-    - pre norm: the branch normalizes its input first, `x + f(norm(x))`. It then sees spread 1 however large the main path has grown.
-    - a zero start: the branch's last layer starts at zero, so every block starts as `x + 0` and does nothing.
+    The first is **pre norm**. The branch normalizes its input first,
+    `x + f(norm(x))`, so it sees spread 1 however large the path has grown.
+    The path itself is never normalized, so one more norm goes after the last
+    block, before the head. GPT-2 placed its norms this way in 2019.
 
-    With a zero start, a model of any depth starts as its first and last
-    layers alone. Each block grows in once training finds it useful. Goyal and
-    others zeroed the last scale of each ResNet block in 2017, and GPT-2
-    scales its blocks down for the same reason.
+    Here is residual2's setup at a rate of 0.05 over three seeds, both kinds
+    of block from PyTorch's default start.
 
-    The main path is never normalized inside the stack, so pre norm models
-    put one more norm after the last block, before the head.
+    | Hidden layers | 51 | 101 | 201 |
+    |---|---|---|---|
+    | residual2's blocks | 95.1% to 95.4% | `nan` on every seed | `nan` on every seed |
+    | pre norm blocks | 95.6% to 96.1% | 95.7% to 96.0% | 95.8% to 95.9% |
 
-    Here is residual2's setup at 51 hidden layers over three seeds, with
-    residual2's blocks against pre norm blocks with a zero start from Kaiming.
+    The second is a **zero start**, for a deep stack with no norm at all. The
+    branch's last layer starts at zero, so every block starts as `x + 0` and
+    does nothing. The model starts as its first and last layers alone, and
+    each block grows in as training finds it useful.
 
-    | Blocks | Rate 0.05 | Rate 0.2 |
+    Fixup, by Zhang and others in 2019, also shrinks the branch's first layer,
+    here by `1 / sqrt(blocks)`. With starts like this, Fixup and ReZero trained
+    residual stacks 10,000 layers deep with no norm. Here are residual2's
+    blocks at 201 hidden layers, three seeds each.
+
+    | Start | Rate 0.05 | Rate 0.2 |
     |---|---|---|
-    | residual2's, default start | 95.1% to 95.4% | `nan` on every seed |
-    | pre norm, zero start | 94.4% to 95.4% | 95.2% to 95.7% |
-
-    At 0.05 both reach about 95%. At four times the step, residual2's main
-    path blows up. Pre norm blocks with a zero start train to the best scores
-    in the table. That is what the fixes buy: a start that is safe at any
-    depth, and room for larger steps.
+    | PyTorch's default | `nan` on every seed | `nan` on every seed |
+    | zero start | 90.1% to 91.0% | 92.9% to 93.6% |
 
     A zeroed layer still learns. Its gradient isn't zero, since the layer
     before it gives it nonzero inputs.
+
+    So use pre norm wherever a block can hold a norm, as language models do.
+    The zero start suits a stack with no norms. combine3 uses it again, to add
+    a branch to a model that already works without changing its answers.
+
+    `.mul_(s)` multiplies every number of a tensor by `s`, in place.
     """,
 )
 
@@ -699,19 +733,15 @@ RESIDUAL3_SOURCE = source_file(
     '''
     # residual3.py
 
+    import math
+
     import torch
     import torch.nn as nn
     from torch import Tensor
 
-    layer = nn.Linear(4, 4)
 
-    with torch.no_grad():
-        layer.weight.zero_()                          # every weight set to 0, in place
-
-
-    # TODO: Two things to finish. In __init__, zero down's weight and bias, so
-    #   the block starts doing nothing. forward returns x plus down of the ReLU
-    #   of up of the norm of x.
+    # TODO: Finish forward, so the block returns x plus down of the ReLU of up
+    #   of the norm of x.
     class PreNormBlock(nn.Module):
         def __init__(self, width: int) -> None:
             super().__init__()
@@ -719,19 +749,8 @@ RESIDUAL3_SOURCE = source_file(
             self.up = nn.Linear(width, width)
             self.down = nn.Linear(width, width)
 
-            with torch.no_grad():
-                ...
-
         def forward(self, x: Tensor) -> Tensor:
             ...
-
-
-    # TODO: Return whether block hands x back unchanged, up to rounding.
-    def does_nothing(
-        block: nn.Module,
-        x: Tensor,
-    ) -> bool:
-        ...
 
 
     # TODO: Finish forward. It passes x through stem and a ReLU, then every block
@@ -752,6 +771,35 @@ RESIDUAL3_SOURCE = source_file(
 
         def forward(self, x: Tensor) -> Tensor:
             ...
+
+
+    layer = nn.Linear(4, 4)
+
+    with torch.no_grad():
+        layer.weight.zero_()                          # every weight set to 0, in place
+        layer.bias.mul_(0.5)                          # every bias halved, in place
+
+
+    # TODO: Finish the three lines, so a branch of up, a ReLU and down starts as
+    #   do nothing in a stack of `blocks` blocks. Set down's weight and bias to
+    #   zero, and multiply up's weight by 1 / sqrt(blocks), all in place.
+    def zero_start_(
+        up: nn.Linear,
+        down: nn.Linear,
+        blocks: int,
+    ) -> None:
+        with torch.no_grad():
+            ...
+            ...
+            ...
+
+
+    # TODO: Return whether block hands x back unchanged, up to rounding.
+    def does_nothing(
+        block: nn.Module,
+        x: Tensor,
+    ) -> bool:
+        ...
     ''',
 )
 
@@ -759,14 +807,11 @@ RESIDUAL3_SOLUTION = source_file(
     '''
     # residual3.py, a solution for comparison
 
+    import math
+
     import torch
     import torch.nn as nn
     from torch import Tensor
-
-    layer = nn.Linear(4, 4)
-
-    with torch.no_grad():
-        layer.weight.zero_()
 
 
     class PreNormBlock(nn.Module):
@@ -776,19 +821,8 @@ RESIDUAL3_SOLUTION = source_file(
             self.up = nn.Linear(width, width)
             self.down = nn.Linear(width, width)
 
-            with torch.no_grad():
-                self.down.weight.zero_()
-                self.down.bias.zero_()
-
         def forward(self, x: Tensor) -> Tensor:
             return x + self.down(torch.relu(self.up(self.norm(x))))
-
-
-    def does_nothing(
-        block: nn.Module,
-        x: Tensor,
-    ) -> bool:
-        return torch.allclose(block(x), x)
 
 
     class PreNormMLP(nn.Module):
@@ -812,20 +846,68 @@ RESIDUAL3_SOLUTION = source_file(
                 x = block(x)
 
             return self.head(self.norm(x))
+
+
+    layer = nn.Linear(4, 4)
+
+    with torch.no_grad():
+        layer.weight.zero_()
+        layer.bias.mul_(0.5)
+
+
+    def zero_start_(
+        up: nn.Linear,
+        down: nn.Linear,
+        blocks: int,
+    ) -> None:
+        with torch.no_grad():
+            down.weight.zero_()
+            down.bias.zero_()
+            up.weight.mul_(1 / math.sqrt(blocks))
+
+
+    def does_nothing(
+        block: nn.Module,
+        x: Tensor,
+    ) -> bool:
+        return torch.allclose(block(x), x)
     ''',
 )
 
 
-def check_pre_norm_start(found: type) -> None:
-    for width in (4, 6):
-        call = f"PreNormBlock({width})"
-        block = expect_module(call, found(width))
+def check_zero_start(found: object) -> None:
+    for width, blocks in ((4, 9), (6, 100)):
+        torch.manual_seed(380 + width)
+        up = nn.Linear(width, width)
+        down = nn.Linear(width, width)
+        weight = up.weight.detach().clone()
+        bias = up.bias.detach().clone()
+        call = f"zero_start_ on an up and a down of width {width}, for {blocks} blocks"
+        found(up, down, blocks)
 
         for name in ("weight", "bias"):
-            parameter = getattr(block.down, name).detach()
+            parameter = getattr(down, name).detach()
 
             if parameter.abs().max().item() > 0:
-                raise Mismatch(f"The {name} of down in {call} should start at zero, but its largest number is {parameter.abs().max().item():.4g}.")
+                raise Mismatch(f"After {call}, down's {name} should be all zeros, but its largest number is {parameter.abs().max().item():.4g}.")
+
+        expect_tensor(
+            call=f"up's weight after {call}, which should be its old weight times 1 / sqrt({blocks})",
+            actual=up.weight.detach(),
+            expected=weight / math.sqrt(blocks),
+        )
+        expect_tensor(
+            call=f"up's bias after {call}, which should stay as it was",
+            actual=up.bias.detach(),
+            expected=bias,
+        )
+
+
+def zero_started_block(width: int) -> nn.Module:
+    block = ReferenceResidualBlock(width)
+    reference_zero_start_(block.branch[0], block.branch[2], 4)
+
+    return block
 
 
 def check_pre_norm_forward(found: type) -> None:
@@ -872,15 +954,20 @@ def check_pre_norm_mlp(found: type) -> None:
 def check_residual3(checker: Checker) -> None:
     checker.test_method(
         class_name="PreNormBlock",
-        method="__init__",
-        description="starts with down's weight and bias at zero",
-        run=check_pre_norm_start,
-    )
-    checker.test_method(
-        class_name="PreNormBlock",
         method="forward",
         description="adds x to the branch of its normalized self",
         run=check_pre_norm_forward,
+    )
+    checker.test_method(
+        class_name="PreNormMLP",
+        method="forward",
+        description="passes x through the stem, the blocks, the last norm and the head",
+        run=check_pre_norm_mlp,
+    )
+    checker.test(
+        function="zero_start_",
+        description="zeroes down and scales up's weight by 1 / sqrt(blocks)",
+        run=check_zero_start,
     )
     torch.manual_seed(395)
     x = small_tensor(396, 3, 4)
@@ -889,33 +976,28 @@ def check_residual3(checker: Checker) -> None:
         function="does_nothing",
         description="says whether a block hands x back unchanged",
         inputs=(
-            (Described(ReferencePreNormBlock(4), "a pre norm block with down at zero"), x),
-            (Described(ReferenceResidualBlock(4), "a residual block with random layers"), x),
+            (Described(zero_started_block(4), "residual2's block after a zero start"), x),
+            (Described(ReferencePreNormBlock(4), "a pre norm block from PyTorch's default start"), x),
             (Described(nn.Identity(), "nn.Identity()"), x),
         ),
         reference=lambda block, x: torch.allclose(block(x), x),
         expect=expect_value,
-    )
-    checker.test_method(
-        class_name="PreNormMLP",
-        method="forward",
-        description="passes x through the stem, the blocks, the last norm and the head",
-        run=check_pre_norm_mlp,
     )
 
 
 RESIDUAL3 = Exercise(
     name="residual3",
     chapter=RESIDUALS,
-    title="Starting as do nothing",
+    title="Pre norm and the zero start",
     lesson=RESIDUAL3_LESSON,
     source=RESIDUAL3_SOURCE,
     solution=RESIDUAL3_SOLUTION,
     hints={
-        "PreNormBlock.__init__": "Call .zero_() on self.down.weight and on self.down.bias, in place of the ... line.",
         "PreNormBlock.forward": "Apply self.norm, then self.up, then torch.relu, then self.down, and add x to that.",
-        "does_nothing": "Compare block(x) with x using torch.allclose.",
         "PreNormMLP.forward": "Like ResidualMLP's forward in residual2, with self.norm applied right before self.head.",
+        "zero_start_": "Call .zero_() on down.weight and on down.bias. Then call .mul_ on up.weight with 1 divided by "
+        "math.sqrt(blocks).",
+        "does_nothing": "Compare block(x) with x using torch.allclose.",
     },
     introduces=(),
     check=check_residual3,
@@ -934,21 +1016,38 @@ RESIDUAL4_LESSON = prose(
     |---|---|
     | He and others 2015, ResNet | inside the branch, with a ReLU after the addition |
     | He and others 2016, ResNet v2 | at the start of the branch, and nothing after the addition |
-    | Vaswani and others 2017 | after the addition, called post norm |
+    | Vaswani and others 2017, the paper later sections' language models come from | after the addition, called post norm |
     | GPT-2, 2019 | at the start of the branch, called pre norm, and once more after the last block |
 
     The second ResNet paper kept the main path clean, with nothing on it but
     additions. That trained a 1001 layer model better than the first design.
-    Post norm puts a norm on the main path at every block. Xiong and others
-    showed in 2020 that post norm needs the learning rate raised slowly at the
-    start, and pre norm trains without that.
+    Post norm puts a norm on the main path at every block.
+
+    Here is residual3's setup with post norm blocks, the norm of x plus the
+    branch of x, against residual3's pre norm blocks, three seeds each. Warmup
+    raised the rate in a straight line over the first 200 of the 780 steps.
+
+    | Hidden layers and rate | Post norm | Pre norm |
+    |---|---|---|
+    | 51, 0.05 | 95.9% to 96.4% | 95.6% to 96.1% |
+    | 51, 0.5 | 11%, 89% and 95% | 94.7% to 95.9% |
+    | 51, 0.5 with warmup | 92.6% to 95.7% | 95.4% to 95.6% |
+    | 201, 0.05 | 89.8% to 95.3% | 95.8% to 95.9% |
+    | 201, 0.2 | 11% on every seed | 95.1% to 95.4% |
+
+    At 51 layers and a small step, both reach about 96%. Liu and others found
+    in 2020 that post norm often ends a little higher when it trains. At a
+    large step it failed on one seed, and warmup fixed that, as Xiong and
+    others showed in 2020. At 201 layers post norm fell apart, and at 0.2 it
+    never learned, even with warmup. Pre norm trained in every row.
 
     So most models since GPT-2 use pre norm. Use it by default, and expect
     post norm when you read the 2017 paper.
 
     When a block changes the width, `x` and `f(x)` no longer line up. ResNet
-    then put a Linear layer on the main path of that one block, to match the
-    width.
+    then matched the width on the main path of that one block, with a learned
+    layer or by filling the new width with zeros. In an MLP the learned layer
+    is a Linear.
 
     A list of pairs can be unpacked in a loop, `for norm, f in pairs:`.
     """,
@@ -1464,13 +1563,13 @@ QUIZ5_LESSON = prose(
     | Name | Moves | Shown in |
     |---|---|---|
     | `rms_pre_norm` | RMSNorm with a weight, inside a pre norm block | rmsnorm1, residual4 |
-    | `DropoutBlock` | a pre norm block starting at zero, with dropout on the branch's output | residual3, dropout1 |
+    | `DropoutBlock` | a pre norm block with dropout on the branch's output | residual3, dropout1 |
     | `block_stack` | blocks in an nn.Sequential, then a final LayerNorm | residual3, mlp1 |
     | `block_parameters` | the parameters of one DropoutBlock, worked out by hand | linear1, layernorm1 |
 
     Dropout on a residual branch goes on the branch's output, before the add,
-    as in nanoGPT and GPT-2. The branch's last layer isn't the model's last
-    layer, so dropout3's rule still holds.
+    as in Vaswani and others' 2017 paper and in nanoGPT. The branch's last
+    layer isn't the model's last layer, so dropout3's rule still holds.
     """,
 )
 
@@ -1501,9 +1600,8 @@ QUIZ5_SOURCE = source_file(
 
     # TODO: Finish both methods. The block holds four modules. norm is a
     #   LayerNorm of width. up and down are Linear layers from width to width.
-    #   dropout is an nn.Dropout of p. down's weight and bias both start at
-    #   zero. forward returns x plus the dropout of down of the ReLU of up of
-    #   the norm of x.
+    #   dropout is an nn.Dropout of p. forward returns x plus the dropout of
+    #   down of the ReLU of up of the norm of x.
     class DropoutBlock(nn.Module):
         def __init__(
             self,
@@ -1568,10 +1666,6 @@ QUIZ5_SOLUTION = source_file(
             self.down = nn.Linear(width, width)
             self.dropout = nn.Dropout(p)
 
-            with torch.no_grad():
-                self.down.weight.zero_()
-                self.down.bias.zero_()
-
         def forward(self, x: Tensor) -> Tensor:
             return x + self.dropout(self.down(torch.relu(self.up(self.norm(x)))))
 
@@ -1603,13 +1697,11 @@ def check_dropout_block_start(found: type) -> None:
         if not isinstance(block.dropout, nn.Dropout) or block.dropout.p != p:
             raise Mismatch(f"The dropout of {call} should be nn.Dropout({p}).")
 
-        expect_parameter(block.up, f"up in {call}", "weight", (width, width))
+        if not isinstance(block.norm, nn.LayerNorm) or tuple(block.norm.normalized_shape) != (width,):
+            raise Mismatch(f"The norm of {call} should be nn.LayerNorm({width}).")
 
-        for name in ("weight", "bias"):
-            parameter = getattr(block.down, name).detach()
-
-            if parameter.abs().max().item() > 0:
-                raise Mismatch(f"The {name} of down in {call} should start at zero, but its largest number is {parameter.abs().max().item():.4g}.")
+        for name in ("up", "down"):
+            expect_parameter(getattr(block, name), f"{name} in {call}", "weight", (width, width))
 
 
 def check_dropout_block_forward(found: type) -> None:
@@ -1674,7 +1766,7 @@ def check_quiz5(checker: Checker) -> None:
     checker.test_method(
         class_name="DropoutBlock",
         method="__init__",
-        description="holds norm, up, down and dropout, with down at zero",
+        description="holds norm, up, down and dropout",
         run=check_dropout_block_start,
     )
     checker.test_method(
@@ -1711,8 +1803,8 @@ QUIZ5 = Exercise(
     solution=QUIZ5_SOLUTION,
     hints={
         "rms_pre_norm": "Normalize x as MyRMSNorm's forward does in rmsnorm1, with weight, then add x to f of that.",
-        "DropoutBlock.__init__": "Make norm, up and down as PreNormBlock does in residual3 and zero down the same "
-        "way. Then add self.dropout = nn.Dropout(p).",
+        "DropoutBlock.__init__": "Make norm, up and down as PreNormBlock does in residual3. Then add a fourth module "
+        "called dropout, an nn.Dropout of p.",
         "DropoutBlock.forward": "PreNormBlock's forward, with self.dropout around self.down(...).",
         "block_stack": "Make a list of DropoutBlock(width, p), one per block, then pass it with * and nn.LayerNorm(width) "
         "to nn.Sequential.",
@@ -1769,7 +1861,9 @@ def depth_model(
     - plain_default: the same from PyTorch's default start.
     - residual: residual2's blocks from PyTorch's default start.
     - kaiming_both: residual2's blocks with Kaiming in both layers.
-    - pre_norm: residual3's blocks, up from Kaiming and down at zero, then one norm before the head."""
+    - zero_start: residual2's blocks with residual3's zero start, down at zero and up scaled down.
+    - pre_norm: residual3's pre norm blocks from PyTorch's default start, then one norm before the head.
+    - post_norm: residual4's post norm blocks from PyTorch's default start."""
     if kind == "plain":
         return kaiming_(plain_mnist_mlp(hidden))
 
@@ -1784,13 +1878,18 @@ def depth_model(
     if kind == "kaiming_both":
         return StackedMLP([kaiming_(ReferenceResidualBlock(64)) for _ in range(blocks)], final_norm=False)
 
-    model = StackedMLP([ReferencePreNormBlock(64) for _ in range(blocks)], final_norm=True)
-    kaiming_(model.stem)
+    if kind == "zero_start":
+        model = StackedMLP([ReferenceResidualBlock(64) for _ in range(blocks)], final_norm=False)
 
-    for block in model.blocks:
-        kaiming_(block.up)
+        for block in model.blocks:
+            reference_zero_start_(block.branch[0], block.branch[2], blocks)
 
-    return model
+        return model
+
+    if kind == "post_norm":
+        return StackedMLP([ReferencePostNormBlock(64) for _ in range(blocks)], final_norm=False)
+
+    return StackedMLP([ReferencePreNormBlock(64) for _ in range(blocks)], final_norm=True)
 
 
 def depth_run(
@@ -1798,32 +1897,66 @@ def depth_run(
     hidden: int,
     rate: float,
     seed: int,
+    warmup: int = 0,
 ) -> dict[str, float]:
     torch.manual_seed(seed)
 
-    return train_on_mnist(depth_model(kind, hidden), rate, seed)
+    return train_on_mnist(
+        model=depth_model(kind, hidden),
+        rate=rate,
+        seed=seed,
+        warmup=warmup,
+    )
 
 
-DEPTH_RUNS: tuple[tuple[str, int, float], ...] = (
-    ("plain", 17, 0.05),
-    ("residual", 17, 0.05),
-    ("plain", 51, 0.05),
-    ("residual", 51, 0.05),
-    ("kaiming_both", 51, 0.05),
-    ("pre_norm", 51, 0.05),
-    ("residual", 51, 0.2),
-    ("pre_norm", 51, 0.2),
+# Each run is a kind, hidden layers, a rate and warmup steps.
+RESIDUAL2_RUNS: tuple[tuple[str, int, float, int], ...] = (
+    ("plain", 17, 0.05, 0),
+    ("residual", 17, 0.05, 0),
+    ("plain", 51, 0.05, 0),
+    ("residual", 51, 0.05, 0),
+    ("kaiming_both", 51, 0.05, 0),
+)
+
+# residual2's blocks turn nan within a few steps at 101 and 201 layers, so those runs take no time.
+RESIDUAL3_RUNS: tuple[tuple[str, int, float, int], ...] = (
+    ("pre_norm", 51, 0.05, 0),
+    ("residual", 101, 0.05, 0),
+    ("pre_norm", 101, 0.05, 0),
+    ("residual", 201, 0.05, 0),
+    ("pre_norm", 201, 0.05, 0),
+    ("residual", 201, 0.2, 0),
+    ("zero_start", 201, 0.05, 0),
+    ("zero_start", 201, 0.2, 0),
+)
+
+# residual4's pre norm runs at 0.05 are residual3's.
+RESIDUAL4_RUNS: tuple[tuple[str, int, float, int], ...] = (
+    ("post_norm", 51, 0.05, 0),
+    ("post_norm", 51, 0.5, 0),
+    ("post_norm", 51, 0.5, 200),
+    ("post_norm", 201, 0.05, 0),
+    ("post_norm", 201, 0.2, 0),
+    ("post_norm", 201, 0.2, 200),
+    ("pre_norm", 51, 0.5, 0),
+    ("pre_norm", 51, 0.5, 200),
+    ("pre_norm", 201, 0.2, 0),
 )
 
 
 def measure_depths(
-    runs: tuple[tuple[str, int, float], ...] = DEPTH_RUNS,
+    runs: tuple[tuple[str, int, float, int], ...] = RESIDUAL2_RUNS + RESIDUAL3_RUNS + RESIDUAL4_RUNS,
     seeds: range = range(3),
-) -> dict[tuple[str, int, float, int], dict[str, float]]:
-    """residual2's and residual3's tables, keyed by kind, hidden layers, rate and seed. Each run is 2 epochs of plain
-    SGD at batch 128 on MNIST's 50,000 training images."""
+) -> dict[tuple[str, int, float, int, int], dict[str, float]]:
+    """residual2's, residual3's and residual4's tables, keyed by kind, hidden layers, rate, warmup steps and seed. Each
+    run is 2 epochs of plain SGD at batch 128 on MNIST's 50,000 training images, 780 steps. A run of 201 layers that
+    trains takes about half a minute to a minute and a half on 4 threads."""
     with pinned_threads():
-        return {(kind, hidden, rate, seed): depth_run(kind, hidden, rate, seed) for kind, hidden, rate in runs for seed in seeds}
+        return {
+            (kind, hidden, rate, warmup, seed): depth_run(kind, hidden, rate, seed, warmup)
+            for kind, hidden, rate, warmup in runs
+            for seed in seeds
+        }
 
 
 def measure_first_gradients() -> dict[str, float]:

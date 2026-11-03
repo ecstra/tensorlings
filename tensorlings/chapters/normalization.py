@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import contextlib
 import math
-from collections.abc import Iterator
+import time
+from collections.abc import Callable, Iterator
 
 import torch
 import torch.nn as nn
@@ -17,6 +18,7 @@ from ..engine import (
     Described,
     Mismatch,
     check_on_inputs,
+    expect_close,
     expect_parts,
     expect_tensor,
     expect_value,
@@ -91,6 +93,30 @@ def check_ones_and_zeros(
 
         if not torch.equal(parameter, torch.full((size,), starts[name])):
             raise Mismatch(f"The {name} of {call} should start as all {starts[name]:g}, but it holds {parameter}.")
+
+
+def expect_spreads(
+    call: str,
+    actual: object,
+    expected: list[float],
+) -> None:
+    """expect_numbers within 1e-3 of each spread. On the few thousand numbers a check passes, a spread that divides by
+    n, as batchnorm1's did, lands that close to plain .std(), which divides by n - 1, so either passes."""
+    if not isinstance(actual, (list, tuple)) or len(actual) != len(expected):
+        expect_numbers(
+            call=call,
+            actual=actual,
+            expected=expected,
+        )
+        return
+
+    for position, (got, wanted) in enumerate(zip(actual, expected)):
+        expect_close(
+            call=f"number {position + 1} of {call}",
+            actual=got,
+            expected=wanted,
+            tolerance=1e-3 * abs(wanted),
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -231,6 +257,17 @@ BATCHNORM1_SOLUTION = source_file(
 
 
 def check_my_batch_norm(found: type) -> None:
+    # eps of 1e-5 barely moves the answer, so a large one shows where self.eps goes.
+    call = "MyBatchNorm(3, eps=0.1)"
+    module = expect_module(call, found(3, eps=0.1))
+    reference = nn.BatchNorm1d(3, eps=0.1)
+    x = small_tensor(296, 6, 3)
+    expect_tensor(
+        call=f"{call} on x of shape (6, 3), which should add self.eps to the variance inside the root",
+        actual=module(x),
+        expected=reference(x),
+    )
+
     for features in (3, 5):
         call = f"MyBatchNorm({features})"
         module = expect_module(call, found(features))
@@ -709,6 +746,17 @@ LAYERNORM1_SOLUTION = source_file(
 
 
 def check_my_layer_norm(found: type) -> None:
+    # eps of 1e-5 barely moves the answer, so a large one shows where self.eps goes.
+    call = "MyLayerNorm(4, eps=0.1)"
+    module = expect_module(call, found(4, eps=0.1))
+    reference = nn.LayerNorm(4, eps=0.1)
+    x = small_tensor(338, 3, 4)
+    expect_tensor(
+        call=f"{call} on x of shape (3, 4), which should add self.eps to the variance inside the root",
+        actual=module(x),
+        expected=reference(x),
+    )
+
     for size in (4, 6):
         call = f"MyLayerNorm({size})"
         module = expect_module(call, found(size))
@@ -791,11 +839,12 @@ RMSNORM1_LESSON = prose(
     **RMSNorm**, from Zhang and Sennrich in 2019, drops LayerNorm's mean. It
     divides each row by its root mean square, the square root of the mean of
     its squares, with `eps` inside the root. Then a learned `weight` scales
-    each feature, and there is no shift.
+    each feature. The paper kept a shift too, and PyTorch's `nn.RMSNorm` and
+    LLaMA leave it out, as this exercise does.
 
-    The authors found that taking away the mean did little, and leaving it out
-    made their models run 7% to 64% faster. LLaMA and most language models
-    since use RMSNorm.
+    The authors found that taking away the mean did little, and that leaving
+    it out cut their models' running time by 7% to 64%. LLaMA and most
+    language models since use RMSNorm.
 
     ```python
     x = torch.tensor([[3.0, 4.0]])
@@ -807,9 +856,15 @@ RMSNORM1_LESSON = prose(
     `nn.RMSNorm(size, eps=1e-6)` matches this. Given no `eps`, PyTorch picks a
     tiny one of its own, so pass it.
 
+    Written the way you write them, here and in layernorm1, RMSNorm does less
+    work. Over six timings on 4096 rows of 1024 numbers, MyRMSNorm's forward
+    ran 3.6 to 7.7 times as fast as MyLayerNorm's. Forward with backward ran
+    1.4 to 1.9 times as fast.
+
     When a row already has mean 0, its variance is its mean square. So
     LayerNorm is RMSNorm on the row with its mean taken away, before the scale
-    and the shift.
+    and the shift. `F.layer_norm(x, (size,), eps=eps)` is LayerNorm with no
+    scale or shift, over a last dimension of length `size`.
     """,
 )
 
@@ -909,6 +964,17 @@ RMSNORM1_SOLUTION = source_file(
 
 
 def check_my_rms_norm(found: type) -> None:
+    # eps of 1e-6 barely moves the answer, so a large one shows where self.eps goes.
+    call = "MyRMSNorm(4, eps=0.1)"
+    module = expect_module(call, found(4, eps=0.1))
+    reference = nn.RMSNorm(4, eps=0.1)
+    x = small_tensor(348, 3, 4)
+    expect_tensor(
+        call=f"{call} on x of shape (3, 4), which should add self.eps to the mean square inside the root",
+        actual=module(x),
+        expected=reference(x),
+    )
+
     for size in (4, 6):
         call = f"MyRMSNorm({size})"
         module = expect_module(call, found(size))
@@ -983,15 +1049,16 @@ NORM1_LESSON = prose(
     Here MLPs with 8 hidden layers of 64 learned MNIST from PyTorch's default
     start, over three seeds. Each hidden layer was Linear, then the norm, then
     ReLU. The first two columns train on 50,000 images for 2 epochs in batches
-    of 128. Each norm gets its best rate of 0.03, 0.1, 0.3 and 1.0. The last
-    column trains on 10,000 images for 1 epoch in batches of 4, at 0.01.
+    of 128. Each norm used whichever of 0.03, 0.1, 0.3 and 1.0 trained best
+    for it, 0.3 for BatchNorm, 0.03 for LayerNorm and 0.1 for RMSNorm. The
+    last column trains on 10,000 images for 1 epoch in batches of 4, at 0.01.
 
     | Normalization | 128, after 100 steps | 128, after 2 epochs | 4, after 1 epoch |
     |---|---|---|---|
     | none | 11% | 11% | 11% |
     | BatchNorm | 90% to 92% | 96.5% to 96.8% | 53% to 56% |
     | LayerNorm | 66% to 84% | 94.6% to 95.4% | 76% to 89% |
-    | RMSNorm | 78% to 86% | 94.8% to 95.3% | 88% to 89% |
+    | RMSNorm | 66% to 70% | 94.6% to 95.0% | 82% to 86% |
 
     The plain MLP never learned, as init3 found, and every norm rescued it.
     Each norm then did what its paper claims.
@@ -1003,13 +1070,26 @@ NORM1_LESSON = prose(
     Kaiming start the plain MLP turned `nan` at 1.0, while BatchNorm still
     reached 96% at 3.0. In batches of 4, BatchNorm's statistics come from 4
     examples, and it fell to about half. LayerNorm and RMSNorm kept most of
-    their accuracy there. They train best at small rates, 0.03 here.
+    their accuracy there. They train best at small rates, 0.03 to 0.1 here.
+
+    The rescue shows in the spread, which `spreads_after_relu` measures. Here
+    it is after the first and the eighth ReLU, at the start, on 1000 images.
+
+    | Normalization | After the first ReLU | After the eighth |
+    |---|---|---|
+    | none | 0.10 to 0.13 | 0.040 to 0.045 |
+    | BatchNorm | 0.58 | 0.59 to 0.60 |
+    | LayerNorm | 0.57 to 0.60 | 0.54 to 0.62 |
+    | RMSNorm | 0.55 to 0.60 | 0.53 to 0.59 |
+
+    Without a norm the spread shrinks layer after layer, so the last layers
+    barely see the input. With any of the three it holds steady at every depth.
 
     Which one, then?
 
     - BatchNorm: models of images. It needs `model.eval()`, and goes wrong when batches hold only a few examples.
     - LayerNorm: sequences, as in language models. Each example stands alone, so training and use match.
-    - RMSNorm: the same places as LayerNorm, a little cheaper. Most recent language models use it.
+    - RMSNorm: the same places as LayerNorm, with less arithmetic, since it skips the mean and the shift. Most recent language models use it.
 
     A Linear layer right before BatchNorm doesn't need its bias, since the
     mean subtraction takes it away. `nn.Linear(n, m, bias=False)` leaves it
@@ -1032,8 +1112,8 @@ NORM1_SOURCE = source_file(
 
 
     # TODO: Return a norm layer for size features, nn.BatchNorm1d for "batch",
-    #   nn.LayerNorm for "layer", nn.RMSNorm for "rms", and nn.Identity for
-    #   "none".
+    #   nn.LayerNorm for "layer", nn.RMSNorm with eps=1e-6 for "rms", and
+    #   nn.Identity for "none".
     def norm_layer(
         kind: str,
         size: int,
@@ -1090,7 +1170,7 @@ NORM1_SOLUTION = source_file(
             return nn.LayerNorm(size)
 
         if kind == "rms":
-            return nn.RMSNorm(size)
+            return nn.RMSNorm(size, eps=1e-6)
 
         return nn.Identity()
 
@@ -1134,8 +1214,11 @@ def norm_summary(module: nn.Module) -> tuple[str, object]:
     if isinstance(module, nn.BatchNorm1d):
         return "BatchNorm1d", module.num_features
 
-    if isinstance(module, (nn.LayerNorm, nn.RMSNorm)):
-        return type(module).__name__, tuple(module.normalized_shape)[0]
+    if isinstance(module, nn.LayerNorm):
+        return "LayerNorm", tuple(module.normalized_shape)[0]
+
+    if isinstance(module, nn.RMSNorm):
+        return "RMSNorm", f"({tuple(module.normalized_shape)[0]}, eps={module.eps})"
 
     return type(module).__name__, None
 
@@ -1160,7 +1243,7 @@ def reference_norm_layer(
         return nn.LayerNorm(size)
 
     if kind == "rms":
-        return nn.RMSNorm(size)
+        return nn.RMSNorm(size, eps=1e-6)
 
     return nn.Identity()
 
@@ -1272,7 +1355,7 @@ def check_norm1(checker: Checker) -> None:
             (seeded_normed_mlp(352, [30, 64, 64, 64, 10], "layer"), x),
         ),
         reference=reference_spreads_after_relu,
-        expect=expect_numbers,
+        expect=expect_spreads,
     )
 
 
@@ -1284,8 +1367,8 @@ NORM1 = Exercise(
     source=NORM1_SOURCE,
     solution=NORM1_SOLUTION,
     hints={
-        "norm_layer": "One if per kind, each returning the module called with size, and nn.Identity() when no kind "
-        "matched.",
+        "norm_layer": "One if per kind, each returning the module called with size, plus eps=1e-6 for nn.RMSNorm, and "
+        "nn.Identity() when no kind matched.",
         "normed_mlp": "Each hidden layer adds three modules, nn.Linear(inputs, outputs), norm_layer(kind, outputs) "
         "and nn.ReLU().",
         "spreads_after_relu": "Inside a with torch.no_grad() block, loop over model, set x to layer(x), and append "
@@ -1336,10 +1419,12 @@ def train_on_mnist(
     epochs: int = 2,
     batch: int = 128,
     early_step: int = 100,
+    warmup: int = 0,
 ) -> dict[str, float]:
     """Plain SGD on the first images of MNIST's training split, the runs behind Section 3's tables. Gives the validation
     accuracy after early_step steps and at the end, and the training loss at the end, all nan once a loss stops being
-    finite. A last batch shorter than batch is left out, since BatchNorm can't take a batch of one."""
+    finite. A last batch shorter than batch is left out, since BatchNorm can't take a batch of one. With warmup, the
+    rate climbs in a straight line from rate / warmup at the first step to rate at step warmup."""
     sets = mnist_sets()
     x, y = sets["train_x"][:images], sets["train_y"][:images]
     optimizer = torch.optim.SGD(model.parameters(), lr=rate)
@@ -1351,6 +1436,10 @@ def train_on_mnist(
         order = torch.randperm(len(x), generator=generator)
 
         for start in range(0, len(x) - batch + 1, batch):
+            if warmup:
+                for group in optimizer.param_groups:
+                    group["lr"] = rate * min(1.0, (step + 1) / warmup)
+
             rows = order[start : start + batch]
             loss = F.cross_entropy(model(x[rows]), y[rows])
 
@@ -1426,5 +1515,99 @@ def measure_norms(
             for rate in (0.3, 1.0, 3.0):
                 for seed in seeds:
                     results[("kaiming", kind, rate, 128, seed)] = norm_run(kind, "kaiming", rate, seed)
+
+    return results
+
+
+def measure_norm_spreads(seeds: range = range(3)) -> dict[str, list[list[float]]]:
+    """norm1's spreads, the spread after each ReLU of norm1's MLP of 8 hidden layers of 64 from PyTorch's default start,
+    on 1000 MNIST training images, for each kind of norm and seed."""
+    x = mnist_sets()["train_x"][:1000]
+    results: dict[str, list[list[float]]] = {}
+
+    with pinned_threads():
+        for kind in NORM_KINDS:
+            results[kind] = []
+
+            for seed in seeds:
+                torch.manual_seed(seed)
+                model = reference_normed_mlp([784] + [64] * 8 + [10], kind)
+                results[kind].append(reference_spreads_after_relu(model, x))
+
+    return results
+
+
+class ReferenceLayerNorm(nn.Module):
+    """layernorm1's MyLayerNorm, written out the way the learner writes it."""
+
+    def __init__(self, size: int) -> None:
+        super().__init__()
+        self.weight = nn.Parameter(torch.ones(size))
+        self.bias = nn.Parameter(torch.zeros(size))
+
+    def forward(self, x: Tensor) -> Tensor:
+        mean = x.mean(dim=-1, keepdim=True)
+        variance = x.var(dim=-1, keepdim=True, unbiased=False)
+
+        return (x - mean) / torch.sqrt(variance + 1e-5) * self.weight + self.bias
+
+
+class ReferenceRMSNorm(nn.Module):
+    """rmsnorm1's MyRMSNorm, written out the way the learner writes it."""
+
+    def __init__(self, size: int) -> None:
+        super().__init__()
+        self.weight = nn.Parameter(torch.ones(size))
+
+    def forward(self, x: Tensor) -> Tensor:
+        return x / torch.sqrt((x ** 2).mean(dim=-1, keepdim=True) + 1e-6) * self.weight
+
+
+def best_milliseconds(
+    run: Callable[[], object],
+    calls: int = 20,
+    repeats: int = 5,
+) -> float:
+    """The fastest of repeats timings, each the average over calls, after a few untimed calls to warm up."""
+    for _ in range(5):
+        run()
+
+    best = math.inf
+
+    for _ in range(repeats):
+        start = time.perf_counter()
+
+        for _ in range(calls):
+            run()
+
+        best = min(best, (time.perf_counter() - start) / calls)
+
+    return 1000 * best
+
+
+def measure_norm_speed(
+    rows: int = 4096,
+    size: int = 1024,
+) -> dict[str, dict[str, float]]:
+    """rmsnorm1's timing, in milliseconds on the CPU with 4 threads. layernorm1's and rmsnorm1's hand written norms,
+    forward alone and forward with backward, on rows of size random numbers. The numbers move with whatever else the
+    machine runs, so compare the two within one call."""
+    x = torch.randn(rows, size, generator=torch.Generator().manual_seed(0), requires_grad=True)
+    results: dict[str, dict[str, float]] = {}
+
+    with pinned_threads():
+        for name, norm in (("layer", ReferenceLayerNorm(size)), ("rms", ReferenceRMSNorm(size))):
+
+            def forward() -> None:
+                with torch.no_grad():
+                    norm(x)
+
+            def forward_and_backward() -> None:
+                norm(x).sum().backward()
+
+            results[name] = {
+                "forward": best_milliseconds(forward),
+                "forward and backward": best_milliseconds(forward_and_backward),
+            }
 
     return results
