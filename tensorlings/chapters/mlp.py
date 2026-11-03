@@ -286,6 +286,33 @@ def check_mlp1(checker: Checker) -> None:
         reference=lambda inputs, hidden, outputs: sum(parameter.numel() for parameter in seeded_mlp(0, (inputs, hidden, outputs)).parameters()),
         expect=expect_value,
     )
+    checker.test(
+        function="mlp_parameters",
+        description="works the count out without building the model",
+        run=check_counts_without_building,
+    )
+
+
+class NoLayers:
+    """Stands in for torch.nn while mlp_parameters runs, so a count that builds the model fails."""
+
+    def __getattr__(self, name: str) -> object:
+        raise Mismatch(f"mlp_parameters used nn.{name}, so it built the model. Work the count out from inputs, hidden and outputs alone.")
+
+
+def check_counts_without_building(found: object) -> None:
+    namespace = found.__globals__
+    had_nn = "nn" in namespace
+    original = namespace.get("nn")
+    namespace["nn"] = NoLayers()
+
+    try:
+        found(784, 100, 10)
+    finally:
+        if had_nn:
+            namespace["nn"] = original
+        else:
+            del namespace["nn"]
 
 
 MLP1 = Exercise(
@@ -626,9 +653,9 @@ def check_mlp3(checker: Checker) -> None:
 class GradWatcher(nn.Module):
     """An MLP that notes whether autograd was recording each time it ran."""
 
-    def __init__(self) -> None:
+    def __init__(self, sizes: tuple[int, ...] = (1, 8, 1)) -> None:
         super().__init__()
-        self.inner = seeded_mlp(3, (1, 8, 1))
+        self.inner = seeded_mlp(3, sizes)
         self.recording: list[bool] = []
 
     def forward(self, x: Tensor) -> Tensor:
@@ -670,31 +697,45 @@ MLP4_LESSON = prose(
     """
     How wide should a hidden layer be? Here MLPs of six widths learned 20
     noisy points of `sin(x)`, 10,000 steps each with a learning rate of 0.005.
-    Then each was measured on 200 new points. Each number is the average of 10
-    seeds, each with its own points and start. The noise alone gives an error
-    of 0.09, so no model can beat that on new points.
+    Each was measured on a test set of 1000 new points. Each number is the
+    average of 10 seeds, each with its own points and start. The noise alone
+    gives an error of 0.09, so no model can beat that on new points.
 
-    | Width | Training error | Validation error |
+    The last column stops early, as in Section 2. Every 100 steps the model
+    was measured on 200 validation points, and the step where it did best was
+    kept.
+
+    | Width | Training error | Test error at the end | Test error, stopped early |
+    |---|---|---|---|
+    | 1 | 0.238 | 0.305 | 0.294 |
+    | 4 | 0.106 | 0.230 | 0.197 |
+    | 8 | 0.067 | 0.177 | 0.173 |
+    | 32 | 0.057 | 0.155 | 0.152 |
+    | 128 | 0.050 | 0.154 | 0.147 |
+    | 512 | 0.041 | 0.163 | 0.138 |
+
+    Width 1 is too narrow to bend, and underfits both. Trained to the end,
+    width 512 overfits a little, worse than width 32 on 9 of 10 seeds. Stopped
+    early, more width kept helping, and 512 beat 32 on 8 of 10 seeds.
+
+    Neyshabur and colleagues found in 2014 that test error kept falling as they
+    added hidden units, even after the training error reached 0. They argued
+    that training itself holds a big network back. So in practice a model is
+    made a bit too big, then held back with early stopping and weight decay.
+    Its size is a hyperparameter, chosen on the validation set.
+
+    Depth gives more bends for the same number of parameters. Here 200 points
+    of `sin(3x)`, with no noise, were fitted for 20,000 steps at a rate of
+    0.01, over 10 seeds.
+
+    | Hidden layers | Parameters | Training error |
     |---|---|---|
-    | 1 | 0.238 | 0.295 |
-    | 4 | 0.106 | 0.217 |
-    | 8 | 0.067 | 0.167 |
-    | 32 | 0.057 | 0.149 |
-    | 128 | 0.050 | 0.148 |
-    | 512 | 0.041 | 0.158 |
+    | one of 48 | 145 | 0.042 |
+    | two of 11 | 166 | 0.025 |
 
-    Width 1 is too narrow to bend, and underfits both. Up to 32, more width
-    helps on new points. Past 32 the training error keeps falling, while the
-    validation error stays between 0.148 and 0.158. A network 16 times wider
-    than it needs fits the training points closer without paying for it on
-    new ones.
-
-    Neyshabur and colleagues argued in 2014 that something other than the
-    number of units holds a big network back. That control comes from
-    training itself. So in practice a model is made a bit too big, then held back
-    further with weight decay and early stopping from Section 2. Its size is a
-    hyperparameter, chosen on the validation set. Depth works the same way,
-    with more layers bending more.
+    Two hidden layers ended lower on 9 of 10 seeds. Deeper plain stacks soon
+    stop training at all. init3, normalization and residuals are what let more
+    depth keep paying.
     """,
 )
 
@@ -741,7 +782,7 @@ MLP4_SOURCE = source_file(
     ) -> tuple[float, float]:
         torch.manual_seed(0)
         model = ...
-        train_error = train(model, train_x, train_y, steps, 0.01)
+        train_error = train(model, train_x, train_y, steps, 0.005)
 
         with torch.no_grad():
             validation_error = ((model(validation_x).squeeze(1) - validation_y) ** 2).mean().item()
@@ -800,7 +841,7 @@ MLP4_SOLUTION = source_file(
     ) -> tuple[float, float]:
         torch.manual_seed(0)
         model = nn.Sequential(nn.Linear(1, width), nn.ReLU(), nn.Linear(width, 1))
-        train_error = train(model, train_x, train_y, steps, 0.01)
+        train_error = train(model, train_x, train_y, steps, 0.005)
 
         with torch.no_grad():
             validation_error = ((model(validation_x).squeeze(1) - validation_y) ** 2).mean().item()
@@ -832,7 +873,7 @@ def reference_width_errors(
     steps: int,
 ) -> tuple[float, float]:
     model = seeded_mlp(0, (1, width, 1))
-    train_error = train_reference(model, train_x, train_y, steps, 0.01)
+    train_error = train_reference(model, train_x, train_y, steps, 0.005)
 
     with torch.no_grad():
         validation_error = ((model(validation_x).squeeze(1) - validation_y) ** 2).mean().item()
@@ -902,36 +943,98 @@ MLP4 = Exercise(
 # ---------------------------------------------------------------------------
 
 
+def mean_squared_error(
+    model: nn.Module,
+    x: Tensor,
+    y: Tensor,
+) -> float:
+    with torch.no_grad():
+        return ((model(x).squeeze(1) - y) ** 2).mean().item()
+
+
 def measure_width(
     width: int,
     seeds: range = range(10),
     steps: int = 10000,
     learning_rate: float = 0.005,
-) -> list[tuple[float, float]]:
-    """mlp4's table for one width: the training and validation error on each seed. Seed s draws 20 training points
-    with noisy_curve(s), 200 validation points with noisy_curve(1000 + s), and the model after torch.manual_seed(s)."""
+    check_every: int = 100,
+) -> list[dict[str, float]]:
+    """mlp4's width table for one width, one row per seed. Seed s trains on 20 points from noisy_curve(s), with the
+    model drawn after torch.manual_seed(s). Every check_every steps it measures 200 validation points from
+    noisy_curve(1000 + s) and 1000 test points from noisy_curve(2000 + s). A row holds the training error and the test
+    error at the end, and the test error at the check with the lowest validation error, which is early stopping."""
     threads = torch.get_num_threads()
     torch.set_num_threads(1)
-    errors: list[tuple[float, float]] = []
+    rows: list[dict[str, float]] = []
 
     try:
         for seed in seeds:
             train_x, train_y = noisy_curve(seed, 20)
             validation_x, validation_y = noisy_curve(1000 + seed, 200)
+            test_x, test_y = noisy_curve(2000 + seed, 1000)
             model = seeded_mlp(seed, (1, width, 1))
-            train_reference(model, train_x, train_y, steps, learning_rate)
+            lowest_validation = float("inf")
+            stopped_test = float("nan")
+            stopped_step = 0
 
-            with torch.no_grad():
-                train_error = ((model(train_x).squeeze(1) - train_y) ** 2).mean().item()
-                validation_error = ((model(validation_x).squeeze(1) - validation_y) ** 2).mean().item()
+            for step in range(1, steps + 1):
+                train_reference(model, train_x, train_y, 1, learning_rate)
 
-            errors.append((train_error, validation_error))
+                if step % check_every:
+                    continue
+
+                validation_error = mean_squared_error(model, validation_x, validation_y)
+
+                if validation_error < lowest_validation:
+                    lowest_validation = validation_error
+                    stopped_test = mean_squared_error(model, test_x, test_y)
+                    stopped_step = step
+
+            rows.append(
+                {
+                    "train": mean_squared_error(model, train_x, train_y),
+                    "test": mean_squared_error(model, test_x, test_y),
+                    "stopped_test": stopped_test,
+                    "stopped_step": stopped_step,
+                },
+            )
+    finally:
+        torch.set_num_threads(threads)
+
+    return rows
+
+
+def measure_widths(widths: tuple[int, ...] = (1, 4, 8, 32, 128, 512)) -> dict[int, list[dict[str, float]]]:
+    """Every row of mlp4's width table. It takes a few minutes, so widths can also be spread over processes with
+    measure_width."""
+    return {width: measure_width(width) for width in widths}
+
+
+def measure_depth(
+    sizes: tuple[int, ...],
+    seeds: range = range(10),
+    steps: int = 20000,
+    learning_rate: float = 0.01,
+) -> list[float]:
+    """mlp4's depth table for one model, the training error on each seed. The model learns 200 evenly spaced points of
+    sin(3x) between -3 and 3, with no noise, after torch.manual_seed(s)."""
+    threads = torch.get_num_threads()
+    torch.set_num_threads(1)
+    x = torch.linspace(-3.0, 3.0, 200).unsqueeze(1)
+    y = torch.sin(3 * x).squeeze(1)
+    errors: list[float] = []
+
+    try:
+        for seed in seeds:
+            model = seeded_mlp(seed, sizes)
+            train_reference(model, x, y, steps, learning_rate)
+            errors.append(mean_squared_error(model, x, y))
     finally:
         torch.set_num_threads(threads)
 
     return errors
 
 
-def measure_widths(widths: tuple[int, ...] = (1, 4, 8, 32, 128, 512)) -> dict[int, list[tuple[float, float]]]:
-    """Every row of mlp4's table. It takes many minutes, so widths can also be spread over processes with measure_width."""
-    return {width: measure_width(width) for width in widths}
+def measure_depths() -> dict[tuple[int, ...], list[float]]:
+    """Both rows of mlp4's depth table, one hidden layer of 48 against two of 11, at about the same parameter count."""
+    return {sizes: measure_depth(sizes) for sizes in ((1, 48, 1), (1, 11, 11, 1))}

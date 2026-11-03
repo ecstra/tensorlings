@@ -77,9 +77,17 @@ EMBEDDING1_LESSON = prose(
 
     Indexing with a tensor of ids of any shape gives one row per id, in the
     same arrangement. Ids of shape `(examples, positions)` give a result of
-    shape `(examples, positions, embedding size)`. `.reshape(len(vectors), -1)`
-    then lays each example's rows end to end, one long row per example, which
-    a Linear layer can take.
+    shape `(examples, positions, embedding size)`.
+
+    `.reshape` puts the same numbers, read in order, into a new shape. A `-1`
+    stands for whatever size makes the count of numbers work out.
+
+    ```python
+    torch.tensor([1, 2, 3, 4, 5, 6]).reshape(2, -1)    # tensor([[1, 2, 3], [4, 5, 6]])
+    ```
+
+    So `.reshape(len(vectors), -1)` lays each example's rows end to end, one
+    long row per example, which a Linear layer can take.
     """,
 )
 
@@ -336,6 +344,14 @@ def check_my_embedding(found: type) -> None:
             expected=weight.detach()[ids],
         )
 
+    # 8000 numbers pin the spread to within about 0.01, so a table drawn at another scale shows.
+    call = "MyEmbedding(1000, 8)"
+    weight = expect_parameter(expect_module(call, found(1000, 8)), call, "weight", (1000, 8))
+    spread = weight.detach().std().item()
+
+    if abs(spread - 1) > 0.1:
+        raise Mismatch(f"The weight of {call} has spread {spread:.3g}, but nn.Embedding's table starts with spread 1, as torch.randn draws it.")
+
 
 def check_embedding2(checker: Checker) -> None:
     checker.test(
@@ -350,6 +366,8 @@ def check_embedding2(checker: Checker) -> None:
         inputs=(
             (torch.tensor([[0.0, 0.0], [2.0, 2.0], [0.0, 0.0], [1.0, 1.0]]),),
             (torch.tensor([[0.5, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, -1.0, 0.0]]),),
+            # The first row adds up to 0 but holds gradient, so a test on each row's sum misses it.
+            (torch.tensor([[0.5, -0.5, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 2.0]]),),
         ),
         reference=lambda grad: (grad != 0).any(dim=1).nonzero().flatten(),
         expect=expect_tensor,
@@ -395,9 +413,13 @@ EMBEDDING3_LESSON = prose(
     ten. After 2000 steps its mean squared error is 3.27, as bad as always
     answering the mean.
 
-    An embedding of size 4 followed by a Linear layer gives every id its own
-    learned row, so each can land on its own target. After 500 steps the error
-    is about 0.
+    An MLP on the raw id can bend, but it needs a bend between each pair of
+    neighbouring ids. With a hidden layer of 64, 193 parameters, it was still
+    at 2.39 after 2000 steps, from 1.90 to 2.63 over 10 seeds.
+
+    An embedding of size 4 followed by a Linear layer, 45 parameters, gives
+    every id its own learned row. So each can land on its own target, and
+    after 500 steps the error is about 0 on all 10 seeds.
 
     The rule is general. A discrete input, one picked from a set, enters a
     model through an embedding. Numbers that measure an amount, like a price
@@ -587,6 +609,8 @@ def check_embedding3(checker: Checker) -> None:
         inputs=(
             (*CATEGORIES, 10, 500),
             (*OTHER_CATEGORIES, 6, 200),
+            # After 20 steps the loss is still far from 0, so it shows a table of the wrong size or a different model.
+            (*OTHER_CATEGORIES, 6, 20),
         ),
         reference=reference_embedded,
         expect=close,
@@ -821,3 +845,29 @@ EMBEDDING4 = Exercise(
     check=check_embedding4,
     time_limit=30,
 )
+
+
+# ---------------------------------------------------------------------------
+# The runs behind the lessons
+# ---------------------------------------------------------------------------
+
+
+def measure_categories(seeds: range = range(10)) -> dict[str, list[float]]:
+    """embedding3's numbers, the final loss on each seed of the 10 categories, after torch.manual_seed(s). A Linear
+    layer and an MLP with a hidden layer of 64 learn from the raw id for 2000 steps at 0.01. An embedding of size 4
+    and a Linear layer learn for 500 steps at 0.1."""
+    ids = torch.arange(10)
+    raw = ids.float().unsqueeze(1)
+    losses: dict[str, list[float]] = {"linear": [], "mlp": [], "embedding": []}
+
+    for seed in seeds:
+        torch.manual_seed(seed)
+        losses["linear"].append(train_categories(nn.Linear(1, 1), raw, CATEGORY_TARGETS, 2000, 0.01))
+        torch.manual_seed(seed)
+        mlp = nn.Sequential(nn.Linear(1, 64), nn.ReLU(), nn.Linear(64, 1))
+        losses["mlp"].append(train_categories(mlp, raw, CATEGORY_TARGETS, 2000, 0.01))
+        torch.manual_seed(seed)
+        embedded = nn.Sequential(nn.Embedding(10, 4), nn.Linear(4, 1))
+        losses["embedding"].append(train_categories(embedded, ids, CATEGORY_TARGETS, 500, 0.1))
+
+    return losses

@@ -25,7 +25,7 @@ from ..engine import (
 )
 from ..text import prose, source_file
 from .linear_layers import expect_parameter
-from .mlp import seeded_mlp
+from .mlp import GradWatcher, seeded_mlp
 
 INITIALIZATION = Chapter(
     folder="19_initialization",
@@ -38,7 +38,7 @@ INITIALIZATION = Chapter(
         all. Too big and the numbers explode, too small and they vanish. This
         chapter works out the right size, matches the Xavier and Kaiming rules
         with PyTorch's `nn.init`, shows a deep MLP on MNIST that only trains
-        with them, and gives each activation its scale.
+        from Kaiming's start, and gives each activation its scale.
 
         ## Further reading
 
@@ -148,14 +148,14 @@ INIT1_LESSON = prose(
     multiplies the spread by that much again.
 
     Here 1000 rows of 100 numbers with spread 1 went through 10 layers of
-    shape `(100, 100)`, with no activation. `1e10` is a 1 followed by 10
-    zeros, and `1e-10` is 1 divided by that.
+    shape `(100, 100)`, with no activation, on 5 seeds. `1e10` is a 1
+    followed by 10 zeros, and `1e-10` is 1 divided by that.
 
     | Weights' spread | After 1 layer | After 10 layers |
     |---|---|---|
     | 1 | 10.0 | about `1e10` |
     | 0.01 | 0.1 | about `1e-10` |
-    | 0.1, which is 1 / sqrt(100) | 1.00 | 1.03 |
+    | 0.1, which is 1 / sqrt(100) | 1.00 | 0.96 to 1.04 |
 
     Too big, and the numbers explode until they overflow and the loss turns
     `nan`. Too small, and they shrink until the output no longer depends on
@@ -391,6 +391,10 @@ INIT2_LESSON = prose(
     and `b` have spread `b / sqrt(3)`, so this starts smaller than even
     init1's rule. Shallow models don't mind, but deep ReLU stacks do.
 
+    No paper worked that size out. It is an old rule of thumb, carried over
+    from Lush and Torch, the libraries that came before PyTorch. Kaiming's
+    size is the one worked out from the variance.
+
     `nn.init` holds the rules. Each fills a weight in place, which the
     trailing `_` in its name marks.
 
@@ -504,11 +508,15 @@ def check_kaiming_init(found: object) -> None:
         call = f"kaiming_init_(nn.Linear({fan_in}, {fan_out}))"
         torch.manual_seed(fan_in)
         layer = nn.Linear(fan_in, fan_out)
+        parameters = (layer.weight, layer.bias)
         before = layer.weight.detach().clone()
         returned = found(layer)
 
         if isinstance(returned, nn.Module) and returned is not layer:
             raise Mismatch(f"{call} returns a new layer. It should change the layer it is given, in place.")
+
+        if layer.weight is not parameters[0] or layer.bias is not parameters[1]:
+            raise Mismatch(f"{call} put a new parameter in the layer. Fill the weight and the bias it already has, in place, with .normal_ and .zero_.")
 
         if torch.equal(layer.weight.detach(), before):
             raise Mismatch(f"{call} left the weight unchanged, which usually means it is {NOT_STARTED}.")
@@ -604,22 +612,29 @@ INIT2 = Exercise(
 
 INIT3_LESSON = prose(
     """
-    Here is what the starting weights do to training. An MLP with 8 hidden
-    layers of 64, each a Linear then ReLU, learned MNIST from 10,000 images.
-    It trained for 3 epochs on minibatches of 128, at a learning rate of 0.1.
-    Only the starting weights differ, and every bias starts at 0.
+    Here is what the starting weights do to training. MNIST is a set of
+    70,000 handwritten digits, each a grid of 28 by 28 pixels, labelled 0 to
+    9. Laid flat, each image is 784 numbers.
 
-    | Weights | Starting loss | After training | Validation accuracy |
+    An MLP with 8 hidden layers of 64, each a Linear then ReLU, learned from
+    10,000 of those images. It trained for 3 epochs on minibatches of 128, at
+    a learning rate of 0.1. Only the starting weights differ, and every bias
+    starts at 0. Each range covers 5 seeds.
+
+    | Weights | Starting loss | Training loss after | Validation accuracy |
     |---|---|---|---|
-    | spread 1 | 12 million | `nan` | 10.6% |
-    | spread 0.01 | 2.303 | 2.278 | 11.0% |
-    | PyTorch's default | 2.303 | 2.277 | 11.0% |
-    | Kaiming | 2.342 | 0.122 | 85.9% |
+    | spread 1 | 10 to 17 million | `nan` | `nan` |
+    | spread 0.01 | 2.303 | 2.300 | 11.0% |
+    | PyTorch's default | 2.303 | 2.300 | 11.0% |
+    | Kaiming | 2.34 to 2.45 | 0.24 to 0.37 | 87.8% to 91.2% |
 
     Spread 1 explodes, and the loss overflows to `nan`. Spread 0.01 and the
-    default both vanish. Their outputs barely depend on the input, and the
-    gradients reaching the first layer are over 2000 times smaller than with
-    Kaiming. So their loss sits near 2.303 the whole time.
+    default both vanish, and their outputs barely depend on the input. The
+    default's gradient at the first layer is 1000 to 3800 times smaller than
+    Kaiming's. Spread 0.01's is over 10 billion times smaller.
+
+    So their loss sits near 2.303 the whole time. Their 11.0% is what always
+    answering the most common digit scores.
 
     The starting loss is the first thing to check. A model that knows nothing
     starts near `log(classes)`, as likelihood2 said, which is 2.303 for 10.
@@ -809,6 +824,14 @@ def check_kaiming_mlp(found: object) -> None:
             )
 
 
+def check_start_loss_records_nothing(found: object) -> None:
+    watcher = GradWatcher((4, 8, 3))
+    found(watcher, small_tensor(250, 6, 4), torch.tensor([0, 2, 1, 1, 0, 2]))
+
+    if any(watcher.recording):
+        raise Mismatch("start_loss ran the model while autograd was recording. Put the work inside a with torch.no_grad() block.")
+
+
 def check_init3(checker: Checker) -> None:
     close = lambda call, actual, expected: expect_close(
         call=call,
@@ -827,6 +850,12 @@ def check_init3(checker: Checker) -> None:
             small_tensor(251, 8, 5),
             torch.tensor([3, 0, 1, 2, 2, 0, 1, 3]),
         ),
+        # Classes 2 and 3 never appear in the labels, so a class count taken from y comes out wrong.
+        (
+            Described(seeded_mlp(5, (3, 8, 4)), "an MLP from 3 inputs to 4 classes"),
+            small_tensor(257, 4, 3),
+            torch.tensor([0, 1, 1, 0]),
+        ),
     )
     check_on_inputs(
         checker=checker,
@@ -835,6 +864,11 @@ def check_init3(checker: Checker) -> None:
         inputs=data,
         reference=lambda model, x, y: F.cross_entropy(model(x), y).item(),
         expect=close,
+    )
+    checker.test(
+        function="start_loss",
+        description="runs the model without recording for autograd",
+        run=check_start_loss_records_nothing,
     )
     check_on_inputs(
         checker=checker,
@@ -878,37 +912,44 @@ INIT3 = Exercise(
 INIT4_LESSON = prose(
     """
     Each activation needs its own scale. Here 1000 rows went through layers
-    of width 100, each a matrix multiply then the activation, on 5 seeds. A
-    range runs from the lowest seed to the highest, and a single number is
-    their average.
+    of width 100, each a matrix multiply then the activation, on 5 seeds.
+    Each cell is the spread at the end, the median of the seeds. Where seeds
+    differ a lot, the lowest and highest follow in brackets.
 
-    | Activation | Weights | Spread after 10 layers | 30 layers | 50 layers |
+    | Activation | Weights | 10 layers | 30 layers | 50 layers |
     |---|---|---|---|---|
-    | none | `1 / sqrt(fan_in)` | 0.96 to 1.04 | | |
-    | ReLU | `1 / sqrt(fan_in)` | 0.017 to 0.033 | | |
-    | ReLU | PyTorch's default | 0.0001 to 0.0002 | | |
-    | ReLU | Kaiming | 0.53 to 1.05 | | |
-    | tanh | spread 1 | 0.96, 78% stuck past 0.99 | | |
-    | tanh | Xavier | 0.22 | 0.12 | 0.09 |
+    | none | `1 / sqrt(fan_in)` | 1.00 (0.96 to 1.04) | 0.89 (0.75 to 1.03) | 0.71 (0.63 to 1.26) |
+    | ReLU | `1 / sqrt(fan_in)` | 0.024 | 2e-5 | 1e-8 |
+    | ReLU | PyTorch's default | 1e-4 | 2e-12 | 3e-20 |
+    | ReLU | Kaiming | 0.76 (0.53 to 1.05) | 0.60 (0.30 to 1.16) | 0.42 (0.26 to 1.12) |
+    | tanh | spread 1 | 0.96, 78% past 0.99 | 0.96 | 0.96 |
+    | tanh | PyTorch's default | 0.003 | 5e-8 | 9e-13 |
+    | tanh | Xavier | 0.22 | 0.12 | 0.08 |
     | tanh | Xavier times 5/3 | 0.65 | 0.65 | 0.65 |
-    | GELU | Kaiming | 0.47 | 0.10 | 0.025 |
+    | GELU | Kaiming | 0.42 (0.30 to 0.70) | 0.04 (0.001 to 0.36) | 1e-4 (1e-6 to 0.09) |
 
     - ReLU: Kaiming, `sqrt(2 / fan_in)`.
-    - tanh and sigmoid: Xavier times tanh's gain of 5/3, as `nn.init.calculate_gain("tanh")` gives, which holds 0.65 at every depth.
+    - tanh: Xavier times tanh's gain of 5/3, as `nn.init.calculate_gain("tanh")` gives.
     - no activation after the layer: `1 / sqrt(fan_in)`, from init1.
 
-    Spread 1 saturates tanh, as activations1 showed, and plain Xavier shrinks.
-    With the gain under 2% of the numbers sit past 0.99.
+    Spread 1 saturates tanh, as activations1 showed. Glorot and Bengio
+    measured Xavier against the start PyTorch now uses by default, and it
+    shrinks far slower. With the gain it holds, and under 2% of the numbers
+    pass 0.99.
 
-    ReLU with Kaiming lands near `sqrt(1 - 1 / pi)`, about 0.83, and not 1.
-    Kaiming keeps the average square of the numbers steady, and over 20
-    seeds it stayed near 1 at 10, 30 and 50 layers. A ReLU's outputs are never
-    negative, so their mean sits above 0 and their spread around it is less.
+    Kaiming keeps the average square of the numbers at 1, on average across
+    runs. Over 20 seeds it averaged 1.28, 0.97 and 0.93 at 10, 30 and 50
+    layers. A ReLU's outputs are never negative, so the spread around their
+    mean is less, about `sqrt(1 - 1 / pi)`, or 0.83.
 
-    GELU and SiLU match ReLU for large inputs, so they usually take Kaiming
-    too. Near 0 they pass less than ReLU, so a deep stack of them shrinks, as
-    the last row shows. Normalization, two chapters on, keeps the spread
-    steady however deep a model goes.
+    One run still drifts as it goes deeper. At 50 layers its average square
+    ran from 0.09 to 4.1 over those seeds. Hanin and Rolnick showed in 2018
+    that this drift grows with depth divided by width.
+
+    GELU and SiLU match ReLU for large inputs, so Kaiming is the nearest plain
+    scale. Near 0 they pass less, so a deep stack under Kaiming shrinks. A
+    little more, `1.5 / sqrt(fan_in)`, made it grow to 2.7 to 14 by 50 layers.
+    Normalization, two chapters on, holds the spread steady at any depth.
 
     The last layer gets one more rule, from Karpathy's recipe for training. Set
     its bias so the model starts out predicting the average target. For
@@ -922,8 +963,12 @@ INIT4_LESSON = prose(
 
     With the last weights small, the model then starts at the loss of
     guessing by the shares. On the labels the shares came from, that is never
-    worse than `log(classes)`. A class missing from those labels gets bias
-    `-inf`, the log of 0.
+    worse than `log(classes)`.
+
+    A class missing from those labels gets bias `-inf`, the log of 0. The
+    model can then never predict or learn that class, and its loss turns
+    `inf` if the class shows up. So take the shares from labels that hold
+    every class.
     """,
 )
 
@@ -959,9 +1004,9 @@ INIT4_SOURCE = source_file(
 
 
     # TODO: Finish the two lines in the loop, so this passes x through depth
-    #   layers of width x.shape[1], each weight drawn with torch.randn from
-    #   generator at init_std's spread, then the activation. It returns the
-    #   spread at the end.
+    #   layers of width x.shape[1]. Each draws its weight with torch.randn from
+    #   generator at init_std's spread, then sets x to the activation of
+    #   x @ weight. It returns the spread at the end.
     def final_spread(
         x: Tensor,
         activation: str,
@@ -981,8 +1026,9 @@ INIT4_SOURCE = source_file(
     counts = torch.bincount(y, minlength=3)           # tensor([3, 1, 1])
 
 
-    # TODO: Return the last layer's bias that makes the model start out
-    #   predicting each class's share of the labels y.
+    # TODO: Return the log of each class's share of the labels y, one number
+    #   per class. As the last layer's bias, it makes the model start out
+    #   predicting those shares.
     def last_bias(
         y: Tensor,
         classes: int,
@@ -1131,6 +1177,8 @@ def check_init4(checker: Checker) -> None:
             (torch.tensor([0, 0, 2, 1, 0]), 3),
             (torch.tensor([1, 1, 1, 0, 2, 3, 3, 1]), 4),
             (torch.tensor([2, 2, 0, 1, 2, 2, 2, 0, 2, 1]), 3),
+            # Class 2 never shows up, so the counts need minlength to give 3 numbers, the last -inf.
+            (torch.tensor([0, 1, 1, 0]), 3),
         ),
         reference=lambda y, classes: (torch.bincount(y, minlength=classes).float() / len(y)).log(),
         expect=expect_tensor,
@@ -1146,7 +1194,7 @@ INIT4 = Exercise(
     solution=INIT4_SOLUTION,
     hints={
         "init_std": "Use Kaiming's sqrt(2 / fan_in) for relu and gelu, and 1 / sqrt(fan_in) for none. For tanh, "
-        "multiply Xavier's sqrt(2 / (fan_in + fan_out)) by the gain 5 / 3.",
+        "multiply Xavier's sqrt(2 / (fan_in + fan_out)) by the gain 5/3.",
         "final_spread": "Each weight is torch.randn(width, width, generator=generator) times init_std(activation, "
         "width, width). Then x goes through x @ weight and the function ACTIVATIONS[activation] gives.",
         "last_bias": "torch.bincount(y, minlength=classes) counts each class. Turn the counts into floats, divide by "
@@ -1161,15 +1209,98 @@ INIT4 = Exercise(
 # The runs behind the lessons
 # ---------------------------------------------------------------------------
 
+def measure_stack(seeds: range = range(5)) -> dict[float, list[tuple[float, float]]]:
+    """init1's table: for each weights' spread, the spread after 1 layer and after 10 on every seed. 1000 rows of 100
+    numbers from the bell curve go through 10 weights of shape (100, 100), with no activation."""
+    results: dict[float, list[tuple[float, float]]] = {}
+
+    for weight_spread in (1.0, 0.01, 0.1):
+        results[weight_spread] = []
+
+        for seed in seeds:
+            generator = torch.Generator().manual_seed(seed)
+            x = torch.randn(1000, 100, generator=generator)
+            spreads = []
+
+            for _ in range(10):
+                x = x @ (torch.randn(100, 100, generator=generator) * weight_spread)
+                spreads.append(x.std().item())
+
+            results[weight_spread].append((spreads[0], spreads[-1]))
+
+    return results
+
+
+# init3's rows: how each Linear layer's weights start. Every bias starts at 0.
+STARTS = ("spread 1", "spread 0.01", "default", "kaiming")
+
+
+def started_mlp(
+    start: str,
+    seed: int,
+) -> nn.Sequential:
+    """init3's MLP from 784 pixels through 8 hidden layers of 64 to 10 classes, drawn after torch.manual_seed(seed)."""
+    model = seeded_mlp(seed, (784, *[64] * 8, 10))
+
+    with torch.no_grad():
+        for layer in model.modules():
+            if not isinstance(layer, nn.Linear):
+                continue
+
+            if start == "spread 1":
+                layer.weight.normal_(0, 1.0)
+            elif start == "spread 0.01":
+                layer.weight.normal_(0, 0.01)
+            elif start == "kaiming":
+                layer.weight.normal_(0, math.sqrt(2 / layer.in_features))
+
+            layer.bias.zero_()
+
+    return model
+
+
+def measure_starts(seeds: range = range(5)) -> dict[tuple[str, int], dict[str, float]]:
+    """init3's table, keyed by start and seed. Each run gives the starting loss on the 10,000 training images, the
+    size of the first layer's gradient for that loss, then the training loss and validation accuracy after 3 epochs
+    in minibatches of 128 at a rate of 0.1, from train_on_mnist."""
+    from .mnist import mnist_sets
+    from .normalization import pinned_threads, train_on_mnist
+
+    sets = mnist_sets()
+    x, y = sets["train_x"][:10000], sets["train_y"][:10000]
+    results: dict[tuple[str, int], dict[str, float]] = {}
+
+    with pinned_threads():
+        for start in STARTS:
+            for seed in seeds:
+                model = started_mlp(start, seed)
+                loss = F.cross_entropy(model(x), y)
+                loss.backward()
+                gradient = model[0].weight.grad.norm().item()
+                model.zero_grad()
+                run = train_on_mnist(model, 0.1, seed, images=10000, epochs=3, batch=128)
+                results[(start, seed)] = {
+                    "start": loss.item(),
+                    "gradient": gradient,
+                    "loss": run["loss"],
+                    "accuracy": run["final"],
+                }
+
+    return results
+
+
 # init4's rows: the activation, and the weights' spread for fan_in and fan_out of 100. None stands for PyTorch's
-# default, drawn evenly between -1 / sqrt(fan_in) and 1 / sqrt(fan_in).
+# default, drawn evenly between -1 / sqrt(fan_in) and 1 / sqrt(fan_in). GELU at 1.5 / sqrt(fan_in) backs the lesson's
+# line that a scale a little above Kaiming's makes a GELU stack grow.
 SPREAD_SETUPS: dict[str, tuple[str, float | None]] = {
     "none, 1 / sqrt(fan_in)": ("none", 1 / math.sqrt(100)),
     "relu, 1 / sqrt(fan_in)": ("relu", 1 / math.sqrt(100)),
     "relu, PyTorch's default": ("relu", None),
     "relu, Kaiming": ("relu", math.sqrt(2 / 100)),
     "gelu, Kaiming": ("gelu", math.sqrt(2 / 100)),
+    "gelu, 1.5 / sqrt(fan_in)": ("gelu", 1.5 / math.sqrt(100)),
     "tanh, spread 1": ("tanh", 1.0),
+    "tanh, PyTorch's default": ("tanh", None),
     "tanh, Xavier": ("tanh", math.sqrt(2 / 200)),
     "tanh, Xavier times 5/3": ("tanh", 5 / 3 * math.sqrt(2 / 200)),
 }
@@ -1180,8 +1311,9 @@ def spread_after(
     std: float | None,
     depth: int,
     seed: int,
-) -> tuple[float, float]:
-    """The spread of 1000 rows of width 100 after depth layers, and the share of numbers past 0.99 in size."""
+) -> tuple[float, float, float]:
+    """The spread of 1000 rows of width 100 after depth layers, the share of numbers past 0.99 in size, and the
+    average square of the numbers."""
     generator = torch.Generator().manual_seed(seed)
     x = torch.randn(1000, 100, generator=generator)
 
@@ -1193,15 +1325,16 @@ def spread_after(
 
         x = ACTIVATIONS[activation](x @ weight)
 
-    return x.std().item(), (x.abs() > 0.99).float().mean().item()
+    return x.std().item(), (x.abs() > 0.99).float().mean().item(), (x**2).mean().item()
 
 
 def measure_spreads(
     seeds: range = range(5),
     depths: tuple[int, ...] = (10, 30, 50),
-) -> dict[tuple[str, int], list[tuple[float, float]]]:
-    """init4's table: for each setup and depth, the spread and the share past 0.99 on every seed."""
-    results: dict[tuple[str, int], list[tuple[float, float]]] = {}
+) -> dict[tuple[str, int], list[tuple[float, float, float]]]:
+    """init4's table: for each setup and depth, the spread, the share past 0.99 and the average square on every
+    seed. The lesson's line on ReLU with Kaiming over 20 seeds comes from measure_spreads(range(20))."""
+    results: dict[tuple[str, int], list[tuple[float, float, float]]] = {}
 
     for name, (activation, std) in SPREAD_SETUPS.items():
         for depth in depths:
