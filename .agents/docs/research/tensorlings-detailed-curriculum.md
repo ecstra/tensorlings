@@ -100,7 +100,7 @@ The project is CS231n's first assignment, a softmax classifier on real images wi
 | 17_mlp | mlp1 | Linear and activation stacked into an MLP with `nn.Sequential`, and its parameter count |
 | | mlp2 | an MLP module built from a list of layer sizes and matched with `nn.Sequential` |
 | | mlp3 | a curve fitted by an MLP with a full training loop over `model.parameters()` |
-| | mlp4 | width and depth, where too small underfits and too big overfits |
+| | mlp4 | width and depth, where too small underfits, too wide overfits unless stopped early, and a second layer buys more bends per weight |
 | 18_embeddings | embedding1 | a one hot vector times a matrix picks a row, and an embedding is that lookup |
 | | embedding2 | Embedding built and matched with `nn.Embedding` |
 | | embedding3 | why, ids fed in as plain numbers mislead a model and an embedding fixes it |
