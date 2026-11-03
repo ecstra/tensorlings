@@ -262,8 +262,8 @@ TOKENS1_LESSON = prose(
     | Input | Its structure | What fits it | The tokens it becomes |
     |---|---|---|---|
     | a table's numbers | a meaning per column, no order | a token per column, table1 | one per column |
-    | text | order, a fixed vocabulary | embeddings, bpe1 | one per piece of text |
-    | a grid or an image | nearby cells go together | convolution, conv1, or patches, vit1 | 196 patches of 16 by 16 at 224 by 224 |
+    | text | order, a fixed vocabulary | embeddings, embedding1, of bpe1's tokens | one per piece of text |
+    | a grid or an image | nearby cells go together | convolution, conv3, or patches, vit1 | 196 patches of 16 by 16 at 224 by 224 |
     | a time series | order and local shape | patches, series1 | 42 for 336 steps in PatchTST |
     | audio | thousands of samples a second | log mel frames, sound1 | 1,500 for 30 seconds in Whisper |
     | video | frames over time | tubelets, video1 | 4,900 for 2 seconds at 224 by 224 |
@@ -282,7 +282,9 @@ TOKENS1_LESSON = prose(
     - A mask that lets each token look only at its neighbours: a graph, with mask1's masks.
 
     `attend`, given in the file, is attention with no weights of its own, so
-    only what you add can change its answer.
+    only what you add can change its answer. Its mask is the other way round
+    from mask1's. It holds True where a token may look, as
+    `F.scaled_dot_product_attention` reads one.
 
     ```python
     torch.arange(6) // 3    # tensor([0, 0, 0, 1, 1, 1]), the row of each place in a grid 3 wide
@@ -328,8 +330,9 @@ TOKENS1_SOURCE = source_file(
 
 
     # TODO: Return tokens with a grid position added. The tokens fill a grid
-    #   width wide, row by row, so token k sits in row k // width and column
-    #   k % width. Add the row's row of rows and the column's row of columns.
+    #   `width` wide, row by row, so token k sits in row k // width and column
+    #   k % width. Add the row's row of `rows` and the column's row of
+    #   `columns`.
     def with_grid_positions(
         tokens: Tensor,
         rows: Tensor,

@@ -38,9 +38,10 @@ AUDIO = Chapter(
         A second of sound is thousands of samples, far too many tokens for a
         transformer. This chapter turns sound into the two kinds of tokens
         audio models read. Log mel frames are what speech recognizers such as
-        Whisper read, about 100 a second. A residual quantizer gives a few
-        streams of codebook ids, which neural codecs such as SoundStream and
-        EnCodec make so a model can write sound as well as read it.
+        Whisper read, 100 a second, which Whisper's first layers turn into 50
+        tokens. A residual quantizer gives a few streams of codebook ids,
+        which neural codecs such as SoundStream and EnCodec make so a model
+        can write sound as well as read it.
 
         ## Further reading
 
@@ -289,7 +290,7 @@ SOUND1_LESSON = prose(
     - The **mel scale** spaces frequencies the way hearing does, fine at low pitches and coarse at high ones.
     - A log turns loudness, which spans many powers of 10, into a range a network handles well.
 
-    The common formula maps a frequency of f hertz to m = 2595 log10(1 + f /
+    The HTK formula maps a frequency of f hertz to m = 2595 log10(1 + f /
     700) mels. It runs near a straight line at low frequencies and bends into
     a log above. Its inverse is f = 700 (10 to the power m / 2595, minus 1).
 
@@ -309,12 +310,17 @@ SOUND1_LESSON = prose(
     torch.clamp(torch.minimum(up, down), min=0)    # tensor([0.0000, 0.5000, 0.0000])
     ```
 
+    Whisper's own filters come from librosa, which uses the Slaney scale,
+    straight below 1,000 Hz, and gives every triangle the same area. This
+    file keeps Whisper's rate, window, hop and 80 channels with the HTK
+    filters.
+
     Each window's power, the strength squared, times the filters gives one
     number per channel. Whisper's code floors it at 1e-10 and takes the log
     in base 10.
 
-    With Whisper's settings, channel 0 spans 45 Hz and channel 79 spans 525
-    Hz. Here is the loudest channel for four pure tones, a second each.
+    With these filters, channel 0 spans 45 Hz and channel 79 spans 525 Hz.
+    Here is the loudest channel for four pure tones, a second each.
 
     | Tone | Loudest channel |
     |---|---|
@@ -324,9 +330,12 @@ SOUND1_LESSON = prose(
     | 6,100 Hz | 72 |
 
     100 Hz apart is four channels down low and the same channel up high, as
-    for a listener. A second of sound becomes 98 frames of 80 numbers. Each
-    frame is a token vector, so a speech model reads about 100 tokens a
-    second where the raw audio held 16,000 samples.
+    for a listener. A second of sound becomes 98 frames of 80 numbers.
+    Whisper pads both ends and drops the last frame, for exactly 100.
+
+    Whisper's first layers are two convolutions, the second with a stride
+    of 2. They turn the 100 frames a second into 50 token vectors, where the
+    raw audio held 16,000 samples.
     """,
 )
 
@@ -398,9 +407,10 @@ SOUND1_SOURCE = source_file(
         return torch.sin(2 * math.pi * frequency * t)
 
 
-    # Whisper's settings, and the loudest channel for tones of 200, 300, 6000 and 6100 Hz.
-    whisper_filters = mel_filters(201, 80, 16000)
-    tone_channels = [loudest_channel(log_mel(tone(f, 1.0, 16000), 400, 160, whisper_filters)) for f in (200, 300, 6000, 6100)]
+    # Whisper's rate, window, hop and 80 channels, with the HTK filters, and the loudest channel for tones of 200,
+    # 300, 6000 and 6100 Hz.
+    filter_bank = mel_filters(201, 80, 16000)
+    tone_channels = [loudest_channel(log_mel(tone(f, 1.0, 16000), 400, 160, filter_bank)) for f in (200, 300, 6000, 6100)]
     ''',
 )
 
@@ -424,8 +434,8 @@ SOUND1_SOLUTION = source_file(
 ''' + indented(TONE_PART) + '''
 
 
-    whisper_filters = mel_filters(201, 80, 16000)
-    tone_channels = [loudest_channel(log_mel(tone(f, 1.0, 16000), 400, 160, whisper_filters)) for f in (200, 300, 6000, 6100)]
+    filter_bank = mel_filters(201, 80, 16000)
+    tone_channels = [loudest_channel(log_mel(tone(f, 1.0, 16000), 400, 160, filter_bank)) for f in (200, 300, 6000, 6100)]
     ''',
 )
 
@@ -580,14 +590,15 @@ SOUND2_LESSON = prose(
     codebooks hold 1,024 entries, 10 bits each, and it uses up to 32 of them.
 
     SoundStream starts its codebooks with k-means on its first batch, then
-    keeps updating them. k-means, given in the file, starts from random
-    vectors. It then moves each entry to the average of the vectors nearest
-    it, again and again. Here each codebook is fitted with k-means on what
-    the codebooks before it left over.
+    keeps updating them. k-means, given in the file, starts from vectors
+    picked at random from the data. It then moves each entry to the average
+    of the vectors nearest it, again and again. Here each codebook is fitted
+    with k-means on what the codebooks before it left over.
 
     These are the log mel frames of sound1 for made up sounds: tones, a
-    chirp, a burst of noise. Each frame is standardized, and the codebooks of
-    64 entries are fitted on 40 sounds and scored on 10 others, on 3 seeds.
+    chirp, a burst of noise. Each channel is standardized with the training
+    frames. The codebooks of 64 entries are fitted on 40 sounds and scored on
+    10 others, on 3 seeds.
 
     | Codebooks | Bits per frame | Share of the frames left as error |
     |---|---|---|
@@ -596,10 +607,11 @@ SOUND2_LESSON = prose(
     | 4 | 24 | 8.2% to 9.3% |
     | 8 | 48 | 5.6% to 6.1% |
 
-    Every codebook added cuts what is left. One codebook for 48 bits would
-    need 2 to the 48 entries, about 281 trillion. SoundStream also trains with
-    a random number of codebooks per example, its quantizer dropout. So one
-    model serves every bitrate from 3 to 18 kilobits a second.
+    The file fits on 20 sounds so it runs fast, and its errors land inside
+    each range. Every codebook added cuts what is left. One codebook for 48
+    bits would need 2 to the 48 entries, about 281 trillion. SoundStream also
+    trains with a random number of codebooks per example, its quantizer
+    dropout. So one model serves every bitrate from 3 to 18 kilobits a second.
     """,
 )
 
@@ -650,8 +662,8 @@ SOUND2_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the bits a second that codebooks codebooks of entries
-    #   entries each send at frames_per_second, as a plain number.
+    # TODO: Return the bits a second that `codebooks` codebooks of `entries`
+    #   entries each send at `frames_per_second`, as a plain number.
     def bits_per_second(
         frames_per_second: float,
         codebooks: int,
@@ -660,9 +672,10 @@ SOUND2_SOURCE = source_file(
         ...
 
 
-    # TODO: Fit levels codebooks of entries entries each, one after another.
-    #   Each comes from kmeans(..., entries, steps, generator) on what the ones
-    #   before left of vectors. Return them stacked, of shape (levels, entries, d).
+    # TODO: Fit `levels` codebooks of `entries` entries each, one after
+    #   another. Each comes from kmeans(..., entries, steps, generator) on what
+    #   the ones before left of `vectors`. Return them stacked, of shape
+    #   (levels, entries, d).
     def fit_codebooks(
         vectors: Tensor,
         levels: int,
@@ -674,9 +687,9 @@ SOUND2_SOURCE = source_file(
 
 
     # Codebooks fitted on 20 made up sounds, then the error left on 10 others with 1, 2, 4 and 8 of them.
-    whisper_filters = mel_filters(201, 80, 16000)
+    filter_bank = mel_filters(201, 80, 16000)
     sounds = torch.Generator().manual_seed(0)
-    frames = torch.cat([log_mel(made_up_sound(1.0, 16000, sounds), 400, 160, whisper_filters).T for _ in range(30)])
+    frames = torch.cat([log_mel(made_up_sound(1.0, 16000, sounds), 400, 160, filter_bank).T for _ in range(30)])
     frames = (frames - frames[:1960].mean(dim=0)) / frames[:1960].std(dim=0)
     codebooks = fit_codebooks(frames[:1960], 8, 64, 15, torch.Generator().manual_seed(1))
     errors = [relative_error(frames[1960:], residual_quantize(frames[1960:], codebooks[:levels])[1]) for levels in (1, 2, 4, 8)]
@@ -710,9 +723,9 @@ SOUND2_SOLUTION = source_file(
 ''' + indented(RVQ_PART) + '''
 
 
-    whisper_filters = mel_filters(201, 80, 16000)
+    filter_bank = mel_filters(201, 80, 16000)
     sounds = torch.Generator().manual_seed(0)
-    frames = torch.cat([log_mel(made_up_sound(1.0, 16000, sounds), 400, 160, whisper_filters).T for _ in range(30)])
+    frames = torch.cat([log_mel(made_up_sound(1.0, 16000, sounds), 400, 160, filter_bank).T for _ in range(30)])
     frames = (frames - frames[:1960].mean(dim=0)) / frames[:1960].std(dim=0)
     codebooks = fit_codebooks(frames[:1960], 8, 64, 15, torch.Generator().manual_seed(1))
     errors = [relative_error(frames[1960:], residual_quantize(frames[1960:], codebooks[:levels])[1]) for levels in (1, 2, 4, 8)]
@@ -879,7 +892,8 @@ SOUND2 = Exercise(
 
 
 def measure_mel() -> dict[str, object]:
-    """sound1's numbers, with Whisper's settings: each channel's width in hertz and each tone's loudest channel."""
+    """sound1's numbers, with Whisper's rate, window and hop and the HTK filters: each channel's width in hertz and
+    each tone's loudest channel."""
     points = REFERENCE["mel_to_hz"](torch.linspace(0, REFERENCE["hz_to_mel"](torch.tensor(SAMPLE_RATE / 2)).item(), N_MELS + 2))
     filters = REFERENCE["mel_filters"](N_FFT // 2 + 1, N_MELS, SAMPLE_RATE)
     frames = REFERENCE["log_mel"](REFERENCE["tone"](440.0, 1.0, SAMPLE_RATE), N_FFT, HOP, filters)

@@ -53,7 +53,7 @@ SHARED_SPACE = Chapter(
 MEASURE_THREADS = 4
 
 DATA_PART = '''
-LENGTH = 32
+LENGTH = 64
 SHAPES = {
     "rises": ("rises", ".", "."),
     "falls": ("falls", ".", "."),
@@ -65,15 +65,20 @@ SHAPES = {
 PERIODS = {
     0: ("never", "repeats", "."),
     4: ("repeats", "every", "4"),
+    6: ("repeats", "every", "6"),
     8: ("repeats", "every", "8"),
+    12: ("repeats", "every", "12"),
     16: ("repeats", "every", "16"),
 }
-LEVELS = {-1.0: ("low",), 1.0: ("high",)}
+LEVELS = {-1.5: ("lowest",), -0.5: ("low",), 0.5: ("high",), 1.5: ("highest",)}
 WORDS = sorted({word for words in [*SHAPES.values(), *PERIODS.values(), *LEVELS.values()] for word in words})
 COMBOS = list(itertools.product(SHAPES, PERIODS, LEVELS))
 
-# Six pairs of a shape and a period that training never shows together.
-HELD_OUT = {("peak", 8), ("dip", 4), ("jump", 16), ("flat", 4), ("rises", 16), ("falls", 8)}
+# Twelve pairs of a shape and a period that training never shows together, two for each shape.
+HELD_OUT = {
+    ("peak", 8), ("dip", 4), ("jump", 16), ("flat", 4), ("rises", 16), ("falls", 8),
+    ("peak", 12), ("dip", 6), ("jump", 6), ("flat", 12), ("rises", 4), ("falls", 16),
+}
 SEEN = [combo for combo in COMBOS if combo[:2] not in HELD_OUT]
 UNSEEN = [combo for combo in COMBOS if combo[:2] in HELD_OUT]
 
@@ -110,6 +115,23 @@ def trend(
     return torch.where(t < 0.5, -1.0, 1.0)
 
 
+def signals_of(
+    chosen: list[tuple[str, int, float]],
+    generator: torch.Generator,
+) -> Tensor:
+    """One signal for each combination in chosen, with a random phase and a little noise."""
+    t = torch.linspace(0, 1, LENGTH)
+    steps = torch.arange(LENGTH).float()
+    trends = torch.stack([trend(shape, t) for shape, _, _ in chosen])
+    periods = torch.tensor([[float(period)] for _, period, _ in chosen])
+    levels = torch.tensor([[level] for _, _, level in chosen])
+    phases = torch.rand(len(chosen), 1, generator=generator) * 2 * math.pi
+    waves = torch.where(periods > 0, 0.6 * torch.sin(2 * math.pi * steps / periods.clamp(min=1) + phases), 0.0)
+    noise = 0.1 * torch.randn(len(chosen), LENGTH, generator=generator)
+
+    return trends + waves + levels + noise
+
+
 def make_pairs(
     combos: list[tuple[str, int, float]],
     count: int,
@@ -118,17 +140,9 @@ def make_pairs(
     """count signals drawn from combos, their descriptions' word ids, and each one's place in COMBOS."""
     picks = torch.randint(0, len(combos), (count,), generator=generator)
     chosen = [combos[pick] for pick in picks.tolist()]
-    t = torch.linspace(0, 1, LENGTH)
-    steps = torch.arange(LENGTH).float()
-    trends = torch.stack([trend(shape, t) for shape, _, _ in chosen])
-    periods = torch.tensor([[float(period)] for _, period, _ in chosen])
-    levels = torch.tensor([[level] for _, _, level in chosen])
-    phases = torch.rand(count, 1, generator=generator) * 2 * math.pi
-    waves = torch.where(periods > 0, 0.6 * torch.sin(2 * math.pi * steps / periods.clamp(min=1) + phases), 0.0)
-    noise = 0.1 * torch.randn(count, LENGTH, generator=generator)
     places = torch.tensor([COMBOS.index(combo) for combo in chosen])
 
-    return trends + waves + levels + noise, description_ids(chosen), places
+    return signals_of(chosen, generator), description_ids(chosen), places
 '''
 
 SIGNAL_ENCODER_PART = '''
@@ -251,11 +265,11 @@ def naming_accuracy(
 '''
 
 SPACE_SOLUTION = '''
-def top_share(
+def right_share(
     similarities: Tensor,
     scale: float,
 ) -> float:
-    return torch.softmax(scale * similarities, dim=1).amax(dim=1).mean().item()
+    return torch.softmax(scale * similarities, dim=1).diagonal().mean().item()
 
 
 def similarity_by_difference(text_encoder: nn.Module) -> list[float]:
@@ -326,7 +340,7 @@ CLIP1_LESSON = prose(
     """
     CLIP, from Radford and colleagues, trained on 400 million pictures with
     their captions from the internet. Its task was to predict which caption
-    goes with which picture. Here the pictures become signals of 32 steps,
+    goes with which picture. Here the pictures become signals of 64 steps,
     and the captions short descriptions made from three parts.
 
     ```text
@@ -409,7 +423,7 @@ def clip1_source(solved: bool) -> str:
     start = math.exp(math.log(1 / 0.07))                                   # 14.285..., a temperature of 0.07
 
 
-    # Signals of 32 steps and their descriptions, in 48 combinations.
+    # Signals of 64 steps and their descriptions, in 144 combinations.
 ''' + indented(DATA_PART) + '''
 
 
@@ -423,7 +437,7 @@ def clip1_source(solved: bool) -> str:
 ''' + loss + '''
 
 
-    # 300 steps of 64 pairs with a learned temperature. The loss falls from 6.28 to 1.00.
+    # 300 steps of 64 pairs with a learned temperature. The loss falls from 5.08 to 0.41.
     torch.manual_seed(0)
     signal_encoder = SignalEncoder()
     text_encoder = TextEncoder()
@@ -596,7 +610,7 @@ CLIP1 = Exercise(
 
 CLIP2_LESSON = prose(
     """
-    A classifier trained on the 36 seen combinations has one output per
+    A classifier trained on the 96 seen combinations has one output per
     combination. It can never answer with a name it has no output for.
 
     CLIP names an input another way. Encode every candidate description,
@@ -605,9 +619,10 @@ CLIP2_LESSON = prose(
     called this zero shot transfer, and wrote its candidates as prompts like
     "A photo of a {label}."
 
-    Training here held out six pairs of a shape and a period, such as "rises
-    then falls" with "repeats every 8". Each word was seen, but never in
-    those pairs. The 12 unseen combinations are `UNSEEN`.
+    Training here held out twelve pairs of a shape and a period, such as
+    "rises then falls" with "repeats every 8". Each word was seen, but never
+    in those pairs. With each of the four levels, they make the 48 unseen
+    combinations, `UNSEEN`.
 
     ```python
     torch.tensor([[0.1, 0.9, 0.3], [0.8, 0.2, 0.0]]).argmax(dim=1)    # tensor([1, 0])
@@ -615,13 +630,13 @@ CLIP2_LESSON = prose(
 
     `train_clip`, given in the file, runs clip1's step. Here are both
     encoders after 1,500 steps of 64 pairs, on 3 seeds. Each score names
-    1,000 new signals among all 48 descriptions, where a guess is right
-    about 2% of the time.
+    1,000 new signals among all 144 descriptions, where a guess is right
+    under 1% of the time.
 
     | Signals from | Named right |
     |---|---|
-    | the 36 seen combinations | 100% on every seed |
-    | the 12 unseen combinations | 91.8% to 92.4% |
+    | the 96 seen combinations | 100% on every seed |
+    | the 48 unseen combinations | 98.3% to 100% |
 
     The text encoder learned each word's place in the space, so a new
     combination of seen words lands near the signals that match it. That is
@@ -760,7 +775,7 @@ def check_name_signals(found: object) -> None:
         signals = REFERENCE["make_pairs"](REFERENCE["COMBOS"], count, torch.Generator().manual_seed(seed))[0]
         names = found(signal_encoder, descriptions, signals)
         expect_tensor(
-            call=f"name_signals(SignalEncoder() seeded with {seed}, the 48 descriptions, {count} signals)",
+            call=f"name_signals(SignalEncoder() seeded with {seed}, the 144 descriptions, {count} signals)",
             actual=names,
             expected=REFERENCE["name_signals"](trained_pair(seed)[0], descriptions, signals),
         )
@@ -768,7 +783,7 @@ def check_name_signals(found: object) -> None:
     signal_encoder, text_encoder = trained_pair(1242)
     signal_encoder.train()
     modes = recorded_modes(signal_encoder)
-    found(signal_encoder, REFERENCE["describe"](text_encoder, REFERENCE["COMBOS"]), torch.zeros(2, 32))
+    found(signal_encoder, REFERENCE["describe"](text_encoder, REFERENCE["COMBOS"]), torch.zeros(2, REFERENCE["LENGTH"]))
     expect_quiet(
         name="name_signals",
         modes=modes,
@@ -818,7 +833,7 @@ def check_clip2(checker: Checker) -> None:
     )
     checker.test(
         function="naming_accuracy",
-        description="names 1,000 signals among all 48 descriptions",
+        description="names 1,000 signals among all 144 descriptions",
         run=check_naming_accuracy,
     )
     checker.check_name(
@@ -875,52 +890,56 @@ CLIP3_LESSON = prose(
 
     | Parts that differ | Average cosine |
     |---|---|
-    | 1 | 0.51 |
-    | 2 | 0.05 |
-    | 3 | -0.41 to -0.42 |
+    | 1 | 0.60 |
+    | 2 | 0.19 to 0.20 |
+    | 3 | -0.21 to -0.23 |
 
     The space is laid out by the parts. Descriptions that share more of
     them sit closer, and a signal lands near the parts it shows.
 
     The temperature decides how sharp each row's softmax can get. A cosine
-    is at most 1. So at a temperature of 1, the right description out of 64
-    gets at most `e**2 / (e**2 + 63)`, about 0.105. That holds even when
-    every rival scores -1. `top_share` measures the share it really gets.
+    is at most 1. So at a temperature of 1, the right description out of 96
+    gets at most `e**2 / (e**2 + 95)`, about 0.072. That holds even when
+    every rival scores -1. `right_share` measures the share each right pair
+    really gets, on a batch of one signal for each seen description.
 
     ```python
-    torch.softmax(torch.tensor([[1.0, 0.0, 0.0]]) * 10, dim=1).amax(dim=1)    # tensor([0.9999])
+    torch.softmax(torch.eye(3) * 10, dim=1).diagonal()    # tensor([0.9999, 0.9999, 0.9999])
     ```
 
     Here is clip2's training at fixed temperatures and with a learned one,
-    naming the 12 unseen combinations, on 3 seeds.
+    naming the 48 unseen combinations, on 3 seeds.
 
     | Temperature | Unseen named right |
     |---|---|
-    | 1 | 32.2%, 57.4% and 73.4% |
-    | 0.3 | 91.2% to 94.6% |
-    | 0.1 | 93.4% to 95.1% |
-    | 0.03 | 92.0% to 95.4% |
-    | learned, from 0.07 | 91.8% to 92.4% |
+    | 1 | 27.6%, 67.9% and 70.2% |
+    | 0.3 | 98.4% to 99.9% |
+    | 0.1 | 94.4% to 100% |
+    | 0.03 | 94.0% to 98.7% |
+    | learned, from 0.07 | 98.3% to 100% |
 
     A temperature of 1 caps how sure the model can be, so the loss keeps
-    pulling at pairs it already has right. On a batch of 64, the trained
-    model gives the right description 0.04 of the softmax at a temperature
-    of 1. At its learned one, which settled at 0.046 to 0.049, it gives 0.47.
+    pulling at pairs it already has right. There the trained model gives
+    each right pair 0.025 to 0.026 of the softmax. The learned temperature
+    settled at 0.038 to 0.040, where each right pair gets 0.997 to 0.999.
+    Learning it lands with the best fixed values, with no training run for
+    each value tried.
 
-    The batch size decides how many rivals each pair meets per step. Here is
-    the same training stopped after 300 steps.
+    The batch size decides how many rivals each pair meets per step. Here
+    every batch size trains for the same 120 steps.
 
-    | Pairs per batch | Unseen named right after 300 steps |
+    | Pairs per batch | Unseen named right after 120 steps |
     |---|---|
-    | 4 | 0.7% to 16.3% |
-    | 16 | 86.4% to 87.5% |
-    | 64 | 88.8% to 90.4% |
-    | 256 | 87.9% to 90.0% |
+    | 4 | 2.7% to 10.6% |
+    | 16 | 13.4% to 21.8% |
+    | 64 | 84.1% to 94.7% |
+    | 256 | 92.7% to 99.4% |
 
-    With 4 pairs a signal meets only 3 rivals a step, and each step sees
-    only 4 pairs. A batch of 256 holds each of the 36 seen descriptions about
-    7 times, and the loss counts those repeats as rivals too. CLIP's 400
-    million captions rarely repeat, and its batches held 32,768 pairs.
+    With the steps fixed, a bigger batch also sees more pairs. Given the
+    same 30,720 pairs instead, a batch of 16 takes 1,920 steps and names
+    98.9% to 100%, against 92.7% to 99.4% for 256. A batch of 4 reaches
+    61.5% to 67.5%, since each pair meets only 3 rivals a step. CLIP's
+    batches held 32,768 pairs.
     """,
 )
 
@@ -928,9 +947,10 @@ CLIP3_LESSON = prose(
 def clip3_source(solved: bool) -> str:
     header = "# clip3.py, a solution for comparison" if solved else "# clip3.py"
     space = indented(SPACE_SOLUTION) if solved else '''
-    # TODO: Return the share softmax gives each row's largest entry, averaged
-    #   over the rows, as a plain number. Multiply similarities by scale first.
-    def top_share(
+    # TODO: Return the share softmax gives each row's right pair, the entry
+    #   on the diagonal, averaged over the rows, as a plain number. Multiply
+    #   similarities by scale first, and take the softmax along each row.
+    def right_share(
         similarities: Tensor,
         scale: float,
     ) -> float:
@@ -949,7 +969,7 @@ def clip3_source(solved: bool) -> str:
         f'''
     {header}
 ''' + FILE_IMPORTS + '''
-    sure = torch.softmax(torch.tensor([[1.0, 0.0, 0.0]]) * 10, dim=1).amax(dim=1)    # tensor([0.9999])
+    sure = torch.softmax(torch.eye(3) * 10, dim=1).diagonal()                           # tensor([0.9999, 0.9999, 0.9999])
     differ = (torch.tensor([[1, 2, 3]]) != torch.tensor([[1, 5, 4]])).sum(dim=1)        # tensor([2])
     picked = torch.tensor([0.5, 0.9, 0.1])[torch.tensor([False, True, True])]           # tensor([0.9000, 0.1000])
 
@@ -980,16 +1000,17 @@ def clip3_source(solved: bool) -> str:
 ''' + space + '''
 
 
-    # clip2's training, then the space's layout and how sure a batch of 64 lets the model be.
+    # clip2's training, then the space's layout, and how sure the model can be on a batch of one signal for each
+    # seen description, so each row has one right pair.
     signal_encoder, text_encoder, scale = train_clip(1500, 64, None, 0)
     by_difference = similarity_by_difference(text_encoder)
-    signals, ids, _ = make_pairs(SEEN, 64, torch.Generator().manual_seed(502))
+    signals = signals_of(SEEN, torch.Generator().manual_seed(502))
 
     with torch.no_grad():
-        batch_cosines = F.normalize(signal_encoder(signals), dim=1) @ F.normalize(text_encoder(ids), dim=1).T
+        batch_cosines = F.normalize(signal_encoder(signals), dim=1) @ describe(text_encoder, SEEN).T
 
-    share_at_one = top_share(batch_cosines, 1.0)
-    share_learned = top_share(batch_cosines, scale)
+    share_at_one = right_share(batch_cosines, 1.0)
+    share_learned = right_share(batch_cosines, scale)
     ''',
     )
 
@@ -998,16 +1019,16 @@ def reference_space(seed: int) -> tuple[nn.Module, nn.Module, float]:
     return REFERENCE["train_clip"](1500, 64, None, seed)
 
 
-def check_top_share(found: object) -> None:
+def check_right_share(found: object) -> None:
     for similarities, scale in (
         (small_tensor(1260, 4, 4).float() / 3, 1.0),
         (small_tensor(1261, 5, 5).float() / 3, 20.0),
-        (small_tensor(1262, 3, 6).float() / 3, 4.0),
+        (small_tensor(1262, 6, 6).float() / 3, 4.0),
     ):
         expect_close(
-            call=f"top_share({value_text(similarities)}, {scale})",
+            call=f"right_share({value_text(similarities)}, {scale})",
             actual=found(similarities, scale),
-            expected=REFERENCE["top_share"](similarities, scale),
+            expected=REFERENCE["right_share"](similarities, scale),
             tolerance=1e-5,
         )
 
@@ -1046,9 +1067,9 @@ def check_by_difference(value: object) -> None:
 
 def check_clip3(checker: Checker) -> None:
     checker.test(
-        function="top_share",
-        description="gives the softmax's largest share, averaged over the rows",
-        run=check_top_share,
+        function="right_share",
+        description="gives the softmax's share on the diagonal, averaged over the rows",
+        run=check_right_share,
     )
     checker.test(
         function="similarity_by_difference",
@@ -1066,8 +1087,8 @@ def check_clip3(checker: Checker) -> None:
         run=check_score_range(
             name="share_at_one",
             low=0.0,
-            high=0.11,
-            advice="At a temperature of 1 the right description out of 64 can get at most about 0.105.",
+            high=0.075,
+            advice="At a temperature of 1 the right description out of 96 can get at most about 0.072.",
         ),
     )
     checker.check_name(
@@ -1075,9 +1096,9 @@ def check_clip3(checker: Checker) -> None:
         description="is how sure the learned temperature lets it be",
         run=check_score_range(
             name="share_learned",
-            low=0.3,
+            low=0.9,
             high=1.0,
-            advice="Pass the learned scale to top_share.",
+            advice="Pass the learned scale to right_share.",
         ),
     )
 
@@ -1111,8 +1132,8 @@ CLIP3 = Exercise(
     source=clip3_source(solved=False),
     solution=clip3_source(solved=True),
     hints={
-        "top_share": "torch.softmax of scale times similarities along dim 1, the largest entry of each row with "
-        "amax, then the mean as a plain number.",
+        "right_share": "torch.softmax of scale times similarities along dim 1, then .diagonal() for each row's right "
+        "pair, then the mean as a plain number.",
         "similarity_by_difference": "describe(text_encoder, COMBOS) times its transpose gives every cosine. Make a "
         "tensor of each combination's shape index, period and level. Compare every row with every row and sum the "
         "parts that differ. Then average the cosines where that count is 1, 2 or 3.",
@@ -1137,7 +1158,7 @@ def measure_clip1() -> tuple[float, float]:
 
 def measure_naming(seeds: range = range(3)) -> dict[str, list[float]]:
     """clip2's table: both encoders trained 1,500 steps of 64 pairs on SEEN, with a learned temperature, each naming
-    1,000 new signals from SEEN and from UNSEEN among all 48 descriptions, on 4 threads."""
+    1,000 new signals from SEEN and from UNSEEN among all 144 descriptions, on 4 threads."""
     results: dict[str, list[float]] = {}
 
     with pinned_threads():
@@ -1172,31 +1193,40 @@ def measure_temperatures(seeds: range = range(3)) -> dict[str, list[float]]:
     return results
 
 
-def measure_batches(seeds: range = range(3)) -> dict[int, list[float]]:
-    """clip3's batch table: clip2's training stopped after 300 steps, at four batch sizes, naming UNSEEN."""
+def measure_batches(
+    steps: int = 120,
+    pairs: int = 0,
+    seeds: range = range(3),
+) -> dict[int, list[float]]:
+    """clip3's batch table: clip2's training at four batch sizes, naming UNSEEN. Each size takes the same number of
+    steps, or, when pairs is given, as many steps as it needs to see that many pairs."""
     results: dict[int, list[float]] = {}
 
     with pinned_threads():
         for batch in (4, 16, 64, 256):
             for seed in seeds:
-                signal_encoder, text_encoder, _ = REFERENCE["train_clip"](300, batch, None, seed)
+                signal_encoder, text_encoder, _ = REFERENCE["train_clip"](pairs // batch if pairs else steps, batch, None, seed)
                 generator = torch.Generator().manual_seed(500 + seed)
                 results.setdefault(batch, []).append(REFERENCE["naming_accuracy"](signal_encoder, text_encoder, REFERENCE["UNSEEN"], generator))
 
     return results
 
 
-def measure_shares() -> dict[str, float]:
-    """clip3's file: how sure a batch of 64 lets the trained model be, at a temperature of 1 and at the learned one."""
+def measure_shares(seeds: range = range(3)) -> dict[str, list[float]]:
+    """clip3's file: on a batch of one signal for each seen description, the share the trained model gives each right
+    pair at a temperature of 1 and at the learned one, for each seed, and the most a temperature of 1 allows."""
+    seen = REFERENCE["SEEN"]
+    results: dict[str, list[float]] = {"bound": [math.exp(2) / (math.exp(2) + len(seen) - 1)]}
+
     with pinned_threads():
-        signal_encoder, text_encoder, scale = reference_space(0)
-        signals, ids, _ = REFERENCE["make_pairs"](REFERENCE["SEEN"], 64, torch.Generator().manual_seed(502))
+        for seed in seeds:
+            signal_encoder, text_encoder, scale = reference_space(seed)
+            signals = REFERENCE["signals_of"](seen, torch.Generator().manual_seed(502 + seed))
 
-        with torch.no_grad():
-            cosines = F.normalize(signal_encoder(signals), dim=1) @ F.normalize(text_encoder(ids), dim=1).T
+            with torch.no_grad():
+                cosines = F.normalize(signal_encoder(signals), dim=1) @ REFERENCE["describe"](text_encoder, seen).T
 
-    return {
-        "at one": REFERENCE["top_share"](cosines, 1.0),
-        "learned": REFERENCE["top_share"](cosines, scale),
-        "bound": math.exp(2) / (math.exp(2) + 63),
-    }
+            results.setdefault("at one", []).append(REFERENCE["right_share"](cosines, 1.0))
+            results.setdefault("learned", []).append(REFERENCE["right_share"](cosines, scale))
+
+    return results

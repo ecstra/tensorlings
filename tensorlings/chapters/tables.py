@@ -283,8 +283,8 @@ class ColumnTransformer(nn.Module):
         super().__init__()
         self.location = PeriodicEmbedding(LOCATION, 16, spread, size)
         self.tokens = ColumnTokens(8 - LOCATION, PLACES, size)
-        self.blocks = nn.Sequential(
-            *[
+        self.blocks = nn.ModuleList(
+            [
                 nn.TransformerEncoderLayer(
                     size,
                     heads,
@@ -309,11 +309,18 @@ TRANSFORMER_FORWARD = '''
         numbers: Tensor,
         places: Tensor,
     ) -> Tensor:
-        others = self.tokens(numbers[:, LOCATION:], places)
-        where = self.location(numbers[:, :LOCATION])
+        missing = numbers.isnan()
+        known = numbers.nan_to_num()
+        others = self.tokens(known[:, LOCATION:], places)
+        where = self.location(known[:, :LOCATION])
         tokens = torch.cat([others[:, :1], where, others[:, 1:]], dim=1)
+        always = torch.zeros(len(numbers), 1, dtype=torch.bool)
+        hidden = torch.cat([always, missing, always], dim=1)
 
-        return self.head(self.blocks(tokens)[:, 0]).squeeze(1)
+        for block in self.blocks:
+            tokens = block(tokens, src_key_padding_mask=hidden)
+
+        return self.head(tokens[:, 0]).squeeze(1)
 '''
 
 RMSE_SOLUTION = '''
@@ -367,15 +374,18 @@ TABLE1_LESSON = prose(
 
     A table holds rows of examples and columns of different kinds. Here each
     row is one of California's 20,640 housing blocks of 1990. Eight columns
-    are numbers, from latitude to median income. One is a category, how far
+    are numbers, from longitude to median income. One is a category, how far
     the block sits from the ocean. The target is the block's median value.
 
     A real table has holes. 207 blocks have no bedroom count, so it reads as
     nan. `fill_missing` puts each column's median over the training rows in
-    every hole, so the test rows never shape the fill.
+    every hole, so the test rows never shape the fill. `nanmedian` skips the
+    holes. With an even count it takes the lower of the two middle values,
+    where `nanquantile(0.5)` takes their average.
 
     ```python
-    torch.tensor([[1.0, float("nan")], [3.0, 4.0]]).nanmedian(dim=0).values    # tensor([1., 4.])
+    nan = float("nan")
+    torch.tensor([[1.0, nan], [nan, 4.0], [3.0, 6.0], [8.0, 5.0]]).nanmedian(dim=0).values    # tensor([3., 5.])
     ```
 
     An MLP reads a row as one long vector. Gorishniy and colleagues give each
@@ -611,13 +621,15 @@ def check_table1(checker: Checker) -> None:
         function="fill_missing",
         description="puts each column's median over the given rows in every hole",
         inputs=(
+            # Every column holds an odd count of numbers in the given rows, so its median is one middle value and
+            # torch's nanmedian, which takes the lower of two, agrees with nanquantile's average of them.
             (
-                torch.tensor([[1.0, NAN, 3.0], [NAN, 2.0, 0.0], [4.0, 5.0, NAN], [2.0, NAN, 1.0], [NAN, -1.0, 2.0], [0.0, 3.0, -2.0]]),
-                torch.tensor([0, 1, 2, 3]),
+                torch.tensor([[1.0, NAN, 3.0], [6.0, 2.0, 0.0], [4.0, 5.0, NAN], [2.0, -1.0, 1.0], [-3.0, NAN, NAN], [NAN, 9.0, 8.0], [10.0, NAN, 7.0]]),
+                torch.tensor([0, 1, 2, 3, 4]),
             ),
             (
-                torch.tensor([[NAN, 1.0], [2.0, NAN], [-1.0, 0.0], [3.0, 2.0], [NAN, -2.0]]),
-                torch.tensor([4, 2, 0, 3]),
+                torch.tensor([[NAN, 1.0], [2.0, 6.0], [-1.0, 0.0], [3.0, 2.0], [NAN, -2.0], [5.0, NAN], [7.0, 9.0]]),
+                torch.tensor([4, 2, 0, 3, 1]),
             ),
         ),
         reference=REFERENCE["fill_missing"],
@@ -986,36 +998,57 @@ TABLE3_LESSON = prose(
     """
     table1's tokens and table2's waves come together here. The location
     columns become tokens through a PeriodicEmbedding, each of size 32. The
-    other six numbers and the place become ColumnTokens.
+    other six numbers and the place become ColumnTokens. Then attention reads
+    the 10 tokens with PyTorch's `nn.TransformerEncoderLayer`, as vit2 read
+    its patches.
 
-    Then attention reads the 10 tokens, as vit2 did with its patches, with
-    PyTorch's `nn.TransformerEncoderLayer`. Attention lets each column look
-    at every other one. The model can learn that income means more inland
-    than by the coast, a mix a plain sum of columns can't make.
+    The tokens need no position table. Each column has its own weight, which
+    already marks where a token came from, so attention reads a row the same
+    in any order. The class token's output goes through a LayerNorm, a ReLU
+    and a Linear, the head Gorishniy and colleagues use.
 
-    The class token's output goes through a LayerNorm, a ReLU and a Linear,
-    the head Gorishniy and colleagues use. Their paper puts the
-    FT-Transformer at 0.459 on this data, against 0.499 for an MLP.
+    Their paper puts the FT-Transformer at 0.459 on this data against 0.499
+    for an MLP, in its own units, hundreds of thousands of dollars. Here
+    every model trains as table2's did, on 3 splits and seeds.
+
+    | Each number enters as | MLP | Attention over the column tokens |
+    |---|---|---|
+    | itself | 0.43 to 0.44 | 0.46 |
+    | itself, with periodic location | 0.38 to 0.40 | 0.39 to 0.41 |
+
+    On complete rows attention buys no accuracy here. A token per column
+    pays off when a row has a hole. An MLP has an input for every column, so
+    a hole needs a number, and table1 put the median there. Attention can
+    leave the hole's token out.
+
+    `src_key_padding_mask` hides tokens from attention, True where a token
+    is hidden, as mask1's padding masks were. The hole still needs a 0 in
+    place of its nan, which would spoil attention's sums.
 
     ```python
-    torch.tensor([[[1.0], [2.0]]])[:, 0]    # tensor([[1.]]), the first token of each row
+    torch.tensor([[1.0, float("nan")]]).nan_to_num()    # tensor([[1., 0.]])
     ```
 
-    `rmse` scores a model in eval mode without recording for autograd, then
-    switches it back, as gpt3's validation_loss did. Here are the three
-    models, each trained with AdamW on 3 splits and seeds.
+    Both models with periodic location trained on complete rows. Then one
+    column went missing from every test row.
 
-    | Model | Weights | Test error |
+    | Missing from the test rows | MLP, median in the hole | Attention, token left out |
     |---|---|---|
-    | plain MLP, 3 layers of 256 | 135,425 | 0.43 to 0.44 |
-    | MLP with periodic location | 144,193 | 0.38 to 0.40 |
-    | column tokens through attention | 19,905 | 0.41 to 0.42 |
+    | nothing | 0.38 to 0.40 | 0.39 to 0.41 |
+    | longitude and latitude | 0.77 to 0.90 | 0.62 to 0.71 |
+    | total rooms | 0.53 to 0.61 | 0.44 to 0.49 |
+    | population | 0.58 to 0.59 | 0.48 to 0.53 |
+    | median income | 0.51 to 0.53 | 0.53 to 0.57 |
 
-    Attention over the column tokens beats the plain MLP on every seed, with
-    a seventh of its weights. The periodic MLP does better still. Gorishniy
-    and colleagues' second paper found the same. With the right number
-    embeddings, an MLP does as well as attention. How each column becomes a
-    vector matters as much as what reads the vectors.
+    Rooms, bedrooms, households and population each tell of the others. A
+    median in one contradicts the rest, where a left out token adds nothing
+    false. No column carries income, so there both models guess, and the
+    median guesses a little better. Trained with a tenth of the numbers
+    dropped, as fuse3 will do with whole inputs, the MLP learns its stand in
+    too. Then the two score within 0.03 of each other on every row.
+
+    `rmse` scores a model in eval mode without recording for autograd, then
+    switches it back, as gpt3's validation_loss did.
     """,
 )
 
@@ -1047,14 +1080,20 @@ TABLE3_SOURCE = source_file(
     + '''
 
 
-    first = torch.tensor([[[1.0], [2.0]]])[:, 0]    # tensor([[1.]]), the first token of each row
+    first = torch.tensor([[[1.0], [2.0]]])[:, 0]                  # tensor([[1.]]), the first token of each row
+    holes = torch.tensor([[1.0, float("nan")]]).isnan()           # tensor([[False,  True]])
+    zeroed = torch.tensor([[1.0, float("nan")]]).nan_to_num()     # tensor([[1., 0.]])
 
 
-    # TODO: Finish forward. Make the tokens of the other columns and the place
-    #   with self.tokens, from the numbers after the first LOCATION. Embed the
-    #   location columns with self.location. Put the class token first, then
-    #   the location tokens, then the rest. Run self.blocks, and self.head on
-    #   the class token's output, giving one answer per row, of shape (rows,).
+    # TODO: Finish forward. A nan in numbers is a missing number. Note where
+    #   they are, then turn them into 0 so no nan reaches a token. Make the
+    #   tokens of the other columns and the place with self.tokens, from the
+    #   numbers after the first LOCATION, and embed the location columns with
+    #   self.location. Put the class token first, then the location tokens,
+    #   then the rest. Run each block in self.blocks with
+    #   src_key_padding_mask, True at the token of every missing number and
+    #   False at the class and place tokens. Return self.head of the class
+    #   token's output, one answer per row, of shape (rows,).
     class ColumnTransformer(nn.Module):
         def __init__(
             self,
@@ -1066,8 +1105,8 @@ TABLE3_SOURCE = source_file(
             super().__init__()
             self.location = PeriodicEmbedding(LOCATION, 16, spread, size)
             self.tokens = ColumnTokens(8 - LOCATION, PLACES, size)
-            self.blocks = nn.Sequential(
-                *[
+            self.blocks = nn.ModuleList(
+                [
                     nn.TransformerEncoderLayer(
                         size,
                         heads,
@@ -1135,6 +1174,8 @@ TABLE3_SOLUTION = source_file(
 
 
     first = torch.tensor([[[1.0], [2.0]]])[:, 0]
+    holes = torch.tensor([[1.0, float("nan")]]).isnan()
+    zeroed = torch.tensor([[1.0, float("nan")]]).nan_to_num()
 
 '''
     + indented(TRANSFORMER_INIT)
@@ -1147,7 +1188,11 @@ TABLE3_SOLUTION = source_file(
 
 
 def check_column_transformer(found: type) -> None:
-    for size, blocks, rows, seed in ((8, 1, 3, 9421), (12, 2, 2, 9422)):
+    for size, blocks, rows, seed, holes in (
+        (8, 1, 3, 9421, ()),
+        (12, 2, 2, 9422, ()),
+        (8, 2, 4, 9423, ((0, 7), (1, 0), (2, 3), (2, 5), (3, 1))),
+    ):
         module = expect_module(f"ColumnTransformer({size}, {blocks}, 2)", seeded_model(found, size, blocks, 2))
         reference = seeded_model(REFERENCE["ColumnTransformer"], size, blocks, 2)
 
@@ -1161,12 +1206,26 @@ def check_column_transformer(found: type) -> None:
         numbers = small_tensor(seed, rows, 8) / 3
         places = torch.randint(0, 5, (rows,), generator=torch.Generator().manual_seed(seed + 1))
 
+        for row, column in holes:
+            numbers[row, column] = NAN
+
         with torch.no_grad():
             actual = module(numbers, places)
             expected = reference(numbers, places)
 
+        call = f"ColumnTransformer({size}, {blocks}, 2) on {rows} rows, in eval mode"
+
+        if holes:
+            call += f", with nan at (row, column) {', '.join(map(str, holes))}"
+
+        if isinstance(actual, Tensor) and actual.isnan().any():
+            raise Mismatch(
+                f"{call} gives nan. A hidden token still meets the others in attention's weighted sum, and 0 "
+                "times nan is nan, so turn the missing numbers into 0 before making any token.",
+            )
+
         expect_tensor(
-            call=f"ColumnTransformer({size}, {blocks}, 2) on {rows} rows, in eval mode",
+            call=call,
             actual=actual,
             expected=expected,
         )
@@ -1249,9 +1308,11 @@ TABLE3 = Exercise(
     source=TABLE3_SOURCE,
     solution=TABLE3_SOLUTION,
     hints={
-        "ColumnTransformer.forward": "others = self.tokens(numbers[:, LOCATION:], places) puts the class token at 0. "
-        "torch.cat others[:, :1], self.location(numbers[:, :LOCATION]) and others[:, 1:] along dim=1. Then take "
-        "self.blocks of that, keep [:, 0], run self.head and .squeeze(1).",
+        "ColumnTransformer.forward": "Keep numbers.isnan() and work from numbers.nan_to_num(). self.tokens of the "
+        "numbers after LOCATION puts the class token at 0. torch.cat its [:, :1], the location tokens and its [:, 1:] "
+        "along dim=1. The tokens run class, the 8 numbers in order, then place. So the mask is a column of "
+        "False, the isnan columns, and a column of False. Loop over self.blocks passing src_key_padding_mask=, then keep "
+        "[:, 0], run self.head and .squeeze(1).",
         "rmse": "Call model.eval(). Inside torch.no_grad(), take F.mse_loss of the model's answers and targets, then "
         ".sqrt().item(). Call model.train() before returning.",
     },
@@ -1267,38 +1328,116 @@ TABLE3 = Exercise(
 # ---------------------------------------------------------------------------
 
 
+# table3's second table: the columns left out of every test row, by HOUSING_COLUMNS' order.
+MISSING_AT_TEST: dict[str, tuple[int, ...]] = {
+    "nothing": (),
+    "longitude and latitude": (0, 1),
+    "longitude": (0,),
+    "latitude": (1,),
+    "housing median age": (2,),
+    "total rooms": (3,),
+    "total bedrooms": (4,),
+    "population": (5,),
+    "households": (6,),
+    "median income": (7,),
+}
+
+
+class MedianFilled(nn.Module):
+    """An MLP that reads a missing number, a nan, as its column's median over the training rows, table1's fill."""
+
+    def __init__(
+        self,
+        inner: nn.Module,
+        data: dict[str, Tensor],
+    ) -> None:
+        super().__init__()
+        self.inner = inner
+        self.register_buffer("medians", data["numbers"][data["train"]].nanmedian(dim=0).values)
+
+    def forward(
+        self,
+        numbers: Tensor,
+        places: Tensor,
+    ) -> Tensor:
+        return self.inner(torch.where(numbers.isnan(), self.medians, numbers), places)
+
+
+class PlainNumberTokens(nn.Module):
+    """table1's plain number tokens, in place of the periodic location embedding for the like for like run."""
+
+    def __init__(
+        self,
+        columns: int,
+        size: int,
+    ) -> None:
+        super().__init__()
+        self.weight = nn.Parameter(torch.randn(columns, size) / math.sqrt(size))
+        self.bias = nn.Parameter(torch.zeros(columns, size))
+
+    def forward(
+        self,
+        values: Tensor,
+    ) -> Tensor:
+        return REFERENCE["number_tokens"](values, self.weight, self.bias)
+
+
+def plain_column_transformer() -> nn.Module:
+    model = REFERENCE["ColumnTransformer"]()
+    model.location = PlainNumberTokens(2, 32)
+
+    return model
+
+
 def train_table_model(
     model: nn.Module,
     data: dict[str, Tensor],
-    epochs: int,
-    lr: float,
-    decay: float,
-    batch: int,
     seed: int,
-) -> float:
-    """AdamW on the training rows, keeping the epoch with the lowest validation error, whose test error it gives."""
-    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=decay)
+    drop: float = 0.0,
+    missing_at_test: bool = False,
+) -> dict[str, float]:
+    """table2's budget for every model: 40 epochs of AdamW at 1e-3 with decay 1e-4 and batches of 256, keeping the
+    epoch with the lowest validation error. Gives that epoch's test error with nothing missing, and with
+    missing_at_test with each of MISSING_AT_TEST's columns turned to nan in every test row. drop turns each training
+    number to nan at that rate."""
+    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-4)
     generator = torch.Generator().manual_seed(seed)
+    holes = torch.Generator().manual_seed(1000 + seed)
     numbers, places, targets = data["numbers"], data["places"], data["targets"]
-    best = (math.inf, math.nan)
+    test = data["test"]
+    best = math.inf
+    scores: dict[str, float] = {}
 
-    for _ in range(epochs):
+    for _ in range(40):
         model.train()
         order = data["train"][torch.randperm(len(data["train"]), generator=generator)]
 
-        for start in range(0, len(order), batch):
-            rows = order[start : start + batch]
-            loss = F.mse_loss(model(numbers[rows], places[rows]), targets[rows])
+        for start in range(0, len(order), 256):
+            rows = order[start : start + 256]
+            seen = numbers[rows]
+
+            if drop > 0:
+                seen = torch.where(torch.rand(seen.shape, generator=holes) < drop, math.nan, seen)
+
+            loss = F.mse_loss(model(seen, places[rows]), targets[rows])
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
 
         validation = REFERENCE["rmse"](model, numbers[data["validation"]], places[data["validation"]], targets[data["validation"]])
 
-        if validation < best[0]:
-            best = (validation, REFERENCE["rmse"](model, numbers[data["test"]], places[data["test"]], targets[data["test"]]))
+        if validation >= best:
+            continue
 
-    return best[1]
+        best = validation
+        tests = MISSING_AT_TEST if missing_at_test else {"nothing": ()}
+
+        for name, columns in tests.items():
+            left_out = numbers[test].clone()
+            left_out[:, list(columns)] = math.nan
+            scores[name] = REFERENCE["rmse"](model, left_out, places[test], targets[test])
+
+    return scores
 
 
 def location_only(data: dict[str, Tensor]) -> dict[str, Tensor]:
@@ -1307,27 +1446,34 @@ def location_only(data: dict[str, Tensor]) -> dict[str, Tensor]:
 
 
 def measure_tables(seeds: range = range(3)) -> dict[str, object]:
-    """table2's and table3's tables: the test error of each model on 3 splits and seeds, and their weight counts."""
-    makers: dict[str, tuple[Callable[[], nn.Module], bool, int, float, float, int]] = {
-        "location, plain MLP": (lambda: REFERENCE["TableMLP"](2), True, 40, 1e-3, 1e-4, 256),
-        "location, periodic": (lambda: REFERENCE["LocationMLP"](2), True, 40, 1e-3, 1e-4, 256),
-        "all, plain MLP": (lambda: REFERENCE["TableMLP"](8), False, 40, 1e-3, 1e-4, 256),
-        "all, periodic location": (lambda: REFERENCE["LocationMLP"](8), False, 40, 1e-3, 1e-4, 256),
-        "all, column transformer": (lambda: REFERENCE["ColumnTransformer"](), False, 30, 1e-3, 1e-5, 512),
+    """table2's and table3's tables: the test error of each model on 3 splits and seeds, all on table2's budget, and
+    their weight counts. The models of the whole table are also scored with columns missing from every test row, the
+    MLPs reading table1's median in the hole and attention leaving the token out, and the periodic two are trained
+    again with a tenth of the numbers dropped."""
+    makers: dict[str, tuple[Callable[[dict[str, Tensor]], nn.Module], bool, tuple[float, ...]]] = {
+        "location, plain MLP": (lambda data: REFERENCE["TableMLP"](2), True, (0.0,)),
+        "location, periodic": (lambda data: REFERENCE["LocationMLP"](2), True, (0.0,)),
+        "all, plain MLP": (lambda data: MedianFilled(REFERENCE["TableMLP"](8), data), False, (0.0,)),
+        "all, periodic location": (lambda data: MedianFilled(REFERENCE["LocationMLP"](8), data), False, (0.0, 0.1)),
+        "all, plain tokens through attention": (lambda data: plain_column_transformer(), False, (0.0,)),
+        "all, column transformer": (lambda data: REFERENCE["ColumnTransformer"](), False, (0.0, 0.1)),
     }
     results: dict[str, object] = {}
 
     with pinned_threads():
-        for name, (make, alone, epochs, lr, decay, batch) in makers.items():
-            errors = []
+        for name, (make, alone, drops) in makers.items():
+            for drop in drops:
+                runs: list[dict[str, float]] = []
 
-            for seed in seeds:
-                data = prepared_housing(seed)
-                torch.manual_seed(seed)
-                model = make()
-                errors.append(train_table_model(model, location_only(data) if alone else data, epochs, lr, decay, batch, seed))
+                for seed in seeds:
+                    data = prepared_housing(seed)
+                    torch.manual_seed(seed)
+                    model = make(data)
+                    runs.append(train_table_model(model, location_only(data) if alone else data, seed, drop, not alone))
 
-            results[name] = errors
+                label = f"{name}, trained with {drop:g} dropped" if drop else name
+                results[label] = {test: [run[test] for run in runs] for test in runs[0]}
+
             results[f"{name} weights"] = sum(parameter.numel() for parameter in model.parameters())
 
         values = load_housing()[2]
