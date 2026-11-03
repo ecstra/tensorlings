@@ -1,14 +1,14 @@
 ---
 name: tensorlings-detailed-curriculum
 kind: doc
-description: the 13 sections expanded into chapters, exercises and projects, about 340 exercises, with the projects the table left open
-updated: 2026-10-30
+description: the 14 sections expanded into chapters, exercises and projects, about 370 exercises, with the projects the table left open
+updated: 2026-11-03
 links: [docs/research/tensorlings-course-design.md]
 ---
 
 # tensorlings detailed curriculum
 
-This expands the 13 sections of [the course design](tensorlings-course-design.md#the-curriculum) into chapters, exercises and projects. The section table there is the one the owner approved, and this list fills it in without moving a topic between sections. The owner asked for it on 2026-10-29 and left the projects the table does not name to the agent, so each one below comes from its own section's topics and is modeled on a known course.
+This expands the 14 sections of [the course design](tensorlings-course-design.md#the-curriculum) into chapters, exercises and projects. The section table there is the one the owner approved, and this list fills it in without moving a topic between sections. The owner asked for it on 2026-10-29 and left the projects the table does not name to the agent, so each one below comes from its own section's topics and is modeled on a known course.
 
 It plans about 340 exercises. Names and counts can still shift while a phase is built, and once a phase lands the built course is the truth. The owner's review of 2026-10-29 added 11 exercises and the 38_soft_design chapter, per [DEC-017](../../decisions/DEC-017-the-owner-s-six-gaps-added-to-the-curriculum.md), which moved every chapter after it up one or two numbers.
 
@@ -424,7 +424,7 @@ Part A takes each kind of input on its own, the structure it has and the layer t
 | | table3 | the column tokens through attention, against the plain MLP on a real table |
 | 95_time_series | series1 | a series cut into patches as tokens, as in PatchTST |
 | | series2 | each series normalized on its own and restored after, as in RevIN |
-| | series3 | the patched transformer against a linear forecaster over several horizons on real data |
+| | series3 | PatchTST's two choices tested on real data, patches against one token a week and columns apart against mixed |
 | 96_audio | sound1 | a waveform turned into mel frames, the tokens speech models read |
 | | sound2 | a neural codec's residual quantizer, sound as a few streams of codebook ids |
 | 97_video | video1 | frames over time as tubelet tokens, as in ViViT |
