@@ -2,7 +2,7 @@
 name: TODO-019-phase-7-section-13-modalities
 kind: todo
 description: each kind of input on its own, tables, time series, audio and video, then kinds joined in one transformer and in the GPT, with the signal reader project
-updated: 2026-10-31
+updated: 2026-11-03
 links: []
 status: open
 by: owner
@@ -18,7 +18,7 @@ Phase 7 of the plan build-tensorlings, the Modalities section the owner asked fo
 
 | # | Step | Points at | By | Status |
 |---|---|---|---|---|
-| 1 | Write 94_tables and 95_time_series | | owner | pending |
+| 1 | Write 94_tables and 95_time_series | | owner | done |
 | 2 | Write 96_audio and 97_video | | owner | done |
 | 3 | Write 98_tokens_for_everything and 99_shared_space | | owner | done |
 | 4 | Write 100_fusion and 102_outputs | | owner | done |
