@@ -187,7 +187,7 @@ The project comes from the section's last topic, the recipe, since a broken run 
 | quizzes | quiz7 | Section 5 together |
 | 37_dna | dna1 | the project starts, real splice junction DNA one hot encoded as 4 channels, with a validation set split off |
 | | dna2 | a 1D conv net with residual blocks, trained by running the file, past 93 percent on validation |
-| | dna3 | test accuracy measured once, the first kernels read as the GT and AG motifs, and the net against position weights and an MLP |
+| | dna3 | test accuracy measured once, the first kernels read as the GT motif and the C and T run before an exon, and the net against position weights and an MLP |
 
 The project is the small image classifier of the section table, in the style of CS231n's convolutional net assignment.
 
