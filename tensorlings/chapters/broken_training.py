@@ -13,6 +13,7 @@ from torch import Tensor
 from ..course import OPTIMIZER_IMPORTS, Chapter, Exercise
 from ..engine import Checker, Mismatch, expect_close, expect_parts
 from ..text import prose, source_file
+from .adaptive import pinned_threads
 from .linear_layers import expect_module
 from .names import CHARACTERS, ReferenceNamesMLP, context_sets, reference_contexts
 
@@ -93,6 +94,7 @@ def reference_train_names(
     Y: Tensor,
     steps: int,
     generator: torch.Generator,
+    batch_size: int = 32,
 ) -> None:
     optimizer = torch.optim.SGD(model.parameters(), lr=0.1)
     model.train()
@@ -101,7 +103,7 @@ def reference_train_names(
         for group in optimizer.param_groups:
             group["lr"] = 0.1 if step < steps * 3 // 4 else 0.01
 
-        batch = torch.randint(0, len(X), (32,), generator=generator)
+        batch = torch.randint(0, len(X), (batch_size,), generator=generator)
         loss = F.cross_entropy(model(X[batch]), Y[batch])
         optimizer.zero_grad()
         loss.backward()
@@ -441,16 +443,19 @@ BROKEN2_LESSON = prose(
     - the global gradient norm clipped at 1.0.
     - minibatches of 64, which halves the variance of each step's gradient, at twice the work per step.
 
+    Each row ran on three seeds.
+
     | Run | Batch | Steps | Validation loss |
     |---|---|---|---|
-    | names3, SGD with one drop | 32 | 10,000 | 2.217 |
-    | tuned, AdamW | 32 | 10,000 | 2.202 |
-    | tuned, AdamW | 64 | 10,000 | 2.170 |
+    | names3's loop, SGD with one drop | 32 | 10,000 | 2.217 to 2.219 |
+    | tuned, AdamW | 32 | 10,000 | 2.199 to 2.203 |
+    | names3's loop, SGD with one drop | 64 | 10,000 | 2.194 to 2.197 |
+    | tuned, AdamW | 64 | 5,000 | 2.195 to 2.198 |
+    | tuned, AdamW | 64 | 10,000 | 2.165 to 2.170 |
 
-    The tuned run beats names3 in the same number of steps. The larger batch
-    helps most, though each of its steps sees twice the examples. The gains
-    are small next to a slip, since names3 was already sound. That is why the
-    recipe's checks come before any tuning.
+    At each batch size the tuned run beats names3's loop on every seed. At
+    batch 64 it reaches in 5,000 steps what the loop needs 10,000 for, and
+    2.17 given all of them.
 
     The check trains your tuned run for 10,000 steps and needs it below 2.20.
     It takes a minute or two, so let it finish.
@@ -602,6 +607,7 @@ def reference_train_tuned(
     Y: Tensor,
     steps: int,
     generator: torch.Generator,
+    batch_size: int = 64,
 ) -> None:
     decayed = [parameter for parameter in model.parameters() if parameter.dim() >= 2]
     kept = [parameter for parameter in model.parameters() if parameter.dim() < 2]
@@ -612,7 +618,7 @@ def reference_train_tuned(
         for group in optimizer.param_groups:
             group["lr"] = reference_rate_at(step, 0.003, 200, steps)
 
-        batch = torch.randint(0, len(X), (64,), generator=generator)
+        batch = torch.randint(0, len(X), (batch_size,), generator=generator)
         loss = F.cross_entropy(model(X[batch]), Y[batch])
         optimizer.zero_grad()
         loss.backward()
@@ -721,3 +727,45 @@ BROKEN2 = Exercise(
     time_limit=300,
     imports_first=OPTIMIZER_IMPORTS,
 )
+
+
+# ---------------------------------------------------------------------------
+# The runs behind the lessons
+# ---------------------------------------------------------------------------
+
+# Each run is (which loop, batch size, steps). names3's loop is SGD at 0.1 with one drop to 0.01 for the last quarter.
+TUNED_RUNS: tuple[tuple[str, int, int], ...] = (
+    ("names3", 32, 10000),
+    ("tuned", 32, 10000),
+    ("names3", 64, 10000),
+    ("tuned", 64, 5000),
+    ("tuned", 64, 10000),
+)
+
+
+def measure_tuned(
+    runs: tuple[tuple[str, int, int], ...] = TUNED_RUNS,
+    seeds: tuple[int, ...] = (0, 1, 2),
+) -> dict[tuple[str, int, int], list[float]]:
+    """broken2's table: names3's loop against the tuned run at equal batch sizes. The validation loss per seed, each
+    run starting from names_model(seed) with minibatches drawn from a generator seeded seed + 1, as the check's."""
+    X, Y = context_sets()["train"]
+    results: dict[tuple[str, int, int], list[float]] = {}
+
+    with pinned_threads():
+        for loop, batch_size, steps in runs:
+            train = reference_train_names if loop == "names3" else reference_train_tuned
+
+            for seed in seeds:
+                model = names_model(seed)
+                train(
+                    model,
+                    X,
+                    Y,
+                    steps,
+                    torch.Generator().manual_seed(seed + 1),
+                    batch_size,
+                )
+                results.setdefault((loop, batch_size, steps), []).append(validation_loss_of(model))
+
+    return results

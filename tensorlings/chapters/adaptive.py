@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import contextlib
 import math
 import textwrap
+from collections.abc import Iterator
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch import Tensor
 
 from ..course import OPTIMIZER_IMPORTS, Chapter, Exercise
@@ -23,6 +26,7 @@ from ..engine import (
 )
 from ..text import prose, source_file
 from .initialization import expect_numbers, relative
+from .names import CHARACTERS, ReferenceNamesMLP, context_sets, name_splits, names_model, reference_contexts, reference_validation_loss
 from .sgd import check_optimizer_class
 
 ADAPTIVE = Chapter(
@@ -42,6 +46,7 @@ ADAPTIVE = Chapter(
 
         - [Kingma and Ba, Adam](https://arxiv.org/abs/1412.6980)
         - [Loshchilov and Hutter, decoupled weight decay regularization](https://arxiv.org/abs/1711.05101)
+        - [Zhang and others, which algorithmic choices matter at which batch sizes](https://arxiv.org/abs/1907.04164)
         - [Hinton, Coursera lecture 6e, RMSProp](https://www.cs.toronto.edu/~tijmen/csc321/slides/lecture_slides_lec6.pdf)
         - [Ruder, an overview of gradient descent optimization algorithms](https://www.ruder.io/optimizing-gradient-descent/)
         """,
@@ -769,7 +774,10 @@ ADAMW1_LESSON = prose(
     torch.optim.AdamW(params, lr=0.001, weight_decay=0.01)    # decay on the weight, decoupled
     ```
 
-    They found AdamW generalizes better. Their own version leaves Adam's
+    Their paper found that decoupling the decay improved Adam's
+    generalization enough to compete with SGD and momentum on image
+    classification. adamw2 shows it on the names model. Their own version
+    leaves Adam's
     learning rate out of the shrink, so the best decay stays put when the
     rate changes. With PyTorch's, the product `lr * weight_decay` is what
     matters, so a new rate can call for a new decay. AdamW is the default for
@@ -956,23 +964,36 @@ ADAMW1 = Exercise(
 ADAMW2_LESSON = prose(
     """
     Here the names model trained for 5000 steps at a learning rate that never
-    changed. Each optimizer ran at four or five rates, and the table gives its
-    best.
+    changed. Each optimizer ran at three rates on two seeds, and the table
+    gives its best.
 
     | Optimizer | Best rate | Validation loss |
     |---|---|---|
-    | SGD | 0.1 | 2.301 |
-    | SGD, momentum 0.9 | 0.01 | 2.305 |
-    | Adam | 0.001 | 2.276 |
-    | AdamW, decay 0.01 | 0.001 | 2.278 |
+    | SGD | 0.1 | 2.301 to 2.304 |
+    | SGD, momentum 0.9 | 0.01 | 2.305 to 2.307 |
+    | Adam | 0.001 | 2.269 to 2.276 |
 
     The best rates sit 10 times apart. Momentum's velocity builds to 10 times
     the gradient, so its rate comes out 10 times smaller. Adam's steps are
     about the rate itself, whatever the gradient, so its rate is a distance in
     the weights' own units.
 
-    AdamW did no better than Adam here. Decay has little to do in 5000 steps
-    of a small model, and its gain shows on longer runs.
+    Momentum matched plain SGD at these batches of 32. Zhang and others found
+    the same in 2019: momentum gives no benefit at small batch sizes, and it
+    speeds training up at large ones.
+
+    Weight decay needs a model with room to memorize. So here a wider names
+    model, with embeddings of 24 and 1000 hidden units, trained on the first
+    2,000 names alone. It ran at 0.001 for 5000 steps on three seeds.
+
+    | Optimizer | Training loss | Validation loss |
+    |---|---|---|
+    | Adam | 1.975 to 1.990 | 2.383 to 2.412 |
+    | AdamW, decay 0.1 | 2.004 to 2.018 | 2.367 to 2.394 |
+    | AdamW, decay 0.3 | 2.052 to 2.073 | 2.343 to 2.372 |
+
+    On every seed, more decay gave up training loss and won more back on new
+    names, as Loshchilov and Hutter found.
 
     - AdamW: the default for language models and most new work, at rates from 0.0001 to 0.001 and weight decay from 0.01 to 0.1.
     - SGD with momentum 0.9: image models like ResNet, at a rate of 0.1 that a schedule lowers, with weight decay near 0.0001.
@@ -1171,3 +1192,127 @@ ADAMW2 = Exercise(
     check=check_adamw2,
     imports_first=OPTIMIZER_IMPORTS,
 )
+
+
+# ---------------------------------------------------------------------------
+# The runs behind the lessons
+# ---------------------------------------------------------------------------
+
+
+@contextlib.contextmanager
+def pinned_threads() -> Iterator[None]:
+    """CPU results move in the third decimal with the thread count, so every measurement runs on 4."""
+    before = torch.get_num_threads()
+    torch.set_num_threads(4)
+
+    try:
+        yield
+    finally:
+        torch.set_num_threads(before)
+
+
+def train_names_rows(
+    model: nn.Module,
+    optimizer: torch.optim.Optimizer,
+    X: Tensor,
+    Y: Tensor,
+    steps: int,
+    generator: torch.Generator,
+) -> None:
+    model.train()
+
+    for _ in range(steps):
+        rows = torch.randint(0, len(X), (32,), generator=generator)
+        loss = F.cross_entropy(model(X[rows]), Y[rows])
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+
+BEST_RATE_GRID: dict[str, tuple[float, ...]] = {
+    "SGD": (0.03, 0.1, 0.3),
+    "SGD, momentum 0.9": (0.003, 0.01, 0.03),
+    "Adam": (0.0003, 0.001, 0.003),
+}
+
+
+def optimizer_named(
+    name: str,
+    parameters: list[nn.Parameter],
+    lr: float,
+) -> torch.optim.Optimizer:
+    if name == "SGD":
+        return torch.optim.SGD(parameters, lr=lr)
+
+    if name == "SGD, momentum 0.9":
+        return torch.optim.SGD(parameters, lr=lr, momentum=0.9)
+
+    return torch.optim.Adam(parameters, lr=lr)
+
+
+def measure_best_rates(seeds: tuple[int, ...] = (0, 1)) -> dict[tuple[str, float], list[float]]:
+    """adamw2's first table: the names model for 5000 steps at batch 32 and a fixed rate, each optimizer at each rate of
+    its grid. The validation loss per seed."""
+    X, Y = context_sets()["train"]
+    validation_x, validation_y = context_sets()["validation"]
+    results: dict[tuple[str, float], list[float]] = {}
+
+    with pinned_threads():
+        for name, rates in BEST_RATE_GRID.items():
+            for rate in rates:
+                for seed in seeds:
+                    model = names_model(seed)
+                    train_names_rows(
+                        model=model,
+                        optimizer=optimizer_named(name, list(model.parameters()), rate),
+                        X=X,
+                        Y=Y,
+                        steps=5000,
+                        generator=torch.Generator().manual_seed(seed + 1),
+                    )
+                    results.setdefault((name, rate), []).append(reference_validation_loss(model, validation_x, validation_y))
+
+    return results
+
+
+# Few enough names that a wide model overfits them, so weight decay has work to do.
+DECAY_NAMES = 2000
+
+
+def measure_decay(seeds: tuple[int, ...] = (0, 1, 2)) -> dict[str, list[tuple[float, float]]]:
+    """adamw2's second table: a names model with embeddings of 24 and 1000 hidden units on the first 2,000 training
+    names, for 5000 steps at batch 32 and a rate of 0.001. Adam against AdamW, the training then the validation loss
+    per seed."""
+    names = list(name_splits()["train"])[:DECAY_NAMES]
+    X, Y = reference_contexts(names, CHARACTERS, 3)
+    validation_x, validation_y = context_sets()["validation"]
+    results: dict[str, list[tuple[float, float]]] = {}
+
+    with pinned_threads():
+        for label, decay in (("Adam", 0.0), ("AdamW, decay 0.1", 0.1), ("AdamW, decay 0.3", 0.3)):
+            for seed in seeds:
+                torch.manual_seed(seed)
+                model = ReferenceNamesMLP(27, 24, 3, 1000)
+                decayed = [parameter for parameter in model.parameters() if parameter.dim() >= 2]
+                kept = [parameter for parameter in model.parameters() if parameter.dim() < 2]
+                optimizer = (
+                    torch.optim.Adam(model.parameters(), lr=0.001)
+                    if decay == 0.0
+                    else torch.optim.AdamW([{"params": decayed, "weight_decay": decay}, {"params": kept, "weight_decay": 0.0}], lr=0.001)
+                )
+                train_names_rows(
+                    model=model,
+                    optimizer=optimizer,
+                    X=X,
+                    Y=Y,
+                    steps=5000,
+                    generator=torch.Generator().manual_seed(seed + 1),
+                )
+                results.setdefault(label, []).append(
+                    (
+                        reference_validation_loss(model, X, Y),
+                        reference_validation_loss(model, validation_x, validation_y),
+                    ),
+                )
+
+    return results

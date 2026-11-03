@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 
 import torch
 import torch.nn as nn
@@ -19,8 +20,10 @@ from ..engine import (
     expect_value,
 )
 from ..text import prose, source_file
+from .adaptive import pinned_threads
 from .dropout import labelled_points
 from .initialization import expect_numbers, relative
+from .names import context_sets, names_model, reference_validation_loss
 
 SCHEDULES = Chapter(
     folder="26_schedules",
@@ -37,6 +40,7 @@ SCHEDULES = Chapter(
         ## Further reading
 
         - [Loshchilov and Hutter, SGDR, cosine decay](https://arxiv.org/abs/1608.03983)
+        - [Hägele and others, a constant rate with a cooldown against cosine](https://arxiv.org/abs/2405.18392)
         - [Goyal and others, large minibatch SGD, warmup](https://arxiv.org/abs/1706.02677)
         - [Smith, cyclical learning rates, the range test](https://arxiv.org/abs/1506.01186)
         - [PyTorch, how to adjust the learning rate](https://docs.pytorch.org/docs/2.14/optim.html#how-to-adjust-learning-rate)
@@ -101,17 +105,19 @@ SCHEDULE1_LESSON = prose(
     `total` the rate is the minimum plus `(base - minimum)` times
     `(1 + cos(pi * t / total)) / 2`.
 
-    Here the names model trained for 5000 steps, with each schedule. Step
-    decay divided the rate by 10 for the last quarter, and cosine went down
-    to 0.
+    Here the names model trained for 5000 steps with each schedule, on three
+    seeds. Step decay divided the rate by 10 for the last quarter, and cosine
+    went down to 0.
 
     | Optimizer | Constant | Step decay | Cosine |
     |---|---|---|---|
-    | SGD at 0.1 | 2.301 | 2.258 | 2.273 |
-    | Adam at 0.003 | 2.281 | 2.233 | 2.239 |
+    | SGD at 0.1 | 2.297 to 2.304 | 2.255 to 2.258 | 2.267 to 2.273 |
+    | Adam at 0.003 | 2.274 to 2.281 | 2.230 to 2.233 | 2.234 to 2.239 |
 
-    Lowering the rate at the end helped every time, by more than the choice
-    of optimizer did.
+    Lowering the rate at the end helped on every seed, by more than the choice
+    of optimizer did. The late drop matched cosine and edged past it. Hägele
+    and others found the same for language models in 2024: a constant rate
+    with a cooldown at the end scales the way cosine does.
 
     A scheduler from `torch.optim.lr_scheduler` changes the optimizer's rate
     each time its `.step()` runs, once per training step after
@@ -315,24 +321,24 @@ WARMUP1_LESSON = prose(
     raises the rate from near 0 to its base over the first few hundred steps,
     and then the schedule takes over.
 
-    Here a deeper names model, eight post norm blocks like residual4's,
-    trained with Adam for 2000 steps. The 0.01 rows ran on three seeds.
+    Here a deeper names model, sixteen post norm blocks like residual4's,
+    trained with Adam for 1500 steps at batch 64. The rate fell along a
+    cosine to 0, and every row ran on two seeds.
 
     | Rate | Warmup | Validation loss |
     |---|---|---|
-    | 0.003 | none | 2.310 |
-    | 0.003 | 200 steps | 2.312 |
-    | 0.01 | none | 2.76 to 2.83 |
-    | 0.01 | 200 steps | 2.36 to 2.37 |
+    | 0.001 | none | 2.217 to 2.226 |
+    | 0.003 | none | 2.820 to 2.821 |
+    | 0.001 | 500 steps | 2.220 to 2.222 |
+    | 0.003 | 500 steps | 2.233 to 2.235 |
 
-    At 0.003, warmup changed nothing. At 0.01 the runs without it fell faster
-    for the first steps, then stuck near 2.8, worse than the bigram. With
-    warmup, all three reached about 2.37. So warmup makes a larger rate safe,
-    and post norm models need it most, as Xiong and others found. Here 0.01
-    with warmup still lost to 0.003, with or without it. Warmup matters when
-    a larger rate is needed, as with big batches.
+    Without warmup, 0.003 ended at 2.82 on both seeds, worse than the
+    bigram's 2.465. With 500 steps of warmup the same rate trained to 2.23,
+    beside 0.001's loss. So warmup makes a three times larger rate safe, and
+    post norm models need it most, as Xiong and others found.
 
-    Goyal and others warmed up for 5 epochs to train ResNet with huge batches.
+    Large batches call for large rates, so they need warmup too. Goyal and
+    others warmed up for 5 epochs to train ResNet with huge batches.
     nanoGPT warms up for 2000 of its 600,000 steps by default, and for 100 in
     its Shakespeare character config. Then it decays along a cosine to a tenth
     of the base rate.
@@ -596,13 +602,14 @@ SCHEDULE2_LESSON = prose(
     | Loss | 3.29 | 3.23 | 2.64 | 2.42 | 2.45 | 3.01 | 13.1 | 99.9 |
 
     One step per rate makes the losses noisy. So they get a running average
-    first, corrected at the start the way Adam's hats are. The smoothed loss
-    was lowest near 0.0095 and doubled past 0.33.
+    with beta 0.9 first, corrected at the start the way Adam's hats are. The
+    smoothed loss was lowest near 0.0095 and doubled past 0.33.
 
     The usual rule picks a tenth of the lowest point, about 0.001 here, the
-    rate adamw2's sweep found best. On a second seed the lowest point came out
-    at 0.026, a tenth of it 0.0026, still a good rate. The test gives a place
-    to start, for 300 steps instead of a sweep of full runs.
+    rate adamw2's sweep found best. Over five seeds the picks ran from 0.00095
+    to 0.0020. Adam trained at each pick for 5000 steps reached 2.265 to
+    2.277, as low as the best rate of adamw2's sweep. So 300 steps stand in
+    for a sweep of full runs.
 
     The rates are `start * (end / start) ** (k / (count - 1))` for `k` from 0
     to `count - 1`, spread evenly on a log scale.
@@ -845,3 +852,197 @@ SCHEDULE2 = Exercise(
     check=check_schedule2,
     imports_first=OPTIMIZER_IMPORTS,
 )
+
+
+# ---------------------------------------------------------------------------
+# The runs behind the lessons
+# ---------------------------------------------------------------------------
+
+
+def train_names_on_schedule(
+    model: nn.Module,
+    optimizer: torch.optim.Optimizer,
+    rate_at: Callable[[int], float],
+    steps: int,
+    batch: int,
+    generator: torch.Generator,
+) -> None:
+    X, Y = context_sets()["train"]
+    model.train()
+
+    for step in range(steps):
+        for group in optimizer.param_groups:
+            group["lr"] = rate_at(step)
+
+        rows = torch.randint(0, len(X), (batch,), generator=generator)
+        loss = F.cross_entropy(model(X[rows]), Y[rows])
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+
+def names_validation(model: nn.Module) -> float:
+    validation_x, validation_y = context_sets()["validation"]
+
+    return reference_validation_loss(model, validation_x, validation_y)
+
+
+SCHEDULE_STEPS = 5000
+
+
+def schedule_rate(
+    schedule: str,
+    base: float,
+    step: int,
+) -> float:
+    if schedule == "constant":
+        return base
+
+    if schedule == "step":
+        return base if step < SCHEDULE_STEPS * 3 // 4 else base / 10
+
+    return reference_cosine_rate(base, step, SCHEDULE_STEPS, 0.0)
+
+
+def measure_schedules(seeds: tuple[int, ...] = (0, 1, 2)) -> dict[tuple[str, str], list[float]]:
+    """schedule1's table: the names model for 5000 steps at batch 32, each optimizer under each schedule. Step decay
+    divides the rate by 10 for the last quarter, and cosine goes down to 0. The validation loss per seed."""
+    results: dict[tuple[str, str], list[float]] = {}
+
+    with pinned_threads():
+        for name, make, base in (("SGD at 0.1", torch.optim.SGD, 0.1), ("Adam at 0.003", torch.optim.Adam, 0.003)):
+            for schedule in ("constant", "step", "cosine"):
+                for seed in seeds:
+                    model = names_model(seed)
+                    train_names_on_schedule(
+                        model=model,
+                        optimizer=make(model.parameters(), lr=base),
+                        rate_at=lambda step: schedule_rate(schedule, base, step),
+                        steps=SCHEDULE_STEPS,
+                        batch=32,
+                        generator=torch.Generator().manual_seed(seed + 1),
+                    )
+                    results.setdefault((name, schedule), []).append(names_validation(model))
+
+    return results
+
+
+class PostNormBlock(nn.Module):
+    """residual4's post norm block, the norm of x plus an MLP of x, where Vaswani and others put the norm."""
+
+    def __init__(self, width: int) -> None:
+        super().__init__()
+        self.up = nn.Linear(width, width)
+        self.down = nn.Linear(width, width)
+        self.norm = nn.LayerNorm(width)
+
+    def forward(self, x: Tensor) -> Tensor:
+        return self.norm(x + self.down(torch.relu(self.up(x))))
+
+
+class DeepNamesModel(nn.Module):
+    """names2's model with post norm blocks between its hidden layer and its head."""
+
+    def __init__(self, blocks: int) -> None:
+        super().__init__()
+        self.embedding = nn.Embedding(27, 10)
+        self.hidden = nn.Linear(30, 200)
+        self.norm = nn.LayerNorm(200)
+        self.blocks = nn.ModuleList([PostNormBlock(200) for _ in range(blocks)])
+        self.head = nn.Linear(200, 27)
+
+        with torch.no_grad():
+            self.head.weight *= 0.1
+            self.head.bias.zero_()
+
+    def forward(self, x: Tensor) -> Tensor:
+        hidden = torch.tanh(self.norm(self.hidden(self.embedding(x).reshape(len(x), -1))))
+
+        for block in self.blocks:
+            hidden = block(hidden)
+
+        return self.head(hidden)
+
+
+WARMUP_BLOCKS = 16
+WARMUP_STEPS = 1500
+
+
+def measure_warmup(
+    runs: tuple[tuple[float, int], ...] = ((0.001, 0), (0.003, 0), (0.001, 500), (0.003, 500)),
+    seeds: tuple[int, ...] = (0, 1),
+) -> dict[tuple[float, int], list[float]]:
+    """warmup1's table: 16 post norm blocks trained with Adam for 1500 steps at batch 64, the rate falling along a
+    cosine to 0, with and without a warmup. Each run is a (rate, warmup steps) pair. The validation loss per seed."""
+    results: dict[tuple[float, int], list[float]] = {}
+
+    with pinned_threads():
+        for base, warmup in runs:
+            for seed in seeds:
+                torch.manual_seed(seed)
+                model = DeepNamesModel(WARMUP_BLOCKS)
+                train_names_on_schedule(
+                    model=model,
+                    optimizer=torch.optim.Adam(model.parameters(), lr=base),
+                    rate_at=lambda step: reference_warmup_cosine(base, step, warmup, WARMUP_STEPS, 0.0),
+                    steps=WARMUP_STEPS,
+                    batch=64,
+                    generator=torch.Generator().manual_seed(seed + 1),
+                )
+                results.setdefault((base, warmup), []).append(names_validation(model))
+
+    return results
+
+
+RANGE_STEPS = 300
+
+# A heavier average, such as fast.ai's 0.98, lags the losses by tens of steps over a climb of only 300, so its
+# lowest point lands at a rate several times too high.
+RANGE_BETA = 0.9
+
+# The steps whose losses schedule2's table shows, spread from the smallest rate to past the blowup.
+RANGE_POINTS = (0, 60, 120, 165, 225, 255, 270, 285)
+
+
+def measure_range_tests(seeds: tuple[int, ...] = (0, 1, 2, 3, 4)) -> list[dict[str, object]]:
+    """schedule2's runs: per seed, a range test of 300 Adam steps on the names model with the rate climbing from
+    0.00001 to 1 at batch 256, smoothed with RANGE_BETA. Then the rate it picks, and the validation loss of Adam
+    trained at that rate for 5000 steps at batch 32."""
+    X, Y = context_sets()["train"]
+    rates = [0.00001 * (1.0 / 0.00001) ** (k / (RANGE_STEPS - 1)) for k in range(RANGE_STEPS)]
+    results: list[dict[str, object]] = []
+
+    with pinned_threads():
+        for seed in seeds:
+            losses = reference_range_test(
+                names_model(seed),
+                X,
+                Y,
+                rates,
+                torch.Generator().manual_seed(seed + 1),
+            )
+            smoothed = reference_smooth(losses, RANGE_BETA)
+            bottom = smoothed.index(min(smoothed))
+            doubled = next((k for k in range(bottom, RANGE_STEPS) if smoothed[k] > 2 * smoothed[bottom]), None)
+            pick = rates[bottom] / 10
+            model = names_model(seed)
+            train_names_on_schedule(
+                model=model,
+                optimizer=torch.optim.Adam(model.parameters(), lr=pick),
+                rate_at=lambda step: pick,
+                steps=SCHEDULE_STEPS,
+                batch=32,
+                generator=torch.Generator().manual_seed(seed + 1),
+            )
+            results.append(
+                {
+                    "rates": [rates[k] for k in RANGE_POINTS],
+                    "losses": [losses[k] for k in RANGE_POINTS],
+                    "lowest": rates[bottom],
+                    "doubled": None if doubled is None else rates[doubled],
+                    "pick": pick,
+                    "trained": names_validation(model),
+                },
+            )
+
+    return results
