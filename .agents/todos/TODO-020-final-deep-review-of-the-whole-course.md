@@ -21,7 +21,7 @@ The owner asked for one last deep review with research before they start, "so I 
 | 1 | Review and fix 01_tensors to 06_tensor_backprop, with quiz1 and quiz2 | | owner | done |
 | 2 | Review and fix 07_micrograd to 12_likelihood | | owner | done |
 | 3 | Review and fix 13_generalization to 16_activations, with quiz3 | | owner | done |
-| 4 | Review and fix 17_mlp to 19_initialization | | owner | pending |
+| 4 | Review and fix 17_mlp to 19_initialization | | owner | done |
 | 5 | Review and fix 20_dropout to 22_residuals, with quiz4 and quiz5 | | owner | pending |
 | 6 | Review and fix 23_names to 26_schedules | | owner | pending |
 | 7 | Review and fix 27_clipping to 29_broken_training, with quiz6 | | owner | pending |
