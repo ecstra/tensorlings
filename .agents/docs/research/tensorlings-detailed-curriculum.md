@@ -254,7 +254,7 @@ The project follows Zaremba and Sutskever's learning to execute and the Keras ad
 | | rope2 | why, RoPE scores that depend only on the distance between positions |
 | 53_transformer_block | block1 | the block, pre norm attention and a pre norm MLP, each with a residual, mixing across positions then within each |
 | | block2 | the GPT-2 block with LayerNorm and a GELU MLP four times as wide |
-| | block3 | why each part, removing one at a time on a toy task |
+| | block3 | why each part, removing one at a time on Shakespeare's characters at two rates |
 | | induction1 | why stacking, copying the token that followed an earlier match, which one attention layer can't do and a shift then attention can |
 | 54_model_types | encoder1 | encoder only, decoder only and encoder decoder models, and the masks that set them apart |
 | | decoder1 | a decoder only language model with shifted targets, end to end |
