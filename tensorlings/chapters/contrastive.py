@@ -240,7 +240,7 @@ reference_nt_xent = REFERENCE["nt_xent"]
 @functools.cache
 def contrastive_sets() -> dict[str, Tensor]:
     """The MNIST images the lessons measure on, 20,000 to train on without labels, 5,000 with labels to look
-    neighbors up in, and 2,000 validation images, centered and moved by up to 4 pixels."""
+    neighbours up in, and 2,000 validation images, centered and moved by up to 4 pixels."""
     sets = mnist_images()
     test = sets["validation_x"][:2000]
 
@@ -285,7 +285,7 @@ class LightModel(nn.Module):
 MOVED_BAR = 0.5
 
 
-def neighbor_scores(model: nn.Module | None) -> tuple[float, float]:
+def neighbour_scores(model: nn.Module | None) -> tuple[float, float]:
     """kNN accuracy on centered and on moved validation digits, of model's features or of raw pixels when None."""
     sets = contrastive_sets()
     knn = REFERENCE["knn_accuracy"]
@@ -504,26 +504,33 @@ CONTRASTIVE2_LESSON = prose(
     than 10%, and that the features before the head serve best afterwards.
 
     To see what the encoder learned, each validation digit gets a kNN guess.
-    That is the label most common among its 10 nearest labeled digits, by
+    That is the label most common among its 10 nearest labelled digits, by
     cosine of their features before the head. The digits are tested
     centered, and moved by up to 4 pixels.
 
-    The temperature decides how the push is shared among the made up pairs.
-    A low one sharpens the softmax onto the made up pairs that look most like
-    the real one. Here are 1,500 steps of 256 digits at four temperatures,
-    with the hardest made up pair's share of the push. An even share would
-    be 0.4%.
+    The loss pushes each made up pair away in proportion to its weight in the
+    softmax. The temperature decides how that push is shared out. A low one
+    sharpens the softmax onto the made up pairs that look most like the real
+    one. A high one spreads the push evenly over all 255.
+
+    Here are 1,500 steps of 256 digits at four temperatures, each on 3 seeds.
+    The share is the hardest made up pair's part of the push, where an even
+    share would be 0.39%.
 
     | Temperature | Hardest pair's share | Centered digits right | Moved digits right |
     |---|---|---|---|
-    | 0.05 | 53.2% | 95.3% | 94.3% |
-    | 0.1 | 30.2% | 95.4% | 95.4% |
-    | 0.5 | 2.0% | 95.5% | 94.9% |
-    | 1 | 0.9% | 95.7% | 94.9% |
+    | 0.01 | 68% to 76% | 95.3% to 95.8% | 93.8% to 94.6% |
+    | 0.1 | 30% to 32% | 94.9% to 95.4% | 94.2% to 95.4% |
+    | 1 | 0.93% | 95.2% to 95.7% | 94.0% to 95.2% |
+    | 10 | 0.43% | 92.5% to 93.8% | 90.8% to 91.3% |
 
-    Every temperature here learned features that beat raw pixels on both
-    tests, as contrastive3 measures. On ImageNet, SimCLR found 0.1 learned
-    best, 64.4% against 59.7% at 0.05, 60.7% at 0.5 and 58.0% at 1.
+    Leaning the push on the hard pairs is what makes the features good, and
+    anywhere from 0.01 to 1 does it here. At 10 the push is nearly even. On
+    each seed it scores 1.4 to 3.3 points below the other three on centered
+    digits, and 3.0 to 4.1 below on moved ones. Centered, it even falls below
+    the 93.9% of raw pixels that contrastive3 measures. SimCLR explains its
+    temperature the same way, as what lets the model learn from the hard made
+    up pairs.
 
     `torch.randn` takes a generator as `randint` does, so each view's noise is
     drawn the same way on every run.
@@ -558,9 +565,9 @@ CONTRASTIVE2_SOURCE = source_file(
 ''' + indented(ENCODER_PART) + '''
 
 
-    # TODO: Return two views of images. Each is random_affine of images, plus
-    #   noise times torch.randn of their shape, drawn with generator. Draw the
-    #   whole first view, then the whole second.
+    # TODO: Return two views of images. For each view, first call random_affine
+    #   on images, then add noise times torch.randn of their shape, drawn with
+    #   generator. Make the whole first view, then the whole second.
     def two_views(
         images: Tensor,
         generator: torch.Generator,
@@ -636,11 +643,21 @@ def expect_two_views(
         raise Mismatch(f"{call} should give the two views as two tensors in a tuple.")
 
     for name, part, wanted in zip(("first", "second"), actual, expected):
-        expect_tensor(
-            call=f"the {name} view of {call}",
-            actual=part,
-            expected=wanted,
-        )
+        try:
+            expect_tensor(
+                call=f"the {name} view of {call}",
+                actual=part,
+                expected=wanted,
+            )
+        except Mismatch as mismatch:
+            if not isinstance(part, Tensor) or part.shape != wanted.shape:
+                raise
+
+            # The same sums drawn in another order give other numbers, which the plain message never says.
+            raise Mismatch(
+                f"{mismatch}\nEvery draw comes from one generator, so the order counts. Call random_affine first, then "
+                "torch.randn, and make the whole first view before the second.",
+            ) from None
 
 
 def check_train_steps(found: object) -> None:
@@ -671,7 +688,7 @@ def check_learns_shifts(found: object) -> None:
     torch.manual_seed(0)
     model = LightModel()
     found(model, contrastive_sets()["train_x"], 150, 0.1, torch.Generator().manual_seed(0))
-    _, moved = neighbor_scores(model.encoder)
+    _, moved = neighbour_scores(model.encoder)
 
     if moved < MOVED_BAR:
         raise Mismatch(
@@ -732,7 +749,7 @@ CONTRASTIVE3_LESSON = prose(
     """
     Here is what contrastive2's encoder learned with no labels at all, at a
     temperature of 0.1, next to what came before it. Each row is a kNN guess
-    from the 10 nearest of 5,000 labeled training digits, read from the
+    from the 10 nearest of 5,000 labelled training digits, read from the
     features before the head.
 
     | Features | Centered digits right | Moved digits right |
@@ -759,7 +776,7 @@ CONTRASTIVE3_LESSON = prose(
     after scaling every row to length 1, averaged over the features. On the
     head's output, which the loss reads, it is 0.122 for the InfoNCE run and
     under 0.0001 for the pulled one. The tiny differences left before the
-    head still sort neighbors a little on centered digits, but the moved
+    head still sort neighbours a little on centered digits, but the moved
     ones fall below raw pixels.
     """,
 )
@@ -839,7 +856,7 @@ CONTRASTIVE3_SOLUTION = source_file(
 )
 
 
-def labeled_features(
+def labelled_features(
     seed: int,
     count: int,
 ) -> tuple[Tensor, Tensor]:
@@ -852,12 +869,12 @@ def labeled_features(
 
 
 def check_contrastive3(checker: Checker) -> None:
-    bank, bank_labels = labeled_features(640, 40)
-    queries, query_labels = labeled_features(641, 25)
+    bank, bank_labels = labelled_features(640, 40)
+    queries, query_labels = labelled_features(641, 25)
     check_on_inputs(
         checker=checker,
         function="knn_accuracy",
-        description="gives the share of queries whose neighbors vote right",
+        description="gives the share of queries whose neighbours vote right",
         inputs=(
             (Described(bank, "40 rows of features"), Described(bank_labels, "their labels"), Described(queries, "25 queries"), Described(query_labels, "their labels"), 5),
             (Described(bank, "40 rows of features"), Described(bank_labels, "their labels"), Described(queries, "25 queries"), Described(query_labels, "their labels"), 1),
@@ -904,7 +921,7 @@ CONTRASTIVE3 = Exercise(
     source=CONTRASTIVE3_SOURCE,
     solution=CONTRASTIVE3_SOLUTION,
     hints={
-        "knn_accuracy": "similarity_matrix(queries, bank).topk(k, dim=1).indices gives each query's neighbors. Index "
+        "knn_accuracy": "similarity_matrix(queries, bank).topk(k, dim=1).indices gives each query's neighbours. Index "
         "bank_labels with them, take torch.mode over dim=1, and compare with query_labels.",
         "feature_spread": "F.normalize the rows, take .std(dim=0), then .mean() and .item().",
         "alignment_loss": "Normalize both, subtract, square, sum over dim=1, then take the mean.",
@@ -917,6 +934,9 @@ CONTRASTIVE3 = Exercise(
 # ---------------------------------------------------------------------------
 # The runs behind the lessons
 # ---------------------------------------------------------------------------
+
+# contrastive2's rows. From 0.05 to 1 the scores tie, so the table spans 0.01 to 10, where an even push shows its cost.
+TEMPERATURES = (0.01, 0.1, 1.0, 10.0)
 
 
 @contextlib.contextmanager
@@ -978,7 +998,7 @@ def measure_run(
         torch.manual_seed(seed)
         model = REFERENCE["WithHead"]()
         loss = train_on_device(model, steps, temperature, seed, pull_only)
-        centered, moved = neighbor_scores(model.encoder)
+        centered, moved = neighbour_scores(model.encoder)
         sample = contrastive_sets()["test_x"][:1000]
 
         with torch.no_grad():
@@ -1002,19 +1022,18 @@ def measure_run(
 
 
 def measure_contrastive() -> dict[str, object]:
-    """Every number in contrastive2's and contrastive3's tables: raw pixels, the untrained CNN, InfoNCE at a
-    temperature of 0.1 on seeds 0 to 2 and at 0.05, 0.5 and 1 on seed 0, and the pulling alone on seed 0."""
+    """Every number in contrastive2's and contrastive3's tables: raw pixels, the untrained CNN, InfoNCE at the
+    temperatures 0.01, 0.1, 1 and 10 on seeds 0 to 2, and the pulling alone on seed 0. Each run takes about 3
+    minutes on MPS."""
     with pinned_threads(4):
         results: dict[str, object] = {
-            "pixels": neighbor_scores(None),
-            "untrained": neighbor_scores(seeded_model().encoder),
+            "pixels": neighbour_scores(None),
+            "untrained": neighbour_scores(seeded_model().encoder),
         }
 
-    for seed in range(3):
-        results[f"0.1, seed {seed}"] = measure_run(0.1, seed)
-
-    for temperature in (0.05, 0.5, 1.0):
-        results[f"{temperature}, seed 0"] = measure_run(temperature, 0)
+    for temperature in TEMPERATURES:
+        for seed in range(3):
+            results[f"{temperature}, seed {seed}"] = measure_run(temperature, seed)
 
     results["pulling alone"] = measure_run(0.1, 0, pull_only=True)
 

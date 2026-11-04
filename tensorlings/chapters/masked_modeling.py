@@ -432,7 +432,7 @@ MAE_REFERENCE: dict[str, object] = {
 exec(MAE_PARTS, MAE_REFERENCE)
 
 
-def neighbor_fill_table() -> dict[float, tuple[float, float]]:
+def neighbour_fill_table() -> dict[float, tuple[float, float]]:
     """The run behind masked2's table: 1,000 CIFAR-10 test images in patches of 4 by 4. Each hidden patch is
     filled with the average of its visible neighbours above, below, left and right, or with the image's
     average visible patch when it has none. The result is that error over the error of filling every
@@ -458,10 +458,10 @@ def neighbor_fill_table() -> dict[float, tuple[float, float]]:
 
         average = shown.sum(dim=(1, 2), keepdim=True) / visible.sum(dim=(1, 2)).clamp(min=1).view(batch, 1, 1, 1, 1, 1)
         fill = torch.where(count.view(shape) > 0, total / count.clamp(min=1).view(shape), average)
-        neighbor_error = ((fill - grid) ** 2).mean(dim=(3, 4, 5))[hidden].mean()
+        neighbour_error = ((fill - grid) ** 2).mean(dim=(3, 4, 5))[hidden].mean()
         average_error = ((average.expand_as(grid) - grid) ** 2).mean(dim=(3, 4, 5))[hidden].mean()
         alone = ((count == 0) & hidden).float().sum() / hidden.float().sum()
-        table[ratio] = ((neighbor_error / average_error).item(), alone.item())
+        table[ratio] = ((neighbour_error / average_error).item(), alone.item())
 
     return table
 

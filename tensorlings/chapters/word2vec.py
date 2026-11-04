@@ -119,9 +119,9 @@ WORD2VEC1_LESSON = prose(
     the words seen at least `min_count` times, most common first. Tiny
     Shakespeare has 208,503 words, 11,455 of them different. 3,225 appear 5
     times or more, and they make up 93.4% of the text. The rest are dropped
-    before pairing, so their neighbors close up.
+    before pairing, so their neighbours close up.
 
-    A **skip gram** pair is a word and one of its neighbors, up to `window`
+    A **skip gram** pair is a word and one of its neighbours, up to `window`
     places away on either side. word2vec2 trains a model to tell such real
     pairs from made up ones. With a window of 1, "to be or not" gives these.
 
@@ -165,9 +165,9 @@ WORD2VEC1_SOURCE = source_file(
 
 
     # TODO: Return every skip gram pair of ids as a tensor of shape (pairs, 2),
-    #   the center first and its neighbor second. Each center pairs with every
+    #   the center first and its neighbour second. Each center pairs with every
     #   position up to window away on either side, itself left out. Go center by
-    #   center, and within a center from the leftmost neighbor to the rightmost.
+    #   center, and within a center from the leftmost neighbour to the rightmost.
     def skipgram_pairs(
         ids: list[int],
         window: int,
@@ -216,7 +216,7 @@ WORD2VEC1_SOLUTION = source_file(
                 if context != center:
                     pairs.append((ids[center], ids[context]))
 
-        return torch.tensor(pairs)
+        return torch.tensor(pairs, dtype=torch.long).view(-1, 2)
     ''',
 )
 
@@ -263,7 +263,7 @@ def check_word2vec1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="skipgram_pairs",
-        description="pairs each id with its neighbors within the window",
+        description="pairs each id with its neighbours within the window",
         inputs=(
             ([4, 7, 2, 9], 1),
             ([3, 1, 4, 1, 5, 9], 2),
@@ -277,7 +277,7 @@ def check_word2vec1(checker: Checker) -> None:
 WORD2VEC1 = Exercise(
     name="word2vec1",
     chapter=WORD2VEC,
-    title="Words and their neighbors",
+    title="Words and their neighbours",
     lesson=WORD2VEC1_LESSON,
     source=WORD2VEC1_SOURCE,
     solution=WORD2VEC1_SOLUTION,
@@ -285,7 +285,7 @@ WORD2VEC1 = Exercise(
         "words_of": "re.findall with the pattern r\"[a-z]+\" on text.lower().",
         "vocabulary": "Count the words with Counter and keep those seen min_count times or more. Sort them with a "
         "key of (minus the count, the word).",
-        "skipgram_pairs": "For each center, loop the neighbor from max(0, center - window) up to min(len(ids), "
+        "skipgram_pairs": "For each center, loop the neighbour from max(0, center - window) up to min(len(ids), "
         "center + window + 1). Skip the center itself, append each pair of ids, and pass the list to torch.tensor.",
     },
     introduces=(),
@@ -382,12 +382,12 @@ def train_skipgram(
 
 WORD2VEC2_LESSON = prose(
     """
-    word2vec could predict each neighbor with a softmax over all 3,225
+    word2vec could predict each neighbour with a softmax over all 3,225
     words, but that scores every word for every pair. **Negative sampling**
     asks a cheaper question instead, whether a pair is real.
 
     The model keeps two tables, like derive2's keys and queries. A word's row
-    as a center is `c`, and its row as a neighbor is `o`. Their dot product
+    as a center is `c`, and its row as a neighbour is `o`. Their dot product
     scores the pair, and a sigmoid turns the score into a chance it is real.
     Each real pair comes with k made up ones, the same center with words drawn
     at random. The loss for one real pair is this.
@@ -409,9 +409,10 @@ WORD2VEC2_LESSON = prose(
     draws. The rarer words get drawn more often than their counts alone
     would give.
 
-    At the start the neighbor table is all zeros, so every score is 0. With 5
+    At the start the neighbour table is all zeros, so every score is 0. With 5
     made up words the loss is then 6 log 2, about 4.16. Training 3,000 steps of
-    1,024 pairs brings it to about 2.29, in seconds on a quiet machine.
+    1,024 pairs brings it to about 2.29. On a laptop's CPU, with 4 threads
+    and other work running, that took 40 to 51 seconds.
 
     After training, the center table holds the word vectors. word2vec3 looks
     inside them.
@@ -431,7 +432,7 @@ WORD2VEC2_SOURCE = source_file(
     rows = torch.ones(2, 5, 3) @ torch.ones(2, 3, 1)       # shape (2, 5, 1), one dot product per made up row
 
 
-    # TODO: Return the chance of drawing each word as a made up neighbor, its
+    # TODO: Return the chance of drawing each word as a made up neighbour, its
     #   count raised to the power 0.75, divided by the sum of them all.
     def noise_distribution(counts: Tensor) -> Tensor:
         ...
@@ -439,7 +440,7 @@ WORD2VEC2_SOURCE = source_file(
 
     # TODO: Return the mean over the batch of the negative sampling loss.
     #   centers and contexts have shape (batch, size), one real pair per row,
-    #   and negatives has shape (batch, k, size), the made up neighbors of each
+    #   and negatives has shape (batch, k, size), the made up neighbours of each
     #   center.
     def sgns_loss(
         centers: Tensor,
@@ -517,7 +518,7 @@ def check_skipgram_forward(found: type) -> None:
     model = expect_module("SkipGram(12, 4)", seeded_skipgram(found))
     reference = seeded_skipgram(ReferenceSkipGram)
 
-    # The given start leaves the neighbor table at zero, which would hide a mixed up lookup.
+    # The given start leaves the neighbour table at zero, which would hide a mixed up lookup.
     with torch.no_grad():
         for table in (model.contexts.weight, reference.contexts.weight):
             table.copy_(torch.randn(12, 4, generator=torch.Generator().manual_seed(601)))
@@ -531,7 +532,7 @@ def check_skipgram_forward(found: type) -> None:
         expected = reference(centers, contexts, negatives)
 
     expect_tensor(
-        call="SkipGram(12, 4) on 6 pairs with 3 made up neighbors each",
+        call="SkipGram(12, 4) on 6 pairs with 3 made up neighbours each",
         actual=model(centers, contexts, negatives),
         expected=expected,
     )
@@ -890,7 +891,8 @@ def family_shares(
     first = within_five = total = 0
 
     for (a, b), (c, d) in itertools.permutations(pairs, 2):
-        # she to her shares her with he to his, and an analogy whose answer is one of its own words can't land.
+        # Pairs that share a word, like he to his and he to him, would ask for an answer that analogy leaves out, so
+        # it could never land. No family here shares one, so this skips nothing today.
         if len({a, b, c, d}) < 4:
             continue
 

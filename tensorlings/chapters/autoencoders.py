@@ -769,27 +769,99 @@ def stretched_points(
     return (torch.randn(count, 8, generator=generator) * spreads) @ turn.T + 3.0
 
 
-def mnist_pca_run() -> tuple[float, float, float, float]:
-    """The run behind autoencoder3's numbers: a linear autoencoder with a code of 16 on 20,000 digits for
-    1,500 steps, its gap to PCA's 16 directions, a random basis's gap, the gap of pca_lowrank asked for
-    exactly 16, and how close its first column is to PCA's first direction."""
-    x = digit_rows("train_x", 20000)
-    torch.manual_seed(0)
-    model = SUBSPACE_REFERENCE["LinearAutoencoder"](784, 16)
-    SUBSPACE_REFERENCE["train_linear"](model, x, 1500, torch.Generator().manual_seed(0))
-    torch.manual_seed(0)
-    principal = SUBSPACE_REFERENCE["pca_basis"](x, 16)
-    _, _, exactly_sixteen = torch.pca_lowrank(x, q=16, center=True)
-    learned = model.decoder.weight.detach()
-    random_basis = torch.randn(784, 16, generator=torch.Generator().manual_seed(1))
-    first = F.cosine_similarity(learned[:, 0], principal[:, 0], dim=0).abs().item()
+def slowly_spread_points(
+    seed: int,
+    count: int,
+) -> Tensor:
+    """Points in 40 dimensions whose spreads fall slowly, from 4 down to 0.63, along random directions, and a shift.
+    In 8 dimensions pca_lowrank asked for 2k + 10 reads every column and is exact however it is run. Here one that
+    skips its refining lands 0.2 to 0.3 away, and one asked for exactly k lands 0.4 to 0.7 away."""
+    generator = torch.Generator().manual_seed(seed)
+    spreads = 4 / torch.arange(1, 41).float().sqrt()
+    turn, _ = torch.linalg.qr(torch.randn(40, 40, generator=generator))
 
-    return (
-        SUBSPACE_REFERENCE["subspace_gap"](learned, principal),
-        SUBSPACE_REFERENCE["subspace_gap"](random_basis, principal),
-        SUBSPACE_REFERENCE["subspace_gap"](exactly_sixteen, principal),
-        first,
-    )
+    return (torch.randn(count, 40, generator=generator) * spreads) @ turn.T + 3.0
+
+
+def exact_pca(
+    x: Tensor,
+    k: int,
+) -> Tensor:
+    _, _, rows = torch.linalg.svd(x - x.mean(dim=0), full_matrices=False)
+
+    return rows[:k].T
+
+
+def mnist_pca_runs(seeds: range = range(3)) -> dict[int, dict[str, float]]:
+    """The runs behind autoencoder3's numbers, for each seed, against PCA's exact 16 directions of 20,000 digits: a
+    linear autoencoder with a code of 16 trained 1,500 steps, 16 random directions, pca_lowrank asked for exactly 16,
+    pca_basis, and the cosine between the autoencoder's first column and PCA's first direction."""
+    threads = torch.get_num_threads()
+    torch.set_num_threads(4)
+
+    try:
+        x = digit_rows("train_x", 20000)
+        exact = exact_pca(x, 16)
+        gap = SUBSPACE_REFERENCE["subspace_gap"]
+        results = {}
+
+        for seed in seeds:
+            torch.manual_seed(seed)
+            model = SUBSPACE_REFERENCE["LinearAutoencoder"](784, 16)
+            SUBSPACE_REFERENCE["train_linear"](model, x, 1500, torch.Generator().manual_seed(seed))
+            learned = model.decoder.weight.detach()
+            torch.manual_seed(seed)
+            _, _, exactly_sixteen = torch.pca_lowrank(x, q=16, center=True)
+            torch.manual_seed(seed)
+            principal = SUBSPACE_REFERENCE["pca_basis"](x, 16)
+            random_basis = torch.randn(784, 16, generator=torch.Generator().manual_seed(seed + 1))
+            results[seed] = {
+                "autoencoder": gap(learned, exact),
+                "random": gap(random_basis, exact),
+                "exactly 16": gap(exactly_sixteen, exact),
+                "pca_basis": gap(principal, exact),
+                "first cosine": F.cosine_similarity(learned[:, 0], exact[:, 0], dim=0).abs().item(),
+            }
+
+        return results
+    finally:
+        torch.set_num_threads(threads)
+
+
+# The code sizes where autoencoder3 sets autoencoder1's model against PCA.
+SMALL_CODES = (2, 8, 32)
+
+
+def against_pca(seeds: range = range(3)) -> dict[int, tuple[list[float], float]]:
+    """autoencoder3's table: for each small code, autoencoder1's model trained as its table was, 1,500 steps on 20,000
+    digits, on each seed, and PCA with the same number of directions, rebuilding each digit as its projection onto
+    them plus the mean. Both are scored on the same 2,000 new digits."""
+    threads = torch.get_num_threads()
+    torch.set_num_threads(4)
+
+    try:
+        x = digit_rows("train_x", 20000)
+        new = digit_rows("validation_x", 2000)
+        mean = x.mean(dim=0)
+        results = {}
+
+        for code in SMALL_CODES:
+            torch.manual_seed(0)
+            basis = SUBSPACE_REFERENCE["pca_basis"](x, code)
+            rebuilt = (new - mean) @ basis @ basis.T + mean
+            errors = []
+
+            for seed in seeds:
+                torch.manual_seed(seed)
+                model = REFERENCE["Autoencoder"](code)
+                REFERENCE["train_autoencoder"](model, x, 1500, torch.Generator().manual_seed(seed))
+                errors.append(validation_error(model))
+
+            results[code] = (errors, F.mse_loss(rebuilt, new).item())
+
+        return results
+    finally:
+        torch.set_num_threads(threads)
 
 
 AUTOENCODER3_LESSON = prose(
@@ -825,21 +897,30 @@ AUTOENCODER3_LESSON = prose(
     same space and 1 for spaces at right angles.
 
     `torch.pca_lowrank(x, q=q, center=True)` gives PCA's first q directions
-    as the columns of its third result. It is a fast random method, and on
-    MNIST, asked for exactly 16 directions, it lands 0.30 from the true
-    space. Asked for 2k + 10 with 4 rounds of refining, `niter=4`, and cut
-    back to k, it lands on it.
+    as the columns of its third result. It is a fast random method. On MNIST,
+    asked for exactly 16 directions, it lands 0.30 to 0.38 from the true
+    space, depending on its draw. Asked for 2k + 10 with 4 rounds of
+    refining, `niter=4`, and cut back to k, it lands within 0.001.
 
     Here is a linear autoencoder with a code of 16, trained for 1,500 steps on
-    20,000 digits, against PCA's first 16 directions.
+    20,000 digits with 3 seeds, against PCA's first 16 directions.
 
-    - Its gap to PCA's space: 0.05.
+    - Its gap to PCA's space: 0.05 to 0.08.
     - The gap of 16 random directions to it: 0.99.
-    - The cosine between its first column and PCA's first direction: 0.52.
+    - The cosine between its first column and PCA's first direction: 0.01 to 0.52.
 
     So it found PCA's space, in a basis of its own. With activations, an
-    autoencoder can find curved shapes PCA can't, which is what made the deep
-    ones of Hinton and Salakhutdinov worth training.
+    autoencoder can find curved shapes PCA can't. PCA rebuilds a digit by
+    projecting it, less the average digit, onto its space and adding the
+    average back. Here are both on the same 2,000 new digits.
+
+    | Code size | 2 | 8 | 32 |
+    |---|---|---|---|
+    | Error of autoencoder1's model, 3 seeds | 0.048 to 0.049 | 0.026 | 0.014 |
+    | Error of PCA | 0.056 | 0.038 | 0.018 |
+
+    For a small code the curved fit's error is 13% to 33% lower. That is what
+    made the deep autoencoders of Hinton and Salakhutdinov worth training.
     """,
 )
 
@@ -916,17 +997,19 @@ AUTOENCODER3_SOLUTION = source_file(
 
 def check_pca_basis(found: object) -> None:
     for seed, k in ((480, 2), (481, 3)):
-        x = stretched_points(seed, 400)
+        x = slowly_spread_points(seed, 400)
         actual = found(x, k)
 
-        if not isinstance(actual, Tensor) or tuple(actual.shape) != (8, k):
-            raise Mismatch(f"pca_basis of 400 points in 8 dimensions, k={k}, should give 8 rows of {k} columns.")
+        if not isinstance(actual, Tensor) or tuple(actual.shape) != (40, k):
+            raise Mismatch(f"pca_basis of 400 points in 40 dimensions, k={k}, should give 40 rows of {k} columns.")
 
-        _, _, exact = torch.linalg.svd(x - x.mean(dim=0), full_matrices=False)
-        gap = SUBSPACE_REFERENCE["subspace_gap"](actual, exact[:k].T)
+        gap = SUBSPACE_REFERENCE["subspace_gap"](actual, exact_pca(x, k))
 
         if gap > 0.01:
-            raise Mismatch(f"pca_basis(x, {k}) spans a space {gap:.3f} away from PCA's first {k} directions.")
+            raise Mismatch(
+                f"pca_basis of 400 points in 40 dimensions, k={k}, spans a space {gap:.3f} away from PCA's first {k} "
+                "directions. The random method needs the extra directions and the 4 rounds of refining the TODO asks for.",
+            )
 
 
 def check_matches_pca(found: object) -> None:
@@ -1030,12 +1113,12 @@ QUIZ11_LESSON = prose(
 
     | Function | Moves | Shown in |
     |---|---|---|
-    | `skipgram_pairs` | every word paired with each neighbour inside the window | word2vec1 |
-    | `sgns_loss` | the log sigmoid of the real pair's score, plus that of each negative's score turned negative | word2vec2 |
-    | `nearest` | the k rows closest to one row by cosine similarity, leaving the row itself out | word2vec3 |
-    | `info_nce` | cosine scores over a temperature, each row's partner as the right class | contrastive1 |
-    | `masked_loss` | cross entropy at the chosen positions alone | masked1 |
-    | `subspace_gap` | the norm of the difference of two projections, each from a QR basis, over the square root of 2k | autoencoder3 |
+    | `vocabulary_pairs` | the common words kept as a vocabulary, each turned into its place in it, then every id paired with its neighbours | word2vec1 |
+    | `skipgram_loss` | rows looked up in two tables by id, then the negative sampling loss of the real and made up pairs | embedding1, word2vec2 |
+    | `nearest` | every row and the chosen one scaled to length 1, their cosines, and the k closest with the row itself left out | word2vec3 |
+    | `info_nce` | the cosine of every pair of rows over a temperature, then cross entropy with each row's partner as the right class | contrastive1 |
+    | `masked_loss` | positions chosen where a random draw falls below the rate, then cross entropy at those alone | masked1 |
+    | `subspace_gap` | a QR basis and its projection for each space, then the norm of their difference over the square root of 2k | autoencoder3 |
     """,
 )
 
@@ -1046,29 +1129,36 @@ QUIZ11_SOURCE = source_file(
     # No examples and no new tools. Each function combines moves from Section 8.
 
     import math
+    from collections import Counter
 
     import torch
     import torch.nn.functional as F
     from torch import Tensor
 
 
-    # TODO: Return every (center, context) pair of ids, a context being any
-    #   other position at most window away, centers in order and contexts in
-    #   order within each, as a long tensor of shape (pairs, 2).
-    def skipgram_pairs(
-        ids: list[int],
+    # TODO: Return the skip gram pairs of words as a long tensor of shape
+    #   (pairs, 2). The vocabulary is the words seen at least min_count times,
+    #   most common first and ties in alphabetical order. Turn each kept word
+    #   into its place in the vocabulary and drop the rest. Then pair each id
+    #   with every other id at most window places away, centers in order and
+    #   contexts in order within each, the center first.
+    def vocabulary_pairs(
+        words: list[str],
+        min_count: int,
         window: int,
     ) -> Tensor:
         ...
 
 
-    # TODO: Return the mean over the batch of minus the log sigmoid of each
-    #   center's dot product with its context, minus the log sigmoids of minus
-    #   its dot products with each of its negatives. centers and contexts are
-    #   (batch, size), and negatives (batch, k, size).
-    def sgns_loss(
+    # TODO: Return the mean over the batch of the negative sampling loss.
+    #   centers and contexts are the two tables, each of shape (vocabulary,
+    #   size). pairs has shape (batch, 2), a center id then a context id, and
+    #   negatives (batch, k), the made up ids of each pair. Look the centers up
+    #   in centers, and the contexts and the made up ids in contexts.
+    def skipgram_loss(
         centers: Tensor,
         contexts: Tensor,
+        pairs: Tensor,
         negatives: Tensor,
     ) -> Tensor:
         ...
@@ -1095,12 +1185,14 @@ QUIZ11_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the cross entropy of scores, (positions, vocabulary), against
-    #   ids, at the positions where chosen is True alone.
+    # TODO: Choose the positions where torch.rand(ids.shape, generator=generator)
+    #   is below rate. Return the cross entropy of scores, (positions,
+    #   vocabulary), against ids at the chosen positions alone.
     def masked_loss(
         scores: Tensor,
         ids: Tensor,
-        chosen: Tensor,
+        rate: float,
+        generator: torch.Generator,
     ) -> Tensor:
         ...
 
@@ -1121,16 +1213,22 @@ QUIZ11_SOLUTION = source_file(
     # quiz11.py, a solution for comparison
 
     import math
+    from collections import Counter
 
     import torch
     import torch.nn.functional as F
     from torch import Tensor
 
 
-    def skipgram_pairs(
-        ids: list[int],
+    def vocabulary_pairs(
+        words: list[str],
+        min_count: int,
         window: int,
     ) -> Tensor:
+        counted = Counter(words)
+        kept = sorted([word for word in counted if counted[word] >= min_count], key=lambda word: (-counted[word], word))
+        place = {word: position for position, word in enumerate(kept)}
+        ids = [place[word] for word in words if word in place]
         pairs = []
 
         for center in range(len(ids)):
@@ -1141,13 +1239,15 @@ QUIZ11_SOLUTION = source_file(
         return torch.tensor(pairs, dtype=torch.long).view(-1, 2)
 
 
-    def sgns_loss(
+    def skipgram_loss(
         centers: Tensor,
         contexts: Tensor,
+        pairs: Tensor,
         negatives: Tensor,
     ) -> Tensor:
-        real = F.logsigmoid((centers * contexts).sum(dim=-1))
-        made_up = F.logsigmoid(-(negatives @ centers.unsqueeze(2)).squeeze(2)).sum(dim=-1)
+        center = centers[pairs[:, 0]]
+        real = F.logsigmoid((center * contexts[pairs[:, 1]]).sum(dim=-1))
+        made_up = F.logsigmoid(-(contexts[negatives] @ center.unsqueeze(2)).squeeze(2)).sum(dim=-1)
 
         return -(real + made_up).mean()
 
@@ -1176,8 +1276,11 @@ QUIZ11_SOLUTION = source_file(
     def masked_loss(
         scores: Tensor,
         ids: Tensor,
-        chosen: Tensor,
+        rate: float,
+        generator: torch.Generator,
     ) -> Tensor:
+        chosen = torch.rand(ids.shape, generator=generator) < rate
+
         return F.cross_entropy(scores[chosen], ids[chosen])
 
 
@@ -1211,27 +1314,36 @@ def quiz11_tensor(
     return torch.randn(*shape, generator=torch.Generator().manual_seed(seed))
 
 
+def quiz11_ids(
+    seed: int,
+    vocabulary: int,
+    *shape: int,
+) -> Tensor:
+    return torch.randint(0, vocabulary, shape, generator=torch.Generator().manual_seed(seed))
+
+
 def check_quiz11(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
-        function="skipgram_pairs",
-        description="pairs every word with its neighbours in the window",
+        function="vocabulary_pairs",
+        description="keeps the common words as ids and pairs each with its neighbours",
         inputs=(
-            ([4, 7, 1, 9, 2], 2),
-            ([3, 3, 8], 1),
+            ("to be or not to be that is the question to be".split(), 2, 1),
+            ("b a c b a c d c a".split(), 2, 2),
+            ("x y x z y x".split(), 1, 3),
         ),
-        reference=QUIZ11_REFERENCE["skipgram_pairs"],
+        reference=QUIZ11_REFERENCE["vocabulary_pairs"],
         expect=expect_pairs,
     )
     check_on_inputs(
         checker=checker,
-        function="sgns_loss",
-        description="scores the real pair up and the negatives down",
+        function="skipgram_loss",
+        description="looks the rows up and scores the real pair up and the made up ones down",
         inputs=(
-            (quiz11_tensor(1110, 4, 3), quiz11_tensor(1111, 4, 3), quiz11_tensor(1112, 4, 5, 3)),
-            (quiz11_tensor(1120, 6, 2), quiz11_tensor(1121, 6, 2), quiz11_tensor(1122, 6, 3, 2)),
+            (quiz11_tensor(1110, 6, 3), quiz11_tensor(1111, 6, 3), quiz11_ids(1112, 6, 4, 2), quiz11_ids(1113, 6, 4, 5)),
+            (quiz11_tensor(1120, 5, 2), quiz11_tensor(1121, 5, 2), quiz11_ids(1122, 5, 6, 2), quiz11_ids(1123, 5, 6, 3)),
         ),
-        reference=QUIZ11_REFERENCE["sgns_loss"],
+        reference=QUIZ11_REFERENCE["skipgram_loss"],
         expect=expect_tensor,
     )
     check_on_inputs(
@@ -1261,8 +1373,8 @@ def check_quiz11(checker: Checker) -> None:
         function="masked_loss",
         description="scores the chosen positions alone",
         inputs=(
-            (quiz11_tensor(1119, 6, 5), torch.tensor([1, 4, 0, 2, 2, 3]), torch.tensor([True, False, False, True, True, False])),
-            (quiz11_tensor(1123, 5, 7), torch.tensor([6, 0, 3, 3, 5]), torch.tensor([False, True, True, False, True])),
+            (quiz11_tensor(1119, 6, 5), torch.tensor([1, 4, 0, 2, 2, 3]), 0.5, seeded(1130)),
+            (quiz11_tensor(1127, 5, 7), torch.tensor([6, 0, 3, 3, 5]), 0.4, seeded(1131)),
         ),
         reference=QUIZ11_REFERENCE["masked_loss"],
         expect=expect_tensor,
@@ -1294,15 +1406,17 @@ QUIZ11 = Exercise(
     source=QUIZ11_SOURCE,
     solution=QUIZ11_SOLUTION,
     hints={
-        "skipgram_pairs": "Loop over each center, then over each context from max(0, center - window) up to and "
-        "including center + window, stopping at the last id. Skip the center itself.",
-        "sgns_loss": "F.logsigmoid of the row by row dot product, plus the sum over k of F.logsigmoid of minus "
-        "negatives @ the center. Take minus the mean.",
+        "vocabulary_pairs": "Count with Counter, keep and sort the words as word2vec1's vocabulary did, and make a dict "
+        "from each kept word to its place. The ids are the places of the kept words in order. Then loop over each "
+        "center and each context up to window away, skipping the center itself.",
+        "skipgram_loss": "Index centers with pairs[:, 0], contexts with pairs[:, 1], and contexts with negatives for "
+        "rows of shape (batch, k, size). Then F.logsigmoid of the real dot products, plus the sum over k of "
+        "F.logsigmoid of minus the made up ones, and minus the mean.",
         "nearest": "Normalize the rows and the chosen row, multiply, set the chosen row's score to minus "
         "infinity, then .topk(k).indices.tolist().",
         "info_nce": "F.normalize both on dim=1, multiply z1 by z2's transpose, divide by temperature, and "
         "F.cross_entropy against torch.arange(len(z1)).",
-        "masked_loss": "Index scores and ids with chosen, then F.cross_entropy.",
+        "masked_loss": "chosen is the draw compared with rate. Index scores and ids with it, then F.cross_entropy.",
         "subspace_gap": "Each projection is torch.linalg.qr's first result times its own transpose. The gap is the "
         "norm of their difference over the square root of 2k, as a plain number.",
     },

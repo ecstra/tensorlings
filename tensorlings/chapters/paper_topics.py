@@ -39,11 +39,11 @@ PAPER_TOPICS = Chapter(
 
         Section 8's project. Cora is a graph of 2,708 machine learning papers
         joined by their citations. You learn a vector for every paper from
-        random walks along the citations, with word2vec's skip-gram and no
+        random walks along the citations, with word2vec's skip gram and no
         topic in sight. Then a linear probe finds each paper's topic from 140
         labelled papers, and you measure what the citations bought against the
-        papers' own words. The training runs outside the app, in about half a
-    minute.
+        papers' own words. The training runs outside the app, in about a
+        minute.
 
         ## Further reading
 
@@ -247,7 +247,7 @@ TOPICS1_LESSON = prose(
     DeepWalk, from Perozzi and colleagues, turns a graph into sentences. A
     random walk starts at a paper and steps to a paper it cites or that cites
     it, picked at random, again and again. Each walk is a sentence and each
-    paper a word. Then word2vec2's skip-gram learns a vector for every paper.
+    paper a word. Then word2vec2's skip gram learns a vector for every paper.
     Papers that turn up near each other in walks end up with vectors that
     point the same way.
 
@@ -272,13 +272,14 @@ TOPICS1_LESSON = prose(
     in the walks, raised to the power 3/4.
 
     Once every check passes, train with `.venv/bin/python run.py train
-    topics1`. It walks 10 times from every paper, 40 steps each. With a
-    window of 10, as DeepWalk's paper used, that gives 18.7 million pairs.
-    Then it trains 2,000 steps of 4,096 pairs.
+    topics1`. It walks 10 times from every paper, each walk 40 papers long.
+    With a window of 10, as DeepWalk's paper used, that gives 18.7 million
+    pairs. Then it trains 2,000 steps of 4,096 pairs.
 
-    The run behind this project took about half a minute, on MPS and on the
-    CPU alike. The loss fell from 4.16, word2vec2's 6 log 2, to about 1.0
-    within 500 steps, and held there.
+    The three runs behind this project took 41 to 52 seconds each on MPS, on
+    a laptop busy with other work. One on its CPU took 77 seconds. The loss
+    fell from 4.16, word2vec2's 6 log 2, to about 1.0 within 500 steps, and
+    held there.
     """,
 )
 
@@ -552,7 +553,7 @@ TOPICS1 = Exercise(
 # ---------------------------------------------------------------------------
 
 SPLIT_GIVEN = '''
-# A split made Planetoid's way: 20 labelled papers per topic, then 500 for validation and 1,000 for test, from one fixed shuffle.
+# Planetoid's 20 labelled papers per topic and 1,000 for test, with Kipf and Welling's 500 for validation, from one fixed shuffle.
 def split_papers(topics: Tensor) -> tuple[Tensor, Tensor, Tensor]:
     order = torch.randperm(len(topics), generator=torch.Generator().manual_seed(100))
     train = torch.cat([order[topics[order] == topic][:20] for topic in range(TOPICS)])
@@ -609,8 +610,9 @@ TOPICS2_LESSON = prose(
     what the vectors already lay out in straight lines.
 
     The split follows Planetoid, from Yang and colleagues. Only 20 papers of
-    each topic keep their topic, 140 in all. Then 500 papers are for
-    validation and 1,000 for test. `split_papers` makes it, the same every run.
+    each topic keep their topic, 140 in all, and 1,000 are for test. Kipf and
+    Welling added 500 papers for validation, and so does this split.
+    `split_papers` makes it, the same every run.
 
     word2vec3 compared word vectors by their direction, with the cosine. The
     probe reads directions too. Each paper's vector is scaled to length 1
@@ -984,7 +986,7 @@ TOPICS3_LESSON = prose(
 
     The citations know the topics because 81% of Cora's links join two papers
     of the same topic. A walk mostly stays inside one topic. So papers of a
-    topic share walks, and skip-gram pulls their vectors together.
+    topic share walks, and skip gram pulls their vectors together.
 
     A probe reads one direction per topic. Neighbours read the map itself.
     For every paper, take the 10 papers whose vectors point closest to its

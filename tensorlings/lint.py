@@ -286,4 +286,9 @@ def lint_exercise(
     if height > TALLEST_LESSON:
         findings.append(f"is {height} lines tall at width {LESSON_WIDTH}, more than {TALLEST_LESSON}")
 
+    # One line of a readme left short of the others' indent stops the dedent, and Markdown then shows every
+    # other line, heading and links included, as one code block.
+    if exercise.chapter.readme[:1].isspace():
+        findings.append(f"its chapter's readme starts with spaces, so {exercise.chapter.folder}/README.md shows as a code block")
+
     return findings
