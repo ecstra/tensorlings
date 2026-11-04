@@ -18,9 +18,11 @@ from ..engine import (
     expect_close,
     expect_tensor,
     expect_value,
+    reject_missing_return,
 )
 from ..text import prose, source_file
 from .linear_layers import expect_module
+from .tensors import pinned_threads
 
 GRAPHS = Chapter(
     folder="73_graphs",
@@ -381,8 +383,10 @@ MESSAGE1_LESSON = prose(
     h_v' = U(h_v, m_v)
     ```
 
-    Here the message M is a Linear of the source's features alone. The update
-    U is a Linear of the node's features and its sum, then a ReLU.
+    h_v is node v's features, and e_vw holds the edge's own features when it
+    has some, like a bond's type. Here the message M is a Linear of the
+    source's features alone. The update U is a Linear of the node's features
+    and its sum, then a ReLU.
 
     Adding up messages by target is what `index_add_` does. It adds each row
     of a tensor into the row an index names, so many messages can land on one
@@ -611,15 +615,19 @@ MESSAGE2_LESSON = prose(
     H' = ReLU(D^(-1/2) (A + I) D^(-1/2) H W)
     ```
 
-    Kipf and Welling wrote this for undirected graphs. There a row's sum
-    equals graph1's degree, the edges arriving at a node. On a one way graph
-    a row's sum counts the edges leaving a node instead. This chapter takes
-    the row's sum.
+    A is the adjacency matrix and I the identity, which adds the self loops.
+    D holds each node's degree on its diagonal, H the features with a row per
+    node, and W a weight. Kipf and Welling wrote this for undirected graphs,
+    which list each edge both ways. There a row's sum equals graph1's degree.
 
     Without the division, a node with 100 neighbours adds 100 messages and a
     node with 2 adds 2. Features grow with degree, and stacking layers makes
-    them grow without end. The self loop keeps a node's own features in its
-    sum. The paper calls this rewriting the renormalization trick.
+    them grow without end.
+
+    The paper's first version divided first and added each node's own
+    features after, `I + D^(-1/2) A D^(-1/2)`. That matrix can double a
+    vector, so stacked layers still blow up. Adding the self loop before
+    dividing stops it. The paper calls this the renormalization trick.
 
     Each layer mixes a node with its neighbours, nearly an average. Stack many
     and every node drifts to the same mix, which is called oversmoothing. Here
@@ -635,8 +643,9 @@ MESSAGE2_LESSON = prose(
     same way, and no classifier can tell the nodes apart. Kipf and Welling
     found their best results with 2 or 3 layers, and their main model has 2.
 
-    Without the division, the same graph's features grew 20,964 times larger
-    over 8 layers. With it, they shrank to 0.21 of their start.
+    Over 8 layers on the same graph, the features grew 20,964 times with no
+    division, and 62 times with the first version's matrix. With the GCN's,
+    they shrank to 0.21 of their start.
 
     Cosine similarity compares directions. `F.normalize(h, dim=1)` scales every
     row to a length of 1, and the dot products of those rows are the cosines.
@@ -749,7 +758,7 @@ def check_message2(checker: Checker) -> None:
         description="adds self loops and divides by the roots of both degrees",
         inputs=(
             (Described(GRAPH_A, "a graph of 7 nodes"),),
-            (Described(adjacency_from_edges(SMALL_EDGES, 5), "a one way graph of 5 nodes"),),
+            (Described(GRAPH_B, "a graph of 9 nodes"),),
         ),
         reference=reference_gcn_matrix,
         expect=expect_tensor,
@@ -894,16 +903,20 @@ MESSAGE3_LESSON = prose(
 
     Xu and colleagues call this algorithmic alignment. A network whose layers
     match an algorithm's steps only has to learn one small step, here a sum
-    and a minimum. They proved that such a network needs fewer examples to
-    learn the task, and 75_shortest_paths measures it.
+    and a minimum. For networks trained one step at a time, they proved a
+    bound on the examples needed that shrinks as the match gets closer.
+    75_shortest_paths measures it, with networks trained on only 8 graphs.
 
     `scatter_reduce` gathers by index like `index_add_`, and can take the
     minimum instead of the sum. By default the value already there joins in.
+    Without the underscore it returns a new tensor and leaves `start` alone.
+    `torch.equal(a, b)` says whether two tensors hold exactly the same numbers.
 
     ```python
     start = torch.tensor([9.0, 9.0, 9.0])
     start.scatter_reduce(0, torch.tensor([0, 2, 0]), torch.tensor([4.0, 1.0, 7.0]), reduce="amin")
     # tensor([4., 9., 1.])
+    torch.equal(torch.tensor([1.0, 2.0]), torch.tensor([1.0, 2.0]))    # True
     ```
     """,
 )
@@ -918,6 +931,7 @@ MESSAGE3_SOURCE = source_file(
     start = torch.tensor([9.0, 9.0, 9.0])
     lowest = start.scatter_reduce(0, torch.tensor([0, 2, 0]), torch.tensor([4.0, 1.0, 7.0]), reduce="amin")
     # tensor([4., 9., 1.])
+    same = torch.equal(torch.tensor([1.0, 2.0]), torch.tensor([1.0, 2.0]))    # True
 
 
     # TODO: Return the distances after one round of Bellman-Ford. Each edge from
@@ -964,6 +978,7 @@ MESSAGE3_SOLUTION = source_file(
 
     start = torch.tensor([9.0, 9.0, 9.0])
     lowest = start.scatter_reduce(0, torch.tensor([0, 2, 0]), torch.tensor([4.0, 1.0, 7.0]), reduce="amin")
+    same = torch.equal(torch.tensor([1.0, 2.0]), torch.tensor([1.0, 2.0]))
 
 
     def relax(
@@ -1018,6 +1033,22 @@ LINE_EDGES = both_ways(torch.tensor([[0, 1, 2, 3, 4], [1, 2, 3, 4, 5]]))
 LINE_LENGTHS = torch.tensor([1.0, 2.0, 1.0, 3.0, 1.0, 1.0, 2.0, 1.0, 3.0, 1.0])
 
 
+def check_relax_leaves_input(found: object) -> None:
+    """check_on_inputs hands each call a fresh copy, so only a call on a kept tensor shows relax changing it."""
+    distances = torch.tensor([0.0, float("inf"), 4.0, float("inf"), 2.0, float("inf")])
+    before = distances.clone()
+    reject_missing_return(
+        call="relax(distances, a line of 6 nodes, its lengths)",
+        actual=found(distances, LINE_EDGES, LINE_LENGTHS),
+    )
+
+    if not torch.equal(distances, before):
+        raise Mismatch(
+            "relax changed the distances it was given. scatter_reduce_, with the underscore, works in place as "
+            "index_add_ does. Use scatter_reduce, which returns a new tensor, or rounds_needed can't compare rounds.",
+        )
+
+
 def check_message3(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
@@ -1029,6 +1060,11 @@ def check_message3(checker: Checker) -> None:
         ),
         reference=reference_relax,
         expect=expect_tensor,
+    )
+    checker.test(
+        function="relax",
+        description="leaves the distances it was given alone",
+        run=check_relax_leaves_input,
     )
     check_on_inputs(
         checker=checker,
@@ -1074,3 +1110,48 @@ MESSAGE3 = Exercise(
     introduces=(),
     check=check_message3,
 )
+
+
+# ---------------------------------------------------------------------------
+# The runs behind message2's and message3's numbers
+# ---------------------------------------------------------------------------
+
+
+def measure_oversmoothing() -> dict[str, object]:
+    """message2's numbers, on a random graph of 40 nodes with 20 chords and 16 random features per node. The average
+    cosine after each count of GCN layers with no weights, and how much the features' size grows over 8 layers with
+    no division, with the paper's first matrix, and with the GCN's, with the largest eigenvalue of each matrix."""
+    adjacency = adjacency_from_edges(random_graph(40, 20, torch.Generator().manual_seed(3)), 40)
+    h = torch.randn(40, 16, generator=torch.Generator().manual_seed(4))
+    inverse_root = adjacency.sum(dim=1) ** -0.5
+    matrices = {
+        "no division": adjacency + torch.eye(40),
+        "first version": torch.eye(40) + inverse_root.unsqueeze(1) * adjacency * inverse_root.unsqueeze(0),
+        "GCN": reference_gcn_matrix(adjacency),
+    }
+
+    with pinned_threads():
+        return {
+            "cosine": {layers: reference_mean_cosine(reference_propagate(h, matrices["GCN"], layers)) for layers in (0, 1, 2, 4, 8, 16, 32)},
+            "growth over 8 layers": {name: (reference_propagate(h, matrix, 8).norm() / h.norm()).item() for name, matrix in matrices.items()},
+            "largest eigenvalue": {name: torch.linalg.eigvalsh(matrix).max().item() for name, matrix in matrices.items()},
+        }
+
+
+def measure_rounds() -> dict[str, object]:
+    """message3's table, on a random graph of 30 nodes with 11 chords and lengths from 1 to 9, from node 0. The
+    nodes with their final distance after each round, and the rounds that change something."""
+    edges = random_graph(30, 11, torch.Generator().manual_seed(5))
+    lengths = random_lengths(edges, torch.Generator().manual_seed(8))
+    truth = reference_bellman_ford(0, edges, lengths, 30)
+    distances = starting_distances(0, 30)
+    right = {}
+
+    for rounds in range(1, 9):
+        distances = reference_relax(distances, edges, lengths)
+        right[rounds] = int((distances == truth).sum())
+
+    return {
+        "right after each round": right,
+        "rounds needed": reference_rounds_needed(0, edges, lengths, 30),
+    }

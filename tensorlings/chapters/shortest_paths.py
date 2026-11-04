@@ -21,6 +21,7 @@ from ..engine import (
 )
 from ..text import prose, source_file
 from .linear_layers import expect_module
+from .tensors import pinned_threads
 
 SHORTEST_PATHS = Chapter(
     folder="75_shortest_paths",
@@ -46,7 +47,8 @@ SHORTEST_PATHS = Chapter(
 
 GRAPHS_PART = '''
 # Weighted graphs as weight matrices, 0 where there is no edge, with weights from 0.1 to 1.
-# A random path through every node keeps each graph connected.
+# A random path through every node keeps each graph connected. chance is the chance of a
+# random edge each way between two nodes, so a smaller chance leaves longer shortest paths.
 def random_graphs(
     count: int,
     nodes: int,
@@ -136,9 +138,11 @@ PATHS1_LESSON = prose(
     n - 1 rounds find them all. paths2 builds a network on exactly this shape.
 
     Missing edges get a cost of infinity, so their offers never win.
+    `torch.minimum(a, b)` keeps the smaller of each pair of entries.
 
     ```python
-    torch.tensor([3.0, float("inf")]).min()    # tensor(3.)
+    torch.tensor([3.0, float("inf")]).min()                                # tensor(3.)
+    torch.minimum(torch.tensor([3.0, 1.0]), torch.tensor([2.0, 5.0]))    # tensor([2., 1.])
     ```
     """,
 )
@@ -150,7 +154,8 @@ PATHS1_SOURCE = source_file(
     import torch
     from torch import Tensor
 
-    smallest = torch.tensor([3.0, float("inf")]).min()    # tensor(3.)
+    smallest = torch.tensor([3.0, float("inf")]).min()                             # tensor(3.)
+    smaller = torch.minimum(torch.tensor([3.0, 1.0]), torch.tensor([2.0, 5.0]))    # tensor([2., 1.])
 
 
 ''' + INDENTED_GRAPHS + '''
@@ -189,6 +194,7 @@ PATHS1_SOLUTION = source_file(
     from torch import Tensor
 
     smallest = torch.tensor([3.0, float("inf")]).min()
+    smaller = torch.minimum(torch.tensor([3.0, 1.0]), torch.tensor([2.0, 5.0]))
 
 
 ''' + INDENTED_GRAPHS + '''
@@ -310,7 +316,7 @@ MIN_PASSING_FORWARD = '''
         distance[:, 0] = 0
         edges = weights > 0
 
-        for _ in range(nodes):
+        for _ in range(nodes - 1):
             pairs = torch.stack([distance.unsqueeze(2).expand(count, nodes, nodes), weights], dim=3)
             offers = self.offer(pairs).squeeze(3).masked_fill(~edges, float("inf"))
             distance = torch.minimum(distance, offers.min(dim=1).values)
@@ -362,8 +368,9 @@ def train_paths(
 ) -> nn.Module:
     optimizer = torch.optim.Adam(model.parameters(), lr=3e-3)
 
-    for _ in range(steps):
-        weights = random_graphs(32, nodes, generator)
+    for step in range(steps):
+        chance = 0.03 if step % 2 else 0.3
+        weights = random_graphs(32, nodes, generator, chance=chance)
         loss = F.mse_loss(model(weights), shortest_paths(weights))
         optimizer.zero_grad()
         loss.backward()
@@ -381,9 +388,9 @@ PATHS2_LESSON = prose(
     """
     Two networks learn the same distances. The first is shaped like
     Bellman-Ford. Each node holds one number, its distance so far, starting at
-    0 for node 0 and `FAR` everywhere else. Each round, every neighbour makes
-    an offer from its own distance and the edge's weight. The node keeps the
-    smallest offer if it beats what it has.
+    0 for node 0 and `FAR` everywhere else. In each of nodes - 1 rounds,
+    every neighbour makes an offer from its own distance and the edge's
+    weight. The node keeps the smallest offer if it beats what it has.
 
     The algorithm's offer is `d[u] + w(u, v)`. Here a small MLP makes the
     offer, and it has to learn that sum from examples. Everything else, the
@@ -393,23 +400,26 @@ PATHS2_LESSON = prose(
     and gives every distance, with 173,588 weights. It reads 20 nodes, so a
     graph of 10 is padded with zeros.
 
-    `torch.minimum(a, b)` keeps the smaller of each pair of entries.
+    Both train on graphs of 10. `random_graphs` takes a `chance` of a random
+    edge each way between two nodes. At 0.3, Bellman-Ford needs at most 4
+    rounds on 200 graphs, and at 0.03 up to 9. Training switches between
+    the two every step. Xu and colleagues found that varied training graphs
+    let such a network handle graphs unlike the ones it saw.
 
-    ```python
-    torch.minimum(torch.tensor([3.0, 1.0]), torch.tensor([2.0, 5.0]))    # tensor([2., 1.])
-    ```
+    Here is the share of distances within 0.05 on 200 new graphs of 10 at
+    0.3, over 3 seeds. One column trains for 1,500 steps of 32 new graphs,
+    48,000 in all. The other trains as long on only 8 graphs, 4 at each
+    chance.
 
-    Trained for 1,500 steps on graphs of 10 nodes, here is the share of
-    distances each gets within 0.05 on new graphs of 10.
-
-    | Network | Weights | Within 0.05 |
-    |---|---|---|
-    | Shaped like Bellman-Ford | 65 | 100% |
-    | MLP on the whole matrix | 173,588 | 43.4% |
+    | Network | Weights | 48,000 graphs | 8 graphs |
+    |---|---|---|---|
+    | Shaped like Bellman-Ford | 65 | 100% | 100% |
+    | MLP on the whole matrix | 173,588 | 22% to 23% | 15% to 16% |
 
     The MLP has to discover from examples that distances add along paths and
     that the shortest one wins. The other network was handed both facts in
-    its shape, and only learned the sum.
+    its shape, and only has to learn the sum. Its offer stayed within 0.1 of
+    `d + w` for every distance up to 4, in every seed.
     """,
 )
 
@@ -422,7 +432,7 @@ PATHS2_SOURCE = source_file(
     import torch.nn.functional as F
     from torch import Tensor
 
-    smaller = torch.minimum(torch.tensor([3.0, 1.0]), torch.tensor([2.0, 5.0]))    # tensor([2., 1.])
+    sparse = 0.03 if 7 % 2 else 0.3    # 0.03, since 7 % 2 is 1, the remainder after dividing by 2
 
     FAR = 100.0
 
@@ -438,7 +448,7 @@ PATHS2_SOURCE = source_file(
 
 
     # TODO: Finish forward, shaped like Bellman-Ford. distance starts at FAR,
-    #   with node 0 at 0. Each of nodes rounds, self.offer reads every pair
+    #   with node 0 at 0. Each of nodes - 1 rounds, self.offer reads every pair
     #   (distance[u], weights[u, v]), stacked on a last dimension of 2. Offers
     #   along missing edges become infinity, and each node v keeps the smaller
     #   of its distance and its best offer. Return the distances, of shape
@@ -461,8 +471,9 @@ PATHS2_SOURCE = source_file(
 
 
     # TODO: Train model with Adam at a rate of 0.003 for steps steps. Each step
-    #   draws 32 graphs of nodes nodes with random_graphs and generator, and
-    #   takes the mean squared error against shortest_paths.
+    #   draws 32 graphs of nodes nodes with random_graphs and generator, at a
+    #   chance of 0.03 on odd steps and 0.3 on even ones, and takes the mean
+    #   squared error against shortest_paths.
     def train_paths(
         model: nn.Module,
         steps: int,
@@ -482,7 +493,7 @@ PATHS2_SOLUTION = source_file(
     import torch.nn.functional as F
     from torch import Tensor
 
-    smaller = torch.minimum(torch.tensor([3.0, 1.0]), torch.tensor([2.0, 5.0]))
+    sparse = 0.03 if 7 % 2 else 0.3
 
     FAR = 100.0
 
@@ -601,7 +612,8 @@ PATHS2 = Exercise(
         "the pairs. self.offer(pairs).squeeze(3), masked_fill with infinity where there is no edge, then the min "
         "over dim=1 and torch.minimum with distance.",
         "within": "Take (guess - truth).abs() from column 1 on, compare with tolerance, and average as floats.",
-        "train_paths": "Each step, weights = random_graphs(32, nodes, generator). Then F.mse_loss of model(weights) and "
+        "train_paths": "Loop with for step in range(steps). Pick the chance from step % 2 as the example's sparse line "
+        "does, and pass it as chance= to random_graphs(32, nodes, generator). Then F.mse_loss of model(weights) and "
         "shortest_paths(weights), zero_grad, backward, step.",
     },
     introduces=(),
@@ -617,8 +629,8 @@ PATHS2 = Exercise(
 
 GENERIC_PART = '''
 # A generic message passing network, message1's with message3's minimum in place of the sum. A vector per
-# node, a learned message along each edge, the smallest of them gathered, and a residual update, for as
-# many rounds as nodes.
+# node, a learned message along each edge, the smallest of them gathered, and a residual update, for
+# nodes - 1 rounds as Bellman-Ford takes, or for rounds rounds when told.
 class MessagePassing(nn.Module):
     def __init__(
         self,
@@ -630,14 +642,18 @@ class MessagePassing(nn.Module):
         self.update = nn.Sequential(nn.Linear(2 * size, size), nn.ReLU(), nn.Linear(size, size))
         self.read = nn.Linear(size, 1)
 
-    def forward(self, weights: Tensor) -> Tensor:
+    def forward(
+        self,
+        weights: Tensor,
+        rounds: int | None = None,
+    ) -> Tensor:
         count, nodes, _ = weights.shape
         source = torch.zeros(count, nodes, 1)
         source[:, 0] = 1
         state = self.start(source)
         edges = weights > 0
 
-        for _ in range(nodes):
+        for _ in range(nodes - 1 if rounds is None else rounds):
             pairs = torch.cat([state.unsqueeze(2).expand(count, nodes, nodes, -1), weights.unsqueeze(3)], dim=3)
             messages = self.message(pairs).masked_fill(~edges.unsqueeze(3), float("inf"))
             state = state + self.update(torch.cat([state, messages.min(dim=1).values], dim=2))
@@ -656,7 +672,7 @@ def scores_by_size(
 
     with torch.no_grad():
         for nodes in sizes:
-            weights = random_graphs(count, nodes, generator)
+            weights = random_graphs(count, nodes, generator, chance=0.4 / nodes)
             scores.append(within(model(weights), shortest_paths(weights), 0.05))
 
     return scores
@@ -682,32 +698,35 @@ PATHS3_LESSON = prose(
     third is a generic message passing network, message1's with message3's
     minimum in place of the sum. Each node holds a vector of 32 numbers, a
     learned message runs along every edge, and a residual update takes the
-    smallest messages in. It gets one round per node, so it runs longer on a
-    bigger graph, as Bellman-Ford does.
+    smallest messages in. Like the first, it runs nodes - 1 rounds.
 
-    Each trained for 1,500 steps on graphs of 10 nodes. Here is the share of
-    distances within 0.05 on new graphs of each size.
+    The test graphs have a chance of 0.4 / nodes, so a node keeps about as
+    many random edges at every size. Bigger graphs then have longer shortest
+    paths. Bellman-Ford needs up to 8 rounds at 10 nodes, 17 at 20 and 18 at
+    40, and distances reach 6.7.
+
+    Each network trained as in paths2. Here is the share within 0.05 on 200
+    new graphs of each size, over 3 seeds.
 
     | Network | Weights | 10 nodes | 20 nodes | 40 nodes |
     |---|---|---|---|---|
-    | Shaped like Bellman-Ford | 65 | 100% | 100% | 100% |
-    | Generic message passing | 5,377 | 99.5% | 0% | 0% |
-    | MLP on the whole matrix | 173,588 | 43.4% | 9.2% | can't read it |
+    | Shaped like Bellman-Ford | 65 | 100% | 99.4% to 100% | 99.7% to 100% |
+    | Generic, nodes - 1 rounds | 5,377 | 54% to 74% | 0% to 55% | 0% to 37% |
+    | Generic, the 9 rounds it trained with | 5,377 | 54% to 74% | 44% to 57% | 39% to 44% |
+    | MLP on the whole matrix | 173,588 | 8% to 12% | 3% to 4% | can't read it |
 
-    The generic network fits graphs of 10 and fails on everything bigger. Its
-    vectors run for more rounds than it ever trained on, and drift. The MLP
+    The generic network learned a computation for exactly 9 rounds. Given
+    more, two of the three seeds drifted to 0%. Held to 9, it can't follow a
+    path of more edges. The first network keeps the smaller distance every
+    round, so extra rounds change nothing once a distance is right. The MLP
     can't even read a graph bigger than its input.
 
-    The network shaped like the algorithm works on every size, and its offer
-    is the only learned part. `offer_gap` shows what it learned. Five sets of
-    200 new graphs of 10 nodes went through it. Along shortest paths, where
-    the offers decide each answer, the worst offer of each set was off by
-    between 0.006 and 0.059. Only the set with 0.059 had a distance off by
-    more than 0.05, one of its 1,800. On graphs of 20 and 40 these offers
-    stayed within 0.007.
-
-    Other offers were off by up to 0.30. None of them came in more than 0.014
-    under its node's true distance, so they never pull an answer far off.
+    `offer_gap` shows what the first network learned. Read at the true
+    distances, its worst offer along shortest paths on graphs of 10 was off
+    by 0.006 to 0.034. Training distances reach about 4.7, and up to 4 every
+    offer stayed within 0.1 of the sum. Past that one seed's offers drifted
+    by up to 1.1, while another stayed within 0.006 all the way to 8. Fewer
+    than 1 in 100 test distances lie past 4, so the scores stay near 100%.
 
     Xu and colleagues call this algorithmic alignment. A network learns from
     few examples when its structure matches the steps of the algorithm, so
@@ -752,8 +771,9 @@ PATHS3_SOURCE = source_file(
 
 
     # TODO: Return model's share of distances within 0.05 for count graphs of
-    #   each size in sizes, in order, each drawn with random_graphs and
-    #   generator. Record nothing for autograd.
+    #   each size in sizes, in order. Draw each size's graphs with
+    #   random_graphs, generator and a chance of 0.4 / nodes, and score them
+    #   with paths2's within. Record nothing for autograd.
     def scores_by_size(
         model: nn.Module,
         sizes: list[int],
@@ -764,8 +784,9 @@ PATHS3_SOURCE = source_file(
 
 
     # TODO: Return how far a MinPassing model's offer is from the true sum,
-    #   model.offer of each pair (distance, weight) minus distance + weight,
-    #   for distance and weight of the same shape. Record nothing for autograd.
+    #   which is model.offer of each pair (distance, weight) minus the sum
+    #   (distance + weight). distance and weight have the same shape. Record
+    #   nothing for autograd.
     def offer_gap(
         model: nn.Module,
         distance: Tensor,
@@ -859,6 +880,9 @@ def check_scores_by_size(found: object) -> None:
     if any(modes):
         raise Mismatch("scores_by_size ran the model while recording for autograd. Run it inside torch.no_grad().")
 
+    if not scored:
+        raise Mismatch("scores_by_size never called within. Score each size's graphs with paths2's within, at 0.05.")
+
     expect_value(
         call="scores_by_size(model, [6, 9, 4], 5, a generator seeded with 754)",
         actual=actual,
@@ -871,7 +895,7 @@ def check_scores_by_size(found: object) -> None:
     replay = torch.Generator().manual_seed(754)
 
     for nodes, (guess, truth) in zip([6, 9, 4], scored):
-        weights = SIZES_REFERENCE["random_graphs"](5, nodes, replay)
+        weights = SIZES_REFERENCE["random_graphs"](5, nodes, replay, chance=0.4 / nodes)
         right_truth = SIZES_REFERENCE["shortest_paths"](weights)
 
         with torch.no_grad():
@@ -884,7 +908,8 @@ def check_scores_by_size(found: object) -> None:
         if not (in_order or swapped):
             raise Mismatch(
                 f"For graphs of {nodes} nodes, scores_by_size scored something other than model(weights) against "
-                "shortest_paths(weights), with weights drawn by random_graphs from the generator it was given.",
+                "shortest_paths(weights), with weights drawn by random_graphs from the generator it was given, at a "
+                "chance of 0.4 / nodes.",
             )
 
 
@@ -931,8 +956,8 @@ PATHS3 = Exercise(
     source=PATHS3_SOURCE,
     solution=PATHS3_SOLUTION,
     hints={
-        "scores_by_size": "Inside torch.no_grad(), for each nodes in sizes draw random_graphs(count, nodes, generator) "
-        "and append within(model(weights), shortest_paths(weights), 0.05).",
+        "scores_by_size": "Inside torch.no_grad(), for each nodes in sizes draw random_graphs(count, nodes, generator, "
+        "chance=0.4 / nodes) and append within(model(weights), shortest_paths(weights), 0.05).",
         "offer_gap": "torch.stack([distance, weight], dim=-1) gives the pairs. Run model.offer, .squeeze(-1), and take "
         "away distance + weight, all inside torch.no_grad().",
     },
@@ -940,3 +965,137 @@ PATHS3 = Exercise(
     check=check_paths3,
     time_limit=30,
 )
+
+
+# ---------------------------------------------------------------------------
+# The runs behind paths2's and paths3's tables
+# ---------------------------------------------------------------------------
+
+TEST_SIZES = (10, 20, 40)
+
+
+def bellman_ford_rounds(weights: Tensor) -> int:
+    """How many rounds of paths1's relax change something, for the hardest graph of the batch."""
+    costs = PATHS_REFERENCE["edge_costs"](weights)
+    distance = torch.full(weights.shape[:2], float("inf"))
+    distance[:, 0] = 0
+    rounds = 0
+
+    while True:
+        relaxed = PATHS_REFERENCE["relax"](distance, costs)
+
+        if torch.equal(relaxed, distance):
+            return rounds
+
+        distance = relaxed
+        rounds += 1
+
+
+def train_on_pool(
+    model: nn.Module,
+    pool: Tensor,
+    steps: int,
+    generator: torch.Generator,
+) -> nn.Module:
+    """paths2's training, with every batch of 32 drawn from a fixed pool of graphs."""
+    truth = PATHS_REFERENCE["shortest_paths"](pool)
+    optimizer = torch.optim.Adam(model.parameters(), lr=3e-3)
+
+    for _ in range(steps):
+        batch = torch.randint(0, len(pool), (32,), generator=generator)
+        loss = F.mse_loss(model(pool[batch]), truth[batch])
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+    return model
+
+
+def offers_on_paths(
+    model: nn.Module,
+    weights: Tensor,
+) -> tuple[float, float]:
+    """The worst offer along shortest paths, where the offers decide each answer, and the furthest any other offer
+    came in under its node's true distance. Every offer is read at the true distances."""
+    distance = SIZES_REFERENCE["shortest_paths"](weights)
+    count, nodes, _ = weights.shape
+    start = distance.unsqueeze(2).expand(count, nodes, nodes)
+    gap = SIZES_REFERENCE["offer_gap"](model, start, weights)
+    edges = weights > 0
+    on_path = edges & ((start + weights - distance.unsqueeze(1)).abs() < 1e-5)
+    on_path[:, :, 0] = False
+    under = distance.unsqueeze(1) - (start + weights + gap)
+
+    return gap[on_path].abs().max().item(), under[edges & ~on_path].max().item()
+
+
+def measure_paths(seeds: range = range(3)) -> dict[str, object]:
+    """paths2's and paths3's tables, by seed. Each seed trains the three networks with train_paths for 1,500 steps
+    on graphs of 10, and the aligned network and the MLP for 1,500 steps on a pool of only 8 graphs, 4 at each
+    chance. paths2 scores on 200 new graphs of 10 at a chance of 0.3, and paths3 on 200 of each size at 0.4 / nodes,
+    the generic network both at nodes - 1 rounds and at the 9 it trained with."""
+    within = SIZES_REFERENCE["within"]
+    shortest_paths = SIZES_REFERENCE["shortest_paths"]
+    random_graphs = SIZES_REFERENCE["random_graphs"]
+    makers = {
+        "aligned": SIZES_REFERENCE["MinPassing"],
+        "generic": SIZES_REFERENCE["MessagePassing"],
+        "MLP": SIZES_REFERENCE["FlatMLP"],
+    }
+    results: dict[str, object] = {}
+
+    with pinned_threads():
+        dense = random_graphs(200, 10, torch.Generator().manual_seed(900))
+        sparse = random_graphs(200, 10, torch.Generator().manual_seed(901), chance=0.03)
+        tests = {nodes: random_graphs(200, nodes, torch.Generator().manual_seed(900 + nodes), chance=0.4 / nodes) for nodes in TEST_SIZES}
+        results["rounds needed"] = {
+            "10 at 0.3": bellman_ford_rounds(dense),
+            "10 at 0.03": bellman_ford_rounds(sparse),
+            **{f"{nodes} at 0.4 / nodes": bellman_ford_rounds(weights) for nodes, weights in tests.items()},
+        }
+        results["largest distance"] = {
+            "10 at 0.3": shortest_paths(dense).max().item(),
+            "10 at 0.03": shortest_paths(sparse).max().item(),
+            **{f"{nodes} at 0.4 / nodes": shortest_paths(weights).max().item() for nodes, weights in tests.items()},
+        }
+
+        for seed in seeds:
+            trained = {}
+
+            for name, make in makers.items():
+                torch.manual_seed(seed)
+                trained[name] = SIZES_REFERENCE["train_paths"](make(), 1500, 10, torch.Generator().manual_seed(seed))
+
+            pool_generator = torch.Generator().manual_seed(500 + seed)
+            pool = torch.cat([random_graphs(4, 10, pool_generator), random_graphs(4, 10, pool_generator, chance=0.03)])
+
+            with torch.no_grad():
+                for name in ("aligned", "MLP"):
+                    results[f"{seed} paths2 {name}"] = within(trained[name](dense), shortest_paths(dense), 0.05)
+
+            for name in ("aligned", "MLP"):
+                torch.manual_seed(seed)
+                on_pool = train_on_pool(makers[name](), pool, 1500, torch.Generator().manual_seed(seed))
+
+                with torch.no_grad():
+                    results[f"{seed} paths2 {name}, 8 graphs"] = within(on_pool(dense), shortest_paths(dense), 0.05)
+
+            with torch.no_grad():
+                for nodes, weights in tests.items():
+                    truth = shortest_paths(weights)
+                    results[f"{seed} paths3 aligned {nodes}"] = within(trained["aligned"](weights), truth, 0.05)
+                    results[f"{seed} paths3 generic {nodes}"] = within(trained["generic"](weights), truth, 0.05)
+                    results[f"{seed} paths3 generic, 9 rounds, {nodes}"] = within(trained["generic"](weights, rounds=9), truth, 0.05)
+
+                    if nodes <= 20:
+                        results[f"{seed} paths3 MLP {nodes}"] = within(trained["MLP"](weights), truth, 0.05)
+
+            for nodes, weights in tests.items():
+                results[f"{seed} offers {nodes}"] = offers_on_paths(trained["aligned"], weights)
+
+            for largest in (2.0, 4.0, 8.0):
+                distance, weight = torch.meshgrid(torch.linspace(0, largest, 81), torch.linspace(0.1, 1.0, 10), indexing="ij")
+                gap = SIZES_REFERENCE["offer_gap"](trained["aligned"], distance, weight)
+                results[f"{seed} worst offer up to {largest:g}"] = gap.abs().max().item()
+
+    return results

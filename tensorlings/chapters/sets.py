@@ -17,12 +17,12 @@ from ..engine import (
     check_on_inputs,
     expect_close,
     expect_tensor,
-    expect_value,
     seeded,
     small_tensor,
 )
 from ..text import prose, source_file
 from .linear_layers import expect_module
+from .tensors import pinned_threads
 
 SETS = Chapter(
     folder="72_sets",
@@ -133,9 +133,9 @@ SETS1_LESSON = prose(
     A Linear on the flattened list can't. Each position has weights of its
     own, so moving an element moves it onto other weights.
 
-    Zaheer and colleagues proved that, for elements from a countable set, every
-    function that ignores order can be written in one shape, called Deep
-    Sets.
+    Zaheer and colleagues proved a result for elements from a countable set,
+    one you could number 0, 1, 2 and on, like words. There every function
+    that ignores order can be written in one shape, called Deep Sets.
 
     - phi runs on every element alone. A Linear on a tensor of shape `(batch, elements, features)` does that already, since it works on the last dimension.
     - A sum over the elements pools them into one vector. Adding doesn't care about order.
@@ -448,13 +448,14 @@ SETS2_LESSON = prose(
     Here is a task on sets. Each set holds 8 numbers between -1 and 1, and
     the answer is the sum of their squares, which no order changes. Three
     models trained for 2,000 steps on the same 1,000 sets, tested on 2,000 new
-    ones, give this mean squared error.
+    ones, give this mean squared error. The Deep Set is sets1's, with 32
+    hidden features.
 
     | Model | Trained on | Error, sorted tests | Error, shuffled tests |
     |---|---|---|---|
     | An MLP on the flat list | sorted sets | 0.0014 | 1.59 |
     | An MLP on the flat list | shuffled sets | 0.0086 | 0.025 |
-    | A Deep Set | shuffled sets | 0.0002 | 0.0002 |
+    | A Deep Set | shuffled sets | 0.00015 | 0.00015 |
 
     Always guessing the average answer scores 0.70.
 
@@ -465,8 +466,8 @@ SETS2_LESSON = prose(
 
     The MLP trained on shuffled sets has to learn from examples that order
     doesn't matter, and 8 numbers have 40,320 orders. The Deep Set has it
-    built in, so the same data teaches it the task alone. On shuffled tests
-    its error is over 100 times smaller.
+    built in, so the same data teaches it the task alone. Over 5 seeds its
+    error on shuffled tests was 13 to 168 times smaller.
 
     `.argsort()` gives the positions that would sort a tensor. Sorting random
     numbers that way gives a random order. Two index tensors pick one element
@@ -738,13 +739,64 @@ def reference_set_attention(
     return weights @ v
 
 
-def reference_is_equivariant(
-    layer: object,
-    x: Tensor,
-    order: Tensor,
-    tolerance: float,
-) -> bool:
-    return torch.allclose(layer(x[:, order]), layer(x)[:, order], atol=tolerance)
+class ReferenceEquivariantNet(nn.Module):
+    def __init__(self, hidden: int) -> None:
+        super().__init__()
+        self.first = ReferenceEquivariantLayer(1, hidden)
+        self.second = ReferenceEquivariantLayer(hidden, hidden)
+        self.head = nn.Linear(hidden, 1)
+
+    def forward(self, x: Tensor) -> Tensor:
+        return self.head(torch.relu(self.second(torch.relu(self.first(x))))).squeeze(-1)
+
+
+class PerElementNet(nn.Module):
+    """An MLP on each element alone, which never sees the rest of its set, for the lesson's centre task."""
+
+    def __init__(self, hidden: int) -> None:
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(1, hidden),
+            nn.ReLU(),
+            nn.Linear(hidden, hidden),
+            nn.ReLU(),
+            nn.Linear(hidden, 1),
+        )
+
+    def forward(self, x: Tensor) -> Tensor:
+        return self.net(x).squeeze(-1)
+
+
+class AttentionNet(nn.Module):
+    """set_attention over a Linear of each element, then an MLP on each element and its mix, for the centre task."""
+
+    def __init__(self, hidden: int) -> None:
+        super().__init__()
+        self.embed = nn.Linear(1, hidden)
+        self.Wq = nn.Parameter(torch.randn(hidden, hidden) / math.sqrt(hidden))
+        self.Wk = nn.Parameter(torch.randn(hidden, hidden) / math.sqrt(hidden))
+        self.Wv = nn.Parameter(torch.randn(hidden, hidden) / math.sqrt(hidden))
+        self.head = nn.Sequential(
+            nn.Linear(2 * hidden, hidden),
+            nn.ReLU(),
+            nn.Linear(hidden, 1),
+        )
+
+    def forward(self, x: Tensor) -> Tensor:
+        embedded = self.embed(x)
+        mixed = reference_set_attention(embedded, self.Wq, self.Wk, self.Wv)
+
+        return self.head(torch.cat([embedded, mixed], dim=-1)).squeeze(-1)
+
+
+def centre_sets(
+    count: int,
+    generator: torch.Generator,
+) -> tuple[Tensor, Tensor]:
+    """Sets of 8 numbers from -1 to 1, one feature each, and each element's value minus its set's mean."""
+    x = torch.rand(count, ELEMENTS, 1, generator=generator) * 2 - 1
+
+    return x, x.squeeze(-1) - x.squeeze(-1).mean(dim=1, keepdim=True)
 
 
 class AttentionLayer(nn.Module):
@@ -793,9 +845,10 @@ SETS3_LESSON = prose(
     y_i = Lambda x_i + Gamma pool(x)
     ```
 
-    They used a sum or a max for the pool. The mean here keeps the size the
-    same for big and small sets. Every element sees the others only through
-    the pool, so no element's position matters.
+    Lambda is `own` in the file and Gamma is `pooled`. They used a sum or a
+    max for the pool. The mean here keeps the size the same for big and small
+    sets. Every element sees the others only through the pool, so no
+    element's position matters.
 
     Attention with no positions does the same job with more say. Each element
     picks its own weighted mix of the others, by content alone. Lee and
@@ -807,14 +860,25 @@ SETS3_LESSON = prose(
     | Layer | Largest change |
     |---|---|
     | The equivariant Linear | 0.0000001 |
-    | Attention, no positions | 0.0000002 |
-    | Attention, with learned positions added | 3.61 |
+    | Attention, no positions | 0.0000005 |
+    | Attention, with learned positions added | 3.60 |
 
-    Positions break it, as position1 showed. A sequence needs them, and a set
-    must do without them.
+    Positions break it. A sequence needs them, which is why position2 added
+    them, and a set must do without them.
 
-    `torch.allclose(a, b, atol=1e-5)` says whether two tensors match within
-    1e-5, as a plain True or False.
+    The pool is what lets each element see its set. Take sets of 8 numbers
+    from -1 to 1, where each element's answer is its value minus its set's
+    mean. Here is each model's mean squared error over 3 seeds, trained for
+    2,000 steps with 64 hidden features.
+
+    | Model | Mean squared error |
+    |---|---|
+    | An MLP on each element alone | 0.037 to 0.038 |
+    | `EquivariantNet` | below 0.00002 |
+    | set_attention, then an MLP on each element | 0.0002 or less |
+
+    Guessing 0 scores 0.29. The MLP can't see the rest of its set, so it
+    can't learn the mean. Both set layers can.
     """,
 )
 
@@ -830,6 +894,7 @@ SETS3_SOURCE = source_file(
 
     x = torch.ones(2, 5, 3)
     pooled = x.mean(dim=1, keepdim=True)    # shape (2, 1, 3), adds to x's every element
+    numbers = torch.ones(2, 5, 1).squeeze(-1)    # shape (2, 5), the last dimension of 1 dropped
 
 
     # TODO: Finish forward. Each element of x, of shape (batch, elements,
@@ -862,16 +927,18 @@ SETS3_SOURCE = source_file(
         ...
 
 
-    # TODO: Return whether layer is equivariant on x, as a plain True or False:
-    #   whether layer of x reordered by order matches layer of x reordered by
-    #   order afterwards, within tolerance. order reorders the elements.
-    def is_equivariant(
-        layer: nn.Module,
-        x: Tensor,
-        order: Tensor,
-        tolerance: float,
-    ) -> bool:
-        ...
+    # TODO: Finish forward. Run first on x, of shape (batch, elements, 1), then
+    #   a ReLU, second, a ReLU and head. Give one number per element, of shape
+    #   (batch, elements).
+    class EquivariantNet(nn.Module):
+        def __init__(self, hidden: int) -> None:
+            super().__init__()
+            self.first = EquivariantLayer(1, hidden)
+            self.second = EquivariantLayer(hidden, hidden)
+            self.head = nn.Linear(hidden, 1)
+
+        def forward(self, x: Tensor) -> Tensor:
+            ...
     ''',
 )
 
@@ -887,6 +954,7 @@ SETS3_SOLUTION = source_file(
 
     x = torch.ones(2, 5, 3)
     pooled = x.mean(dim=1, keepdim=True)
+    numbers = torch.ones(2, 5, 1).squeeze(-1)
 
 
     class EquivariantLayer(nn.Module):
@@ -915,13 +983,17 @@ SETS3_SOLUTION = source_file(
         return weights @ v
 
 
-    def is_equivariant(
-        layer: nn.Module,
-        x: Tensor,
-        order: Tensor,
-        tolerance: float,
-    ) -> bool:
-        return torch.allclose(layer(x[:, order]), layer(x)[:, order], atol=tolerance)
+    class EquivariantNet(nn.Module):
+        def __init__(self, hidden: int) -> None:
+            super().__init__()
+            self.first = EquivariantLayer(1, hidden)
+            self.second = EquivariantLayer(hidden, hidden)
+            self.head = nn.Linear(hidden, 1)
+
+        def forward(self, x: Tensor) -> Tensor:
+            hidden = torch.relu(self.second(torch.relu(self.first(x))))
+
+            return self.head(hidden).squeeze(-1)
     ''',
 )
 
@@ -940,24 +1012,18 @@ def check_equivariant_layer(found: type) -> None:
     )
 
 
-def check_is_equivariant(found: object) -> None:
-    x = small_tensor(732, 3, 6, 4) / 3
-    order = torch.tensor([4, 1, 5, 0, 3, 2])
-    cases = (
-        ("an EquivariantLayer(4, 4)", seeded_model(ReferenceEquivariantLayer, 4, 4), True),
-        ("attention with no positions", seeded_model(AttentionLayer, 4, 6, False), True),
-        ("attention with positions added", seeded_model(AttentionLayer, 4, 6, True), False),
+def check_equivariant_net(found: type) -> None:
+    model = expect_module("EquivariantNet(8)", seeded_model(found, 8))
+    x = small_tensor(732, 3, 6, 1) / 3
+
+    with torch.no_grad():
+        expected = seeded_model(ReferenceEquivariantNet, 8)(x)
+
+    expect_tensor(
+        call="EquivariantNet(8) on 3 sets of 6",
+        actual=model(x),
+        expected=expected,
     )
-
-    for name, layer, wanted in cases:
-        with torch.no_grad():
-            actual = found(layer, x, order, 1e-5)
-
-        expect_value(
-            call=f"is_equivariant({name}, 3 sets of 6, an order, 1e-5)",
-            actual=actual,
-            expected=wanted,
-        )
 
 
 def check_sets3(checker: Checker) -> None:
@@ -978,10 +1044,11 @@ def check_sets3(checker: Checker) -> None:
         reference=reference_set_attention,
         expect=expect_tensor,
     )
-    checker.test(
-        function="is_equivariant",
-        description="tells an equivariant layer from one that isn't",
-        run=check_is_equivariant,
+    checker.test_method(
+        class_name="EquivariantNet",
+        method="forward",
+        description="stacks two equivariant layers and gives one number per element",
+        run=check_equivariant_net,
     )
 
 
@@ -996,8 +1063,103 @@ SETS3 = Exercise(
         "EquivariantLayer.forward": "x.mean(dim=1, keepdim=True) keeps a dimension of 1 for the elements, so "
         "self.pooled of it adds to self.own(x) at every element.",
         "set_attention": "q @ k.transpose(1, 2), divided by math.sqrt(q.shape[-1]), softmax over dim=-1, then @ v.",
-        "is_equivariant": "Compare layer(x[:, order]) with layer(x)[:, order] using torch.allclose and atol=tolerance.",
+        "EquivariantNet.forward": "Each layer keeps the shape (batch, elements, features), so chain them with "
+        "torch.relu between. self.head gives a last dimension of 1, which .squeeze(-1) drops.",
     },
     introduces=(),
     check=check_sets3,
 )
+
+
+# ---------------------------------------------------------------------------
+# The runs behind the lessons' tables
+# ---------------------------------------------------------------------------
+
+
+def measure_order_gaps() -> dict[str, float]:
+    """sets1's table, untrained models on 4 random sets of 8 elements with 3 features, reordered once."""
+    x = torch.randn(4, ELEMENTS, 3, generator=torch.Generator().manual_seed(0))
+    order = torch.randperm(ELEMENTS, generator=torch.Generator().manual_seed(1))
+
+    return {
+        "Linear on the flattened list": reference_order_gap(seeded_model(FlatLinear, ELEMENTS, 3, 2), x, order),
+        "Deep Set": reference_order_gap(seeded_model(ReferenceDeepSet, 3, 16, 2), x, order),
+    }
+
+
+def measure_sets2(seeds: range = range(5)) -> dict[int, dict[str, float]]:
+    """sets2's table by seed, each model trained by train_regressor for 2,000 steps on 1,000 sets and tested on
+    2,000 new ones, sorted and shuffled, with the error of always guessing the average answer."""
+    results = {}
+
+    with pinned_threads():
+        for seed in seeds:
+            x, y = square_sets(1000, torch.Generator().manual_seed(10 * seed))
+            test_x, test_y = square_sets(2000, torch.Generator().manual_seed(10 * seed + 1))
+            sorted_tests = reference_sort_each(test_x)
+            shuffled_tests = reference_shuffle_each(test_x, torch.Generator().manual_seed(10 * seed + 2))
+            shuffled_x = reference_shuffle_each(x, torch.Generator().manual_seed(10 * seed + 3))
+            runs = {
+                "MLP on sorted sets": (ReferenceFlatMLP, (), reference_sort_each(x)),
+                "MLP on shuffled sets": (ReferenceFlatMLP, (), shuffled_x),
+                "Deep Set on shuffled sets": (ReferenceDeepSet, (1, 32, 1), shuffled_x),
+            }
+            row = {"guess": ((test_y - y.mean()) ** 2).mean().item()}
+
+            for name, (make, arguments, inputs) in runs.items():
+                torch.manual_seed(seed)
+                model = train_regressor(make(*arguments), inputs, y, 2000)
+                row[f"{name}, sorted tests"] = reference_squared_error(model, sorted_tests, test_y)
+                row[f"{name}, shuffled tests"] = reference_squared_error(model, shuffled_tests, test_y)
+
+            results[seed] = row
+
+    return results
+
+
+def measure_set_layers() -> dict[str, float]:
+    """sets3's first table, untrained layers with 4 features on 4 random sets of 8 elements, reordered once."""
+    x = torch.randn(4, ELEMENTS, 4, generator=torch.Generator().manual_seed(0))
+    order = torch.randperm(ELEMENTS, generator=torch.Generator().manual_seed(1))
+
+    return {
+        "equivariant Linear": equivariance_gap(seeded_model(ReferenceEquivariantLayer, 4, 4), x, order),
+        "attention, no positions": equivariance_gap(seeded_model(AttentionLayer, 4, ELEMENTS, False), x, order),
+        "attention, positions added": equivariance_gap(seeded_model(AttentionLayer, 4, ELEMENTS, True), x, order),
+    }
+
+
+def measure_centre_task(seeds: range = range(3)) -> dict[int, dict[str, float]]:
+    """sets3's second table by seed, each model trained with Adam at 0.003 for 2,000 steps of 64 new sets, and
+    tested on 2,000 more, with the error of always guessing 0."""
+    makers = {
+        "MLP on each element": PerElementNet,
+        "EquivariantNet": ReferenceEquivariantNet,
+        "attention": AttentionNet,
+    }
+    results = {}
+
+    with pinned_threads():
+        for seed in seeds:
+            test_x, test_y = centre_sets(2000, torch.Generator().manual_seed(100 + seed))
+            row = {"guess 0": (test_y**2).mean().item()}
+
+            for name, make in makers.items():
+                torch.manual_seed(seed)
+                model = make(64)
+                optimizer = torch.optim.Adam(model.parameters(), lr=3e-3)
+                generator = torch.Generator().manual_seed(seed)
+
+                for _ in range(2000):
+                    x, y = centre_sets(64, generator)
+                    loss = F.mse_loss(model(x), y)
+                    optimizer.zero_grad()
+                    loss.backward()
+                    optimizer.step()
+
+                with torch.no_grad():
+                    row[name] = F.mse_loss(model(test_x), test_y).item()
+
+            results[seed] = row
+
+    return results
