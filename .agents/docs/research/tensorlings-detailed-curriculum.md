@@ -152,7 +152,7 @@ The project is the name generator of the section table, as in Karpathy's makemor
 | | debug5 | the common slips, a missing `zero_grad`, `train` and `eval` modes, and a summed loss where a mean was meant |
 | quizzes | quiz6 | Section 4 together |
 | 29_broken_training | broken1 | the project starts, the Section 3 name generator with planted bugs, found with the recipe one step at a time |
-| | broken2 | the fixed run tuned with AdamW, warmup and clipping below a validation loss target |
+| | broken2 | the fixed run tuned with Adam, warmup, cosine decay and clipping at the 90th percentile of its norms, below a validation loss target, with a table of what each piece buys |
 
 The project comes from the section's last topic, the recipe, since a broken run calls on the whole section. It is modeled on Karpathy's recipe post and CS231n's babysitting of the learning process.
 
