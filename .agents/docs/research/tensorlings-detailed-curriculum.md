@@ -202,11 +202,11 @@ The project is the small image classifier of the section table, in the style of 
 | | rnn3 | why, a task that needs the whole past, which a fixed window can't hold and an RNN can |
 | 40_bptt | bptt1 | backprop through time by hand, where repeated multiplying shrinks or grows the gradient |
 | | bptt2 | truncated backprop through time, detaching the hidden state between chunks |
-| | bptt3 | gradients that vanish over long spans, and clipping for the ones that explode |
+| | bptt3 | gradients that vanish over long spans and explode with a large weight, clipping for the explosions, and the identity start holding a value across a long gap |
 | 41_gated_rnns | lstm1 | the LSTM cell from its papers, forget gate included, matched with `nn.LSTM` |
-| | lstm2 | why, remembering one value from 50 steps back, where the RNN fails and the LSTM doesn't |
-| | gru1 | the GRU, matched with `nn.GRU` |
-| | gating1 | a gate, one signal scaling another through a sigmoid, the first weight here that is computed from the input instead of fixed by training |
+| | lstm2 | why, remembering one value from 40 steps back, where the RNN fails and the LSTM with its forget gate opened doesn't |
+| | gru1 | the GRU, matched with `nn.GRU`, and its update gate opened at the start as the LSTM's forget gate is |
+| | gating1 | a gate, one signal scaling another through a sigmoid, measured against a Linear and an MLP on a switch |
 | | lstm3 | when, an RNN, an LSTM or a GRU |
 | 42_bidirectional | bidir1 | one RNN forwards and one backwards, matched with `bidirectional=True` |
 | | bidir2 | when, tagging can read ahead and generating can't |
