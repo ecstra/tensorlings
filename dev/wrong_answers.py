@@ -541,6 +541,7 @@ CASES: list[tuple[str, str, str, str]] = [
     ("unet1", "TinyUNet joins the skip first", "torch.cat([F.interpolate(c, scale_factor=2), b], dim=1)", "torch.cat([b, F.interpolate(c, scale_factor=2)], dim=1)"),
     ("unet2", "NoSkipUNet upsamples once", "        u = self.up1(F.interpolate(u, scale_factor=2))\n", "        u = self.up1(u)\n"),
     ("unet2", "iou over the marked pixels only", "return ((marked & truth).sum() / (marked | truth).sum()).item()", "return ((marked & truth).sum() / marked.sum()).item()"),
+    ("unet2", "iou thresholds the logits at 0.5", "marked = logits > 0\n", "marked = logits > 0.5\n"),
     ("unet2", "edge_pixels grown against the mask", "return grown != shrunk", "return grown != masks"),
     ("augment1", "horizontal_flip flips upside down", "    return images.flip(-1)", "    return images.flip(-2)"),
     ("augment1", "padded_crop forgets to pad", "return F.pad(image, (pad, pad, pad, pad))[:, top:top + h, left:left + w]", "return image[:, top:top + h, left:left + w]"),

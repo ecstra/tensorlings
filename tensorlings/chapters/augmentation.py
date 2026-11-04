@@ -35,7 +35,7 @@ AUGMENTATION = Chapter(
 
         - [Shorten and Khoshgoftaar, a survey on image data augmentation](https://link.springer.com/article/10.1186/s40537-019-0197-0)
         - [PyTorch, torchvision transforms](https://docs.pytorch.org/vision/stable/transforms.html)
-        - [CS231n, data augmentation](https://cs231n.github.io/neural-networks-2/#reg)
+        - [Krizhevsky, Sutskever and Hinton, AlexNet, whose section 4.1 is data augmentation](https://papers.nips.cc/paper_files/paper/2012/hash/c399862d3b9d6b76c8436e924a68c45b-Abstract.html)
         """,
     ),
 )
@@ -83,9 +83,9 @@ AUGMENT1_LESSON = prose(
     usually pad by 4 and crop back to 32 by 32.
 
     ```python
-    image = torch.arange(4.0).reshape(1, 2, 2)    # one channel, 2 by 2
-    padded = F.pad(image, (1, 1, 1, 1))           # shape (1, 4, 4)
-    padded[:, 0:2, 0:2]                            # shifted down and right by one
+    image = torch.arange(1.0, 5.0).reshape(1, 2, 2)    # one channel, 2 by 2
+    padded = F.pad(image, (1, 1, 1, 1))                # shape (1, 4, 4)
+    padded[:, 0:2, 0:2]    # tensor([[[0., 0.], [0., 1.]]]), shifted down and right by one
     ```
 
     `torchvision` holds these as ready made transforms. Here they are plain
@@ -101,9 +101,9 @@ AUGMENT1_SOURCE = source_file(
     import torch.nn.functional as F
     from torch import Tensor
 
-    image = torch.arange(4.0).reshape(1, 2, 2)
+    image = torch.arange(1.0, 5.0).reshape(1, 2, 2)
     padded = F.pad(image, (1, 1, 1, 1))              # shape (1, 4, 4), a border of zeros
-    mirrored = image.flip(-1)                        # tensor([[[1., 0.], [3., 2.]]])
+    mirrored = image.flip(-1)                        # tensor([[[2., 1.], [4., 3.]]])
 
 
     # TODO: Return images, of shape (batch, channels, h, w), mirrored left to
@@ -145,7 +145,7 @@ AUGMENT1_SOLUTION = source_file(
     import torch.nn.functional as F
     from torch import Tensor
 
-    image = torch.arange(4.0).reshape(1, 2, 2)
+    image = torch.arange(1.0, 5.0).reshape(1, 2, 2)
     padded = F.pad(image, (1, 1, 1, 1))
     mirrored = image.flip(-1)
 
@@ -261,8 +261,8 @@ AUGMENT2_LESSON = prose(
     learned from wrong pictures.
 
     So a change has to keep the label for the data at hand. Rotating a 6 by
-    half a turn makes a 9. Colour changes suit photos, and do nothing for grey
-    digits. He and others trained their CIFAR-10 ResNets with these very two,
+    half a turn makes a 9. Shifting colours suits photos, but a grey digit has
+    no colours to shift. He and others trained their CIFAR-10 ResNets with these very two,
     shifts of up to 4 pixels and flips.
 
     Augmentation helps most when data is scarce and the model can memorize.
@@ -301,8 +301,8 @@ AUGMENT2_SOURCE = source_file(
 
     # TODO: Finish the line that flips, so this shifts every image by up to 2
     #   pixels, then, when flip is True, mirrors each image whose draw from
-    #   torch.rand is below 0.5. Draw one number per image, shaped
-    #   (batch, 1, 1, 1).
+    #   torch.rand with generator is below 0.5. Draw one number per image,
+    #   shaped (batch, 1, 1, 1).
     def augment_batch(
         images: Tensor,
         generator: torch.Generator,

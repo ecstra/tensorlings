@@ -309,7 +309,8 @@ TRANSFER2_LESSON = prose(
     85.6%. The new task was its other five, dogs to trucks.
 
     Each start then trained 300 steps on the few labels, over three draws of
-    them, and was scored on the new classes' validation images.
+    them, and was scored on the new classes' validation images. Photos were
+    flipped at random, as in augment2, here and while the body trained.
 
     | Start | 100 digits | 100 photos | 1,000 photos |
     |---|---|---|---|
@@ -331,8 +332,9 @@ TRANSFER2_LESSON = prose(
     and deer don't fit trucks exactly. Training everything let them adapt.
     `fine_tune_optimizer`'s smaller body rate scored highest on average, 82.6%
     against 80.7%, and varied least. Yosinski and others found the same boost,
-    one that lingers even after fine tuning. ULMFiT goes further, dividing the
-    rate by 2.6 for each layer down.
+    one that lingers even after fine tuning. Howard and Ruder's ULMFiT, a
+    recipe for fine tuning language models, goes further. It divides the rate
+    by 2.6 for each layer down.
 
     An optimizer takes one rate per group, as in adamw2.
     """,
@@ -516,7 +518,7 @@ QUIZ7_LESSON = prose(
     | `image_size_through` | the output size formula, followed through layers, for height and width | stride1, conv5 |
     | `conv_bn_relu` | a 3 by 3 convolution with a stride and padding 1, no bias, BatchNorm and ReLU | stride1, resnet1 |
     | `pooled_scores` | global average pooling of feature maps, then a Linear head | pooling1, lenet1 |
-    | `flip_and_normalize` | a random flip per image, then each channel's mean taken away and divided by its spread | augment2, batchnorm1 |
+    | `flip_and_normalize` | a random flip per image, then each channel's mean taken away and divided by its spread | augment2, resnet1, broadcasting1 |
     """,
 )
 

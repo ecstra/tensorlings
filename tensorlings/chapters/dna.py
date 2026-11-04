@@ -189,6 +189,12 @@ DNA1_LESSON = prose(
 
     A conv net reads channels, as an image has red, green and blue. One hot
     gives DNA four, one per base, so a window becomes a tensor of shape (4, 60).
+    `F.one_hot` puts the four last, and `.transpose(1, 2)` swaps dimensions 1
+    and 2.
+
+    ```python
+    torch.zeros(2, 60, 4).transpose(1, 2).shape    # torch.Size([2, 4, 60])
+    ```
 
     Look at the data before training on it, the first step of Karpathy's
     recipe. `base_frequencies` gives the share of each base at each place, over
@@ -476,7 +482,7 @@ DNA1 = Exercise(
         "clean": "Keep a set of the windows seen so far. A window stays when set(window) <= set(BASES) and it is not "
         "in that set yet. Index labels with the list of kept positions.",
         "one_hot": "Turn each letter into its place in BASES with BASES.index, then F.one_hot(ids, 4). That gives "
-        "(count, length, 4), so swap the last two dimensions and call .float().",
+        "(count, length, 4), so swap the last two dimensions with .transpose and call .float().",
         "base_frequencies": "x[labels == label] keeps one label's windows. Their mean over the first dimension is "
         "the share of each base at each place.",
         "split": "test is order[:test_size], validation the next validation_size positions, train the rest.",
@@ -601,7 +607,7 @@ DNA2_MAIN = '''
 DNA2_LESSON = prose(
     """
     `DnaNet` reads each window with 32 kernels of 7 bases, the same kernels at
-    every place, as conv3's detector did with `nn.Conv1d`. One kernel that
+    every place, as conv4's detector did with `nn.Conv1d`. One kernel that
     learns GT finds it wherever it sits. A Linear layer over all 240 numbers
     would need its own weight for every base at every place.
 
@@ -641,7 +647,7 @@ DNA2_LESSON = prose(
     |---|---|---|---|---|---|
     | Validation accuracy | 95.0% | 97.5% | 97.75% | 97.5% | 97.5% |
 
-    One run takes about 40 seconds here. The check asks for more than 93%.
+    One run takes about 10 seconds here. The check asks for more than 93%.
     """,
 )
 
@@ -1039,7 +1045,7 @@ DNA3_LESSON = prose(
 
     `DnaNet` wins at every size and every seed. With all the data it makes
     about half the mistakes of the position weights. Its stem holds 928 weights,
-    one detector of 7 bases shared by all 60 places. The MLP holds 31,235 and
+    32 detectors of 7 bases, each shared by all 60 places. The MLP holds 31,235 and
     trails the position weights from 1,000 windows on, since it must learn each
     pattern again at every place.
 
@@ -1103,7 +1109,7 @@ DNA3_SOURCE = source_file(
 
 
     # TODO: Return the strongest base at each place of kernel, of shape
-    #   (4, places), as one string, such as "AG" for the kernel above.
+    #   (4, places), as one string, such as "AT" for the kernel above.
     def kernel_motif(kernel: Tensor) -> str:
         ...
 

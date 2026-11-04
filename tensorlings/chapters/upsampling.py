@@ -17,6 +17,7 @@ from ..engine import (
     small_tensor,
 )
 from ..text import prose, source_file
+from .classic_nets import pinned_threads
 from .linear_layers import expect_module
 
 UPSAMPLING = Chapter(
@@ -104,9 +105,12 @@ UPSAMPLE1_LESSON = prose(
     `F.interpolate(x, scale_factor=2, mode="bilinear")` takes `x` of shape
     `(batch, channels, h, w)`. Its `mode="nearest"` repeats instead.
 
-    `align_corners=True` makes the first and last outputs land exactly on the
-    first and last inputs. Then the output of `n` inputs grown `s` times has
-    `(n - 1) * s + 1` points, and output `j` sits at input position `j / s`.
+    `align_corners=True` puts the first and last outputs exactly on the first
+    and last inputs. Ask it for `(n - 1) * s + 1` outputs with `size=`, and
+    output `j` then sits at input position `j / s`. With `scale_factor=s` it
+    gives `n * s` outputs instead, packed a little closer. Left at its
+    default, `align_corners` is `False`.
+
     `.floor()` rounds down and `.long()` makes whole numbers usable as
     positions.
     """,
@@ -133,7 +137,8 @@ UPSAMPLE1_SOURCE = source_file(
 
 
     # TODO: Return x, of shape (batch, channels, h, w), grown s times with
-    #   bilinear upsampling, using F.interpolate.
+    #   bilinear upsampling, using F.interpolate with align_corners left at its
+    #   default.
     def bilinear(
         x: Tensor,
         s: int,
@@ -277,8 +282,21 @@ TRANSPOSED1_LESSON = prose(
 
     `nn.ConvTranspose2d(in, out, k, stride=2)` is the layer. With a kernel
     that the stride doesn't divide, like 3 at stride 2, the stamps overlap
-    unevenly and leave a checkerboard pattern. So many models upsample with
-    interpolation, then a plain convolution, as Odena and others advised.
+    unevenly. With all ones in and all ones as weights, each output counts
+    the stamps that land on it.
+
+    ```python
+    ones = torch.ones(1, 1, 6)
+    F.conv_transpose1d(ones, torch.ones(1, 1, 3), stride=2)    # 1 1 2 1 2 1 2 1 2 1 2 1 1
+    F.conv_transpose1d(ones, torch.ones(1, 1, 4), stride=2)    # 1 1 2 2 2 2 2 2 2 2 2 2 1 1
+    grown = F.interpolate(ones, scale_factor=2)                # 12 ones
+    F.conv1d(grown, torch.ones(1, 1, 3), padding=1)            # 2 3 3 3 3 3 3 3 3 3 3 2
+    ```
+
+    Kernel 3 jumps between 1 and 2 at every step, and in 2D that makes a
+    checkerboard. Kernel 4 covers the middle evenly. Growing with
+    interpolation, then a plain convolution, is even everywhere but the
+    padded ends. Odena and others advised that last way.
     """,
 )
 
@@ -447,7 +465,7 @@ UNET1_LESSON = prose(
     microscope images. It has two halves, drawn as the two arms of a U.
 
     - the way down: blocks of two 3 by 3 convolutions, each block followed by a max pool of 2.
-    - the way up: upsampling by 2, then a block, back to full size, then a 1 by 1 convolution to one score per pixel.
+    - the way up: upsampling by 2, then a block, back to full size. A 1 by 1 convolution then scores each pixel for each class.
     - the skips: each level's maps on the way down are joined onto the same level's maps on the way up.
 
     The way down learns what is in the image but loses where exactly. The
@@ -462,6 +480,10 @@ UNET1_LESSON = prose(
     The paper used convolutions without padding, so its maps shrank a little
     in each block. A skip's map was then larger than the map it joined, and
     was cut down to the middle part first. Most versions now pad instead.
+
+    The paper also followed each upsampling with a 2 by 2 convolution that
+    halved the channels. `TinyUNet` below leaves that out. It marks one kind
+    of object, so it gives one score per pixel.
     """,
 )
 
@@ -641,24 +663,25 @@ UNET1 = Exercise(
 UNET2_LESSON = prose(
     """
     Here two models learned to mark made up shapes, circles and squares on
-    noisy images of 32 by 32, from 1000 examples for 400 steps. One was
-    unet1's U-Net. The other was the same with no skips, its way up fed only
-    from below.
-
-    | Model | Pixels right | Pixels on an edge right | IoU |
-    |---|---|---|---|
-    | no skips | 98.5% | 86.2% | 0.876 |
-    | U-Net | 99.1% | 92.2% | 0.927 |
-
-    Most pixels are easy, far inside or far outside a shape, so the share of
-    all pixels right hides the gap. On the pixels next to an edge the skips
-    win by 6 points. The way down shrank the maps to 8 by 8. Without skips,
-    the way up has to guess where each edge falls inside a block of 4 by 4.
+    noisy images of 32 by 32. Each trained 400 steps on 1000 examples, over
+    three seeds, and was scored on 500 new ones. One was unet1's U-Net. The
+    other was the same with no skips, its way up fed only from below.
 
     **IoU**, intersection over union, scores a mask. It is the count of pixels
     both masks mark, divided by the count of pixels either marks, 1 for a
     perfect match. `&` and `|` are and and or on tensors of `True` and
     `False`.
+
+    | Model | Pixels right | Pixels on an edge right | IoU |
+    |---|---|---|---|
+    | no skips | 97.5% to 97.6% | 81.8% to 82.5% | 0.885 to 0.892 |
+    | U-Net | 98.7% to 99.0% | 90.0% to 92.3% | 0.936 to 0.950 |
+
+    Most pixels are easy, far inside or far outside a shape, so the share of
+    all pixels right hides the gap. On the pixels next to an edge the skips
+    win by 7.6 to 9.8 points, on every seed. The way down shrank the maps to
+    8 by 8. Without skips, the way up has to guess where each edge falls
+    inside a block of 4 by 4.
 
     `F.max_pool2d(mask, 3, stride=1, padding=1)` grows a mask by one pixel all
     around, since a pixel next to a marked one becomes marked. Minus the max
@@ -854,6 +877,8 @@ def check_unet2(checker: Checker) -> None:
         inputs=(
             (small_tensor(832, 2, 1, 6, 6), square_masks()),
             (torch.ones(1, 1, 3, 3), torch.tensor([[[[1.0, 0.0, 0.0], [1.0, 1.0, 0.0], [0.0, 0.0, 0.0]]]])),
+            # Logits between 0 and 1 catch a cut at 0.5, which whole numbers can't tell from a cut at 0.
+            (small_tensor(833, 2, 1, 6, 6) / 4, square_masks()),
         ),
         reference=lambda logits, masks: (((logits > 0) & (masks > 0.5)).sum() / ((logits > 0) | (masks > 0.5)).sum()).item(),
         expect=lambda call, actual, expected: expect_close(
@@ -891,3 +916,87 @@ UNET2 = Exercise(
     introduces=(),
     check=check_unet2,
 )
+
+
+# ---------------------------------------------------------------------------
+# The runs behind the lessons
+# ---------------------------------------------------------------------------
+
+
+def made_up_shapes(
+    count: int,
+    generator: torch.Generator,
+    noise: float = 0.5,
+) -> tuple[Tensor, Tensor]:
+    """count images of 32 by 32, each with 1 to 3 circles or squares of radius 3 to 8 at 1 on a background of 0,
+    plus noise of the given spread, and their masks of 0 and 1."""
+    rows = torch.arange(32).view(32, 1).float()
+    columns = torch.arange(32).view(1, 32).float()
+    masks = torch.zeros(count, 1, 32, 32)
+
+    for index in range(count):
+        for _ in range(int(torch.randint(1, 4, (1,), generator=generator))):
+            radius = float(torch.randint(3, 9, (1,), generator=generator))
+            middle_row, middle_column = (torch.rand(2, generator=generator) * (32 - 2 * radius) + radius).tolist()
+
+            if torch.rand(1, generator=generator) < 0.5:
+                shape = (rows - middle_row) ** 2 + (columns - middle_column) ** 2 <= radius**2
+            else:
+                shape = ((rows - middle_row).abs() <= radius) & ((columns - middle_column).abs() <= radius)
+
+            masks[index, 0] = torch.maximum(masks[index, 0], shape.float())
+
+    images = masks + noise * torch.randn(count, 1, 32, 32, generator=generator)
+
+    return images, masks
+
+
+def mask_scores(
+    model: nn.Module,
+    images: Tensor,
+    masks: Tensor,
+) -> tuple[float, float, float]:
+    """The share of pixels right, the share of edge pixels right, and the IoU, over all of images at once."""
+    model.eval()
+
+    with torch.no_grad():
+        marked = model(images) > 0
+
+    truth = masks > 0.5
+    edge = F.max_pool2d(masks, 3, stride=1, padding=1) != -F.max_pool2d(-masks, 3, stride=1, padding=1)
+    right = marked == truth
+
+    return (
+        right.float().mean().item(),
+        right[edge].float().mean().item(),
+        ((marked & truth).sum() / (marked | truth).sum()).item(),
+    )
+
+
+def measure_unet(seeds: tuple[int, ...] = (0, 1, 2)) -> dict[str, list[tuple[float, float, float]]]:
+    """unet2's table: unet1's U-Net and the same with no skips, each trained 400 Adam steps at 0.001 on batches of 32
+    from 1000 made up images, with binary cross entropy, then scored on 500 new ones, on the CPU with 4 threads. Gives
+    the pixels right, the edge pixels right and the IoU, one triple per seed."""
+    results: dict[str, list[tuple[float, float, float]]] = {}
+
+    with pinned_threads():
+        for seed in seeds:
+            train_x, train_masks = made_up_shapes(1000, torch.Generator().manual_seed(seed))
+            held_x, held_masks = made_up_shapes(500, torch.Generator().manual_seed(1000 + seed))
+
+            for name, make in (("no skips", ReferenceNoSkip), ("U-Net", ReferenceUNet)):
+                torch.manual_seed(seed)
+                model = make()
+                optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+                generator = torch.Generator().manual_seed(seed + 50)
+
+                for _ in range(400):
+                    batch = torch.randint(0, 1000, (32,), generator=generator)
+                    loss = F.binary_cross_entropy_with_logits(model(train_x[batch]), train_masks[batch])
+                    optimizer.zero_grad()
+                    loss.backward()
+                    optimizer.step()
+
+                results.setdefault(name, []).append(mask_scores(model, held_x, held_masks))
+
+    return results
