@@ -21,8 +21,10 @@ from ..engine import (
     small_tensor,
 )
 from ..text import prose, source_file
+from .adaptive import pinned_threads
 from .dropout import labelled_points
 from .initialization import expect_numbers
+from .names import context_sets, names_model, reference_validation_loss
 
 CLIPPING = Chapter(
     folder="27_clipping",
@@ -35,12 +37,13 @@ CLIPPING = Chapter(
         and one step on it can undo much of the training before it. This
         chapter measures a gradient's size, caps it the way PyTorch's
         `clip_grad_norm_` does, and shows the cap holding through one huge
-        gradient.
+        gradient, with the cap picked from the logged norms.
 
         ## Further reading
 
         - [Pascanu and others, on the difficulty of training recurrent networks](https://arxiv.org/abs/1211.5063)
         - [PyTorch, clip_grad_norm_](https://docs.pytorch.org/docs/2.14/generated/torch.nn.utils.clip_grad_norm_.html)
+        - [Google, deep learning tuning playbook, on picking the cap](https://github.com/google-research/tuning_playbook)
         """,
     ),
 )
@@ -91,8 +94,10 @@ CLIPPING1_LESSON = prose(
     difference too small to matter.
 
     Pascanu and others proposed clipping the norm in 2013, for models that
-    read long sequences, whose gradients can explode. GPT-3 and nanoGPT clip
-    at 1.0, and most language models do the same.
+    read long sequences, whose gradients can explode. The earlier way capped
+    each entry on its own, as `torch.nn.utils.clip_grad_value_` still does.
+    That turns the direction, and scaling the norm keeps it. GPT-3 and
+    nanoGPT clip the norm at 1.0.
     """,
 )
 
@@ -290,33 +295,44 @@ CLIPPING1 = Exercise(
 
 CLIPPING2_LESSON = prose(
     """
-    Here the names model trained for 3000 steps, and at step 1000 one loss was
-    multiplied by 100 or by 1000. That stands in for one bad minibatch, like a
-    corrupt example or a loss that spiked. The table gives the validation loss
-    right after that step, 10 and 100 steps later, and at the end.
+    Here the names model trained for 3000 steps on three seeds, with SGD at
+    0.1 or Adam at 0.003. At step 1000 one loss was multiplied by 100 or by
+    1000. That stands in for one bad minibatch, like a corrupt example or a
+    loss that spiked. The table gives the validation loss right after that
+    step, 10 and 100 steps later, and at the end.
 
-    | Optimizer | Spike | After | 10 later | 100 later | End |
-    |---|---|---|---|---|---|
-    | SGD at 0.1 | none | 2.41 | 2.43 | 2.40 | 2.335 |
-    | SGD at 0.1 | 100 times | 15.8 | 6.59 | 2.80 | 2.377 |
-    | SGD at 0.1 | 1000 times | 88.7 | 43.3 | 8.69 | 3.361 |
-    | Adam at 0.003 | none | 2.38 | 2.38 | 2.37 | 2.291 |
-    | Adam at 0.003 | 1000 times | 2.40 | 3.67 | 3.08 | 2.338 |
+    | Run | After | 10 later | 100 later | End |
+    |---|---|---|---|---|
+    | SGD, no spike | 2.41 to 2.42 | 2.40 to 2.45 | 2.39 to 2.41 | 2.335 to 2.352 |
+    | SGD, 100 times | 12.0 to 16.4 | 6.14 to 6.35 | 2.81 to 2.97 | 2.377 to 2.429 |
+    | SGD, 1000 times | 88.7 to 116 | 35.1 to 41.9 | 6.49 to 15.6 | 2.861 to 3.361 |
+    | SGD, 1000 times, clipped at 1.9 | 2.41 to 2.42 | 2.40 to 2.45 | 2.39 to 2.41 | 2.335 to 2.352 |
+    | Adam, no spike | 2.37 to 2.38 | 2.38 | 2.36 to 2.38 | 2.291 to 2.306 |
+    | Adam, 1000 times | 2.40 to 2.42 | 3.77 to 3.95 | 2.93 to 3.07 | 2.330 to 2.338 |
+    | Adam, 1000 times, clipped at 1.6 | 2.37 to 2.38 | 2.38 | 2.36 to 2.38 | 2.291 to 2.305 |
 
-    One step undid most of 1000 steps of SGD, and 2000 more didn't fully
+    One step undid all 1000 steps of SGD and more, and 2000 more didn't
     repair it. Adam's step stays about its rate, but the spike filled its
     averages and threw the next steps off.
 
-    With the global norm clipped at 1.0, both spikes changed nothing. The
-    runs came out the same as without a spike, since the spike's gradient
-    shrank to the length of an ordinary one. Ordinary gradients here had
-    norms near 1.7, and the spikes 174 and 1742.
+    Ordinary SGD gradients had norms near 1.7, and the spikes near 170 and
+    1700. Clipped, the spike's gradient shrank to the size of an ordinary
+    one, and the runs came out as if there were no spike.
 
-    Clipping at 1.0 caught ordinary steps too, and that cost nothing here.
-    Logging the norm each step shows where the spikes are, so a bad batch can
-    be found and looked at.
+    The cap comes from the logged norms. Google's tuning playbook puts it
+    near their 90th percentile, the value 9 in 10 norms stay below. Here that
+    was 1.9 for SGD and 1.6 for Adam. At those caps clipping1's
+    `clipped_fraction` of the norms was 0.09 to 0.13, so only the steps that
+    stand out were cut.
 
-    A spike stands far above the median of the norms, their middle value.
+    For SGD a cap of 1.0 held the spike too, but `clipped_fraction` came out
+    at 1.0. It cut every step, which works as a smaller learning rate. When
+    more than half the steps get clipped, the playbook lowers the rate
+    instead.
+
+    Logging the norm each step also shows where the spikes are, so a bad
+    batch can be found and looked at. A spike stands far above the median of
+    the norms, their middle value.
     Spikes don't pull the median up the way they pull up a mean. For an even
     count, PyTorch's `median()` takes the lower of the two middle values.
     """,
@@ -524,3 +540,71 @@ CLIPPING2 = Exercise(
     check=check_clipping2,
     imports_first=OPTIMIZER_IMPORTS,
 )
+
+
+# ---------------------------------------------------------------------------
+# The runs behind the lessons
+# ---------------------------------------------------------------------------
+
+# Each run is (optimizer, how many times the loss at the spike step is scaled, the cap or None for no clipping). SGD's
+# cap of 1.9 and Adam's of 1.6 are the 90th percentiles of their norms without a spike, as measure_spike reports them.
+SPIKE_RUNS: tuple[tuple[str, float, float | None], ...] = (
+    ("SGD", 1.0, None),
+    ("SGD", 100.0, None),
+    ("SGD", 1000.0, None),
+    ("SGD", 1000.0, 1.9),
+    ("SGD", 1000.0, 1.0),
+    ("Adam", 1.0, None),
+    ("Adam", 1000.0, None),
+    ("Adam", 1000.0, 1.6),
+)
+
+
+def measure_spike(
+    runs: tuple[tuple[str, float, float | None], ...] = SPIKE_RUNS,
+    seeds: tuple[int, ...] = (0, 1, 2),
+    steps: int = 3000,
+    spike_step: int = 1000,
+) -> dict[tuple[str, float, float | None], list[dict[str, float]]]:
+    """clipping2's table: the names model trained with minibatches of 32 by SGD at 0.1 or Adam at 0.003, one loss
+    scaled at spike_step, clipped at a cap or not. Per seed, the validation loss right after the spike step, 10 and 100
+    steps later and at the end, the spike's norm, the median and 90th percentile of the other steps' norms, and the
+    share of steps above the cap."""
+    X, Y = context_sets()["train"]
+    validation_x, validation_y = context_sets()["validation"]
+    marks = {spike_step: "after", spike_step + 10: "10 later", spike_step + 100: "100 later", steps - 1: "end"}
+    results: dict[tuple[str, float, float | None], list[dict[str, float]]] = {}
+
+    with pinned_threads():
+        for optimizer_name, factor, cap in runs:
+            for seed in seeds:
+                model = names_model(seed)
+                optimizer = torch.optim.SGD(model.parameters(), lr=0.1) if optimizer_name == "SGD" else torch.optim.Adam(model.parameters(), lr=0.003)
+                generator = torch.Generator().manual_seed(seed + 1)
+                norms: list[float] = []
+                row: dict[str, float] = {}
+
+                for step in range(steps):
+                    model.train()
+                    batch = torch.randint(0, len(X), (32,), generator=generator)
+                    loss = F.cross_entropy(model(X[batch]), Y[batch])
+
+                    if step == spike_step:
+                        loss = loss * factor
+
+                    optimizer.zero_grad()
+                    loss.backward()
+                    norms.append(torch.nn.utils.clip_grad_norm_(model.parameters(), float("inf") if cap is None else cap).item())
+                    optimizer.step()
+
+                    if step in marks:
+                        row[marks[step]] = reference_validation_loss(model, validation_x, validation_y)
+
+                others = torch.tensor(norms[:spike_step] + norms[spike_step + 1:])
+                row["spike norm"] = norms[spike_step]
+                row["median norm"] = others.median().item()
+                row["90th percentile"] = others.quantile(0.9).item()
+                row["share clipped"] = 0.0 if cap is None else sum(norm > cap for norm in norms) / len(norms)
+                results.setdefault((optimizer_name, factor, cap), []).append(row)
+
+    return results
