@@ -681,9 +681,9 @@ FORECAST1 = Exercise(
         "after day t is row t + 1, so drop row 0 and .sum(dim=1).",
         "information_coefficient": "torch.stack the two into rows, torch.corrcoef them, take the [0, 1] entry and "
         ".item() it.",
-        "true_expected": "Set total = 0.0, then loop horizon times. Each lean is strength times (abs of the sum of "
-        "history[-WINDOW:] over WINDOW, less KAPPA). Append it to history and add it to total. After the loop, "
-        "expected[day] = total.",
+        "true_expected": "Start a total at 0.0, then loop horizon times. Each lean is strength times (abs of the sum "
+        "of history[-WINDOW:] over WINDOW, less KAPPA). Append it to history and add it to the total. After the "
+        "loop, the total goes into expected at that day.",
         "price": "It comes from prices. Get that right first.",
         "targets": "It comes from forward_returns. Get that right first.",
         "best": "It comes from true_expected. Get that right first.",
@@ -1845,10 +1845,11 @@ FORECAST4 = Exercise(
     source=FORECAST4_SOURCE,
     solution=FORECAST4_SOLUTION,
     hints={
-        "train_mlp": "torch.manual_seed(seed) before building the nn.Sequential. In each step: zero_grad, the mean of "
-        "(model(x).squeeze(1) - y / scale) ** 2 with scale = y.std(), backward, step.",
-        "mlp_forecast": "train_x, test_x = standardize(train_x, test_x), then train_mlp(train_x, train_y, seed, 150). "
-        "model.eval(), and inside torch.no_grad() return model(test_x).squeeze(1).",
+        "train_mlp": "Seed torch with seed before building the nn.Sequential. In each step: zero_grad, the mean "
+        "squared gap between the outputs squeezed to one per row and y divided by y.std(), backward, step.",
+        "mlp_forecast": "Run both through standardize, then train_mlp on the training rows with seed and 150 "
+        "steps. Put the model in eval mode, and inside torch.no_grad() give its outputs for test_x, squeezed to one "
+        "per row.",
         "paired_scores": "For each fold, slice the training rows with [:train_end] and the test rows with "
         "[test_start:test_end]. Score linear_forecast and mlp_forecast with information_coefficient and append the "
         "pair.",

@@ -1102,9 +1102,9 @@ PHYSICS2 = Exercise(
     solution=PHYSICS2_SOLUTION,
     hints={
         "coasting": "A tensor of zeros with x's shape, which zeros_like makes.",
-        "train_accelerations": "Unpack the pool into xs, ss and targets. Each step, rows = torch.randint(0, len(xs), "
-        "(64,), generator=generator), then F.mse_loss of model on those rows against their targets, zero_grad, "
-        "backward, step.",
+        "train_accelerations": "Unpack the pool into xs, ss and targets. Each step, draw 64 row numbers below "
+        "len(xs) with torch.randint and the generator. Then take F.mse_loss of model on those rows against their "
+        "targets, zero_grad, backward, step.",
         "share_close": "Inside torch.no_grad(), take model of the positions and springs minus the targets, and its "
         ".norm over dim 2. Compare with tolerance, and average as floats with .item().",
         "rollout_error": "physics1's rollout for truth.shape[1] - 1 steps, minus truth, its .norm over the last dim, "
@@ -1147,26 +1147,29 @@ PHYSICS3_LESSON = prose(
     | `RelativeForces` | 4,610 | 2e-7 | 1.5 | 1e-7 |
     | `CentralForces` | 4,353 | 2e-7 | 2e-7 | 6e-8 |
 
-    Trained as physics2's flat MLP was, here is each one's share of held out accelerations within
-    0.1, over 3 seeds. The same states also come moved by (4, -3), and turned by 1 radian.
+    Each trains as physics2's flat MLP did, but with its rate falling along a cosine from 3e-3 to 0,
+    as schedule1 showed. At a constant rate the weights kept bouncing, and one run stopped on a bad
+    step at 66%. GNS decays its rate too. Here is each one's share of held out accelerations within
+    0.1 over 5 seeds, also moved by (4, -3) and turned by 1 radian.
 
     | Module | Held out | Moved | Turned |
     |---|---|---|---|
-    | flat MLP | 4.4% to 5.2% | 0.9% to 1.6% | 4.8% to 5.3% |
-    | pairs on absolute positions | 78% to 88% | 13% to 37% | 76% to 88% |
-    | `RelativeForces` | 66% to 96% | 66% to 96% | 64% to 96% |
+    | flat MLP | 4.2% to 5.3% | 1.3% to 1.9% | 4.3% to 5.1% |
+    | pairs on absolute positions | 87% to 91% | 0.7% to 10% | 87% to 90% |
+    | `RelativeForces` | 89% to 96% | 89% to 96% | 89% to 95% |
     | `CentralForces` | 100% | 100% | 100% |
 
-    The turn costs no module anything here, since the training states already come in every
-    orientation. To see what pulls along the line buy, train each module only on systems laid out
-    along one line. Then test it on new systems on that line, and on the same states turned 90
-    degrees.
+    On states like the training ones, the two pair modules score close, since absolute positions
+    have seen every place in the box. Moved out of it, they fall to 10% or less, and offsets lose
+    nothing. The turn costs no module anything here, since the training states already come in
+    every orientation. To see what pulls along the line buy, train each module only on systems
+    along one line. Test it on new systems on that line, and on the same states turned 90 degrees.
 
     | Module | On the line | Turned 90 degrees |
     |---|---|---|
-    | flat MLP | 24% to 27% | 0.7% to 1.4% |
-    | pairs on absolute positions | 95% to 97% | under 0.5% |
-    | `RelativeForces` | 98% | 0% to 1.3% |
+    | flat MLP | 21% to 24% | 0.8% to 1.3% |
+    | pairs on absolute positions | 96% to 97% | under 0.3% |
+    | `RelativeForces` | 97% to 98% | 0% to 2.2% |
     | `CentralForces` | 100% | 100% |
 
     Each fact the physics gave pays off. Pairs fit where the flat MLP failed, and offsets survive a
@@ -1842,6 +1845,37 @@ def trained(
     return BASELINE_REFERENCE["train_accelerations"](make(), pool, steps, torch.Generator().manual_seed(seed))
 
 
+# physics3's tables run 5 seeds, since one seed in 3 at a constant rate once stopped on a bad step.
+PHYSICS3_SEEDS = range(5)
+
+
+def trained_with_decay(
+    make: Callable[[], nn.Module],
+    pool: tuple[Tensor, Tensor, Tensor],
+    seed: int,
+    steps: int = MEASURE_STEPS,
+) -> nn.Module:
+    """train_accelerations's run with its rate falling along a cosine from 3e-3 to 0, for physics3's tables. At a
+    constant 3e-3 the held out share swings by up to 0.49 between checkpoints 1,000 steps apart, so where a run stops
+    decides its score. GNS decays its rate too."""
+    torch.manual_seed(seed)
+    model = make()
+    generator = torch.Generator().manual_seed(seed)
+    optimizer = torch.optim.Adam(model.parameters(), lr=3e-3)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=steps)
+    xs, ss, targets = pool
+
+    for _ in range(steps):
+        rows = torch.randint(0, len(xs), (64,), generator=generator)
+        loss = F.mse_loss(model(xs[rows], ss[rows]), targets[rows])
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+        scheduler.step()
+
+    return model
+
+
 def lesson_cases() -> dict[str, tuple[Tensor, Tensor, Tensor]]:
     systems = WORLD_REFERENCE["random_systems"]
 
@@ -1907,7 +1941,7 @@ def measure_longer_training() -> dict[str, object]:
 
 def measure_structures() -> dict[str, object]:
     """physics3's tables, each structure's property gaps untrained and its share of held out accelerations within
-    0.1 after training, plain, moved by (4, -3) and turned by 1 radian, over 3 seeds."""
+    0.1 after training with a decaying rate, plain, moved by (4, -3) and turned by 1 radian, over 5 seeds."""
     share = BASELINE_REFERENCE["share_close"]
     rotate = STRUCTURE_REFERENCE["rotate"]
     makers = {
@@ -1939,8 +1973,8 @@ def measure_structures() -> dict[str, object]:
         turned = (rotate(xs, 1.0), ss, rotate(targets, 1.0))
 
         for name, make in makers.items():
-            for seed in SEEDS:
-                model = trained(make, pool, seed)
+            for seed in PHYSICS3_SEEDS:
+                model = trained_with_decay(make, pool, seed)
                 results[f"{name} {seed}"] = (share(model, held, 0.1), share(model, moved, 0.1), share(model, turned, 0.1))
 
     return results
@@ -1960,8 +1994,8 @@ def line_pool(
 
 
 def measure_line() -> dict[str, object]:
-    """physics3's second table, each structure trained only on systems along one line, then scored on new systems
-    along it and on the same states turned 90 degrees, over 3 seeds."""
+    """physics3's second table, each structure trained with a decaying rate only on systems along one line, then
+    scored on new systems along it and on the same states turned 90 degrees, over 5 seeds."""
     share = BASELINE_REFERENCE["share_close"]
     rotate = STRUCTURE_REFERENCE["rotate"]
     makers = {
@@ -1978,8 +2012,8 @@ def measure_line() -> dict[str, object]:
         turned = (rotate(xs, math.pi / 2), ss, rotate(targets, math.pi / 2))
 
         for name, make in makers.items():
-            for seed in SEEDS:
-                model = trained(make, pool, seed)
+            for seed in PHYSICS3_SEEDS:
+                model = trained_with_decay(make, pool, seed)
                 results[f"{name} {seed}"] = (share(model, held, 0.1), share(model, turned, 0.1))
 
     return results

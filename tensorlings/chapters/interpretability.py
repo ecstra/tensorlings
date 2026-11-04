@@ -940,8 +940,8 @@ INTERP2 = Exercise(
     source=INTERP2_SOURCE,
     solution=INTERP2_SOLUTION,
     hints={
-        "patterns": "Start from x = model.embed(ids) inside torch.no_grad(). For each block, keep "
-        "block.attention.pattern(x) in a list, then move on with x = block(x).",
+        "patterns": "Inside torch.no_grad(), start from the model's embed of ids. For each block, keep its "
+        "attention.pattern of the current x in a list, then run the block on x to move on.",
         "previous_token_score": "The file's first lines show torch.diagonal with offset=-1. Average what it gives "
         "and turn it into a plain number.",
         "induction_score": "Compare every pair of places as the file's same line does, and keep the pairs with s "
@@ -1535,8 +1535,8 @@ INTERP4 = Exercise(
     source=INTERP4_SOURCE,
     solution=INTERP4_SOLUTION,
     hints={
-        "gradient": "Make x = x.detach().clone().requires_grad_(True), call .backward() on f(x).sum(), and return "
-        "x.grad.",
+        "gradient": "Detach x, clone it, and turn on requires_grad_ so it is a fresh leaf autograd tracks. Call "
+        ".backward() on the sum of f of it, and return its .grad.",
         "integrated_gradients": "Loop k over range(1, steps + 1), add up gradient at each point, divide by steps, "
         "and multiply by x - baseline.",
         "position_attributions": "Pass integrated_gradients a lambda that runs answer_scores on the vectors it gets, "
@@ -1563,7 +1563,7 @@ QUIZ17_LESSON = prose(
 
     | Name | Problem | What the check tests |
     |---|---|---|
-    | `train_step` | one step of training a classifier | the weights after two calls, against a reference step |
+    | `train_step` | one clipped step of training a classifier, in micro batches | the loss and the weights after two calls, against a reference step |
     | `ZeroStartBlock` | a block for a deep stack | it starts as exactly its input, and every weight learns after one step |
     | `LocalDetector` | a pattern on a ring of readings, wherever it sits | a turn of the ring turns the scores, and each score sees 5 steps |
     | `ReadingsEncoder` | readings with some missing | a missing reading changes nothing |
@@ -1593,16 +1593,19 @@ QUIZ17_SOURCE = source_file(
     from torch import Tensor
 
 
-    # TODO: Run one training step of model on x and its class labels y. Take
-    #   the cross entropy of model(x) against y, clip the gradients to a total
-    #   norm of max_norm, then step the optimizer. No gradient from an earlier
-    #   call may carry over. Return the loss from before the step as a plain
-    #   number.
+    # TODO: Run one training step of model on x and its class labels y, split
+    #   into micro_batches equal pieces run one after another, as ddp2 did.
+    #   Backpropagate every piece's cross entropy divided by micro_batches,
+    #   so the gradients add up to the whole batch's. Then clip that whole
+    #   gradient to a total norm of max_norm and step the optimizer, once. No
+    #   gradient from an earlier call may carry over. Return the sum of the
+    #   divided losses as a plain number.
     def train_step(
         model: nn.Module,
         optimizer: torch.optim.Optimizer,
         x: Tensor,
         y: Tensor,
+        micro_batches: int,
         max_norm: float,
     ) -> float:
         ...
@@ -1731,15 +1734,22 @@ def train_step(
     optimizer: torch.optim.Optimizer,
     x: Tensor,
     y: Tensor,
+    micro_batches: int,
     max_norm: float,
 ) -> float:
     optimizer.zero_grad()
-    loss = F.cross_entropy(model(x), y)
-    loss.backward()
+    total = 0.0
+
+    for micro_x, micro_y in zip(x.chunk(micro_batches), y.chunk(micro_batches)):
+        loss = F.cross_entropy(model(micro_x), micro_y) / micro_batches
+        loss.backward()
+        total += loss.item()
+
+    # Clipping waits for the last piece, since each piece's gradient alone isn't the batch's.
     nn.utils.clip_grad_norm_(model.parameters(), max_norm)
     optimizer.step()
 
-    return loss.item()
+    return total
 
 
 # The branch's last layer at zero makes the block x itself, and the layers before it still get gradients.
@@ -1929,7 +1939,8 @@ def check_has_weights(
 
 
 def check_train_step(found: object) -> None:
-    for seed, max_norm in ((1701, 0.05), (1702, 100.0)):
+    # The first clips hard, so a clip of each piece alone shows. The second never clips, so the sum alone shows.
+    for seed, max_norm, rows, micro_batches in ((1701, 0.05, 12, 3), (1702, 100.0, 8, 4)):
         torch.manual_seed(seed)
         mine = nn.Sequential(nn.Linear(4, 8), nn.ReLU(), nn.Linear(8, 3))
         theirs = copy.deepcopy(mine)
@@ -1938,14 +1949,14 @@ def check_train_step(found: object) -> None:
         generator = torch.Generator().manual_seed(seed)
 
         for number in (1, 2):
-            x = 3 * torch.randn(6, 4, generator=generator)
-            y = torch.randint(0, 3, (6,), generator=generator)
+            x = 3 * torch.randn(rows, 4, generator=generator)
+            y = torch.randint(0, 3, (rows,), generator=generator)
             call = (
-                f"train_step call {number}, on a Linear 4 to 8, a ReLU and a Linear 8 to 3 with SGD at 0.5 and momentum "
-                f"0.9, max_norm {max_norm}"
+                f"train_step call {number}, on {rows} rows in {micro_batches} micro batches, with a Linear 4 to 8, a "
+                f"ReLU and a Linear 8 to 3, SGD at 0.5 and momentum 0.9, and max_norm {max_norm}"
             )
-            loss = found(mine, my_optimizer, x, y, max_norm)
-            wanted = QUIZ17_REFERENCE["train_step"](theirs, their_optimizer, x, y, max_norm)
+            loss = found(mine, my_optimizer, x, y, micro_batches, max_norm)
+            wanted = QUIZ17_REFERENCE["train_step"](theirs, their_optimizer, x, y, micro_batches, max_norm)
 
             reject_missing_return(
                 call=call,
@@ -1966,7 +1977,8 @@ def check_train_step(found: object) -> None:
                 if not torch.allclose(parameter, expected, atol=1e-5):
                     raise Mismatch(
                         f"After {call}, the weight {name} is off by up to {largest_gap(parameter, expected):.3g} from a "
-                        f"step that clears the old gradients, clips to a total norm of {max_norm} and then steps.",
+                        "step that clears the old gradients, adds up every piece's divided gradient, then clips the "
+                        f"total to a norm of {max_norm} and steps, once.",
                     )
 
 
@@ -2401,7 +2413,7 @@ QUIZ17_MODULE_TESTS: dict[str, tuple[tuple[int, ...], tuple[tuple[str, Callable[
 def check_quiz17(checker: Checker) -> None:
     checker.test(
         function="train_step",
-        description="clears the old gradients, clips, steps and gives the loss",
+        description="adds up the micro batches, then clips and steps once, and gives the loss",
         run=check_train_step,
     )
     checker.test_method(
@@ -2442,8 +2454,9 @@ QUIZ17 = Exercise(
     source=QUIZ17_SOURCE,
     solution=QUIZ17_SOLUTION,
     hints={
-        "train_step": "Clear the gradients first, then the loss, backward, nn.utils.clip_grad_norm_ over the model's "
-        "parameters, and the step. .item() turns the loss into a plain number.",
+        "train_step": "Clear the gradients once, before any piece. Loop over the paired chunks of x and y as ddp2 "
+        "did, and add each divided loss's .item() to a running total. nn.utils.clip_grad_norm_ and the step go after "
+        "the loop, since only then do the gradients hold the whole batch.",
         "ZeroStartBlock.__init__": "A branch whose last layer is all zeros adds nothing to x. Zero that one layer's "
         "weight and bias under torch.no_grad(), and leave the layers before it as drawn.",
         "ZeroStartBlock.forward": "Return x plus the branch, its layers in the order the TODO lists them. A layer at "
