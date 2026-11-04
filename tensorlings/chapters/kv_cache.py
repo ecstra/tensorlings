@@ -582,7 +582,8 @@ KVCACHE1 = Exercise(
         "CachedGPT.forward": "start is caches[0][0].shape[2], or 0 when caches is None, and the positions run from "
         "start to start + ids.shape[1]. Loop over enumerate(self.h), passing caches[index] or None, and keep each "
         "block's cache in a list.",
-        "cached_generate": "scores, caches = model(ids) first. Each step, next_token of scores[:, -1], torch.cat it "
+        "cached_generate": "First run model on all of ids for the scores and the caches. Each step, next_token of "
+        "scores[:, -1], torch.cat it "
         "onto ids on dim=1, then run model on that token and caches.",
     },
     introduces=(),

@@ -1065,8 +1065,8 @@ QUANT3 = Exercise(
         "...) and the same for scales.",
         "Int8Linear.forward": "F.linear takes x, a weight and a bias. dequantize(self.quantized, self.scales) is the "
         "weight.",
-        "quantize_linears_": "Loop over module.named_children(). An nn.Linear gets setattr(module, name, "
-        "Int8Linear(child)), and any other child gets quantize_linears_ called on it.",
+        "quantize_linears_": "Loop over module.named_children(). Swap an nn.Linear child for Int8Linear of it with "
+        "setattr under the same name. Any other child gets quantize_linears_ called on it.",
         "model_bytes": "model.parameters() lists a shared tensor once. Add numel() * element_size() over it and "
         "over model.buffers().",
         "int8_bytes": "model_bytes(model), now that the blocks are quantized.",

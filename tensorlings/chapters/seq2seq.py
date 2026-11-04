@@ -521,8 +521,9 @@ ENCDEC1 = Exercise(
         "last state.",
         "Decoder.forward": "self.gru(self.embedding(symbols), state) gives the outputs and the last state. Return "
         "self.out(outputs) and the state.",
-        "sequence_loss": "inputs, outputs = decoder_pairs(target). scores, _ = decoder(inputs, encoder(source)). "
-        "Then F.cross_entropy of scores.reshape(-1, scores.shape[-1]) and outputs.reshape(-1).",
+        "sequence_loss": "Split target into inputs and outputs with decoder_pairs. Run decoder on the inputs from "
+        "the state encoder gives for source, and keep only the scores. Then F.cross_entropy of "
+        "scores.reshape(-1, scores.shape[-1]) and outputs.reshape(-1).",
     },
     introduces=(),
     check=check_encdec1,
@@ -784,10 +785,11 @@ ENCDEC2 = Exercise(
     source=ENCDEC2_SOURCE,
     solution=ENCDEC2_SOLUTION,
     hints={
-        "train_copier": "source = torch.randint(0, 10, (64, length), generator=generator). loss = sequence_loss(encoder, "
-        "decoder, source, source). Then zero the gradients, backward, and optimizer.step().",
+        "train_copier": "Draw source from torch.randint, digits below 10 in a (64, length) shape, using generator. "
+        "The loss is sequence_loss with source as both the source and the target. Then zero the gradients, "
+        "backward, and optimizer.step().",
         "copy_guesses": "Take the input from decoder_pairs(source) and run the decoder on it from encoder(source), "
-        "inside torch.no_grad(). Then scores[:, :-1].argmax(dim=2).",
+        "inside torch.no_grad(). Drop the last place of the scores, then take the argmax over dim 2.",
         "exact_match": "Compare copy_guesses with source, take .all(dim=1), then the mean as floats and .item().",
     },
     introduces=(),
@@ -1057,8 +1059,9 @@ GREEDY1 = Exercise(
     source=GREEDY1_SOURCE,
     solution=GREEDY1_SOLUTION,
     hints={
-        "greedy_decode": "state = encoder(source.unsqueeze(0)). Loop max_length times, running decoder on "
-        "torch.tensor([[symbol]]) and the state, and take scores[0, -1].argmax().item(). Break on END.",
+        "greedy_decode": "Get the state from encoder on source, made a batch of one with .unsqueeze(0). Loop "
+        "max_length times, running decoder on torch.tensor([[symbol]]) and the state, and take "
+        "scores[0, -1].argmax().item(). Break on END.",
         "greedy_digits": "For each row, zip greedy_decode(..., row, len(row) + 5) with row.tolist() and count the "
         "pairs that match. Divide the count by sources.numel().",
     },
@@ -1468,8 +1471,9 @@ BEAM1 = Exercise(
     solution=BEAM1_SOLUTION,
     hints={
         "sequence_score": "Python's ** raises a number to a power, so divide total by length ** alpha.",
-        "beam_search": "log_probs, next_state = step(symbols[-1], state). best = log_probs.topk(width). For each pair "
-        "of best.values.tolist() and best.indices.tolist(), append (symbols + [symbol], total + log_prob, next_state).",
+        "beam_search": "Call step on the last of symbols and the state, for log_probs and next_state. Keep the "
+        "width best with .topk. For each pair of best.values.tolist() and best.indices.tolist(), append "
+        "(symbols + [symbol], total + log_prob, next_state).",
         "decoder_step": "Define step(symbol, state) inside decoder_step. It runs decoder(torch.tensor([[symbol]]), "
         "state) and returns F.log_softmax(scores[0, -1], dim=0) and the state. Return step.",
     },

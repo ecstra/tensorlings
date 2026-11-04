@@ -1322,8 +1322,9 @@ DNA3 = Exercise(
         "torch.cat them.",
         "kernel_motif": "kernel.argmax(dim=0) gives the strongest base's number at each place. Look each one up in "
         "BASES and join the letters.",
-        "kernel_for": "strongest = model.stem(x).amax(dim=2) has one row per window and one column per kernel. Take "
-        "the mean of its rows with y == label, take away the mean of the rest, and give the argmax as an int.",
+        "kernel_for": "Run x through model.stem and take .amax over dim 2, the positions. That leaves one row per "
+        "window and one column per kernel. Take the mean of its rows with y == label, take away the mean of the "
+        "rest, and give the argmax as an int.",
         "test_accuracy": "Compare predictions(model, test_x) with test_y, take the mean of the matches as floats, "
         "then .item().",
         "exon_end_motif": "kernel_for(model, validation_x, validation_y, 0) gives a kernel's number. Hand "

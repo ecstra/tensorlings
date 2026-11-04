@@ -625,7 +625,8 @@ SSM2 = Exercise(
         "matrix by c * b.",
         "is_stable": "a.abs() < 1 checks every entry, .all() asks whether all are True, and bool(...) makes it a "
         "plain bool.",
-        "discretize": "rate = -torch.exp(log_rate), a = torch.exp(step * rate), and b_bar = (a - 1) / rate * b.",
+        "discretize": "The rate is minus torch.exp of log_rate, and a is torch.exp of step times that rate. Then "
+        "b_bar = (a - 1) / rate * b.",
         "half_life": "math.log(0.5) divided by torch.log(a).",
     },
     introduces=(),
@@ -941,8 +942,9 @@ SSM3 = Exercise(
     source=SSM3_SOURCE,
     solution=SSM3_SOLUTION,
     hints={
-        "selective_scan": "Loop over t with step = delta[:, t].unsqueeze(1). Set h to torch.exp(step * rate) * h "
-        "plus step * B[:, t] * u[:, t].unsqueeze(1). Keep (C[:, t] * h).sum(dim=1), and stack along dim=1.",
+        "selective_scan": "Loop over t, with step as delta[:, t] given a trailing dim by .unsqueeze(1). Set h to "
+        "torch.exp(step * rate) * h plus step * B[:, t] * u[:, t].unsqueeze(1). Keep (C[:, t] * h).sum(dim=1), and "
+        "stack along dim=1.",
         "SelectiveSSM.forward": "F.softplus(self.to_delta(x)).squeeze(2) is delta. The values are x[:, :, 0], and "
         "the last step of y is y[:, -1].",
     },

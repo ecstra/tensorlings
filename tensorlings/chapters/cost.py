@@ -566,7 +566,8 @@ COST2 = Exercise(
         "storage.data_ptr() against storage.nbytes() in a dict and gives the tensor back. Sum the sizes whose start "
         "is not a parameter's.",
         "training_flops": "Six times the parameters times the tokens.",
-        "counted_training_flops": "Run model(x).sum().backward() inside the with block, then read "
+        "counted_training_flops": "Inside the with block, run the model on x, sum the output and call backward on "
+        "that. Then read "
         "counter.get_total_flops().",
     },
     introduces=(),

@@ -500,7 +500,8 @@ LORA1 = Exercise(
         "LoRALinear.__init__": "base.requires_grad_(False) freezes it. torch.randn(rank, base.in_features) / "
         "math.sqrt(base.in_features) and torch.zeros(base.out_features, rank), each wrapped in nn.Parameter.",
         "LoRALinear.forward": "self.base(x) plus x @ self.A.T @ self.B.T, times self.scale.",
-        "add_lora": "model.requires_grad_(False) first. Then for each block of model.h, set block.attn.c_attn to "
+        "add_lora": "First freeze the whole model by passing False to its requires_grad_. Then for each block of "
+        "model.h, set block.attn.c_attn to "
         "LoRALinear(block.attn.c_attn, rank, alpha).",
     },
     introduces=(),

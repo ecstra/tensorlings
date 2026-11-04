@@ -410,9 +410,9 @@ MOE1 = Exercise(
     hints={
         "route": "scores.topk(k, dim=-1) gives .values and .indices. Return torch.softmax of the values over dim=-1, "
         "then the indices.",
-        "MoE.forward": "weights, chosen = route(self.router(x), self.k). For each expert, (chosen == index).nonzero("
-        "as_tuple=True) gives rows and slots. Skip an expert with no rows, and add weights[rows, slots].unsqueeze(1) "
-        "times the expert's output on x[rows] into out[rows].",
+        "MoE.forward": "Call route on self.router's scores for x and self.k, which gives weights and chosen. For each "
+        "expert, (chosen == index).nonzero(as_tuple=True) gives rows and slots. Skip an expert with no rows, and add "
+        "weights[rows, slots].unsqueeze(1) times the expert's output on x[rows] into out[rows].",
         "expert_load": "torch.bincount(chosen.flatten(), minlength=experts) counts the choices. Divide by "
         "chosen.numel() as floats.",
     },

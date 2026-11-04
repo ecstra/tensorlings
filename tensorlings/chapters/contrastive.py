@@ -731,8 +731,9 @@ CONTRASTIVE2 = Exercise(
     hints={
         "two_views": "random_affine(images, generator), plus noise * torch.randn(images.shape, generator=generator). "
         "Build the first view this way, then the second.",
-        "train_contrastive": "batch = images[torch.randint(0, len(images), (256,), generator=generator)]. Then "
-        "two_views of it with 0.3, info_nce of model of each with the temperature, zero_grad, backward and step.",
+        "train_contrastive": "Pick a batch of 256 images at places drawn by torch.randint below len(images), using "
+        "generator. Then two_views of it with 0.3, info_nce of model of each with the temperature, zero_grad, "
+        "backward and step.",
     },
     introduces=(),
     check=check_contrastive2,

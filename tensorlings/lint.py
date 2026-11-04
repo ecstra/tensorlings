@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import ast
+import io
 import re
+import tokenize
 
 from rich.console import Console
 from rich.markdown import Markdown
@@ -110,6 +112,9 @@ BOLD_LABEL = re.compile(r"^\*\*[^*\n]+[.:]\*\*", re.MULTILINE)
 
 # A solution shorter than this many code tokens is too generic to count as copied, like "x @ y".
 SHORTEST_ANSWER = 6
+
+# A solution line shorter than this many characters, like "return x" or "pass", gives nothing away in a hint.
+SHORTEST_LINE = 20
 
 CODE_TOKEN = re.compile(r"[A-Za-z_]\w*|\d+(?:\.\d*)?|\S")
 
@@ -221,6 +226,33 @@ def shown_code(text: str) -> str:
     return " " + " ".join(tokens) + " "
 
 
+def written_lines(exercise: Exercise) -> dict[str, str]:
+    """Each solution line the learner has to write, keyed to its code as tokens, with a leading return and a
+    trailing comma left out. Short lines and lines the starting file already shows, as code or in a TODO, are left out."""
+    comment_columns: dict[int, int] = {
+        token.start[0]: token.start[1]
+        for token in tokenize.generate_tokens(io.StringIO(exercise.solution).readline)
+        if token.type == tokenize.COMMENT
+    }
+    # A TODO that wraps opens each of its lines with a #, so the marks come off and the TODO reads as one run.
+    starting_text = " ".join(line.strip().lstrip("#") for line in exercise.source.splitlines())
+    shown = f" {' '.join(CODE_TOKEN.findall(starting_text))} "
+    lines: dict[str, str] = {}
+
+    for number, line in enumerate(exercise.solution.split("\n"), start=1):
+        code = " ".join(line[: comment_columns.get(number)].split()).removesuffix(",")
+
+        if len(code) < SHORTEST_LINE:
+            continue
+
+        written = f" {' '.join(CODE_TOKEN.findall(code.removeprefix('return ')))} "
+
+        if written not in shown:
+            lines[code] = written
+
+    return lines
+
+
 def lint_exercise(
     exercise: Exercise,
     introduced_before: set[str],
@@ -274,6 +306,15 @@ def lint_exercise(
 
         if len(body) >= SHORTEST_ANSWER and f" {' '.join(body)} " in shown:
             findings.append(f"shows the answer to {function}")
+
+    lines_to_write = written_lines(exercise)
+
+    for function, hint in exercise.hints.items():
+        hint_code = f" {' '.join(CODE_TOKEN.findall(hint))} "
+
+        for line, line_code in lines_to_write.items():
+            if line_code in hint_code:
+                findings.append(f"the hint for {function} gives the solution line '{line}' word for word")
 
     height = len(
         console.render_lines(

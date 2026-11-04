@@ -570,7 +570,8 @@ PROFILE1 = Exercise(
         "synchronize": 'Compare device.type with "cuda" and with "mps".',
         "time_call": "A loop of warmup calls, then synchronize(device). In the timed loop, read the clock, call run, "
         "synchronize, read the clock again, and keep the difference. Then statistics.median.",
-        "calls_of": "with profile(activities=[ProfilerActivity.CPU]) as profiler: run(). After the block, loop over "
+        "calls_of": "Call run() inside a with block over profile, its activities a list holding ProfilerActivity.CPU, "
+        "named profiler. After the block, loop over "
         "profiler.key_averages() and compare each row.key with name.",
     },
     introduces=(),

@@ -375,8 +375,8 @@ MASKED1 = Exercise(
         "random_ids where chosen and roll is from 0.8 up to 0.9.",
         "masked_loss": "scores[chosen] gives one row of scores per chosen position, and ids[chosen] the answers. Pass "
         "both to F.cross_entropy.",
-        "copy_scores": "right = corrupted == ids. Its mean as floats is the first share, and right[chosen]'s mean the "
-        "second. .item() each one.",
+        "copy_scores": "Compare corrupted with ids for right, one bool per token. Its mean as floats is the first "
+        "share, and right[chosen]'s mean the second. .item() each one.",
     },
     introduces=(),
     check=check_masked1,
@@ -668,9 +668,9 @@ MASKED2 = Exercise(
     source=MASKED2_SOURCE,
     solution=MASKED2_SOLUTION,
     hints={
-        "random_masking": "keep = the draws' argsort over dim=1, cut to the first kept. rows = torch.arange(batch)."
-        "unsqueeze(1) picks each row's patches with patches[rows, keep]. Start hidden all True and set it False at "
-        "[rows, keep].",
+        "random_masking": "keep = the draws' argsort over dim=1, cut to the first kept. Make rows a column of row "
+        "numbers, torch.arange over batch with .unsqueeze(1). It picks each row's patches with patches[rows, keep]. "
+        "Start hidden all True and set it False at [rows, keep].",
         "fill_in": "mask_token.expand(batch, count, size).clone() gives a tensor you can write into. Put visible at "
         "[rows, keep] the same way random_masking picked them.",
         "masked_mse": "((predicted - patches) ** 2).mean(dim=-1) is one error per patch. Pick the hidden ones with "

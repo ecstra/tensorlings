@@ -1070,7 +1070,7 @@ GATING1 = Exercise(
     hints={
         "gate": "torch.sigmoid of x @ weight.T + bias.",
         "gated": "Multiply signal by gate(x, weight, bias).",
-        "glu": "Split x @ weight.T + bias into a and b with .chunk(2, dim=-1), then return a * torch.sigmoid(b).",
+        "glu": "Split x @ weight.T + bias into a and b with .chunk(2, dim=-1), then multiply a by torch.sigmoid of b.",
     },
     introduces=(),
     check=check_gating1,

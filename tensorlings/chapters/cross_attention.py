@@ -785,8 +785,9 @@ CROSS2 = Exercise(
     hints={
         "Copier.read": "torch.zeros(memory.shape[:2], dtype=torch.bool) blocks nothing. Pass outputs, memory and it to "
         "self.cross, torch.cat the outputs with the result on dim=-1, and run self.head.",
-        "Copier.forward": "memory, state = self.encoder(self.embedding(source)). The decoder's outputs come from "
-        "self.embedding(so_far) and state. Return self.read(outputs, memory).",
+        "Copier.forward": "Run self.encoder on the embedded source, keeping every step as memory and the last state. "
+        "The decoder's outputs come from self.embedding(so_far) and state. Return what self.read makes of those "
+        "outputs and memory.",
         "greedy_copy": "torch.full((len(source), 1), START) starts it. Each step, run model.decoder on the embedded "
         "symbol and the state, take model.read(outputs, memory).argmax(dim=2), keep it, and torch.cat at the end.",
     },

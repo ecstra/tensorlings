@@ -1247,7 +1247,7 @@ DEBUG5 = Exercise(
     source=DEBUG5_SOURCE,
     solution=DEBUG5_SOLUTION,
     hints={
-        "train_steps": "Add optimizer.zero_grad() before loss.backward().",
+        "train_steps": "Clear the old gradients with the optimizer's zero_grad before loss.backward().",
         "accuracy": "Call model.eval() before measuring.",
         "batch_loss": "Leave out reduction=\"sum\", so F.cross_entropy takes the mean.",
     },

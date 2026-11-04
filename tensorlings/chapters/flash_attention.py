@@ -726,7 +726,8 @@ FLASH2 = Exercise(
         "after its shrink.",
         "blocks_read": "math.ceil(steps / block) blocks each way. Query block i reads key blocks 0 to i when causal, "
         "which adds up to blocks * (blocks + 1) // 2.",
-        "scores_held": "steps * steps written out. Tiled, a block is min(block, steps) wide, squared.",
+        "scores_held": "Written out, the whole grid of scores is steps wide and steps tall. Tiled, a block is "
+        "min(block, steps) wide, squared.",
     },
     introduces=(),
     check=check_flash2,

@@ -734,7 +734,8 @@ PPO1 = Exercise(
         "probability_ratio": "The ratio of two chances is the exp of the difference of their logs.",
         "ppo_loss": "ratio from probability_ratio, and ratio.clamp(1 - epsilon, 1 + epsilon). torch.min of the two "
         "times the advantages, then .mean() with a minus in front.",
-        "objective_slopes": "leaf = ratios.clone().requires_grad_(). Build torch.min of leaf * advantage and the "
+        "objective_slopes": "Make a leaf from ratios.clone() and requires_grad_. Build torch.min of leaf * advantage "
+        "and the "
         "clamped leaf * advantage, .sum().backward(), and return leaf.grad.",
     },
     introduces=(),

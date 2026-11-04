@@ -1911,7 +1911,8 @@ DESIGN4 = Exercise(
     solution=DESIGN4_SOLUTION,
     hints={
         "identity_gap": "Take block(x) - x, its .abs().max(), and .item().",
-        "silent_after_one_step": "copied = copy.deepcopy(model), and an SGD over copied.parameters(). After the "
+        "silent_after_one_step": "Work on a copy.deepcopy of the model, with an SGD over copied.parameters(). After "
+        "the "
         "second backward, keep each name from copied.named_parameters() whose grad is None or not grad.any().",
         "GatedBlock.__init__": "Under torch.no_grad(), call .zero_() on self.down.weight and self.down.bias, after "
         "the layers are made.",

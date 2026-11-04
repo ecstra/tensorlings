@@ -746,7 +746,8 @@ PRECISION2 = Exercise(
         "torch.isfinite(...).all() says whether one is finite.",
         "update_scale": "Three cases, an inf, a good step that completes growth_interval, and any other good step.",
         "mixed_step": "Only the forward pass and the loss go inside the with block. Backward on loss * scale comes "
-        "after it, then unscale_, then optimizer.step() when finite, then optimizer.zero_grad().",
+        "after it, then unscale_, then optimizer.step() when finite. Last, clear the gradients with the optimizer's "
+        "zero_grad.",
     },
     introduces=(),
     check=check_precision2,

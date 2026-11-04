@@ -557,8 +557,9 @@ MULTIHEAD2 = Exercise(
     source=MULTIHEAD2_SOURCE,
     solution=MULTIHEAD2_SOLUTION,
     hints={
-        "MultiHeadAttention.forward": "q, k, v = self.qkv(x).chunk(3, dim=-1). Pass the split heads to "
-        "F.scaled_dot_product_attention with attn_mask=~blocked, or None without a mask. Merge, then self.out.",
+        "MultiHeadAttention.forward": "Run self.qkv on x and cut it into q, k and v with .chunk(3, dim=-1). Pass "
+        "the split heads to F.scaled_dot_product_attention with attn_mask=~blocked, or None without a mask. Merge, "
+        "then self.out.",
         "copy_from_torch": "Inside torch.no_grad(), .copy_ in_proj_weight and in_proj_bias into ours.qkv, and "
         "out_proj's weight and bias into ours.out.",
         "weight_count": "Three input Linears and one output Linear, each size * size weights and size biases.",
@@ -900,8 +901,8 @@ MULTIHEAD3 = Exercise(
     source=MULTIHEAD3_SOURCE,
     solution=MULTIHEAD3_SOLUTION,
     hints={
-        "lookup_targets": "Take first = max(offsets), and steps the length of each sequence, x.shape[1]. Then "
-        "x[:, first - offset : steps - offset] holds the token offset back for every position from first on. "
+        "lookup_targets": "Take first as the largest of offsets, and steps the length of each sequence, x.shape[1]. "
+        "Then x[:, first - offset : steps - offset] holds the token offset back for every position from first on. "
         "torch.stack one per offset with dim=2.",
         "LookupModel.forward": "Split q, k and v into self.heads heads, pass them to F.scaled_dot_product_attention "
         "with is_causal=True, and merge_heads the result.",

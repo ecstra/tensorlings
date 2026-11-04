@@ -758,8 +758,8 @@ VIT2 = Exercise(
         "SmallViT.forward": "self.blocks(self.embed(images)), then self.norm. Its output at position 0 is the class "
         "token's, which goes to self.head.",
         "train_steps": "F.cross_entropy(model(x[batch]), y[batch]).",
-        "data_curve": "For each size, model = make_model(), then train_steps(model, x[:size], y[:size], steps, "
-        "generator), then append accuracy(model, validation_x, validation_y).",
+        "data_curve": "For each size, build a fresh model with make_model. Train it with train_steps on the first size "
+        "rows of x and y, for steps, with generator. Then append accuracy(model, validation_x, validation_y).",
     },
     introduces=(),
     check=check_vit2,

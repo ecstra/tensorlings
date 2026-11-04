@@ -851,7 +851,8 @@ GAN2 = Exercise(
     solution=GAN2_SOLUTION,
     hints={
         "ring_points": "mode_centers(modes) indexed with the drawn modes gives each point's center. Add the noise.",
-        "train_step": "fake = generator(noise). The discriminator's loss takes discriminator(fake.detach()). After its "
+        "train_step": "Make the fakes once from the noise with the generator. The discriminator's loss takes "
+        "discriminator(fake.detach()). After its "
         "step, the generator's loss takes discriminator(fake). Return d_loss.item() and g_loss.item().",
         "coverage": "torch.cdist(samples, centers).min(dim=1) gives each sample's nearest distance and center. "
         "torch.bincount with minlength counts the near samples per center.",

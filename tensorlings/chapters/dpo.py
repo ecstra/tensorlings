@@ -1256,8 +1256,9 @@ GRPO1 = Exercise(
     hints={
         "group_advantages": "rewards.mean(dim=1, keepdim=True) and rewards.std(dim=1, keepdim=True) keep one number per "
         "row that broadcasts back. Subtract the mean, then divide by the std plus 1e-4.",
-        "kl_estimate": "gap = reference_logprobs - logprobs, then gap.exp() minus gap minus 1.",
-        "grpo_loss": "ratio = (logprobs - old_logprobs).exp(). advantages.unsqueeze(1) lines up with the tokens. "
+        "kl_estimate": "The gap is the reference log probs minus the policy's. Then gap.exp() minus gap minus 1.",
+        "grpo_loss": "The ratio is .exp() of the log probs minus the old log probs. advantages.unsqueeze(1) lines up "
+        "with the tokens. "
         "torch.minimum of ratio times it and ratio.clamp(1 - epsilon, 1 + epsilon) times it, minus beta * "
         "kl_estimate. Multiply by mask, sum over dim=1, divide by mask.sum(dim=1), take the mean, and negate.",
     },

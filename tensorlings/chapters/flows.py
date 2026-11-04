@@ -417,7 +417,8 @@ FLOW1 = Exercise(
     hints={
         "normal_log_prob": "Sum z ** 2 over the last dimension and halve it with a minus sign. Then take away "
         "z.shape[-1] / 2 times math.log(2 * math.pi).",
-        "affine_log_prob": "z = (x - shift) / scale. Then normal_log_prob(z), minus the sum of the logs of the "
+        "affine_log_prob": "Undo the map to get z: take the shift off x and divide by the scale. Then "
+        "normal_log_prob(z), minus the sum of the logs of the "
         "scale's sizes, torch.log(scale.abs()).sum().",
         "log_abs_det": "torch.autograd.functional.jacobian(g, x) gives the matrix, and torch.linalg.slogdet of it has "
         ".logabsdet.",
@@ -620,7 +621,8 @@ FLOW2 = Exercise(
     source=FLOW2_SOURCE,
     solution=FLOW2_SOLUTION,
     hints={
-        "Coupling.forward": "kept, moved = self.halves(x). s, t = self.scale_and_shift(kept). Join kept with "
+        "Coupling.forward": "self.halves splits x into the kept and the moved halves. self.scale_and_shift of the "
+        "kept half gives s and t. Join kept with "
         "moved * torch.exp(s) + t, and return that with s summed over dim=1.",
         "Coupling.inverse": "Split y the same way. The kept half gives the same s and t, so the moved half is "
         "(moved - t) * torch.exp(-s). Join them back.",

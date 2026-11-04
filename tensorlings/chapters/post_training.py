@@ -1074,10 +1074,12 @@ POST1 = Exercise(
     source=POST1_SOURCE,
     solution=POST1_SOLUTION,
     hints={
-        "chat_example": "prompt = prompt_text(word). Make one tensor of the ids of prompt + answer + a newline. x is "
+        "chat_example": "prompt_text of the word gives the prompt. Make one tensor of the ids of prompt + answer + a "
+        "newline. x is "
         "ids[:-1] and y is ids[1:].clone(). The answer starts at place len(prompt), so its first target sits at place "
         "len(prompt) - 1. Set y before that to -100.",
-        "sft_step": "scores = model(x.to(device)). F.cross_entropy of scores.flatten(0, 1) and y.to(device).flatten(). "
+        "sft_step": "Move x to device and run the model on it for the scores. F.cross_entropy of scores.flatten(0, 1) "
+        "and y.to(device).flatten(). "
         "Then zero_grad, backward, step, and loss.item().",
         "answer": "Make ids with torch.tensor([[...]], device=device). Inside torch.no_grad(), loop 12 times. Take "
         "the argmax of model(ids)[0, -1] with .item(), and break if characters[token] is a newline. Otherwise add "
@@ -1821,8 +1823,8 @@ POST3 = Exercise(
         "reward_rows": "Build each text as prompt_text(word) + answer + a newline. torch.full makes the rows of "
         "newline ids, one per text, as long as the longest. Copy each text's ids into its row. The last places are "
         "each text's length minus 1.",
-        "mean_reward": "reward_model.eval(), then inside torch.no_grad() call reward_model(*reward_rows(...)). Call "
-        "reward_model.train(), then return the rewards' mean().item().",
+        "mean_reward": "reward_model.eval(), then inside torch.no_grad() call reward_model(*reward_rows(...)). Put "
+        "the reward model back in training mode with its train method, then return the rewards' mean().item().",
         "preferred_gpt": "Your post2 model is read from checkpoints/post2.pt. Train post2 again if it scores low.",
     },
     introduces=(),

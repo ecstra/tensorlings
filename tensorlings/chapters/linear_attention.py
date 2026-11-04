@@ -510,9 +510,9 @@ LINATTN2 = Exercise(
     hints={
         "memory_numbers": "Linear attention keeps size * size for the state plus size for the sum of the keys. "
         "Softmax attention keeps pairs keys and pairs values, each of size numbers.",
-        "LinearRecaller.forward": "k = F.elu(self.keys(keys)) + 1, and q the same from self.queries(query) with "
-        ".unsqueeze(1). Divide q @ (k.transpose(1, 2) @ self.values(values)) by q @ k.sum(dim=1, keepdim=True) "
-        "transposed, then .squeeze(1) and self.out.",
+        "LinearRecaller.forward": "For k, put keys through self.keys and F.elu, then add 1. Make q the same way from "
+        "self.queries(query), with .unsqueeze(1). Divide q @ (k.transpose(1, 2) @ self.values(values)) by "
+        "q @ k.sum(dim=1, keepdim=True) transposed, then .squeeze(1) and self.out.",
     },
     introduces=(),
     check=check_linattn2,

@@ -639,8 +639,9 @@ BPTT2 = Exercise(
     hints={
         "Predictor.forward": "self.rnn(x, h) gives every step's state and the last state. Pass the first through "
         "self.out and return both.",
-        "train_truncated": "predictions, h = model(x_chunk, h). Take F.mse_loss against y_chunk, zero the gradients, "
-        "backward and step. Then set h = h.detach() for the next chunk.",
+        "train_truncated": "Call model on x_chunk and the carried h, and keep both the predictions and the new h. "
+        "Take F.mse_loss against y_chunk, zero the gradients, backward and step. Then set h = h.detach() for the "
+        "next chunk.",
     },
     introduces=(),
     check=check_bptt2,
@@ -1031,7 +1032,8 @@ BPTT3 = Exercise(
     hints={
         "gradient_by_distance": "Clone x and call .requires_grad_(). Run rnn on it, call .sum().backward() on the "
         "last state, take x.grad.norm(dim=(0, 2)), and .flip(0) it.",
-        "identity_start_": "Inside torch.no_grad(), rnn.weight_hh_l0.copy_(torch.eye(rnn.hidden_size) * scale).",
+        "identity_start_": "Inside torch.no_grad(), build torch.eye of rnn.hidden_size times scale and .copy_ it into "
+        "rnn.weight_hh_l0.",
         "train_votes": "cap is float('inf') when max_norm is None, else max_norm. clip_grad_norm_ returns the norm "
         "from before clipping, so keep the larger of it and largest.",
     },

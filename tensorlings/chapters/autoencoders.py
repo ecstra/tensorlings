@@ -1089,7 +1089,8 @@ AUTOENCODER3 = Exercise(
     source=AUTOENCODER3_SOURCE,
     solution=AUTOENCODER3_SOLUTION,
     hints={
-        "projection": "q, _ = torch.linalg.qr(basis), then q times its own transpose.",
+        "projection": "torch.linalg.qr of the basis gives an orthonormal q first and a factor you can drop. Return q "
+        "times its own transpose.",
         "subspace_gap": "Take projection of a minus projection of b, its .norm(), and divide by math.sqrt(2 * k) with k "
         "the number of columns. Return it with .item().",
         "pca_basis": "min(2 * k + 10, x.shape[0], x.shape[1]) is how many to ask for. torch.pca_lowrank gives three "

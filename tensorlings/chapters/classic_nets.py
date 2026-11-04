@@ -342,8 +342,8 @@ LENET1 = Exercise(
     source=LENET1_SOURCE,
     solution=LENET1_SOLUTION,
     hints={
-        "LeNet.forward": "x = F.avg_pool2d(torch.tanh(self.conv1(x)), 2), the same with conv2, then x.flatten(1) "
-        "through fc1 and fc2 with tanh, and fc3 at the end.",
+        "LeNet.forward": "Pass x through conv1, then torch.tanh, then F.avg_pool2d with a window of 2. Do the same "
+        "with conv2, then x.flatten(1) through fc1 and fc2 with tanh, and fc3 at the end.",
         "lenet_parameters": "A convolution has out * in * k * k weights and out biases, as channels1 counted. A "
         "Linear has in * out weights and out biases, and fc3 has classes outputs.",
         "train_lenet": "F.cross_entropy of model(x[batch]) against y[batch].",
@@ -814,9 +814,9 @@ RESNET1 = Exercise(
     source=RESNET1_SOURCE,
     solution=RESNET1_SOLUTION,
     hints={
-        "BasicBlock.__init__": "An if on stride == 1 and in_channels == out_channels. The other case is "
-        "nn.Sequential(nn.Conv2d(in_channels, out_channels, 1, stride=stride, bias=False), "
-        "nn.BatchNorm2d(out_channels)).",
+        "BasicBlock.__init__": "An if on stride == 1 and in_channels == out_channels. The other case is an "
+        "nn.Sequential of a 1 by 1 nn.Conv2d from in_channels to out_channels, with the block's stride and no bias, "
+        "then an nn.BatchNorm2d.",
         "BasicBlock.forward": "Work out the branch in two lines, conv1, bn1 and a ReLU, then conv2 and bn2. Return the "
         "ReLU of that plus self.shortcut(x).",
     },

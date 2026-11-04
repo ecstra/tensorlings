@@ -350,11 +350,13 @@ VAE1 = Exercise(
     source=VAE1_SOURCE,
     solution=VAE1_SOLUTION,
     hints={
-        "Encoder.forward": "h = torch.relu(self.hidden(x)), then return self.mean(h) and self.log_variance(h).",
+        "Encoder.forward": "Pass x through self.hidden and torch.relu. Feed that to self.mean and self.log_variance "
+        "and return both.",
         "kl_to_standard": "log_variance.exp() is the variance. Put the four parts together, sum over dim=-1, and "
         "halve it.",
         "log_normal": "Write the lesson's formula with math.log(2 * math.pi) and log_variance.exp() as the variance.",
-        "kl_by_sampling": "z = mean + torch.exp(0.5 * log_variance) * noise. The standard normal is log_normal with "
+        "kl_by_sampling": "The spread is torch.exp of half the log variance. A sample is the mean plus the spread "
+        "times the noise. The standard normal is log_normal with "
         "zeros for the mean and the log variance. Sum the gap over dim=-1, then average over dim=0.",
     },
     introduces=(),
@@ -718,7 +720,8 @@ VAE2 = Exercise(
     source=VAE2_SOURCE,
     solution=VAE2_SOLUTION,
     hints={
-        "VAE.forward": "mean, log_variance = self.encoder(x). Noise is torch.randn(mean.shape, generator=generator). "
+        "VAE.forward": "self.encoder gives the mean and the log variance of x. Noise is torch.randn(mean.shape, "
+        "generator=generator). "
         "Decode mean plus the spread times the noise, and return the logits with the mean and the log variance.",
         "negative_elbo": "F.binary_cross_entropy_with_logits with reduction=\"sum\" gives the reconstruction. Add half "
         "the sum of the KL parts, then divide by len(x).",

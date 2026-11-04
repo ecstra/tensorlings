@@ -862,9 +862,10 @@ ADDER2 = Exercise(
     source=ADDER2_SOURCE,
     solution=ADDER2_SOLUTION,
     hints={
-        "Adder.forward": "_, state = self.encoder(self.embedding(questions)). Pass self.embedding(answers_so_far) and "
-        "state to self.decoder, and run self.head on its outputs.",
-        "answer_loss": "scores = model(questions, answers[:, :-1]). Reshape them to (-1, 14) and answers[:, 1:] to "
+        "Adder.forward": "Run self.encoder on the embedded questions and keep only its last state. Pass "
+        "self.embedding(answers_so_far) and that state to self.decoder, and run self.head on its outputs.",
+        "answer_loss": "Score with model on questions and every answer place but the last. Reshape the scores to "
+        "(-1, 14) and answers[:, 1:] to "
         "(-1), then F.cross_entropy with ignore_index=0.",
         "greedy": "Start token as torch.full((len(questions), 1), VOCABULARY.index(\"^\")). Each step, run the decoder "
         "on its embedding with the state, take the head's argmax over dim=2, keep it, and torch.cat at the end.",

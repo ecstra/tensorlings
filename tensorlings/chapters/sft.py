@@ -962,8 +962,8 @@ SFT2 = Exercise(
         "grow_vocabulary": "torch.cat the old rows, model.wte.weight.data, with their mean over dim=0 expanded to extra "
         "rows. Make model.wte from that with nn.Embedding.from_pretrained and freeze=False, then a new lm_head whose "
         "weight you set to model.wte.weight.",
-        "sft_step": "answer_loss(model, x, y), then optimizer.zero_grad(), loss.backward(), optimizer.step(), and "
-        "return loss.item().",
+        "sft_step": "answer_loss(model, x, y), then clear the old gradients with the optimizer's zero_grad. Call "
+        "loss.backward() and optimizer.step(), and return loss.item().",
         "answer": "Start ids as a tensor of one row. Inside torch.no_grad(), loop 12 times: argmax of model(ids)[0, -1], "
         "break at END, else add names[token] to the text and torch.cat the token onto ids.",
         "exact_match": "model.eval(), count the words where answer(...) equals word.upper(), model.train(), then divide "

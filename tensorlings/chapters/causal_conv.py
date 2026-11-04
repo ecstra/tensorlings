@@ -1253,8 +1253,8 @@ STFT1 = Exercise(
         "frames": "Call .unfold on signal along dimension 0, with frame_length as the size and hop as the step.",
         "stft_by_hand": "Multiply frames(signal, frame_length, hop) by torch.hann_window(frame_length). Then "
         "torch.fft.rfft with dim=1 gives one row per window, and .T makes them columns.",
-        "spectrogram": "Call torch.stft with the arguments the TODO names and window=torch.hann_window(n_fft), then "
-        "take .abs().",
+        "spectrogram": "Build a torch.hann_window of n_fft places. Call torch.stft with the arguments the TODO names "
+        "and that as the window, then take .abs().",
         "loudest_frequencies": "The frequencies run down each column, so take the argmax over dim=0.",
     },
     introduces=(),

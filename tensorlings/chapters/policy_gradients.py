@@ -781,7 +781,8 @@ REINFORCE1 = Exercise(
         "log_probabilities": "torch.log_softmax(preferences, dim=0) gives every arm's log probability. Index it "
         "with the actions.",
         "reinforce_loss": "Multiply log_probs by rewards, take the mean, and put a minus in front.",
-        "train_bandit": "preferences = torch.zeros(len(arm_means), requires_grad=True), and SGD over [preferences]. "
+        "train_bandit": "Start the preferences as torch.zeros, one per arm, with requires_grad=True, and SGD over "
+        "[preferences]. "
         "In the loop, play, then reinforce_loss of log_probabilities(preferences, actions) and the rewards, then "
         "zero_grad, backward and step.",
     },
@@ -1009,7 +1010,8 @@ REINFORCE2 = Exercise(
     solution=REINFORCE2_SOLUTION,
     hints={
         "advantages": "Subtract rewards.mean() from rewards.",
-        "gradient_samples": "In a loop, leaf = preferences.clone().requires_grad_(), then play with the leaf. Call "
+        "gradient_samples": "In a loop, make a fresh leaf with preferences.clone() and requires_grad_, then play with "
+        "the leaf. Call "
         ".backward() on reinforce_loss of log_probabilities(leaf, actions) and the weights, keep -leaf.grad, and "
         "torch.stack the list.",
         "gradient_noise": "samples.std(dim=0) gives each arm's spread over the trials. Take its .mean() and .item().",
@@ -1287,7 +1289,8 @@ REINFORCE3 = Exercise(
         "estimate. Subtract exact_gradient, then .abs().max().item().",
         "word_log_probs": "torch.log_softmax(logits, dim=1), indexed with torch.arange(len(logits)) and words, then "
         ".sum(dim=1).",
-        "train_speller": "logits = torch.zeros(len(target), LETTERS, requires_grad=True). In the loop, spell, then "
+        "train_speller": "Start the logits as torch.zeros, one row of LETTERS per letter of the target, with "
+        "requires_grad=True. In the loop, spell, then "
         "matches, then reinforce_loss of word_log_probs and advantages(rewards), then zero_grad, backward and step.",
     },
     introduces=(),

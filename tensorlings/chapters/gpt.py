@@ -1274,8 +1274,9 @@ GPT3 = Exercise(
     source=GPT3_SOURCE,
     solution=GPT3_SOLUTION,
     hints={
-        "learning_rate": "Below warmup, max_lr * (step + 1) / warmup. After it, progress = (step - warmup) / (total - "
-        "warmup), and min_lr plus half of max_lr - min_lr times 1 + math.cos(math.pi * progress).",
+        "learning_rate": "Below warmup, scale max_lr by step + 1 over warmup. After it, progress is how far step is "
+        "past warmup, as a share of total minus warmup. The rate is min_lr plus half of max_lr - min_lr times 1 + "
+        "math.cos(math.pi * progress).",
         "make_optimizer": "Split model.parameters() by parameter.dim() >= 2 into two groups, each a dict with "
         "\"params\" and \"weight_decay\", and pass the list to torch.optim.AdamW with betas=(0.9, 0.95).",
         "train_step": "Loop over optimizer.param_groups to set \"lr\". scores.flatten(0, 1) against y.flatten() for "
@@ -1670,8 +1671,8 @@ GPT4 = Exercise(
         "masked_fill the scores below it with float(\"-inf\").",
         "next_token": "torch.softmax of top_k_filter(scores / temperature, top_k) over dim=-1, then "
         "torch.multinomial of it with 1 draw and generator=generator.",
-        "generate": "model.eval() and torch.no_grad(). Each step, scores = model(ids[:, -model.block_size :])[:, -1], "
-        "then torch.cat next_token's pick onto ids on dim=1.",
+        "generate": "model.eval() and torch.no_grad(). Each step, run model on the last model.block_size ids and keep "
+        "the scores at the final place. Then torch.cat next_token's pick onto ids on dim=1.",
         "sample": "generate(model, prompt, 200, 0.8, 20, torch.Generator().manual_seed(0)), then join "
         "characters[index] for each index of its first row.",
     },

@@ -723,8 +723,9 @@ DDP2 = Exercise(
     source=DDP2_SOURCE,
     solution=DDP2_SOLUTION,
     hints={
-        "accumulated_step": "optimizer.zero_grad() once, then loop over zip(x.chunk(micro_batches), "
-        "y.chunk(micro_batches)). Divide each loss by micro_batches, call backward, add .item() to total, and step "
+        "accumulated_step": "Clear the gradients once with the optimizer's zero_grad, then loop over "
+        "zip(x.chunk(micro_batches), y.chunk(micro_batches)). Divide each loss by micro_batches, call backward, add "
+        ".item() to total, and step "
         "after the loop.",
         "accumulation_steps": "One step covers micro_batch_size * workers examples per micro batch. Divide batch_size by "
         "that with //.",
