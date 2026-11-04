@@ -22,6 +22,8 @@ from ..engine import (
     small_tensor,
 )
 from ..text import prose, source_file
+from .classic_nets import pinned_threads
+from .gan import REFERENCE as GAN_PARTS
 from .linear_layers import expect_module
 
 FLOWS = Chapter(
@@ -241,10 +243,15 @@ FLOW1_LESSON = prose(
     log p(x) = log N(g(x)) + log |det J_g(x)|
     ```
 
-    `J_g` is the Jacobian of `g`, the matrix of how each output moves with each
-    input. Its determinant says how much `g` stretches a small area around `x`.
-    Where `g` squeezes a wide region of `x` into a small one of `z`, the
-    density of `x` is lower than `z`'s by that factor.
+    `N` is the standard normal's density. `J_g` is the Jacobian of `g`, the
+    matrix of how each output moves with each input. Its determinant says how
+    much `g` stretches a small area around `x`. Where `g` squeezes a wide
+    region of `x` into a small one of `z`, the density of `x` is lower than
+    `z`'s by that factor.
+
+    For `g(v) = 2 * v` in 2 dimensions, the Jacobian is `[[2, 0], [0, 2]]`.
+    With zeros off the diagonal, the determinant is the product of the
+    diagonal, 4. Every small square grows to 4 times its area.
 
     In one dimension take `x = 3z`. The values of `x` spread 3 times as wide,
     so their density is 3 times lower. Here `g(x) = x / 3` has derivative 1/3,
@@ -260,7 +267,8 @@ FLOW1_LESSON = prose(
     For any `g`, `torch.autograd.functional.jacobian(g, x)` builds the
     Jacobian at one point, and `torch.linalg.slogdet` gives the log of its
     determinant's size as `.logabsdet`. That costs a backward pass per
-    dimension and a determinant that grows with the cube of the dimension.
+    dimension, and a determinant whose cost grows with the cube of the
+    dimension.
     flow2's layer is built so its determinant comes nearly free.
     """,
 )
@@ -425,6 +433,32 @@ FLOW1 = Exercise(
 # flow2
 # ---------------------------------------------------------------------------
 
+
+def measure_coupling(seed: int = 0) -> dict[str, float]:
+    """flow2's numbers for one seed, on a layer whose network starts 3 times larger, as the checks make it, and 1,000
+    points. The largest gap between the points and the inverse of the layer's output, and the first point's log
+    determinant as the sum of s and as slogdet of the full Jacobian. The lesson gives seeds 0 to 2. Not run by any
+    check."""
+    torch.manual_seed(seed)
+    layer = REFERENCE["Coupling"](False)
+    x = torch.randn(1000, 2, generator=torch.Generator().manual_seed(seed))
+
+    with torch.no_grad():
+        for parameter in layer.net.parameters():
+            parameter.mul_(3)
+
+        y, log_det = layer(x)
+        gap = (layer.inverse(y) - x).abs().max().item()
+
+    full = REFERENCE["log_abs_det"](lambda point: layer(point.unsqueeze(0))[0].squeeze(0), x[0])
+
+    return {
+        "inverse gap": gap,
+        "sum of s": log_det[0].item(),
+        "slogdet": full.item(),
+    }
+
+
 FLOW2_LESSON = prose(
     """
     A determinant through `slogdet` is slow and a general network has no
@@ -452,10 +486,10 @@ FLOW2_LESSON = prose(
 
     `.chunk(2, dim=1)` splits a tensor into two along its columns.
 
-    On 1,000 points here, a layer's inverse gave back its input within
-    0.000002, the rounding of 32 bit numbers. For one point, the sum of `s`
-    gave a log determinant of 0.9089, and flow1's `slogdet` of the full
-    Jacobian gave 0.9089 too.
+    On 1,000 points and 3 seeds, a layer's inverse gave back its input within
+    0.000001, the rounding of 32 bit numbers. For each seed's first point, the
+    sum of `s` gave log determinants from -0.997 to 0.692. flow1's `slogdet`
+    of the full Jacobian matched each within 0.000001.
     """,
 )
 
@@ -614,21 +648,27 @@ FLOW3_LESSON = prose(
     each one's `inverse`.
 
     Here it is against the best single normal, fitted with the data's own
-    mean and covariance. The covariance holds each number's spread and how
-    the two numbers vary together. A sample counts as on the moons within
-    0.15 of the arcs.
+    mean and covariance, and against gan3's VAE. The covariance holds each
+    number's spread and how the two numbers vary together. A sample counts as
+    on the moons within 0.15 of the arcs. Each range covers 3 seeds.
 
     | Model | Mean log density of new points | Samples on the moons |
     |---|---|---|
-    | The best single normal | -1.89 | 35.9% |
-    | Flow, 250 steps | -0.59 | 89.4% |
-    | Flow, 1,000 steps | -0.38 | 97.7% |
-    | Flow, 2,000 steps | -0.38 | 98.5% |
+    | The best single normal | -1.89 | 34.7% to 34.8% |
+    | VAE, 8,000 steps, its ELBO | -1.03 to -1.15 | 88% to 92% |
+    | Flow, 250 steps | -0.52 to -0.77 | 81.4% to 90.7% |
+    | Flow, 1,000 steps | -0.38 to -0.39 | 97.7% to 98.1% |
+    | Flow, 2,000 steps | -0.35 to -0.38 | 98.5% to 99.1% |
 
     The normal puts nearly two thirds of its samples off the arcs. The flow
     bends space so that the round cloud of noise lands on both of them. Its
-    log density stops improving after about 1,000 steps here, while its
-    samples keep sharpening a little.
+    log density improves only a little after 1,000 steps here, while its
+    samples keep sharpening.
+
+    The VAE gives only its ELBO, a bound below its log density. A closer
+    estimate from 500 codes per point still comes to only -0.77 to -0.81. A
+    GAN gives no density at all. When the likelihood of each point matters,
+    a flow gives it exactly.
 
     `reversed(layers)` walks a list from its end.
 
@@ -751,6 +791,95 @@ def share_on_moons(samples: Tensor) -> float:
     curve = REFERENCE["two_moons"](4000, 0.0, torch.Generator().manual_seed(3))
 
     return (torch.cdist(samples, curve).min(dim=1).values < 0.15).float().mean().item()
+
+
+def train_moons_vae(
+    seed: int,
+    steps: int,
+    sigma: float = 0.1,
+) -> tuple[nn.Module, nn.Module]:
+    """gan3's VAE with its layers, trained on the moons with Adam at 0.001 on batches of 256. Its reconstruction is
+    the squared error over 2 * sigma ** 2, the negative log density of a normal of spread sigma, constants dropped."""
+    torch.manual_seed(seed)
+    encoder = GAN_PARTS["mlp"](2, 4)
+    decoder = GAN_PARTS["mlp"](2, 2)
+    optimizer = torch.optim.Adam([*encoder.parameters(), *decoder.parameters()], lr=1e-3)
+    rng = torch.Generator().manual_seed(seed + 100)
+
+    for _ in range(steps):
+        real = REFERENCE["two_moons"](256, 0.05, rng)
+        mean, log_variance = encoder(real).chunk(2, dim=1)
+        code = mean + torch.exp(0.5 * log_variance) * torch.randn(256, 2, generator=rng)
+
+        reconstruction = ((real - decoder(code)) ** 2).sum(dim=1) / (2 * sigma**2)
+        kl = 0.5 * (mean**2 + log_variance.exp() - 1 - log_variance).sum(dim=1)
+        loss = (reconstruction + kl).mean()
+
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+    return encoder, decoder
+
+
+def vae_log_densities(
+    encoder: nn.Module,
+    decoder: nn.Module,
+    sigma: float,
+    x: Tensor,
+    draws: int = 500,
+) -> tuple[float, float]:
+    """The VAE's ELBO averaged over the rows of x, and a closer estimate of their log density. The closer one weights
+    each code drawn from the encoder by how much likelier the model makes it than the encoder does, which the ELBO
+    averages away. Both read the same 500 codes per point."""
+    with torch.no_grad():
+        mean, log_variance = encoder(x).chunk(2, dim=1)
+        noise = torch.randn(draws, *mean.shape, generator=torch.Generator().manual_seed(11))
+        z = mean + torch.exp(0.5 * log_variance) * noise
+        rebuilt = decoder(z.reshape(-1, 2)).reshape(draws, len(x), 2)
+
+    log_likelihood = -((x - rebuilt) ** 2).sum(dim=-1) / (2 * sigma**2) - 2 * math.log(sigma) - math.log(2 * math.pi)
+    log_prior = REFERENCE["normal_log_prob"](z)
+    log_encoder = REFERENCE["normal_log_prob"](noise) - 0.5 * log_variance.sum(dim=-1)
+    weights = log_likelihood + log_prior - log_encoder
+
+    return weights.mean(dim=0).mean().item(), (torch.logsumexp(weights, dim=0) - math.log(draws)).mean().item()
+
+
+def measure_moons_models(seed: int = 0) -> dict[str, float]:
+    """Every number of flow3's table for one seed, the mean log density of new points and the share of samples on
+    the moons for each model. The normal fits 20,000 points, the flows train from scratch for each length, and the
+    VAE, with sigma 0.1, trains 8,000 steps. A few minutes on a laptop CPU. The lesson gives seeds 0 to 2. Not run by
+    any check."""
+    test = REFERENCE["two_moons"](2000, 0.05, torch.Generator().manual_seed(1))
+    results: dict[str, float] = {}
+
+    with pinned_threads():
+        data = REFERENCE["two_moons"](20000, 0.05, torch.Generator().manual_seed(100 + seed))
+        centre = data.mean(dim=0)
+        covariance = torch.cov(data.T)
+        drawn = centre + torch.randn(2000, 2, generator=torch.Generator().manual_seed(4)) @ torch.linalg.cholesky(covariance).T
+        results["normal, log density"] = torch.distributions.MultivariateNormal(centre, covariance).log_prob(test).mean().item()
+        results["normal, on the moons"] = share_on_moons(drawn)
+
+        for steps in (250, 1000, 2000):
+            torch.manual_seed(seed)
+            flow = REFERENCE["Flow"](8)
+            REFERENCE["train_flow"](flow, steps, torch.Generator().manual_seed(seed))
+            results[f"flow {steps}, log density"] = held_out_log_prob(flow)
+            results[f"flow {steps}, on the moons"] = share_on_moons(flow.sample(2000, torch.Generator().manual_seed(4)))
+
+        encoder, decoder = train_moons_vae(seed, 8000)
+        elbo, closer = vae_log_densities(encoder, decoder, 0.1, test)
+
+        with torch.no_grad():
+            samples = decoder(torch.randn(2000, 2, generator=torch.Generator().manual_seed(4)))
+
+        results["vae, ELBO"] = elbo
+        results["vae, closer log density"] = closer
+        results["vae, on the moons"] = share_on_moons(samples)
+
+    return results
 
 
 def check_flow_log_prob(found: type) -> None:

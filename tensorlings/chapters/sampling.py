@@ -76,6 +76,19 @@ def reference_largest_gap(
     return (seen - probabilities).abs().max().item()
 
 
+def measure_largest_gaps(seed: int = 0) -> dict[int, float]:
+    """sampling1's table for one seed, with a fresh generator for each count. The lesson gives seeds 0 to 2. Not run
+    by any check."""
+    return {
+        count: reference_largest_gap(
+            probabilities=torch.tensor([0.5, 0.3, 0.2]),
+            count=count,
+            generator=torch.Generator().manual_seed(seed),
+        )
+        for count in (100, 10_000, 1_000_000)
+    }
+
+
 # ---------------------------------------------------------------------------
 # sampling1
 # ---------------------------------------------------------------------------
@@ -87,9 +100,9 @@ SAMPLING1_LESSON = prose(
     chance. names3 and gpt4 used `torch.multinomial` for it, and this exercise
     opens it up.
 
-    Lay the probabilities end to end along a ruler from 0 to 1, so each choice
-    owns a stretch as long as its probability. Drop a point anywhere on the
-    ruler, evenly at random. The stretch it lands in is the draw.
+    Lay the probabilities end to end from 0 to 1, so each choice owns a
+    stretch as long as its probability. Pick a point anywhere from 0 to 1,
+    evenly at random. The stretch it lands in is the draw.
 
     ```python
     probabilities = torch.tensor([0.5, 0.3, 0.2])
@@ -104,11 +117,11 @@ SAMPLING1_LESSON = prose(
     more than the choices. Draws that may repeat need `replacement=True`.
 
     The share of each choice over many draws comes close to its probability.
-    Here is the largest gap over the three choices above.
+    Here is the largest gap over the three choices above, on 3 seeds.
 
     | Draws | 100 | 10,000 | 1,000,000 |
     |---|---|---|---|
-    | Largest gap | 0.070 | 0.0046 | 0.00036 |
+    | Largest gap | 0.03 to 0.13 | 0.0030 to 0.0047 | 0.00003 to 0.00091 |
 
     A hundred times more draws make the gap about ten times smaller. That
     slow shrinking is why a sampled estimate needs many draws to be exact.
@@ -147,8 +160,8 @@ SAMPLING1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the share of draws that picked each of choices choices, as
-    #   floats, one per choice, a choice never drawn included.
+    # TODO: Return, for each choice from 0 to choices - 1, the share of draws
+    #   that picked it, as floats, a choice never drawn included.
     def frequencies(
         draws: Tensor,
         choices: int,
@@ -256,6 +269,8 @@ def check_sampling1(checker: Checker) -> None:
         inputs=(
             (torch.tensor([0.5, 0.3, 0.2]), 100, seeded(652)),
             (torch.tensor([0.25, 0.25, 0.25, 0.25]), 1000, seeded(653)),
+            # Its largest gap is a choice drawn too rarely, so a gap taken without its size comes out smaller.
+            (torch.tensor([0.5, 0.3, 0.2]), 100, seeded(655)),
         ),
         reference=reference_largest_gap,
         expect=expect_close,
@@ -325,6 +340,23 @@ def reference_sample_with(
 PEAKED = torch.tensor([6.0, 3.0, 2.0, 1.0, 0.5, 0.0, 0.0, -1.0, -1.0, -2.0])
 FLAT = torch.tensor([1.0, 0.9, 0.8, 0.8, 0.7, 0.6, 0.5, 0.5, 0.4, 0.3])
 
+
+def measure_top_p_table() -> dict[str, tuple[float, int, float]]:
+    """sampling2's table, the top chance, the count top p of 0.9 keeps and the chance in the top 3 of each set of
+    scores. It draws nothing, so it has no seed. Not run by any check."""
+    table: dict[str, tuple[float, int, float]] = {}
+
+    for name, logits in (("peaked", PEAKED), ("flat", FLAT)):
+        chances = torch.softmax(logits, dim=0)
+        table[name] = (
+            chances.max().item(),
+            reference_kept_count(logits, 0.9),
+            chances.topk(3).values.sum().item(),
+        )
+
+    return table
+
+
 SAMPLING2_LESSON = prose(
     """
     gpt4 shaped its draws with two knobs, temperature and top k. Top k keeps
@@ -333,8 +365,9 @@ SAMPLING2_LESSON = prose(
 
     When the model is sure, a few choices hold almost all the chance, and
     keeping more lets in nonsense. When it is unsure, many choices are fair,
-    and keeping few cuts good ones. Top p, from Holtzman and colleagues, keeps
-    the smallest set of likeliest choices whose chances add up to at least p.
+    and keeping few cuts good ones. Top p, which Holtzman and colleagues call
+    nucleus sampling, keeps the smallest set of likeliest choices whose
+    chances add up to at least p.
 
     Two sets of scores over 10 choices show the difference.
 
@@ -359,8 +392,8 @@ SAMPLING2_LESSON = prose(
     Writing into a tensor at `order` puts each sorted entry back in its own
     place, so `keep[order] = sorted_keep` undoes the sort.
 
-    Libraries apply the knobs in a row, temperature first, then top k, then
-    top p, and draw from what is left.
+    Hugging Face's transformers library applies the knobs in a row,
+    temperature first, then top k, then top p, and draws from what is left.
     """,
 )
 
@@ -565,6 +598,50 @@ def reference_square_gradients(
     return mean_leaf.grad.item(), log_variance_leaf.grad.item()
 
 
+def score_function_gradients(
+    mean: float,
+    log_variance: float,
+    count: int,
+    generator: torch.Generator,
+) -> tuple[float, float]:
+    """The same two gradients by the score function estimator, which Kingma and Welling set the trick against. The
+    draws carry no gradient, and each one's z squared weights the gradient of its own log density."""
+    mean_leaf = torch.tensor(mean, requires_grad=True)
+    log_variance_leaf = torch.tensor(log_variance, requires_grad=True)
+    z = reference_draw_codes(torch.tensor(mean), torch.tensor(log_variance), count, generator)
+    log_density = -0.5 * (math.log(2 * math.pi) + log_variance_leaf + (z - mean_leaf) ** 2 / log_variance_leaf.exp())
+    (z**2 * log_density).mean().backward()
+
+    return mean_leaf.grad.item(), log_variance_leaf.grad.item()
+
+
+def measure_square_gradients(seed: int = 0) -> dict[int, tuple[float, float]]:
+    """sampling3's first table for one seed, with a fresh generator for each count. The lesson gives seeds 0 to 2.
+    Not run by any check."""
+    return {
+        count: reference_square_gradients(
+            mean=1.5,
+            log_variance=math.log(0.25),
+            count=count,
+            generator=torch.Generator().manual_seed(seed),
+        )
+        for count in (10, 1000, 100_000)
+    }
+
+
+def measure_gradient_spreads(seed: int = 0) -> dict[str, tuple[float, float]]:
+    """sampling3's second table for one seed, the spread of each estimator's two gradients over 2,000 estimates of 10
+    draws. Both estimators read the same noise. The lesson gives seeds 0 to 2. Not run by any check."""
+    spreads: dict[str, tuple[float, float]] = {}
+
+    for name, estimate in (("trick", reference_square_gradients), ("score function", score_function_gradients)):
+        generator = torch.Generator().manual_seed(seed)
+        estimates = torch.tensor([estimate(1.5, math.log(0.25), 10, generator) for _ in range(2000)])
+        spreads[name] = (estimates[:, 0].std().item(), estimates[:, 1].std().item())
+
+    return spreads
+
+
 SAMPLING3_LESSON = prose(
     """
     A VAE, in the next chapter, draws a random code while it trains. The loss
@@ -581,9 +658,9 @@ SAMPLING3_LESSON = prose(
     the spread a gradient of 0.
 
     The reparameterization trick moves the randomness out of the way. Draw
-    noise from a standard normal, mean 0 and spread 1, then shift and stretch
-    it, `z = mean + spread * noise`. z has the same distribution as a direct
-    draw. It is a plain sum and product of mean and spread, so autograd
+    noise from a standard normal, likelihood3's Gaussian with mean 0 and
+    spread 1. Then shift and stretch it, `z = mean + spread * noise`. z has
+    the same distribution as a direct draw. It is a plain sum and product of mean and spread, so autograd
     follows it. `torch.distributions.Normal(...).rsample()` does exactly this.
 
     Models output the log of the variance instead of the spread. A Linear can
@@ -592,16 +669,28 @@ SAMPLING3_LESSON = prose(
 
     Gradients through the trick are estimates, averaged over draws. Take the
     average of z squared, with z drawn at a mean of 1.5 and a spread of 0.5.
-    Its true gradient is 2 times the mean, 3, for the mean. For the log
-    variance it is the variance, 0.25.
+    It comes out at the mean squared plus the variance, 2.5. So its true
+    gradient is 2 times the mean, 3, for the mean, and the variance, 0.25,
+    for the log variance. Here are the estimates on 3 seeds.
 
     | Draws | 10 | 1,000 | 100,000 |
     |---|---|---|---|
-    | Gradient for the mean | 2.73 | 3.03 | 3.00 |
-    | Gradient for the log variance | 0.10 | 0.29 | 0.25 |
+    | Gradient for the mean | 2.73 to 2.87 | 3.01 to 3.05 | 3.00 |
+    | Gradient for the log variance | -0.01 to 0.10 | 0.27 to 0.29 | 0.25 |
 
-    Few draws give a noisy gradient, and many give the right one. Training
-    lives with the noise and takes many small steps.
+    Kingma and Welling call the older way, the score function estimator, too
+    noisy to use. It needs no trick. It weights each draw's z squared by how
+    a nudge to the mean or the log variance raises that draw's log density.
+    Both average to the true gradient. Here is how far each strays, as the
+    spread of 2,000 estimates from 10 draws each, on 3 seeds.
+
+    | Estimate | Spread for the mean | Spread for the log variance |
+    |---|---|---|
+    | The trick | 0.31 to 0.32 | 0.26 to 0.27 |
+    | Score function | 2.30 to 2.37 | 1.04 to 1.11 |
+
+    The trick strays about 7 times less for the mean and 4 times less for the
+    log variance. So far fewer draws give a usable gradient.
     """,
 )
 

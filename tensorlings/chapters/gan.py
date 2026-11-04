@@ -23,6 +23,7 @@ from ..engine import (
     small_tensor,
 )
 from ..text import prose, source_file
+from .classic_nets import pinned_threads
 
 GAN = Chapter(
     folder="67_gan",
@@ -269,8 +270,8 @@ def train_ring_vae(
 
 def measure_ring_models() -> dict[str, list[tuple[float, int, float]]]:
     """Every number of gan3's first table and of its stronger reconstruction, as the mean distance to the nearest
-    mode, the modes covered and the share near a mode for each seed. A few minutes on a laptop CPU. Not run by any
-    check."""
+    mode, the modes covered and the share near a mode for each seed. Both models train 8,000 steps, since at 2,000 the
+    VAE is still far from where it settles. A few minutes on a laptop CPU. Not run by any check."""
     centers = REFERENCE["mode_centers"](8)
 
     def scores(samples: Tensor) -> tuple[float, int, float]:
@@ -283,12 +284,49 @@ def measure_ring_models() -> dict[str, list[tuple[float, int, float]]]:
 
     seeds = range(3)
 
-    return {
-        "data": [scores(REFERENCE["ring_points"](2000, 8, torch.Generator().manual_seed(7)))],
-        "gan": [scores(drawn(train_gan(REFERENCE["train_step"], seed, 2000, 1e-3))) for seed in seeds],
-        "vae, sigma 0.1": [scores(drawn(train_ring_vae(seed, 2000, 0.1))) for seed in seeds],
-        "vae, sigma 0.05": [scores(drawn(train_ring_vae(seed, 2000, 0.05))) for seed in seeds],
-    }
+    with pinned_threads():
+        return {
+            "data": [scores(REFERENCE["ring_points"](2000, 8, torch.Generator().manual_seed(7)))],
+            "gan": [scores(drawn(train_gan(REFERENCE["train_step"], seed, 8000, 1e-3))) for seed in seeds],
+            "vae, sigma 0.1": [scores(drawn(train_ring_vae(seed, 8000, 0.1))) for seed in seeds],
+            "vae, sigma 0.05": [scores(drawn(train_ring_vae(seed, 8000, 0.05))) for seed in seeds],
+        }
+
+
+def measure_learning_rates() -> dict[float, list[tuple[int, float]]]:
+    """gan2's table, the modes covered and the share near a mode after 4,000 steps, on seeds 0 to 4 at each rate. A
+    few minutes on a laptop CPU. Not run by any check."""
+    with pinned_threads():
+        return {
+            lr: [ring_scores(train_gan(REFERENCE["train_step"], seed, 4000, lr)) for seed in range(5)]
+            for lr in (1e-4, 1e-3, 5e-3)
+        }
+
+
+def measure_modes_over_time(lr: float = 5e-3) -> list[list[int]]:
+    """gan2's runs at 5e-3 carried on to 12,000 steps, with the modes covered every 1,000 steps, on seeds 0 to 4.
+    The same run as train_gan, counted along the way. A few minutes on a laptop CPU. Not run by any check."""
+    tracks: list[list[int]] = []
+
+    with pinned_threads():
+        for seed in range(5):
+            generator, discriminator = seeded_pair(seed)
+            g_opt = torch.optim.Adam(generator.parameters(), lr=lr, betas=(0.5, 0.999))
+            d_opt = torch.optim.Adam(discriminator.parameters(), lr=lr, betas=(0.5, 0.999))
+            rng = torch.Generator().manual_seed(seed + 100)
+            covered: list[int] = []
+
+            for step in range(1, 12_001):
+                real = REFERENCE["ring_points"](256, 8, rng)
+                noise = torch.randn(256, 2, generator=rng)
+                REFERENCE["train_step"](generator, discriminator, g_opt, d_opt, real, noise)
+
+                if step % 1000 == 0:
+                    covered.append(ring_scores(generator)[0])
+
+            tracks.append(covered)
+
+    return tracks
 
 
 # ---------------------------------------------------------------------------
@@ -503,13 +541,15 @@ GAN2_LESSON = prose(
     | 5e-3 | 8, 5, 7, 8, 7 | 92% to 96% |
 
     At 1e-4 the generator has barely started. At 1e-3 every run finds all 8
-    modes. At 5e-3 the samples are the sharpest of all, yet 3 runs of 5 lose
-    whole modes for good.
+    modes. At 5e-3 the samples are the sharpest of all, yet 3 runs of 5 are
+    missing whole modes at 4,000 steps.
 
     At 5e-3 this is **mode collapse**. The generator only has to fool the
     discriminator, so it can pile its samples onto the modes the discriminator
     accepts. Nothing in its loss asks for every mode. Metz and colleagues
-    saw a GAN on this same ring hop from mode to mode, one at a time.
+    saw a GAN on a ring like this one hop from mode to mode, one at a time.
+    Carried on to 12,000 steps, the runs at 5e-3 here lose and regain modes
+    too, and 4 of 5 end missing one.
 
     `torch.cdist(a, b)` gives the distance from every row of `a` to every row
     of `b`, and `.min(dim=1)` the nearest one with its index.
@@ -640,19 +680,60 @@ def expect_coverage(
 
 
 def uneven_samples() -> Tensor:
-    """200 points at mode 0, 3 at mode 1, under 2% of all, and 100 far out but nearest mode 2. Only modes 0 and 1
-    get near points, and only mode 0 gets enough to count as covered."""
+    """200 points at mode 0, 5 at mode 1, and 100 far out but nearest mode 2. Only modes 0 and 1 get near points.
+    Mode 1's 5 are under 2% of all the samples but over 2% of the near ones, so only mode 0 counts as covered."""
     rng = torch.Generator().manual_seed(688)
     centers = REFERENCE["mode_centers"](8)
 
     return torch.cat([
         centers[0] + 0.05 * torch.randn(200, 2, generator=rng),
-        centers[1] + 0.05 * torch.randn(3, 2, generator=rng),
+        centers[1] + 0.05 * torch.randn(5, 2, generator=rng),
         0.5 * centers[2] + 0.05 * torch.randn(100, 2, generator=rng),
     ])
 
 
+def naming_a_missing_detach(found: object) -> object:
+    """found, with PyTorch's error about a freed graph turned into the change a learner should make."""
+
+    def step(*arguments: object) -> object:
+        try:
+            return found(*arguments)
+        except RuntimeError as error:
+            if "backward through the graph a second time" not in str(error):
+                raise
+
+            raise Mismatch(
+                "train_step's second backward ran into the graph its first backward freed. The fakes reached the "
+                "discriminator's loss still tied to the generator. Detach them there, with fake.detach().",
+            ) from error
+
+    return step
+
+
+def keeps_old_gradients(found: object) -> bool:
+    """Whether found steps with gradients left over from before. Every gradient starts filled, which a step that
+    zeroes each optimizer's gradients before its backward clears."""
+    rng = torch.Generator().manual_seed(676)
+    real = REFERENCE["ring_points"](32, 8, rng)
+    noise = torch.randn(32, 2, generator=rng)
+    weights = []
+
+    for step in (found, REFERENCE["train_step"]):
+        generator, discriminator = seeded_pair(677)
+
+        for parameter in [*generator.parameters(), *discriminator.parameters()]:
+            parameter.grad = torch.full_like(parameter, 0.5)
+
+        g_opt = torch.optim.SGD(generator.parameters(), lr=0.1)
+        d_opt = torch.optim.SGD(discriminator.parameters(), lr=0.1)
+        step(generator, discriminator, g_opt, d_opt, real, noise)
+        weights.append(torch.cat([generator[0].weight.detach().flatten(), discriminator[0].weight.detach().flatten()]))
+
+    return not torch.allclose(weights[0], weights[1], atol=1e-6)
+
+
 def check_train_step(found: object) -> None:
+    found = naming_a_missing_detach(found)
     rng = torch.Generator().manual_seed(676)
     real = REFERENCE["ring_points"](32, 8, rng)
     noise = torch.randn(32, 2, generator=rng)
@@ -689,6 +770,12 @@ def check_train_step(found: object) -> None:
         expected=expected_generator,
     )
 
+    if keeps_old_gradients(found):
+        raise Mismatch(
+            "train_step stepped with gradients left over from before it ran. Zero each optimizer's gradients before "
+            "its backward.",
+        )
+
 
 def check_sample(found: object) -> None:
     generator, _ = seeded_pair(678)
@@ -705,7 +792,7 @@ def check_sample(found: object) -> None:
 
 
 def check_learns_ring(found: object) -> None:
-    covered, share = ring_scores(train_gan(found, 0, 1000, 1e-3))
+    covered, share = ring_scores(train_gan(naming_a_missing_detach(found), 0, 1000, 1e-3))
 
     if covered < 6 or share < 0.4:
         raise Mismatch(
@@ -738,7 +825,7 @@ def check_gan2(checker: Checker) -> None:
         inputs=(
             (Described(REFERENCE["ring_points"](300, 8, torch.Generator().manual_seed(682)), "300 ring points"), REFERENCE["mode_centers"](8), 0.2),
             (Described(REFERENCE["ring_points"](300, 4, torch.Generator().manual_seed(683)) * 1.1, "300 points of a ring of 4, stretched"), REFERENCE["mode_centers"](8), 0.15),
-            (Described(uneven_samples(), "200 points at one mode, 3 at the next, and 100 far from any"), REFERENCE["mode_centers"](8), 0.2),
+            (Described(uneven_samples(), "200 points at one mode, 5 at the next, and 100 far from any"), REFERENCE["mode_centers"](8), 0.2),
         ),
         reference=REFERENCE["coverage"],
         expect=expect_coverage,
@@ -785,22 +872,23 @@ GAN3_LESSON = prose(
     """
     GANs earned their place with their samples. Here is how far samples land
     from the nearest mode of the ring. The GAN and a VAE of 66_vae's kind both
-    trained for 2,000 steps with the same layers.
+    trained for 8,000 steps with the same layers.
 
     | Model, 3 seeds | Mean distance to the nearest mode | Samples near a mode |
     |---|---|---|
     | The data itself | 0.063 | 99.9% |
-    | GAN | 0.13 to 0.18 | 73% to 84% |
-    | VAE | 0.35 to 0.38 | 39% to 44% |
+    | GAN | 0.064 to 0.072 | 95% to 96% |
+    | VAE | 0.20 to 0.23 | 64% to 67% |
 
-    The VAE reaches every mode but smears its samples along the ring between
+    The GAN's samples sit almost as close to the modes as the data does. The
+    VAE reaches every mode but smears its samples along the ring between
     them. Its loss rewards a decoder that lands near the data on average, and
     a point between two modes is near both. The discriminator has no such
     average, since any point that doesn't look real loses. Weighting the VAE's
-    reconstruction 4 times higher did worse here in 2,000 steps, with 1 to 3
-    modes.
+    reconstruction 4 times higher still reached every mode, but put fewer
+    samples near one, 53% to 57%.
 
-    The price is training. In gan2, a rate of 1e-4 learned almost nothing in
+    The price is training. In gan2, a rate of 1e-4 had barely started after
     4,000 steps, and 5e-3 lost modes. A VAE, a flow or a diffusion model
     lowers one loss, and a falling loss says training works. A GAN's two
     losses fight each other, and neither says the samples are good.
@@ -822,8 +910,9 @@ GAN3_LESSON = prose(
     discriminator's loss fixes it.
 
     So reach for a GAN when samples must be sharp and there is time to tune
-    it, as StyleGAN did for faces. Many recent image generators, like DALL-E 2
-    and Stable Diffusion, use diffusion instead, which 69_diffusion builds.
+    it. Diffusion, which 69_diffusion builds, took over image generation,
+    while neural codecs like SoundStream and EnCodec, the kind sound2
+    quantizes, still train against a discriminator.
     """,
 )
 
@@ -893,6 +982,16 @@ GAN3_SOLUTION = source_file(
 )
 
 FIXED = reference_namespace(LOSS_PART, RING_PART, FIXED_STEP_PART)
+
+
+def measure_detach() -> dict[str, list[tuple[int, float]]]:
+    """gan3's second table, the modes covered and the share near a mode after 2,000 steps at 1e-3 with the fixed step
+    and with the step missing its detach, on seeds 0 to 4. A minute or two on a laptop CPU. Not run by any check."""
+    with pinned_threads():
+        return {
+            name: [ring_scores(train_gan(namespace["train_step"], seed, 2000, 1e-3)) for seed in range(5)]
+            for name, namespace in (("fixed", FIXED), ("missing detach", BUGGY))
+        }
 
 
 def check_fixed_step(found: object) -> None:

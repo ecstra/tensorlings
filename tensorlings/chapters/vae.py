@@ -138,8 +138,8 @@ VAE1_LESSON = prose(
     Training pulls every code's normal toward the standard normal, mean 0 and
     spread 1. It measures how far apart they are with a KL divergence, which
     is 0 when two distributions match and grows as they part. For a normal
-    against the standard normal it has a closed form, summed over the numbers
-    of the code.
+    against the standard normal it has a closed form, a formula with no
+    sampling in it. It is summed over the numbers of the code.
 
     ```text
     KL = 0.5 * sum(mean ** 2 + variance - log_variance - 1)
@@ -158,11 +158,11 @@ VAE1_LESSON = prose(
     ```
 
     Averaging over draws reaches the closed form slowly. Here is a code of 2
-    numbers, with means 0.5 and -1 and variances 1 and 0.25.
+    numbers, with means 0.5 and -1 and variances 1 and 0.25, on 3 seeds.
 
     | Draws | 100 | 10,000 | Closed form |
     |---|---|---|---|
-    | KL | 0.919 | 0.933 | 0.943 |
+    | KL | 0.89 to 1.02 | 0.933 to 0.951 | 0.943 |
 
     The closed form costs one line and has no noise, which is why VAEs use it.
     """,
@@ -281,6 +281,23 @@ def check_encoder(found: type) -> None:
 
 EXAMPLE_MEAN = torch.tensor([[0.5, -1.0]])
 EXAMPLE_LOG_VARIANCE = torch.tensor([[0.0, math.log(0.25)]])
+
+
+def measure_kl_by_sampling(seed: int = 0) -> dict[str, float]:
+    """vae1's table for one seed, the sampled KL of the lesson's code with a fresh generator for each count, and the
+    closed form. The lesson gives seeds 0 to 2. Not run by any check."""
+    table = {
+        f"{count} draws": KL_REFERENCE["kl_by_sampling"](
+            EXAMPLE_MEAN,
+            EXAMPLE_LOG_VARIANCE,
+            count,
+            torch.Generator().manual_seed(seed),
+        ).item()
+        for count in (100, 10_000)
+    }
+    table["closed form"] = KL_REFERENCE["kl_to_standard"](EXAMPLE_MEAN, EXAMPLE_LOG_VARIANCE).item()
+
+    return table
 
 
 def check_vae1(checker: Checker) -> None:
@@ -493,7 +510,7 @@ VAE2_LESSON = prose(
     New digits need only the decoder. Draw codes from the standard normal and
     decode them. Training pulled every code toward that normal, so these
     draws land where the decoder learned to read. After 4,000 steps on 3
-    seeds, a digit classifier is more than 90% sure of 43.5% to 45.0% of
+    seeds, a digit classifier is more than 90% sure of 44.3% to 46.1% of
     1,000 such samples. vae3 shows what the same draws give a plain
     autoencoder.
     """,
@@ -888,7 +905,8 @@ def code_space_numbers(
     train_vae(vae, train_x, 1600, 2 + 10 * seed)
     results["vae reconstruction, KL at 2000"] = elbo_parts(vae, validation_x[:2000])
     train_vae(vae, train_x, 2000, 3 + 10 * seed)
-    results["vae samples"] = share(classifier, VAE_REFERENCE["sample_digits"](vae, 1000, torch.Generator().manual_seed(7)), 0.9)
+    # The same draw as the standard normal row of vae3's table, so both lessons quote one number.
+    results["vae samples"] = share(classifier, VAE_REFERENCE["sample_digits"](vae, 1000, torch.Generator().manual_seed(8)), 0.9)
 
     torch.manual_seed(671 + seed)
     autoencoder = ReferenceAutoencoder(code, 256)
@@ -961,12 +979,13 @@ VAE3_LESSON = prose(
     Ghosh and colleagues measured the same gap on MNIST with FID. It scores
     how far generated images sit from real ones, and lower is better. A VAE
     drawn from the standard normal scored 19.21, against 58.73 for an
-    autoencoder drawn from a normal fitted to its codes. Fitting a richer
-    density to the codes after training is the other way out they study.
+    autoencoder drawn from a normal fitted to its codes. Fitting a mix of 10
+    normals to the autoencoder's codes after training brought it to 10.66,
+    better than the VAE. So what a VAE buys is that a plain standard normal
+    works, with no second step to fit.
 
-    Both decoders blur, since binary cross entropy is lowest on an average of
-    every image a code could stand for. gan3 trains a model that doesn't
-    average.
+    gan3 sets a VAE against a GAN and measures how close the samples of each
+    land to real data.
     """,
 )
 
