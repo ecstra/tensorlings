@@ -515,8 +515,8 @@ QUIZ7_LESSON = prose(
 
     | Function | Moves | Shown in |
     |---|---|---|
-    | `image_size_through` | the output size formula, followed through layers, for height and width | stride1, conv5 |
-    | `conv_bn_relu` | a 3 by 3 convolution with a stride and padding 1, no bias, BatchNorm and ReLU | stride1, resnet1 |
+    | `head_inputs` | the output size formula followed through the layers for height and width, then the flattened count | stride1, conv5, pooling2, lenet1 |
+    | `halving_stack` | 3 by 3 convolutions at stride 2 with no bias, BatchNorm and ReLU, channels chained layer to layer | stride1, resnet2, vgg1 |
     | `pooled_scores` | global average pooling of feature maps, then a Linear head | pooling1, lenet1 |
     | `flip_and_normalize` | a random flip per image, then each channel's mean taken away and divided by its spread | augment2, resnet1, broadcasting1 |
     """,
@@ -533,24 +533,27 @@ QUIZ7_SOURCE = source_file(
     from torch import Tensor
 
 
-    # TODO: Return the height and width of an image of h by w after each layer of
-    #   layers in turn, as one (height, width) pair at the end. Each layer is a
-    #   (k, s, p) triple for a square kernel, stride and padding.
-    def image_size_through(
+    # TODO: Return the in_features of the nn.Linear that follows nn.Flatten at
+    #   the end of a stack of convolutions, for images of h by w. Each layer of
+    #   layers is an (out_channels, k, s, p) tuple, for its output channels and
+    #   its square kernel, stride and padding, applied in turn. The count is
+    #   the last layer's channels times the final height times the final width.
+    def head_inputs(
         h: int,
         w: int,
-        layers: list[tuple[int, int, int]],
-    ) -> tuple[int, int]:
+        layers: list[tuple[int, int, int, int]],
+    ) -> int:
         ...
 
 
-    # TODO: Return an nn.Sequential of a 3 by 3 nn.Conv2d from in_channels to
-    #   out_channels with the given stride, padding 1 and no bias, then an
-    #   nn.BatchNorm2d and a ReLU.
-    def conv_bn_relu(
+    # TODO: Return an nn.Sequential with one layer per entry of widths, each
+    #   halving the height and width. A layer is a 3 by 3 nn.Conv2d at stride 2
+    #   with padding 1 and no bias, to that width's channels, then an
+    #   nn.BatchNorm2d and an nn.ReLU. The first layer reads in_channels, and
+    #   each later one reads the width before it. Make every layer a new object.
+    def halving_stack(
         in_channels: int,
-        out_channels: int,
-        stride: int,
+        widths: list[int],
     ) -> nn.Sequential:
         ...
 
@@ -587,28 +590,29 @@ QUIZ7_SOLUTION = source_file(
     from torch import Tensor
 
 
-    def image_size_through(
+    def head_inputs(
         h: int,
         w: int,
-        layers: list[tuple[int, int, int]],
-    ) -> tuple[int, int]:
-        for k, s, p in layers:
+        layers: list[tuple[int, int, int, int]],
+    ) -> int:
+        for out_channels, k, s, p in layers:
             h = (h + 2 * p - k) // s + 1
             w = (w + 2 * p - k) // s + 1
 
-        return h, w
+        return layers[-1][0] * h * w
 
 
-    def conv_bn_relu(
+    def halving_stack(
         in_channels: int,
-        out_channels: int,
-        stride: int,
+        widths: list[int],
     ) -> nn.Sequential:
-        return nn.Sequential(
-            nn.Conv2d(in_channels, out_channels, 3, stride=stride, padding=1, bias=False),
-            nn.BatchNorm2d(out_channels),
-            nn.ReLU(),
-        )
+        layers = []
+
+        for width in widths:
+            layers.extend([nn.Conv2d(in_channels, width, 3, stride=2, padding=1, bias=False), nn.BatchNorm2d(width), nn.ReLU()])
+            in_channels = width
+
+        return nn.Sequential(*layers)
 
 
     def pooled_scores(
@@ -632,16 +636,18 @@ QUIZ7_SOLUTION = source_file(
 )
 
 
-def reference_image_size_through(
+def reference_head_inputs(
     h: int,
     w: int,
-    layers: list[tuple[int, int, int]],
-) -> tuple[int, int]:
-    for k, s, p in layers:
+    layers: list[tuple[int, int, int, int]],
+) -> int:
+    for _, k, s, p in layers:
         h = reference_output_size(h, k, p, s)
         w = reference_output_size(w, k, p, s)
 
-    return h, w
+    channels = layers[-1][0]
+
+    return channels * h * w
 
 
 def reference_flip_and_normalize(
@@ -656,62 +662,89 @@ def reference_flip_and_normalize(
     return (flipped - mean.view(1, -1, 1, 1)) / spread.view(1, -1, 1, 1)
 
 
-def check_conv_bn_relu(found: object) -> None:
-    for in_channels, out_channels, stride in ((3, 16, 1), (16, 32, 2)):
-        call = f"conv_bn_relu({in_channels}, {out_channels}, {stride})"
-        block = expect_module(call, found(in_channels, out_channels, stride))
-        layer_names = [type(layer).__name__ for layer in block] if isinstance(block, nn.Sequential) else []
+def stack_layers(stack: nn.Sequential) -> list[nn.Module]:
+    """The layers in order, any nn.Sequential inside opened up. Looping over a Sequential keeps a layer that sits in
+    it twice, where .modules() would list it once."""
+    layers: list[nn.Module] = []
 
-        if layer_names != ["Conv2d", "BatchNorm2d", "ReLU"]:
-            raise Mismatch(f"{call} should be an nn.Sequential of Conv2d, BatchNorm2d and ReLU.")
+    for layer in stack:
+        if isinstance(layer, nn.Sequential):
+            layers.extend(stack_layers(layer))
+            continue
 
-        conv, norm = block[0], block[1]
-        settings = (
-            conv.in_channels,
-            conv.out_channels,
-            conv.kernel_size,
-            conv.stride,
-            conv.padding,
-            conv.bias is None,
-            norm.num_features,
-        )
-        wanted = (
-            in_channels,
-            out_channels,
-            (3, 3),
-            (stride, stride),
-            (1, 1),
-            True,
-            out_channels,
-        )
+        layers.append(layer)
 
-        if settings != wanted:
-            raise Mismatch(
-                f"{call} should hold a 3 by 3 convolution from {in_channels} to {out_channels} channels "
-                f"with stride {stride}, padding 1 and no bias, then BatchNorm2d({out_channels}).",
+    return layers
+
+
+def check_halving_stack(found: object) -> None:
+    # Equal widths let a stack that repeats one layer object get every setting right.
+    for in_channels, widths in ((3, [8, 16, 32]), (4, [4, 4])):
+        call = f"halving_stack({in_channels}, {widths})"
+        stack = expect_module(call, found(in_channels, list(widths)))
+
+        if not isinstance(stack, nn.Sequential):
+            raise Mismatch(f"{call} is {type(stack).__name__}, but it should be an nn.Sequential.")
+
+        layers = stack_layers(stack)
+        kinds = [type(layer).__name__ for layer in layers]
+        wanted_kinds = ["Conv2d", "BatchNorm2d", "ReLU"] * len(widths)
+
+        if kinds != wanted_kinds:
+            raise Mismatch(f"{call} holds {', '.join(kinds) or 'nothing'}, but it should hold {', '.join(wanted_kinds)}.")
+
+        if len({id(layer) for layer in layers}) != len(layers):
+            raise Mismatch(f"{call} holds one layer object in more than one place. Make a new Conv2d, BatchNorm2d and ReLU for every width.")
+
+        reads = in_channels
+
+        for position, width in enumerate(widths):
+            conv, norm = layers[3 * position], layers[3 * position + 1]
+            settings = (
+                conv.in_channels,
+                conv.out_channels,
+                conv.kernel_size,
+                conv.stride,
+                conv.padding,
+                conv.bias is None,
+                norm.num_features,
             )
+            wanted = (
+                reads,
+                width,
+                (3, 3),
+                (2, 2),
+                (1, 1),
+                True,
+                width,
+            )
+
+            if settings != wanted:
+                raise Mismatch(
+                    f"Layer {position + 1} of {call} should be a 3 by 3 convolution from {reads} to {width} channels "
+                    f"with stride 2, padding 1 and no bias, then BatchNorm2d({width}).",
+                )
+
+            reads = width
 
 
 def check_quiz7(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
-        function="image_size_through",
-        description="follows the height and width through the layers",
+        function="head_inputs",
+        description="follows the height and width through the layers and counts what nn.Flatten gives",
         inputs=(
-            (224, 224, [(7, 2, 3), (3, 2, 1)]),
-            (32, 20, [(3, 1, 1), (3, 2, 1), (3, 2, 0)]),
+            (32, 32, [(16, 3, 1, 1), (32, 3, 2, 1), (64, 3, 2, 1)]),
+            (28, 20, [(6, 5, 1, 2), (16, 5, 2, 0), (8, 3, 2, 1)]),
+            (15, 9, [(4, 3, 2, 1), (10, 3, 2, 0)]),
         ),
-        reference=reference_image_size_through,
-        expect=lambda call, actual, expected: expect_value(
-            call=call,
-            actual=tuple(actual) if isinstance(actual, (tuple, list)) else actual,
-            expected=expected,
-        ),
+        reference=reference_head_inputs,
+        expect=expect_value,
     )
     checker.test(
-        function="conv_bn_relu",
-        description="builds convolution, BatchNorm and ReLU",
-        run=check_conv_bn_relu,
+        function="halving_stack",
+        description="chains halving convolutions with BatchNorm and ReLU",
+        run=check_halving_stack,
     )
 
     torch.manual_seed(870)
@@ -751,9 +784,12 @@ QUIZ7 = Exercise(
     source=QUIZ7_SOURCE,
     solution=QUIZ7_SOLUTION,
     hints={
-        "image_size_through": "For each (k, s, p), update h and w with stride1's formula.",
-        "conv_bn_relu": "nn.Sequential of nn.Conv2d(in_channels, out_channels, 3, stride=stride, padding=1, "
-        "bias=False), nn.BatchNorm2d(out_channels) and nn.ReLU().",
+        "head_inputs": "Follow h and w through each layer with stride1's output size formula, as conv5's "
+        "sizes_through does. nn.Flatten lays each image's channels, rows and columns out in one row, so multiply "
+        "the three.",
+        "halving_stack": "Build a list, adding a convolution, a BatchNorm2d and a ReLU for each width, as resnet2's "
+        "plain_stack does. Each next convolution reads the width before it, as in vgg1's blocks. Unpack the list "
+        "into nn.Sequential with *.",
         "pooled_scores": "Average over dim=(2, 3), then pass the result to head.",
         "flip_and_normalize": "Flip as augment2's augment_batch does. Then give mean and spread the shape "
         "(1, channels, 1, 1) with .view so they line up with the channels.",

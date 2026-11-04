@@ -776,7 +776,7 @@ BROKEN2 = Exercise(
     source=BROKEN2_SOURCE,
     solution=BROKEN2_SOLUTION,
     hints={
-        "rate_at": "quiz6's set_rate works the rate out the same way, without setting it.",
+        "rate_at": "warmup1's warmup_cosine works the rate out the same way, with base / 10 as its minimum.",
         "train_tuned": "Take the rate from rate_at, with base 0.003, 200 warmup steps and steps as the total. The "
         "missing line clips with torch.nn.utils.clip_grad_norm_ on model.parameters() at 1.3.",
     },

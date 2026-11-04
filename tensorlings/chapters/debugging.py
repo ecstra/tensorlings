@@ -1268,10 +1268,10 @@ QUIZ6_LESSON = prose(
 
     | Function | Moves | Shown in |
     |---|---|---|
-    | `adamw_for` | AdamW, with weight decay on the parameters of two or more dimensions only | adamw1, adamw2 |
-    | `clipped_step` | clear, backward, clip the global norm, step | sgd1, clipping1 |
-    | `set_rate` | warmup then cosine decay to a tenth of the base, set on every group | warmup1, schedule1 |
-    | `start_and_baseline` | the loss before training and the loss of guessing the class shares | debug1 |
+    | `decay_weights_only_` | decoupled weight decay, in place under no_grad, on the parameters of two or more dimensions only | adamw1, adamw2, modules1 |
+    | `clipped_step` | clear, backward, clip the global norm, step | sgd1, clipping2 |
+    | `warmup_to_picked_rate` | the range test's losses smoothed, a tenth of the best rate picked, then a warmup to it | schedule2, warmup1 |
+    | `start_excess` | the loss before training, less the loss of guessing the class shares | init3, debug1 |
     """,
 )
 
@@ -1289,14 +1289,16 @@ QUIZ6_SOURCE = source_file(
     from torch import Tensor
 
 
-    # TODO: Return AdamW for model at lr, with weight_decay on the parameters of
-    #   two or more dimensions, in the first group, and no decay on the rest,
-    #   in the second.
-    def adamw_for(
+    # TODO: Shrink, in place, every parameter of model that has two or more
+    #   dimensions, by the fraction lr * weight_decay of itself. So lr 0.1 and
+    #   weight_decay 0.5 take 5% off each such number. Leave the parameters of
+    #   one dimension, like biases, as they are. Change them without autograd
+    #   recording it, and return nothing.
+    def decay_weights_only_(
         model: nn.Module,
         lr: float,
         weight_decay: float,
-    ) -> torch.optim.Optimizer:
+    ) -> None:
         ...
 
 
@@ -1312,27 +1314,31 @@ QUIZ6_SOURCE = source_file(
         ...
 
 
-    # TODO: Set every group of optimizer to the rate at step and return it. The
-    #   rate warms up over warmup steps, as warmup1's warmup_rate does. Then it
-    #   falls along a cosine from base at step warmup to a tenth of base at
-    #   step total, as warmup1's warmup_cosine does.
-    def set_rate(
-        optimizer: torch.optim.Optimizer,
+    # TODO: Return the learning rate at step of a warmup toward a rate picked
+    #   by a range test, where losses[i] is the loss the test got at rates[i].
+    #   Smooth losses with beta, correcting for the average starting at 0.
+    #   The base rate is a tenth of the rate where the smoothed loss is lowest.
+    #   The rate climbs to base over warmup steps, step 0 giving base / warmup,
+    #   and stays at base after that.
+    def warmup_to_picked_rate(
+        rates: list[float],
+        losses: list[float],
+        beta: float,
         step: int,
-        base: float,
         warmup: int,
-        total: int,
     ) -> float:
         ...
 
 
-    # TODO: Return the model's loss on x and y before any training, and the loss
-    #   of always guessing each class's share of y, both as plain numbers.
-    def start_and_baseline(
+    # TODO: Return how far the model's loss on x and y starts above the loss of
+    #   always guessing each class's share of y, as a plain number. A class's
+    #   share is the fraction of the labels in y that are that class. Work out
+    #   the model's cross entropy without autograd, since nothing trains here.
+    def start_excess(
         model: nn.Module,
         x: Tensor,
         y: Tensor,
-    ) -> tuple[float, float]:
+    ) -> float:
         ...
     ''',
 )
@@ -1349,16 +1355,15 @@ QUIZ6_SOLUTION = source_file(
     from torch import Tensor
 
 
-    def adamw_for(
+    def decay_weights_only_(
         model: nn.Module,
         lr: float,
         weight_decay: float,
-    ) -> torch.optim.Optimizer:
-        decayed = [parameter for parameter in model.parameters() if parameter.dim() >= 2]
-        kept = [parameter for parameter in model.parameters() if parameter.dim() < 2]
-        groups = [{"params": decayed, "weight_decay": weight_decay}, {"params": kept, "weight_decay": 0.0}]
-
-        return torch.optim.AdamW(groups, lr=lr)
+    ) -> None:
+        with torch.no_grad():
+            for parameter in model.parameters():
+                if parameter.dim() >= 2:
+                    parameter *= 1 - lr * weight_decay
 
 
     def clipped_step(
@@ -1375,66 +1380,69 @@ QUIZ6_SOLUTION = source_file(
         return norm.item()
 
 
-    def set_rate(
-        optimizer: torch.optim.Optimizer,
+    def warmup_to_picked_rate(
+        rates: list[float],
+        losses: list[float],
+        beta: float,
         step: int,
-        base: float,
         warmup: int,
-        total: int,
     ) -> float:
-        if step < warmup:
-            rate = base * (step + 1) / warmup
-        else:
-            progress = (step - warmup) / (total - warmup)
-            rate = base / 10 + (base - base / 10) * (1 + math.cos(math.pi * progress)) / 2
+        average = 0.0
+        smoothed = []
 
-        for group in optimizer.param_groups:
-            group["lr"] = rate
+        for k, loss in enumerate(losses, start=1):
+            average = beta * average + (1 - beta) * loss
+            smoothed.append(average / (1 - beta ** k))
 
-        return rate
+        base = rates[smoothed.index(min(smoothed))] / 10
+
+        return base * min(1.0, (step + 1) / warmup)
 
 
-    def start_and_baseline(
+    def start_excess(
         model: nn.Module,
         x: Tensor,
         y: Tensor,
-    ) -> tuple[float, float]:
+    ) -> float:
         with torch.no_grad():
-            logits = model(x)
+            start = F.cross_entropy(model(x), y).item()
 
-        counts = torch.bincount(y, minlength=logits.shape[1]).float()
+        counts = torch.bincount(y).float()
         shares = counts[counts > 0] / len(y)
+        baseline = -(shares * shares.log()).sum().item()
 
-        return F.cross_entropy(logits, y).item(), -(shares * shares.log()).sum().item()
+        return start - baseline
     ''',
 )
 
 
-def check_adamw_for(found: object) -> None:
-    model = seeded_classifier(650, ReferenceThreeLayers)
-    call = "adamw_for a three layer classifier at 0.001 with weight decay 0.1"
-    optimizer = found(model, 0.001, 0.1)
+def normed_classifier(seed: int) -> nn.Sequential:
+    """A LayerNorm's weight has one dimension but is named weight, so a check by name decays it by mistake."""
+    torch.manual_seed(seed)
 
-    if type(optimizer) is not torch.optim.AdamW:
-        raise Mismatch(f"{call} is {type(optimizer).__name__}, but it should be torch.optim.AdamW.")
+    return nn.Sequential(nn.Linear(4, 6), nn.LayerNorm(6), nn.ReLU(), nn.Linear(6, 3))
 
-    names = {id(parameter): name for name, parameter in model.named_parameters()}
-    wanted = (
-        ([name for name, parameter in model.named_parameters() if parameter.dim() >= 2], 0.1),
-        ([name for name, parameter in model.named_parameters() if parameter.dim() < 2], 0.0),
-    )
 
-    if len(optimizer.param_groups) != 2:
-        raise Mismatch(f"{call} should have two parameter groups, but it has {len(optimizer.param_groups)}.")
+def check_decay_weights_only(found: object) -> None:
+    for lr, weight_decay in ((0.1, 0.5), (0.01, 3.0)):
+        model, expected = normed_classifier(650), normed_classifier(650)
+        call = (
+            "decay_weights_only_ on nn.Sequential(nn.Linear(4, 6), nn.LayerNorm(6), nn.ReLU(), nn.Linear(6, 3)), "
+            f"with lr {lr} and weight_decay {weight_decay}"
+        )
+        found(model, lr, weight_decay)
 
-    for position, (group, (expected, decay)) in enumerate(zip(optimizer.param_groups, wanted)):
-        got = [names.get(id(parameter), "something else") for parameter in group["params"]]
+        with torch.no_grad():
+            for parameter in expected.parameters():
+                if parameter.ndim > 1:
+                    parameter.mul_(1 - lr * weight_decay)
 
-        if got != expected:
-            raise Mismatch(f"Group {position} of {call} should hold {', '.join(expected)}, but it holds {', '.join(got)}.")
-
-        if group["weight_decay"] != decay or group["lr"] != 0.001:
-            raise Mismatch(f"Group {position} of {call} should have a weight decay of {decay} and a rate of 0.001.")
+        for (name, parameter), reference in zip(model.named_parameters(), expected.parameters()):
+            expect_tensor(
+                call=f"parameter {name} after {call}",
+                actual=parameter.detach(),
+                expected=reference.detach(),
+            )
 
 
 def check_clipped_step(found: object) -> None:
@@ -1464,68 +1472,112 @@ def check_clipped_step(found: object) -> None:
         )
 
 
-def reference_set_rate(
+def reference_warmup_to_picked_rate(
+    rates: list[float],
+    losses: list[float],
+    beta: float,
     step: int,
-    base: float,
     warmup: int,
-    total: int,
 ) -> float:
-    if step < warmup:
-        return base * (step + 1) / warmup
+    corrected = []
+    running = 0.0
 
-    progress = (step - warmup) / (total - warmup)
+    for count, loss in enumerate(losses, start=1):
+        running = beta * running + (1 - beta) * loss
+        corrected.append(running / (1 - beta**count))
 
-    return base / 10 + (base - base / 10) * (1 + math.cos(math.pi * progress)) / 2
+    lowest = min(range(len(corrected)), key=corrected.__getitem__)
+    base = rates[lowest] / 10
+
+    if step >= warmup:
+        return base
+
+    return base * (step + 1) / warmup
 
 
-def check_set_rate(found: object) -> None:
-    for step in (0, 9, 10, 55, 100):
-        optimizer = torch.optim.SGD([{"params": [torch.zeros(1, requires_grad=True)]}, {"params": [torch.zeros(1, requires_grad=True)]}], lr=1.0)
-        call = f"set_rate at step {step}, with base 0.01, 10 warmup steps and 100 in all"
-        expected = reference_set_rate(step, 0.01, 10, 100)
-        returned = found(optimizer, step, 0.01, 10, 100)
-        expect_close(
-            call=f"the rate {call} returns",
-            actual=returned,
-            expected=expected,
-            tolerance=1e-12,
-        )
+# Each test's lowest loss is a lone dip that smoothing averages away, so the picked rate differs without smoothing.
+RANGE_TESTS = (
+    (
+        [0.0001, 0.0002, 0.0004, 0.0008, 0.0016, 0.0032, 0.0064, 0.0128, 0.0256, 0.0512, 0.1024, 0.2048, 0.4096],
+        [2.30, 2.29, 2.27, 2.20, 2.05, 1.40, 1.85, 1.70, 1.62, 1.58, 2.40, 3.90, 7.50],
+        0.6,
+        5,
+    ),
+    (
+        [0.001, 0.002, 0.004, 0.008, 0.016, 0.032, 0.064, 0.128, 0.256, 0.512],
+        [1.10, 1.08, 1.02, 0.95, 0.70, 0.93, 0.80, 0.85, 1.40, 2.60],
+        0.8,
+        4,
+    ),
+)
 
-        for position, group in enumerate(optimizer.param_groups):
-            expect_close(
-                call=f"the rate of group {position} after {call}",
-                actual=group["lr"],
-                expected=expected,
-                tolerance=1e-12,
-            )
+
+def lopsided_labels(*counts: int) -> Described:
+    labels = torch.cat([torch.full((count,), label) for label, count in enumerate(counts)])
+    shuffled = labels[torch.randperm(len(labels), generator=torch.Generator().manual_seed(len(labels)))]
+    listed = ", ".join(f"{count} of class {label}" for label, count in enumerate(counts))
+
+    return Described(shuffled, f"{len(labels)} labels, {listed}")
+
+
+def fresh_classifier(
+    seed: int,
+    classes: int,
+) -> Described:
+    torch.manual_seed(seed)
+
+    return Described(ReferenceClassifier(6, 16, classes), f"a fresh classifier with {classes} classes")
+
+
+def reference_start_excess(
+    model: nn.Module,
+    x: Tensor,
+    y: Tensor,
+) -> float:
+    with torch.no_grad():
+        logits = model(x)
+
+    return F.cross_entropy(logits, y).item() - reference_baseline(y, logits.shape[1])
 
 
 def check_quiz6(checker: Checker) -> None:
     checker.test(
-        function="adamw_for",
-        description="decays the weight matrices only",
-        run=check_adamw_for,
+        function="decay_weights_only_",
+        description="shrinks the parameters of two or more dimensions in place",
+        run=check_decay_weights_only,
     )
     checker.test(
         function="clipped_step",
         description="clears, backs up, clips and steps",
         run=check_clipped_step,
     )
-    checker.test(
-        function="set_rate",
-        description="warms up, then decays to a tenth along a cosine",
-        run=check_set_rate,
-    )
-    x, y = labelled_points(653, 40, 6, 3)
     check_on_inputs(
         checker=checker,
-        function="start_and_baseline",
-        description="gives the starting loss and the baseline",
-        inputs=(
-            (Described(seeded_classifier(654), "a fresh classifier"), Described(x, "40 points"), Described(y, "their labels")),
+        function="warmup_to_picked_rate",
+        description="picks a tenth of the best smoothed rate and warms up to it",
+        inputs=tuple(
+            (rates, losses, beta, step, warmup)
+            for rates, losses, beta, warmup in RANGE_TESTS
+            for step in (0, warmup - 2, warmup + 3)
         ),
-        reference=lambda model, x, y: (F.cross_entropy(model(x), y).item(), reference_baseline(y, 3)),
-        expect=expect_parts("the starting loss", "the baseline"),
+        reference=reference_warmup_to_picked_rate,
+        expect=lambda call, actual, expected: expect_close(
+            call=call,
+            actual=actual,
+            expected=expected,
+            tolerance=1e-6 * expected,
+        ),
+    )
+    check_on_inputs(
+        checker=checker,
+        function="start_excess",
+        description="gives how far the starting loss sits above guessing the class shares",
+        inputs=(
+            (fresh_classifier(653, 3), Described(small_tensor(654, 20, 6) / 3, "20 points"), lopsided_labels(14, 4, 2)),
+            (fresh_classifier(655, 4), Described(small_tensor(656, 12, 6) / 3, "12 points"), lopsided_labels(3, 0, 9)),
+        ),
+        reference=reference_start_excess,
+        expect=expect_close,
     )
 
 
@@ -1537,14 +1589,16 @@ QUIZ6 = Exercise(
     source=QUIZ6_SOURCE,
     solution=QUIZ6_SOLUTION,
     hints={
-        "adamw_for": "Make the two groups as adamw2's decay_groups does, then pass them to torch.optim.AdamW with "
-        "lr=lr.",
-        "clipped_step": "optimizer.zero_grad(), loss.backward(), torch.nn.utils.clip_grad_norm_ on "
-        "model.parameters(), then optimizer.step(). Return the clip's result with .item().",
-        "set_rate": "Work out the rate as warmup1's warmup_cosine does, with base / 10 as the minimum, then set "
-        "group[\"lr\"] for every group.",
-        "start_and_baseline": "The first is F.cross_entropy of model(x) and y without autograd. The second is "
-        "debug1's baseline_loss, with the number of classes from the output's width.",
+        "decay_weights_only_": "Inside torch.no_grad, go through model.parameters(). Pick out the ones whose .dim() "
+        "is at least 2, as adamw2's groups do, and scale each in place with *=, as adamw1's MyAdamW does.",
+        "clipped_step": "Clear the gradients with the optimizer's zero_grad before backward. Clip with "
+        "torch.nn.utils.clip_grad_norm_ after backward and before the step, and return what it gives with .item().",
+        "warmup_to_picked_rate": "Smooth as schedule2's smooth does, dividing the kth average by 1 - beta ** k. "
+        "Find the position of the smallest smoothed loss and take a tenth of that rate as base. Then warm up as "
+        "warmup1's warmup_rate does.",
+        "start_excess": "The start is F.cross_entropy of model(x) and y inside torch.no_grad, with .item(). The "
+        "guessing loss is debug1's baseline_loss. Count each class with torch.bincount, keep the counts above "
+        "zero and divide by len(y). Then take minus the sum of each share times its log.",
     },
     introduces=(),
     check=check_quiz6,

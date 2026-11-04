@@ -964,10 +964,10 @@ QUIZ8_LESSON = prose(
 
     | Function | Moves | Shown in |
     |---|---|---|
-    | `gru_step` | the reset gate, the update gate and the candidate state of one GRU step | gru1, gating1 |
-    | `causal_dilated_conv` | zeros on the left only, then a dilated convolution | causal1, dilated1 |
-    | `both_directions` | one RNN over the sequence, one over it flipped, flipped back and joined | bidir1 |
-    | `diagonal_scan` | a diagonal linear recurrence run as a loop, read out at every step | ssm1, ssm2 |
+    | `input_gated_scan` | a sigmoid gate and a tanh value from each step's input, blended into the state, every state kept | gating1, derive1, rnn2 |
+    | `gated_causal_conv` | zeros on the left only, a dilated convolution, then half the channels gating the other half | causal1, dilated1, gating1 |
+    | `bidirectional_summary` | the forward output at the last step joined with the backward output at the first | bidir1, rnn2 |
+    | `diagonal_ssm_conv` | a diagonal state discretized and its kernel built, then a causal convolution with the kernel flipped | ssm2, ssm1 |
     """,
 )
 
@@ -983,25 +983,27 @@ QUIZ8_SOURCE = source_file(
     from torch import Tensor
 
 
-    # TODO: Return the next hidden state of a GRU without biases, for x of shape
-    #   (batch, inputs) and h of shape (batch, hidden). W and U stack the reset,
-    #   update and candidate weights in that order, of shapes (3 * hidden,
-    #   inputs) and (3 * hidden, hidden). r = sigmoid(x W_r^T + h U_r^T), z the
-    #   same with W_z and U_z, n = tanh(x W_n^T + r * (h U_n^T)), and the result
-    #   is (1 - z) * n + z * h.
-    def gru_step(
+    # TODO: Return the hidden state after every step of x, of shape (batch,
+    #   steps, inputs), as one tensor of shape (batch, steps, hidden). W_g and
+    #   W_v have shape (hidden, inputs), and there are no biases. The state h
+    #   starts at zeros. At each step, with x_t that step's inputs, the gate is
+    #   g = sigmoid(x_t W_g^T) and the new value is v = tanh(x_t W_v^T). Then
+    #   h becomes g * v + (1 - g) * h.
+    def input_gated_scan(
         x: Tensor,
-        h: Tensor,
-        W: Tensor,
-        U: Tensor,
+        W_g: Tensor,
+        W_v: Tensor,
     ) -> Tensor:
         ...
 
 
-    # TODO: Return the causal convolution of x, of shape (batch, channels,
-    #   length), with weight, of shape (out channels, channels, k), at the given
-    #   dilation. The output keeps the length, and no output sees a later input.
-    def causal_dilated_conv(
+    # TODO: Return the gated causal convolution of x, of shape (batch, channels,
+    #   length), with weight, of shape (2 * out, channels, k), at the given
+    #   dilation. Causal means no output sees a later input. Add dilation *
+    #   (k - 1) zeros on the left of x only, then convolve at that dilation.
+    #   Split the result's channels into two halves, and return the first half
+    #   times the sigmoid of the second, of shape (batch, out, length).
+    def gated_causal_conv(
         x: Tensor,
         weight: Tensor,
         dilation: int,
@@ -1009,28 +1011,30 @@ QUIZ8_SOURCE = source_file(
         ...
 
 
-    # TODO: Return both directions' outputs for x, of shape (batch, steps,
-    #   features), joined along the last dimension, forward first. forward and
-    #   backward are nn.RNNs with batch_first=True, and backward reads x flipped
-    #   in time. Its outputs are flipped back, so its output for step t lines
-    #   up with the forward output at step t.
-    def both_directions(
-        forward: nn.RNN,
-        backward: nn.RNN,
+    # TODO: Return one summary row per sequence of x, of shape (batch, steps,
+    #   features), from rnn, an nn.RNN with bidirectional=True and
+    #   batch_first=True. Join the forward direction's output at the last step
+    #   with the backward direction's output at the first step, forward first.
+    #   The result has shape (batch, 2 * hidden).
+    def bidirectional_summary(
+        rnn: nn.RNN,
         x: Tensor,
     ) -> Tensor:
         ...
 
 
-    # TODO: Return the outputs of the recurrence h_t = a * h_(t-1) + b * x_t,
-    #   y_t = the sum of c * h_t, for x of shape (batch, steps). a, b and c hold
-    #   one number per state. The state starts at 0, and the result has the
-    #   shape of x.
-    def diagonal_scan(
-        a: Tensor,
+    # TODO: Return what a diagonal state space model gives for x, of shape
+    #   (length,), worked out as a convolution. Discretize first, with rate =
+    #   -exp(log_rate), a = exp(step * rate), and b becoming (a - 1) / rate * b.
+    #   Entry j of the kernel is the sum of c * b * a ** j, for j from 0 to
+    #   len(x) - 1. Convolve causally, with len(x) - 1 zeros on the left of x
+    #   and the kernel flipped. The result has shape (length,).
+    def diagonal_ssm_conv(
+        x: Tensor,
+        log_rate: Tensor,
         b: Tensor,
         c: Tensor,
-        x: Tensor,
+        step: float,
     ) -> Tensor:
         ...
     ''',
@@ -1046,164 +1050,181 @@ QUIZ8_SOLUTION = source_file(
     from torch import Tensor
 
 
-    def gru_step(
+    def input_gated_scan(
         x: Tensor,
-        h: Tensor,
-        W: Tensor,
-        U: Tensor,
+        W_g: Tensor,
+        W_v: Tensor,
     ) -> Tensor:
-        W_r, W_z, W_n = W.chunk(3)
-        U_r, U_z, U_n = U.chunk(3)
-        r = torch.sigmoid(x @ W_r.T + h @ U_r.T)
-        z = torch.sigmoid(x @ W_z.T + h @ U_z.T)
-        n = torch.tanh(x @ W_n.T + r * (h @ U_n.T))
+        h = torch.zeros(len(x), len(W_g))
+        states = []
 
-        return (1 - z) * n + z * h
+        for t in range(x.shape[1]):
+            g = torch.sigmoid(x[:, t] @ W_g.T)
+            v = torch.tanh(x[:, t] @ W_v.T)
+            h = g * v + (1 - g) * h
+            states.append(h)
+
+        return torch.stack(states, dim=1)
 
 
-    def causal_dilated_conv(
+    def gated_causal_conv(
         x: Tensor,
         weight: Tensor,
         dilation: int,
     ) -> Tensor:
         k = weight.shape[2]
+        both = F.conv1d(F.pad(x, (dilation * (k - 1), 0)), weight, dilation=dilation)
+        first, second = both.chunk(2, dim=1)
 
-        return F.conv1d(F.pad(x, (dilation * (k - 1), 0)), weight, dilation=dilation)
+        return first * torch.sigmoid(second)
 
 
-    def both_directions(
-        forward: nn.RNN,
-        backward: nn.RNN,
+    def bidirectional_summary(
+        rnn: nn.RNN,
         x: Tensor,
     ) -> Tensor:
-        ahead, _ = forward(x)
-        behind, _ = backward(x.flip(1))
+        outputs, _ = rnn(x)
+        hidden = outputs.shape[2] // 2
 
-        return torch.cat([ahead, behind.flip(1)], dim=2)
+        return torch.cat([outputs[:, -1, :hidden], outputs[:, 0, hidden:]], dim=1)
 
 
-    def diagonal_scan(
-        a: Tensor,
+    def diagonal_ssm_conv(
+        x: Tensor,
+        log_rate: Tensor,
         b: Tensor,
         c: Tensor,
-        x: Tensor,
+        step: float,
     ) -> Tensor:
-        h = torch.zeros(len(x), len(a))
-        outputs = []
+        rate = -torch.exp(log_rate)
+        a = torch.exp(step * rate)
+        b_bar = (a - 1) / rate * b
+        kernel = (a ** torch.arange(len(x)).unsqueeze(1)) @ (c * b_bar)
+        padded = F.pad(x.view(1, 1, -1), (len(x) - 1, 0))
 
-        for t in range(x.shape[1]):
-            h = a * h + b * x[:, t : t + 1]
-            outputs.append((c * h).sum(dim=1))
-
-        return torch.stack(outputs, dim=1)
+        return F.conv1d(padded, kernel.flip(0).view(1, 1, -1)).flatten()
     ''',
 )
 
 
-def reference_gru_step(
+def reference_input_gated_scan(
     x: Tensor,
-    h: Tensor,
-    W: Tensor,
-    U: Tensor,
+    W_g: Tensor,
+    W_v: Tensor,
 ) -> Tensor:
-    """nn.GRUCell with its biases at zero is the same step, so the quiz is held to PyTorch's own GRU."""
-    cell = nn.GRUCell(x.shape[1], h.shape[1])
+    gates = torch.sigmoid(x @ W_g.T)
+    values = torch.tanh(x @ W_v.T)
+    h = torch.zeros(x.shape[0], W_g.shape[0])
+    states = []
 
-    with torch.no_grad():
-        cell.weight_ih.copy_(W)
-        cell.weight_hh.copy_(U)
-        cell.bias_ih.zero_()
-        cell.bias_hh.zero_()
+    for gate, value in zip(gates.unbind(1), values.unbind(1)):
+        h = h + gate * (value - h)
+        states.append(h)
 
-        return cell(x, h)
+    return torch.stack(states, dim=1)
 
 
-def reference_causal_dilated_conv(
+def reference_gated_causal_conv(
     x: Tensor,
     weight: Tensor,
     dilation: int,
 ) -> Tensor:
-    k = weight.shape[2]
+    """Padding both ends and keeping the first length outputs is the same as padding the left alone."""
+    reach = dilation * (weight.shape[2] - 1)
+    out = weight.shape[0] // 2
+    both = F.conv1d(x, weight, padding=reach, dilation=dilation)[..., : x.shape[-1]]
 
-    return F.conv1d(F.pad(x, (dilation * (k - 1), 0)), weight, dilation=dilation)
+    return both[:, :out] * torch.sigmoid(both[:, out:])
 
 
-def reference_both_directions(
-    forward: nn.RNN,
-    backward: nn.RNN,
+def reference_bidirectional_summary(
+    rnn: nn.RNN,
     x: Tensor,
 ) -> Tensor:
+    """With one layer, the last states nn.RNN returns are the forward state after the last step and the backward
+    state after reading back to the first."""
     with torch.no_grad():
-        ahead, _ = forward(x)
-        behind, _ = backward(x.flip(1))
+        _, last = rnn(x)
 
-    return torch.cat([ahead, behind.flip(1)], dim=2)
+    return torch.cat([last[0], last[1]], dim=1)
 
 
-def reference_diagonal_scan(
-    a: Tensor,
+def reference_diagonal_ssm_conv(
+    x: Tensor,
+    log_rate: Tensor,
     b: Tensor,
     c: Tensor,
-    x: Tensor,
+    step: float,
 ) -> Tensor:
-    h = torch.zeros(len(x), len(a))
+    a, b_bar = reference_discretize(log_rate, b, step)
+    h = torch.zeros_like(a)
     outputs = []
 
-    for t in range(x.shape[1]):
-        h = a * h + b * x[:, t : t + 1]
-        outputs.append((c * h).sum(dim=1))
+    for value in x:
+        h = a * h + b_bar * value
+        outputs.append((c * h).sum())
 
-    return torch.stack(outputs, dim=1)
+    return torch.stack(outputs)
 
 
-def seeded_rnn(seed: int) -> nn.RNN:
+def seeded_bidirectional(
+    seed: int,
+    features: int,
+    hidden: int,
+) -> Described:
     torch.manual_seed(seed)
 
-    return nn.RNN(3, 4, batch_first=True)
+    return Described(
+        value=nn.RNN(features, hidden, batch_first=True, bidirectional=True),
+        text=f"nn.RNN({features}, {hidden}, batch_first=True, bidirectional=True)",
+    )
 
 
 def check_quiz8(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
-        function="gru_step",
-        description="gives the GRU's next hidden state",
+        function="input_gated_scan",
+        description="blends each step's gated value into the state and keeps every state",
         inputs=(
-            (small_tensor(880, 2, 3) / 3, small_tensor(881, 2, 4) / 3, small_tensor(882, 12, 3) / 3, small_tensor(883, 12, 4) / 3),
+            (small_tensor(880, 2, 5, 3) / 3, small_tensor(881, 4, 3) / 2, small_tensor(882, 4, 3) / 2),
+            (small_tensor(883, 3, 4, 2) / 3, small_tensor(884, 5, 2) / 2, small_tensor(885, 5, 2) / 2),
         ),
-        reference=reference_gru_step,
+        reference=reference_input_gated_scan,
         expect=expect_tensor,
     )
     check_on_inputs(
         checker=checker,
-        function="causal_dilated_conv",
-        description="keeps the length and never reads ahead",
+        function="gated_causal_conv",
+        description="never reads ahead, and gates the first half of the channels with the second",
         inputs=(
-            (small_tensor(884, 2, 3, 9), small_tensor(885, 4, 3, 2), 3),
-            (small_tensor(886, 1, 2, 7), small_tensor(887, 2, 2, 3), 1),
+            (small_tensor(886, 2, 3, 9), small_tensor(887, 4, 3, 2) / 2, 3),
+            (small_tensor(888, 1, 2, 7), small_tensor(889, 6, 2, 3) / 2, 1),
+            (small_tensor(890, 2, 2, 10), small_tensor(891, 2, 2, 3) / 2, 2),
         ),
-        reference=reference_causal_dilated_conv,
+        reference=reference_gated_causal_conv,
         expect=expect_tensor,
     )
     check_on_inputs(
         checker=checker,
-        function="both_directions",
-        description="joins the forward outputs with the backward ones flipped back",
+        function="bidirectional_summary",
+        description="joins the forward output at the last step with the backward output at the first",
         inputs=(
-            (Described(seeded_rnn(888), "an nn.RNN from 3 to 4"), Described(seeded_rnn(889), "another"), small_tensor(890, 2, 5, 3) / 3),
+            (seeded_bidirectional(892, 3, 4), small_tensor(893, 2, 5, 3) / 3),
+            (seeded_bidirectional(894, 2, 3), small_tensor(895, 3, 4, 2) / 3),
         ),
-        reference=reference_both_directions,
+        reference=reference_bidirectional_summary,
         expect=expect_tensor,
     )
     check_on_inputs(
         checker=checker,
-        function="diagonal_scan",
-        description="runs the recurrence and reads it out at every step",
+        function="diagonal_ssm_conv",
+        description="discretizes, builds the kernel and convolves causally",
         inputs=(
-            (torch.tensor([0.9, 0.5]), torch.tensor([1.0, -0.5]), torch.tensor([0.3, 2.0]), small_tensor(891, 2, 6)),
-            (torch.tensor([0.2, 0.99, -0.6]), torch.tensor([0.5, 0.1, 1.0]), torch.tensor([1.0, 1.0, -1.0]), small_tensor(892, 3, 4)),
+            (small_tensor(896, 6), torch.tensor([0.0, -1.0]), torch.tensor([1.0, -0.5]), torch.tensor([0.3, 2.0]), 0.5),
+            (small_tensor(897, 8), torch.tensor([-0.5, 0.5, -2.0]), torch.tensor([0.5, 1.0, -1.0]), torch.tensor([1.0, 1.0, -1.0]), 0.1),
         ),
-        reference=reference_diagonal_scan,
-        expect=expect_tensor,
+        reference=reference_diagonal_ssm_conv,
+        expect=expect_tensor_near,
     )
 
 
@@ -1215,14 +1236,16 @@ QUIZ8 = Exercise(
     source=QUIZ8_SOURCE,
     solution=QUIZ8_SOLUTION,
     hints={
-        "gru_step": "W.chunk(3) and U.chunk(3) give the reset, update and candidate weights. Then follow the "
-        "formulas in the TODO in order.",
-        "causal_dilated_conv": "F.pad(x, (dilation * (k - 1), 0)) adds the zeros on the left only, then F.conv1d "
-        "with dilation=dilation.",
-        "both_directions": "Run backward on x.flip(1), flip its outputs back with .flip(1), and torch.cat both "
-        "outputs on dim=2.",
-        "diagonal_scan": "Start h at torch.zeros(len(x), len(a)). Each step, h = a * h + b * x[:, t : t + 1], and "
-        "keep (c * h).sum(dim=1). torch.stack the outputs on dim=1.",
+        "input_gated_scan": "Start h as zeros of shape (batch, hidden). Step t's inputs are x[:, t]. Keep each new "
+        "h in a list and stack the list on dim 1, as rnn2's loop does.",
+        "gated_causal_conv": "k is weight.shape[2]. F.pad takes the zeros for the left and the right as a pair, and "
+        "F.conv1d takes dilation= as nn.Conv1d does. Splitting the channels is .chunk(2, dim=1), as gating1's glu "
+        "does.",
+        "bidirectional_summary": "rnn(x) gives the outputs and the last states. Each step's output holds the "
+        "forward state in its first hidden features and the backward state in the rest. Take step -1 of one and "
+        "step 0 of the other.",
+        "diagonal_ssm_conv": "Discretize as ssm2's discretize does, and build the kernel as its diagonal_kernel "
+        "does. Then convolve as ssm1's ssm_convolve does, with x and the flipped kernel each shaped (1, 1, length).",
     },
     introduces=(),
     check=check_quiz8,
