@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import textwrap
+import time
 
 import torch
 import torch.nn as nn
@@ -11,6 +12,7 @@ import torch.nn.functional as F
 from torch import Tensor
 
 from ..course import QUIZZES, Chapter, Exercise
+from ..data import load_shakespeare
 from ..engine import (
     Checker,
     Described,
@@ -500,8 +502,9 @@ BPE3_LESSON = prose(
     bytes underneath make it hold even for text unlike the training text.
 
     This `train` is plain Python, so it is slow on big texts. 768 merges on
-    100,000 characters of tiny Shakespeare took about 25 seconds here.
-    tiktoken, the tokenizer OpenAI's models use, encodes far faster.
+    100,000 characters of tiny Shakespeare took 16 to 33 seconds on this
+    Mac's CPU, slower when other work shared the machine. tiktoken, the
+    tokenizer OpenAI's models use, encodes far faster.
     """,
 )
 
@@ -934,6 +937,39 @@ BPE4 = Exercise(
 )
 
 
+def measure_bpe() -> dict[str, object]:
+    """The numbers of bpe2, bpe3 and bpe4. Each tokenizer learns from the first 100,000 characters of tiny
+    Shakespeare and is measured on the next 50,000. Gives bpe2's first five merges, the seconds bpe3's train
+    took for 768 merges on the CPU, bpe4's table and quirks, and the splits of numbers after training on the
+    numbers 0 to 1999."""
+    text = load_shakespeare()
+    train_text, test_text = text[:100_000], text[100_000:150_000]
+    merges_256 = MEASURE["train"](train_text, 512)
+    start = time.time()
+    merges_768 = MEASURE["train"](train_text, 1024)
+    seconds = time.time() - start
+    tokens = MEASURE["vocabulary"](merges_768)
+    train_words = re.findall(r"[A-Za-z]+", train_text)
+    test_words = re.findall(r"[A-Za-z]+", test_text)
+    numbers = MEASURE["train"](" ".join(str(number) for number in range(2000)), 1024)
+
+    return {
+        "first merges": [tokens[index].decode("utf-8") for index in range(256, 261)],
+        "seconds for 768 merges": seconds,
+        "bytes": len(test_text.encode("utf-8")),
+        "tokens with 256 merges": len(MEASURE["encode"](test_text, merges_256)),
+        "tokens with 768 merges": len(MEASURE["encode"](test_text, merges_768)),
+        "bytes per token with 256 merges": MEASURE["bytes_per_token"](test_text, merges_256),
+        "bytes per token with 768 merges": MEASURE["bytes_per_token"](test_text, merges_768),
+        "training words": len(set(train_words)),
+        "test words": len(test_words),
+        "unseen share": MEASURE["unseen_share"](train_words, test_words),
+        "words in all": len(set(re.findall(r"[A-Za-z]+", text))),
+        "quirks": {piece: MEASURE["pieces"](piece, merges_768) for piece in ("the", "The", "the king")},
+        "numbers": {piece: MEASURE["pieces"](piece, numbers) for piece in (" 1999", " 123456")},
+    }
+
+
 # ---------------------------------------------------------------------------
 # quiz9
 # ---------------------------------------------------------------------------
@@ -946,10 +982,9 @@ QUIZ9_LESSON = prose(
 
     | Function | Moves | Shown in |
     |---|---|---|
-    | `causal_attention` | scores scaled by the square root of the size, the future masked, a softmax, the values mixed | attention3, attention2, mask1 |
-    | `multi_head_causal` | heads split, causal attention in each, heads merged | multihead1 |
-    | `rotate_pairs` | each pair of features turned by its own angle | rope1 |
-    | `rms_norm` | each row divided by the root of its mean square, then scaled | rmsnorm1, llama1 |
+    | `padded_causal_attention` | the future and the padding blocked together, scores scaled by the square root of the size, a softmax, the values mixed | attention2, mask1, attention5 |
+    | `rope_causal_scores` | each position's query and key turned by its angles, the scores scaled, the future set to minus infinity | rope1, attention3, attention2 |
+    | `heads_padded_attention` | each head's slice of the features, padded causal attention on it, the heads joined back | multihead1, this quiz |
     """,
 )
 
@@ -965,46 +1000,45 @@ QUIZ9_SOURCE = source_file(
     from torch import Tensor
 
 
-    # TODO: Return causal attention of q, k and v, of shape (..., steps, size),
-    #   by hand. Scale the scores by the square root of size, mask every later
-    #   position, take the softmax and mix the values.
-    def causal_attention(
+    # TODO: Return attention of q, k and v, each of shape (batch, steps, size),
+    #   by hand. A query may not look at a key in its future, or at a key at
+    #   or past its sequence's length in lengths, of shape (batch,). Scale the
+    #   scores by the square root of size, set every blocked one to minus
+    #   infinity, take the softmax and mix the values.
+    def padded_causal_attention(
         q: Tensor,
         k: Tensor,
         v: Tensor,
+        lengths: Tensor,
     ) -> Tensor:
         ...
 
 
-    # TODO: Return causal attention of q, k and v, of shape (batch, steps,
-    #   size), run in heads heads, each of size // heads features, then merged
-    #   back to (batch, steps, size). Use causal_attention.
-    def multi_head_causal(
+    # TODO: Return the causal scores of q and k, each of shape (steps, size),
+    #   after RoPE. Turn each adjacent pair of features (0 and 1, 2 and 3, and
+    #   so on) of row m of q and of k by its angle in angles[m], of shape
+    #   (steps, size // 2). A pair (a, b) turned by phi becomes
+    #   (a cos phi - b sin phi, a sin phi + b cos phi). Then divide q k^T by
+    #   the square root of size, and set the future to minus infinity.
+    def rope_causal_scores(
         q: Tensor,
         k: Tensor,
-        v: Tensor,
-        heads: int,
-    ) -> Tensor:
-        ...
-
-
-    # TODO: Return x, of shape (steps, size), with each adjacent pair of
-    #   features (0 and 1, 2 and 3, and so on) turned by its angle. angles has
-    #   shape (steps, size // 2). A pair (a, b) turned by phi becomes
-    #   (a cos phi - b sin phi, a sin phi + b cos phi).
-    def rotate_pairs(
-        x: Tensor,
         angles: Tensor,
     ) -> Tensor:
         ...
 
 
-    # TODO: Return each row of x divided by the square root of its mean square
-    #   plus eps, then multiplied by weight.
-    def rms_norm(
-        x: Tensor,
-        weight: Tensor,
-        eps: float,
+    # TODO: Return padded causal attention of q, k and v, each of shape
+    #   (batch, steps, size), run in heads heads. Head h reads the features
+    #   from h * head_size up to (h + 1) * head_size, where head_size is
+    #   size // heads. Run padded_causal_attention on each head's features,
+    #   then join the heads' outputs back along the features, in order.
+    def heads_padded_attention(
+        q: Tensor,
+        k: Tensor,
+        v: Tensor,
+        lengths: Tensor,
+        heads: int,
     ) -> Tensor:
         ...
     ''',
@@ -1020,68 +1054,72 @@ QUIZ9_SOLUTION = source_file(
     from torch import Tensor
 
 
-    def causal_attention(
+    def padded_causal_attention(
         q: Tensor,
         k: Tensor,
         v: Tensor,
+        lengths: Tensor,
     ) -> Tensor:
-        steps = q.shape[-2]
-        scores = q @ k.transpose(-2, -1) / math.sqrt(q.shape[-1])
+        steps = q.shape[1]
         future = torch.triu(torch.ones(steps, steps, dtype=torch.bool), diagonal=1)
+        padding = torch.arange(steps) >= lengths.unsqueeze(1)
+        blocked = future | padding.unsqueeze(1)
+        scores = q @ k.transpose(1, 2) / math.sqrt(q.shape[-1])
 
-        return torch.softmax(scores.masked_fill(future, float("-inf")), dim=-1) @ v
+        return torch.softmax(scores.masked_fill(blocked, float("-inf")), dim=-1) @ v
 
 
-    def multi_head_causal(
+    def rope_causal_scores(
         q: Tensor,
         k: Tensor,
-        v: Tensor,
-        heads: int,
-    ) -> Tensor:
-        batch, steps, size = q.shape
-        q, k, v = (part.view(batch, steps, heads, size // heads).transpose(1, 2) for part in (q, k, v))
-
-        return causal_attention(q, k, v).transpose(1, 2).reshape(batch, steps, size)
-
-
-    def rotate_pairs(
-        x: Tensor,
         angles: Tensor,
     ) -> Tensor:
-        a, b = x[..., 0::2], x[..., 1::2]
         cos, sin = torch.cos(angles), torch.sin(angles)
+        q = torch.stack([q[:, 0::2] * cos - q[:, 1::2] * sin, q[:, 0::2] * sin + q[:, 1::2] * cos], dim=-1).flatten(-2)
+        k = torch.stack([k[:, 0::2] * cos - k[:, 1::2] * sin, k[:, 0::2] * sin + k[:, 1::2] * cos], dim=-1).flatten(-2)
+        steps = q.shape[0]
+        future = torch.triu(torch.ones(steps, steps, dtype=torch.bool), diagonal=1)
 
-        return torch.stack([a * cos - b * sin, a * sin + b * cos], dim=-1).flatten(-2)
+        return (q @ k.T / math.sqrt(q.shape[-1])).masked_fill(future, float("-inf"))
 
 
-    def rms_norm(
-        x: Tensor,
-        weight: Tensor,
-        eps: float,
+    def heads_padded_attention(
+        q: Tensor,
+        k: Tensor,
+        v: Tensor,
+        lengths: Tensor,
+        heads: int,
     ) -> Tensor:
-        return x / torch.sqrt((x**2).mean(dim=-1, keepdim=True) + eps) * weight
+        head_size = q.shape[-1] // heads
+        outputs = []
+
+        for head in range(heads):
+            start, end = head * head_size, (head + 1) * head_size
+            outputs.append(padded_causal_attention(q[:, :, start:end], k[:, :, start:end], v[:, :, start:end], lengths))
+
+        return torch.cat(outputs, dim=-1)
     ''',
 )
 
 
-def reference_quiz9_attention(
+def allowed_keys(
+    steps: int,
+    lengths: Tensor,
+) -> Tensor:
+    """True where a query may look at a key, the past and itself, inside the sequence's length."""
+    past = torch.tril(torch.ones(steps, steps, dtype=torch.bool))
+    inside = torch.arange(steps) < lengths.unsqueeze(1)
+
+    return past & inside.unsqueeze(1)
+
+
+def reference_padded_causal_attention(
     q: Tensor,
     k: Tensor,
     v: Tensor,
+    lengths: Tensor,
 ) -> Tensor:
-    return F.scaled_dot_product_attention(q, k, v, is_causal=True)
-
-
-def reference_multi_head_causal(
-    q: Tensor,
-    k: Tensor,
-    v: Tensor,
-    heads: int,
-) -> Tensor:
-    batch, steps, size = q.shape
-    q, k, v = (part.view(batch, steps, heads, size // heads).transpose(1, 2) for part in (q, k, v))
-
-    return F.scaled_dot_product_attention(q, k, v, is_causal=True).transpose(1, 2).reshape(batch, steps, size)
+    return F.scaled_dot_product_attention(q, k, v, attn_mask=allowed_keys(q.shape[1], lengths))
 
 
 def reference_rotate_pairs(
@@ -1091,6 +1129,31 @@ def reference_rotate_pairs(
     turned = torch.view_as_complex(x.reshape(*x.shape[:-1], -1, 2).contiguous()) * torch.polar(torch.ones_like(angles), angles)
 
     return torch.view_as_real(turned).flatten(-2)
+
+
+def reference_rope_causal_scores(
+    q: Tensor,
+    k: Tensor,
+    angles: Tensor,
+) -> Tensor:
+    scores = reference_rotate_pairs(q, angles) @ reference_rotate_pairs(k, angles).T / q.shape[-1] ** 0.5
+    future = ~torch.tril(torch.ones(len(q), len(q), dtype=torch.bool))
+
+    return scores.masked_fill(future, float("-inf"))
+
+
+def reference_heads_padded_attention(
+    q: Tensor,
+    k: Tensor,
+    v: Tensor,
+    lengths: Tensor,
+    heads: int,
+) -> Tensor:
+    batch, steps, size = q.shape
+    q, k, v = (part.view(batch, steps, heads, size // heads).transpose(1, 2) for part in (q, k, v))
+    mixed = F.scaled_dot_product_attention(q, k, v, attn_mask=allowed_keys(steps, lengths).unsqueeze(1))
+
+    return mixed.transpose(1, 2).reshape(batch, steps, size)
 
 
 def quiz_tensor(
@@ -1103,46 +1166,35 @@ def quiz_tensor(
 def check_quiz9(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
-        function="causal_attention",
-        description="matches PyTorch's causal attention",
+        function="padded_causal_attention",
+        description="blocks the future and the padding, then attends",
         inputs=(
-            (quiz_tensor(930, 2, 5, 4), quiz_tensor(931, 2, 5, 4), quiz_tensor(932, 2, 5, 3)),
-            (quiz_tensor(933, 2, 3, 6, 8), quiz_tensor(934, 2, 3, 6, 8), quiz_tensor(935, 2, 3, 6, 8)),
+            (quiz_tensor(930, 2, 5, 4), quiz_tensor(931, 2, 5, 4), quiz_tensor(932, 2, 5, 3), torch.tensor([5, 3])),
+            (quiz_tensor(933, 3, 6, 8), quiz_tensor(934, 3, 6, 8), quiz_tensor(935, 3, 6, 8), torch.tensor([6, 1, 4])),
         ),
-        reference=reference_quiz9_attention,
+        reference=reference_padded_causal_attention,
         expect=expect_tensor,
     )
     check_on_inputs(
         checker=checker,
-        function="multi_head_causal",
-        description="runs causal attention in each head and merges them",
+        function="rope_causal_scores",
+        description="turns q and k by RoPE, then scales and masks the scores",
         inputs=(
-            (quiz_tensor(936, 2, 5, 8), quiz_tensor(937, 2, 5, 8), quiz_tensor(938, 2, 5, 8), 2),
-            (quiz_tensor(939, 1, 4, 12), quiz_tensor(940, 1, 4, 12), quiz_tensor(941, 1, 4, 12), 3),
+            (quiz_tensor(942, 3, 4), quiz_tensor(943, 3, 4), quiz_tensor(944, 3, 2)),
+            (quiz_tensor(945, 5, 6), quiz_tensor(946, 5, 6), quiz_tensor(947, 5, 3)),
         ),
-        reference=reference_multi_head_causal,
+        reference=reference_rope_causal_scores,
         expect=expect_tensor,
     )
     check_on_inputs(
         checker=checker,
-        function="rotate_pairs",
-        description="turns each adjacent pair by its angle",
+        function="heads_padded_attention",
+        description="runs padded causal attention in each head and joins them",
         inputs=(
-            (quiz_tensor(942, 3, 4), quiz_tensor(943, 3, 2)),
-            (quiz_tensor(944, 5, 6), quiz_tensor(945, 5, 3)),
+            (quiz_tensor(936, 2, 5, 8), quiz_tensor(937, 2, 5, 8), quiz_tensor(938, 2, 5, 8), torch.tensor([5, 2]), 2),
+            (quiz_tensor(939, 1, 4, 12), quiz_tensor(940, 1, 4, 12), quiz_tensor(941, 1, 4, 12), torch.tensor([3]), 3),
         ),
-        reference=reference_rotate_pairs,
-        expect=expect_tensor,
-    )
-    check_on_inputs(
-        checker=checker,
-        function="rms_norm",
-        description="matches nn.RMSNorm",
-        inputs=(
-            (quiz_tensor(946, 3, 4), quiz_tensor(947, 4), 1e-6),
-            (quiz_tensor(948, 2, 3, 5) * 10, quiz_tensor(949, 5), 1e-5),
-        ),
-        reference=lambda x, weight, eps: F.rms_norm(x, (x.shape[-1],), weight, eps),
+        reference=reference_heads_padded_attention,
         expect=expect_tensor,
     )
 
@@ -1155,14 +1207,13 @@ QUIZ9 = Exercise(
     source=QUIZ9_SOURCE,
     solution=QUIZ9_SOLUTION,
     hints={
-        "causal_attention": "Use k.transpose(-2, -1) so any leading dimensions work. torch.triu of a square of True "
-        "with diagonal=1 marks the future, which masked_fill sets to float(\"-inf\").",
-        "multi_head_causal": "view each of q, k and v as (batch, steps, heads, size // heads) and transpose(1, 2). "
-        "After causal_attention, transpose back and reshape to (batch, steps, size).",
-        "rotate_pairs": "x[..., 0::2] and x[..., 1::2] are the pairs' halves. torch.stack the two turned halves on "
-        "dim=-1, then .flatten(-2) zips them back.",
-        "rms_norm": "(x**2).mean(dim=-1, keepdim=True) is each row's mean square. Add eps, take torch.sqrt, divide, "
-        "then multiply by weight.",
+        "padded_causal_attention": "torch.triu of a square of True with diagonal=1 marks the future. "
+        "torch.arange(steps) >= lengths.unsqueeze(1) marks each sequence's padded keys. Join the two with |, with "
+        "the padding unsqueezed to (batch, 1, steps), and masked_fill the scaled scores.",
+        "rope_causal_scores": "q[:, 0::2] and q[:, 1::2] are the pairs' halves. torch.stack the two turned halves on "
+        "dim=-1 and .flatten(-2) zips them back. Do the same for k, then mask the scaled q @ k.T as attention2 did.",
+        "heads_padded_attention": "Loop over the heads, slicing q[:, :, start:end] and the same for k and v. "
+        "torch.cat the outputs on dim=-1.",
     },
     introduces=(),
     check=check_quiz9,
@@ -1181,11 +1232,10 @@ QUIZ10_LESSON = prose(
 
     | Function | Moves | Shown in |
     |---|---|---|
-    | `pre_norm_block` | a norm before each part, each part added back to the stream | block1 |
-    | `swiglu` | a SiLU gate times an up projection, then a down projection | llama2 |
-    | `route` | the top k scores of each token, their softmax and where they sit | moe1 |
-    | `patchify` | an image cut into square patches, each flattened into a row | vit1 |
-    | `merge` | every place a pair of tokens sits side by side replaced by one new token | bpe2 |
+    | `rms_pre_norm_block` | each row divided by its root mean square and scaled, before attention and before the MLP, each output added back | rmsnorm1, block1 |
+    | `mixtral_layer` | each token's top k experts and their softmax, every expert a SwiGLU MLP, the outputs weighted and summed | moe1, llama2, dynamic1 |
+    | `embed_patches` | an image cut into patches, each embedded by one matrix, a class token in front and positions added | vit1 |
+    | `apply_merges` | every merge applied in the order it was made, each replacing its pair from left to right | bpe3, bpe2 |
     """,
 )
 
@@ -1201,57 +1251,59 @@ QUIZ10_SOURCE = source_file(
     from torch import Tensor
 
 
-    # TODO: Return x after a pre norm block: attention reads norm1 of x and its
-    #   output is added to x, then mlp reads norm2 of that and its output is
-    #   added too.
-    def pre_norm_block(
+    # TODO: Return x after a pre norm block with RMSNorm. The norm divides each
+    #   row by the square root of its mean square plus eps, with eps inside
+    #   the root, then multiplies by a weight. attention reads x normed with
+    #   weight1 and its output is added to x. Then mlp reads that normed with
+    #   weight2, and its output is added too.
+    def rms_pre_norm_block(
         x: Tensor,
-        norm1: nn.Module,
         attention: nn.Module,
-        norm2: nn.Module,
         mlp: nn.Module,
+        weight1: Tensor,
+        weight2: Tensor,
+        eps: float,
     ) -> Tensor:
         ...
 
 
-    # TODO: Return the SwiGLU MLP of x: F.silu(x W_gate^T) times x W_up^T,
-    #   then times W_down^T.
-    def swiglu(
+    # TODO: Return Mixtral's layer for x, of shape (tokens, size). The router's
+    #   scores are x @ router.T. Each token weights its k largest scores'
+    #   experts by a softmax over those scores alone, and the rest by 0.
+    #   Expert i is a SwiGLU MLP, F.silu(x @ W_gate[i].T) times x @ W_up[i].T,
+    #   then @ W_down[i].T. Running every expert is fine here.
+    def mixtral_layer(
         x: Tensor,
+        router: Tensor,
         W_gate: Tensor,
         W_up: Tensor,
         W_down: Tensor,
+        k: int,
     ) -> Tensor:
         ...
 
 
-    # TODO: Return the weights and the experts for each row of scores, of shape
-    #   (tokens, experts). Keep each row's k largest scores, largest first, and
-    #   return their softmax and their positions, each of shape (tokens, k).
-    def route(
-        scores: Tensor,
-        k: int,
-    ) -> tuple[Tensor, Tensor]:
-        ...
-
-
-    # TODO: Return images, of shape (batch, channels, height, width), as rows of
-    #   patches, of shape (batch, patches, channels * patch * patch). Patches go
-    #   row by row across the image, and each flattens its channels first, then
-    #   its rows, then its columns.
-    def patchify(
+    # TODO: Return a ViT's input for images, of shape (batch, channels, height,
+    #   width), of shape (batch, patches + 1, size). Cut the images into
+    #   patches, row by row, each flattened by channel, then row, then column.
+    #   Embed each patch's row as row @ W.T, put class_token, of shape (size,),
+    #   in front of each image's patches, and add positions to every token.
+    def embed_patches(
         images: Tensor,
         patch: int,
+        W: Tensor,
+        class_token: Tensor,
+        positions: Tensor,
     ) -> Tensor:
         ...
 
 
-    # TODO: Return ids with every place pair sits, from left to right and
-    #   without overlaps, replaced by new_id.
-    def merge(
+    # TODO: Return ids with every merge in merges applied, in the order merges
+    #   holds them. Each merge puts its new id in place of its pair wherever the
+    #   pair sits, from left to right and without overlaps.
+    def apply_merges(
         ids: list[int],
-        pair: tuple[int, int],
-        new_id: int,
+        merges: dict[tuple[int, int], int],
     ) -> list[int]:
         ...
     ''',
@@ -1267,64 +1319,75 @@ QUIZ10_SOLUTION = source_file(
     from torch import Tensor
 
 
-    def pre_norm_block(
+    def rms_pre_norm_block(
         x: Tensor,
-        norm1: nn.Module,
         attention: nn.Module,
-        norm2: nn.Module,
         mlp: nn.Module,
+        weight1: Tensor,
+        weight2: Tensor,
+        eps: float,
     ) -> Tensor:
-        x = x + attention(norm1(x))
+        def norm(
+            y: Tensor,
+            weight: Tensor,
+        ) -> Tensor:
+            return y / torch.sqrt((y**2).mean(dim=-1, keepdim=True) + eps) * weight
 
-        return x + mlp(norm2(x))
+        x = x + attention(norm(x, weight1))
+
+        return x + mlp(norm(x, weight2))
 
 
-    def swiglu(
+    def mixtral_layer(
         x: Tensor,
+        router: Tensor,
         W_gate: Tensor,
         W_up: Tensor,
         W_down: Tensor,
-    ) -> Tensor:
-        return (F.silu(x @ W_gate.T) * (x @ W_up.T)) @ W_down.T
-
-
-    def route(
-        scores: Tensor,
         k: int,
-    ) -> tuple[Tensor, Tensor]:
-        best = scores.topk(k, dim=-1)
+    ) -> Tensor:
+        top = (x @ router.T).topk(k, dim=-1)
+        weights = torch.zeros(len(x), len(router)).scatter(1, top.indices, torch.softmax(top.values, dim=-1))
+        outputs = torch.stack([(F.silu(x @ gate.T) * (x @ up.T)) @ down.T for gate, up, down in zip(W_gate, W_up, W_down)], dim=1)
 
-        return torch.softmax(best.values, dim=-1), best.indices
+        return (weights.unsqueeze(2) * outputs).sum(dim=1)
 
 
-    def patchify(
+    def embed_patches(
         images: Tensor,
         patch: int,
+        W: Tensor,
+        class_token: Tensor,
+        positions: Tensor,
     ) -> Tensor:
         batch, channels, height, width = images.shape
         cells = images.reshape(batch, channels, height // patch, patch, width // patch, patch)
+        rows = cells.permute(0, 2, 4, 1, 3, 5).reshape(batch, -1, channels * patch * patch)
+        first = class_token.expand(batch, 1, -1)
 
-        return cells.permute(0, 2, 4, 1, 3, 5).reshape(batch, -1, channels * patch * patch)
+        return torch.cat([first, rows @ W.T], dim=1) + positions
 
 
-    def merge(
+    def apply_merges(
         ids: list[int],
-        pair: tuple[int, int],
-        new_id: int,
+        merges: dict[tuple[int, int], int],
     ) -> list[int]:
-        merged = []
-        position = 0
+        for pair, new_id in merges.items():
+            merged = []
+            position = 0
 
-        while position < len(ids):
-            if position + 1 < len(ids) and (ids[position], ids[position + 1]) == pair:
-                merged.append(new_id)
-                position += 2
-                continue
+            while position < len(ids):
+                if position + 1 < len(ids) and (ids[position], ids[position + 1]) == pair:
+                    merged.append(new_id)
+                    position += 2
+                    continue
 
-            merged.append(ids[position])
-            position += 1
+                merged.append(ids[position])
+                position += 1
 
-        return merged
+            ids = merged
+
+        return ids
     ''',
 )
 
@@ -1341,127 +1404,124 @@ def quiz_module(
     return module
 
 
-def reference_pre_norm_block(
+def reference_rms_pre_norm_block(
     x: Tensor,
-    norm1: nn.Module,
     attention: nn.Module,
-    norm2: nn.Module,
     mlp: nn.Module,
+    weight1: Tensor,
+    weight2: Tensor,
+    eps: float,
 ) -> Tensor:
     with torch.no_grad():
-        x = x + attention(norm1(x))
+        x = x + attention(F.rms_norm(x, (x.shape[-1],), weight1, eps))
 
-        return x + mlp(norm2(x))
+        return x + mlp(F.rms_norm(x, (x.shape[-1],), weight2, eps))
 
 
-def reference_route(
-    scores: Tensor,
+def reference_mixtral_layer(
+    x: Tensor,
+    router: Tensor,
+    W_gate: Tensor,
+    W_up: Tensor,
+    W_down: Tensor,
     k: int,
-) -> tuple[Tensor, Tensor]:
-    best = scores.topk(k, dim=-1)
+) -> Tensor:
+    """Each token's chosen experts one by one, a different road to the same numbers."""
+    rows = []
 
-    return torch.softmax(best.values, dim=-1), best.indices
+    for token in x:
+        top = (router @ token).topk(k)
+        weights = torch.softmax(top.values, dim=0)
+        experts = [W_down[index] @ (F.silu(W_gate[index] @ token) * (W_up[index] @ token)) for index in top.indices.tolist()]
+        rows.append(sum(weight * expert for weight, expert in zip(weights, experts)))
 
-
-def expect_route(
-    call: str,
-    actual: object,
-    expected: tuple[Tensor, Tensor],
-) -> None:
-    if not isinstance(actual, tuple) or len(actual) != 2:
-        raise Mismatch(f"{call} should give the weights and the experts as two tensors in a tuple.")
-
-    expect_tensor(
-        call=f"the weights of {call}",
-        actual=actual[0],
-        expected=expected[0],
-    )
-    expect_tensor(
-        call=f"the experts of {call}",
-        actual=actual[1],
-        expected=expected[1],
-    )
+    return torch.stack(rows)
 
 
-def reference_merge(
+def reference_embed_patches(
+    images: Tensor,
+    patch: int,
+    W: Tensor,
+    class_token: Tensor,
+    positions: Tensor,
+) -> Tensor:
+    rows = F.unfold(images, kernel_size=patch, stride=patch).transpose(1, 2) @ W.T
+    first = class_token.repeat(len(images), 1, 1)
+
+    return torch.cat([first, rows], dim=1) + positions
+
+
+def reference_apply_merges(
     ids: list[int],
-    pair: tuple[int, int],
-    new_id: int,
+    merges: dict[tuple[int, int], int],
 ) -> list[int]:
-    merged: list[int] = []
-    position = 0
+    for pair, new_id in merges.items():
+        ids = PAIRS["merge"](ids, pair, new_id)
 
-    while position < len(ids):
-        if position + 1 < len(ids) and (ids[position], ids[position + 1]) == pair:
-            merged.append(new_id)
-            position += 2
-            continue
-
-        merged.append(ids[position])
-        position += 1
-
-    return merged
+    return ids
 
 
 def check_quiz10(checker: Checker) -> None:
+    attention = Described(quiz_module(952, nn.Linear(4, 4)), "a Linear standing in for attention")
+    mlp = Described(quiz_module(954, nn.Sequential(nn.Linear(4, 8), nn.GELU(), nn.Linear(8, 4))), "an MLP")
     check_on_inputs(
         checker=checker,
-        function="pre_norm_block",
-        description="adds each part's output back after its norm",
+        function="rms_pre_norm_block",
+        description="norms with RMSNorm before each part and adds its output back",
+        inputs=(
+            (quiz_tensor(950, 2, 3, 4), attention, mlp, quiz_tensor(951, 4), quiz_tensor(953, 4), 1e-5),
+            # An eps this large tells eps inside the root from eps added after it.
+            (quiz_tensor(955, 2, 3, 4), attention, mlp, quiz_tensor(956, 4), quiz_tensor(957, 4), 0.5),
+        ),
+        reference=reference_rms_pre_norm_block,
+        expect=expect_tensor,
+    )
+    check_on_inputs(
+        checker=checker,
+        function="mixtral_layer",
+        description="weights each token's top k SwiGLU experts by a softmax over their scores",
         inputs=(
             (
-                quiz_tensor(950, 2, 3, 4),
-                Described(quiz_module(951, nn.LayerNorm(4)), "a LayerNorm"),
-                Described(quiz_module(952, nn.Linear(4, 4)), "a Linear standing in for attention"),
-                Described(quiz_module(953, nn.LayerNorm(4)), "another LayerNorm"),
-                Described(quiz_module(954, nn.Sequential(nn.Linear(4, 8), nn.GELU(), nn.Linear(8, 4))), "an MLP"),
+                quiz_tensor(958, 5, 4),
+                quiz_tensor(959, 4, 4),
+                quiz_tensor(960, 4, 6, 4) / 2,
+                quiz_tensor(961, 4, 6, 4) / 2,
+                quiz_tensor(962, 4, 4, 6) / 2,
+                2,
+            ),
+            (
+                quiz_tensor(963, 3, 4),
+                quiz_tensor(964, 3, 4),
+                quiz_tensor(965, 3, 5, 4) / 2,
+                quiz_tensor(966, 3, 5, 4) / 2,
+                quiz_tensor(967, 3, 4, 5) / 2,
+                1,
             ),
         ),
-        reference=reference_pre_norm_block,
+        reference=reference_mixtral_layer,
         expect=expect_tensor,
     )
     check_on_inputs(
         checker=checker,
-        function="swiglu",
-        description="gates the up projection with SiLU, then projects down",
+        function="embed_patches",
+        description="cuts patches, embeds them, puts the class token first and adds positions",
         inputs=(
-            (quiz_tensor(955, 3, 4), quiz_tensor(956, 6, 4), quiz_tensor(957, 6, 4), quiz_tensor(958, 4, 6)),
+            (quiz_tensor(968, 2, 3, 4, 6), 2, quiz_tensor(969, 5, 12), quiz_tensor(970, 5), quiz_tensor(971, 7, 5)),
+            (quiz_tensor(972, 1, 1, 6, 6), 3, quiz_tensor(973, 4, 9), quiz_tensor(974, 4), quiz_tensor(975, 5, 4)),
         ),
-        reference=lambda x, W_gate, W_up, W_down: (F.silu(x @ W_gate.T) * (x @ W_up.T)) @ W_down.T,
+        reference=reference_embed_patches,
         expect=expect_tensor,
     )
     check_on_inputs(
         checker=checker,
-        function="route",
-        description="keeps each token's top k experts and their softmax",
+        function="apply_merges",
+        description="applies every merge in order, each from left to right",
         inputs=(
-            (quiz_tensor(959, 4, 6), 2),
-            (quiz_tensor(960, 3, 8), 3),
+            (list(b"aaabdaaabac"), {(97, 97): 256, (256, 97): 257, (257, 98): 258}),
+            ([1, 2, 3, 1, 2, 3], {(1, 2): 300, (2, 3): 301, (300, 3): 302}),
+            ([5, 5, 5, 5, 5], {(5, 5): 260, (260, 260): 261}),
         ),
-        reference=reference_route,
-        expect=expect_route,
-    )
-    check_on_inputs(
-        checker=checker,
-        function="patchify",
-        description="matches F.unfold's order of patches",
-        inputs=(
-            (quiz_tensor(961, 2, 3, 4, 6), 2),
-            (quiz_tensor(962, 1, 1, 6, 6), 3),
-        ),
-        reference=lambda images, patch: F.unfold(images, kernel_size=patch, stride=patch).transpose(1, 2),
-        expect=expect_tensor,
-    )
-    check_on_inputs(
-        checker=checker,
-        function="merge",
-        description="replaces the pair from left to right",
-        inputs=(
-            ([1, 2, 3, 1, 2, 2, 1, 2], (1, 2), 9),
-            ([4, 4, 4, 4, 4], (4, 4), 7),
-            ([5, 6], (6, 5), 8),
-        ),
-        reference=reference_merge,
+        reference=reference_apply_merges,
         expect=expect_value,
     )
 
@@ -1474,14 +1534,14 @@ QUIZ10 = Exercise(
     source=QUIZ10_SOURCE,
     solution=QUIZ10_SOLUTION,
     hints={
-        "pre_norm_block": "x = x + attention(norm1(x)), then return x plus mlp of norm2 of it.",
-        "swiglu": "F.silu(x @ W_gate.T) times (x @ W_up.T), and the product @ W_down.T.",
-        "route": "scores.topk(k, dim=-1) gives values and indices, largest first. Take the softmax of the values over "
-        "dim=-1.",
-        "patchify": "Reshape to (batch, channels, height // patch, patch, width // patch, patch). Then permute to "
-        "(0, 2, 4, 1, 3, 5) and reshape to (batch, -1, channels * patch * patch).",
-        "merge": "Walk a position along ids. Where ids[position] and ids[position + 1] make pair, append new_id and "
-        "step 2, and otherwise append the id and step 1.",
+        "rms_pre_norm_block": "A small function inside, norm(y, weight), keeps the two norms from repeating. "
+        "(y**2).mean(dim=-1, keepdim=True) is each row's mean square.",
+        "mixtral_layer": "topk the router's scores, then scatter their softmax into torch.zeros(len(x), len(router)), "
+        "as dynamic1 did. torch.stack every expert's SwiGLU output on dim=1, weight it and sum over dim=1.",
+        "embed_patches": "vit1's reshape, permute and reshape cut the patches. class_token.expand(batch, 1, -1) gives "
+        "one per image to torch.cat in front on dim=1.",
+        "apply_merges": "Loop over merges.items(), and for each one walk a position along ids as bpe2's merge did, "
+        "building a new list.",
     },
     introduces=(),
     check=check_quiz10,

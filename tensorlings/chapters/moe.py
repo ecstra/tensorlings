@@ -106,8 +106,12 @@ MOE1_LESSON = prose(
 
     This is Mixtral's router, a softmax over the top k of `x W_g`, with 8
     experts and k of 2. Each token runs 2 of the 8. So Mixtral holds about 47
-    billion parameters and uses about 13 billion per token. The Switch paper
-    went further, with k of 1, a single expert per token.
+    billion parameters and uses about 13 billion per token.
+
+    The Switch paper went further, with k of 1. A softmax over one score is
+    always 1, so that router would get no gradient and never learn. Switch
+    takes the softmax over every expert's score first, then weights the one
+    chosen expert by its probability. moe2's layer does this.
 
     The saving comes from running only the chosen experts. For each expert,
     find the tokens that picked it, run it on those rows alone, and add its
@@ -150,6 +154,7 @@ MOE1_SOURCE = source_file(
     # TODO: Return the weights and the chosen experts of each token, both of
     #   shape (tokens, k), for router scores of shape (tokens, experts). The
     #   weights are a softmax over the k largest scores of each row alone.
+    #   Keep the largest score first, as topk gives them.
     def route(
         scores: Tensor,
         k: int,
@@ -316,12 +321,13 @@ def check_moe_forward(found: type) -> None:
         x = small_tensor(560 + k, 7, 4) / 2
         rows_run = [0]
 
+        # A single token's row of shape (features,) counts as one row, so a loop over tokens counts right.
         def count_rows(
             module: nn.Module,
             inputs: tuple[Tensor, ...],
             output: Tensor,
         ) -> None:
-            rows_run[0] += len(inputs[0])
+            rows_run[0] += inputs[0].shape[0] if inputs[0].dim() > 1 else 1
 
         hooks = [expert_net.register_forward_hook(count_rows) for expert_net in model.experts]
 
@@ -344,6 +350,21 @@ def check_moe_forward(found: type) -> None:
             raise Mismatch(
                 f"MoE(4, 6, 5, {k}) ran its experts on {rows_run[0]} rows in all for 7 tokens, but it should run "
                 f"only the chosen ones, {7 * k} rows.",
+            )
+
+        # With k of 1 every weight is a softmax over one score, always 1, so only k of 2 can show a gradient.
+        if k == 1:
+            continue
+
+        if actual.requires_grad:
+            actual.sum().backward()
+
+        gradient = model.router.weight.grad
+
+        if gradient is None or not gradient.abs().sum() > 0:
+            raise Mismatch(
+                f"MoE(4, 6, 5, {k})'s router got no gradient. Keep the weights from route in the sum, outside "
+                "torch.no_grad() and without .detach(), since they are how the router learns.",
             )
 
 
@@ -501,7 +522,9 @@ MOE2_LESSON = prose(
     Here are 4 runs of a top 1 router over 4 experts, 400 steps each, on the
     same smooth target. Its router has a bias, which lets it favour one expert
     for every input and shows the effect quickly. The routers of Switch and
-    Mixtral have no bias.
+    Mixtral have no bias. This layer's softmax runs over all 4 scores, as
+    Switch's does. Each token's one expert is weighted by its probability,
+    for the reason moe1 gave.
 
     | Balancing | Tokens to the busiest expert | Tokens dropped | Error |
     |---|---|---|---|
@@ -768,6 +791,25 @@ MOE2 = Exercise(
 )
 
 
+def measure_moe2(
+    seeds: tuple[int, ...] = (0, 1, 2, 3),
+) -> dict[float, list[tuple[float, float, float]]]:
+    """moe2's table: the Switch layer from each seed, trained 400 steps on batches drawn from seed + 1, with no
+    balancing and with a weight of 0.01. Gives (share to the busiest expert, share dropped, error) for each, on
+    4,096 new inputs."""
+    results: dict[float, list[tuple[float, float, float]]] = {}
+
+    with pinned_threads():
+        for alpha in (0.0, 0.01):
+            for seed in seeds:
+                model = seeded_switch(seed)
+                SWITCH_REFERENCE["train_switch"](model, 400, alpha, torch.Generator().manual_seed(seed + 1))
+                busiest, dropped, error, _ = switch_results(model)
+                results.setdefault(alpha, []).append((busiest, dropped, error))
+
+    return results
+
+
 # ---------------------------------------------------------------------------
 # moe3
 # ---------------------------------------------------------------------------
@@ -919,7 +961,8 @@ MOE3_LESSON = prose(
     On the regions task the router sent 99% or more of each region's inputs
     to one expert. Each expert came to own a couple of regions and learned
     their maps. The experts beat the dense layer of the same compute about
-    tenfold, and the dense layer with as many parameters too.
+    tenfold. They also beat the dense layer with as many parameters, with
+    about half its error.
 
     On the smooth task the experts still beat the dense layer of the same
     compute, 0.012 against 0.015. One function everywhere doesn't split into
@@ -927,12 +970,14 @@ MOE3_LESSON = prose(
     running, does ten times better.
 
     That is the trade. Experts buy parameters for the same compute, and they
-    pay most when the work splits into parts that different experts can own. A
-    language model meets many topics and languages, which is such work.
+    pay most when the work splits into parts that different experts can own.
+    In Mixtral and in Google's ST-MoE the experts did not split by topic or by
+    language. They split by kinds of tokens, like punctuation, numbers, names,
+    or `self` in Python code.
 
     The experts above ran with no limit on their load. With room for twice an
     even share, a capacity factor of 2.0, under half a percent of the inputs
-    found their expert full. The regions error stayed at 0.112 to 0.185.
+    found their expert full. The regions error came out at 0.112 to 0.185.
 
     The Switch Transformer paper ran factors from 1.0 to 2.0, and each beat
     the dense model of the same compute by about the same margin. There a token
@@ -940,8 +985,8 @@ MOE3_LESSON = prose(
     a dropped token gets 0, which is why it wants the room.
 
     The cost is memory, every expert held at once, and a router to keep
-    balanced. The saving is multiplications per token, which is why large
-    models spread their experts across many GPUs.
+    balanced. That memory is why large models spread their experts across
+    many GPUs. The saving is multiplications per token.
     """,
 )
 

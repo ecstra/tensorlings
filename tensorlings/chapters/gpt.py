@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import contextlib
 import math
+import re
 import textwrap
+import time
+from collections.abc import Iterator
 
 import torch
 import torch.nn as nn
@@ -25,8 +29,20 @@ from ..engine import (
     seeded,
 )
 from ..text import prose, source_file
-from ..training import MissingCheckpoint, load_checkpoint
+from ..training import MissingCheckpoint, best_device, load_checkpoint
 from .transformer_block import SELF_ATTENTION, expect_same_layers
+
+
+@contextlib.contextmanager
+def pinned_threads() -> Iterator[None]:
+    """Four CPU threads while measuring, so the sums add up in the same order on every run."""
+    threads = torch.get_num_threads()
+    torch.set_num_threads(4)
+
+    try:
+        yield
+    finally:
+        torch.set_num_threads(threads)
 
 GPT = Chapter(
     folder="59_gpt",
@@ -459,29 +475,36 @@ GPT2_LESSON = prose(
     behind. `wte` turns each token into a row of numbers and `wpe` adds a row
     for its position, as position2 did. The blocks follow, then a last
     LayerNorm, and `lm_head` scores every token of the vocabulary as the next
-    one. The names are GPT-2's own, so its released weights would load into
-    this model.
+    one. The names are GPT-2's own. Its released weights load into this model
+    once four of its matrices are transposed, as block2 said.
 
     The head shares its weight with `wte`, as in GPT-2. A token's row reads it
     in and also scores it on the way out, which saves a whole table.
 
-    nanoGPT starts every weight from a normal spread of 0.02 and every bias at
-    0. GPT-2's released code does the same, except that it draws `wpe` at
-    0.01. Then, as the GPT-2 paper describes, nanoGPT shrinks the layers that
-    write into the residual stream, the `c_proj` of each attention and each
-    MLP. It divides them by the square root of how many there are. Here is
-    why, the spread of the residual stream after the last block, as a
-    multiple of its spread going in.
+    nanoGPT starts every Linear and Embedding weight from a normal spread of
+    0.02, and every bias at 0. GPT-2's released code does the same, except
+    that it draws `wpe` at 0.01.
+
+    The **residual stream** is residual2's main path, the `x` that every
+    block adds its attention and MLP outputs to. As the GPT-2 paper describes,
+    nanoGPT shrinks the layers that write into it, the `c_proj` of each
+    attention and each MLP. It divides their spread by the square root of how
+    many there are.
+
+    Here is why. These GPTs have gpt3's size of 128 and read 128 random
+    characters. The table gives the stream's spread after the last block, as
+    a multiple of its spread going in, the token and position rows added.
+    Each cell is the range over 3 seeds.
 
     | Blocks | 4 | 12 | 24 | 48 |
     |---|---|---|---|---|
-    | All weights at 0.02 | 6.1 | 11.1 | 16.5 | 24.0 |
-    | `c_proj` scaled down | 2.2 | 2.3 | 2.3 | 2.3 |
+    | All weights at 0.02 | 4.2 to 4.5 | 7.7 to 7.8 | 11.1 to 11.5 | 15.7 to 16.5 |
+    | `c_proj` scaled down | 1.7 | 1.7 | 1.7 | 1.7 to 1.8 |
 
     Every block adds its output to the stream. Without the scaling the stream
-    grows like the square root of the depth, the growth residual2 measured.
-    With it, the stream's size stays the same however deep the model, much as
-    residual3's zero start kept it.
+    keeps growing with depth, as residual2 measured, here about like the
+    square root of the depth. With it, the stream's size stays the same
+    however deep the model, much as residual3's zero start kept it.
 
     `model.apply(fn)` calls `fn` on every module inside `model`, which is how
     one function sets up every layer.
@@ -612,6 +635,15 @@ def check_init_weights(found: object) -> None:
         if abs(spread - 0.02) > 0.002 or abs(weight.mean().item()) > 0.002:
             raise Mismatch(f"After init_weights, {name} has a spread of {spread:.4f}, but it should be drawn with a spread of 0.02 around 0.")
 
+        # A normal spread puts about 4.6% of its draws beyond two spreads, and an even spread of 0.02 puts none.
+        tails = (weight.abs() > 0.04).float().mean().item()
+
+        if not 0.03 < tails < 0.06:
+            raise Mismatch(
+                f"After init_weights, {tails:.1%} of {name} lies beyond 0.04, two spreads out, but a normal draw puts "
+                "about 4.6% there. Draw it with nn.init.normal_.",
+            )
+
     if not torch.all(linear.bias == 0):
         raise Mismatch("After init_weights, a Linear's bias should be all 0.")
 
@@ -625,6 +657,13 @@ def check_init_weights(found: object) -> None:
 def check_scale_residuals(found: object) -> None:
     torch.manual_seed(593)
     model = MODEL_REFERENCE["GPT"](20, 16, 256, 8, 4)
+
+    # The reference model comes already scaled, so every c_proj goes back to 0.02 and a layer left out shows.
+    with torch.no_grad():
+        for block in model.h:
+            nn.init.normal_(block.attn.c_proj.weight, mean=0.0, std=0.02)
+            nn.init.normal_(block.mlp.c_proj.weight, mean=0.0, std=0.02)
+
     attention_before = model.h[0].attn.c_attn.weight.clone()
     found(model, 8)
     wanted = 0.02 / math.sqrt(16)
@@ -654,6 +693,10 @@ def check_gpt_forward(found: type) -> None:
 
     if model.lm_head.weight is not model.wte.weight:
         raise Mismatch("lm_head's weight should be wte's weight itself, tied, as the given __init__ sets it.")
+
+    # The reference's weights go in first, so forward is checked on its own, whatever order the start drew in.
+    with torch.no_grad():
+        model.load_state_dict(reference.state_dict())
 
     ids = torch.randint(0, 20, (3, 10), generator=torch.Generator().manual_seed(594))
 
@@ -698,13 +741,46 @@ GPT2 = Exercise(
         "for the weight, and nn.init.zeros_ for a Linear's bias when module.bias is not None.",
         "scale_residuals_": "For each block of model.h, nn.init.normal_ block.attn.c_proj.weight and "
         "block.mlp.c_proj.weight with std=0.02 / math.sqrt(2 * layers).",
-        "GPT.forward": "torch.arange(ids.shape[1]) gives the positions. Add self.wte(ids) and self.wpe of them, loop "
-        "over self.h, then self.ln_f and self.lm_head.",
+        "GPT.forward": "torch.arange(ids.shape[1], device=ids.device) gives the positions, on the device ids are on. "
+        "Add self.wte(ids) and self.wpe of them, loop over self.h, then self.ln_f and self.lm_head.",
     },
     introduces=(),
     check=check_gpt2,
     time_limit=30,
 )
+
+
+def measure_residual_growth(
+    blocks: tuple[int, ...] = (4, 12, 24, 48),
+    seeds: tuple[int, ...] = (0, 1, 2),
+) -> dict[str, dict[int, list[float]]]:
+    """gpt2's table: GPTs of gpt3's size, 65 tokens, 128 positions, size 128 and 4 heads, from each seed, run on 8
+    rows of 128 random tokens. Gives the spread of the residual stream after the last block over its spread going
+    in, the token and position rows added, with c_proj scaled down as gpt2 does and with it drawn at 0.02."""
+    results: dict[str, dict[int, list[float]]] = {"plain": {}, "scaled": {}}
+
+    with pinned_threads(), torch.no_grad():
+        for layers in blocks:
+            for seed in seeds:
+                for kind in ("plain", "scaled"):
+                    torch.manual_seed(seed)
+                    model = MODEL_REFERENCE["GPT"](65, 128, 128, layers, 4)
+
+                    if kind == "plain":
+                        for block in model.h:
+                            nn.init.normal_(block.attn.c_proj.weight, mean=0.0, std=0.02)
+                            nn.init.normal_(block.mlp.c_proj.weight, mean=0.0, std=0.02)
+
+                    ids = torch.randint(0, 65, (8, 128), generator=torch.Generator().manual_seed(seed + 100))
+                    stream = model.wte(ids) + model.wpe(torch.arange(128))
+                    spread_in = stream.std().item()
+
+                    for block in model.h:
+                        stream = block(stream)
+
+                    results[kind].setdefault(layers, []).append(stream.std().item() / spread_in)
+
+    return results
 
 
 # ---------------------------------------------------------------------------
@@ -851,8 +927,8 @@ GPT3_LESSON = prose(
 
     It trains the way nanoGPT does, with Section 4's tools together.
 
-    - AdamW, with weight decay on the matrices and none on the biases and norms, as broken2 set it up.
-    - A rate that warms up for 150 steps, then follows a cosine down to a tenth of its peak, as in warmup1 and schedule2.
+    - AdamW, with weight decay on the matrices and none on the biases and norms, as adamw2 set it up.
+    - A rate that warms up for 150 steps, then follows a cosine down to a tenth of its peak, as in warmup1, schedule1 and broken2.
     - Gradients clipped to a norm of 1, as clipping1 did.
 
     The rate changes every step. `optimizer.param_groups` holds the rate of
@@ -864,16 +940,18 @@ GPT3_LESSON = prose(
     optimizer.param_groups[0]["lr"] = 0.05    # the next step uses 0.05
     ```
 
-    Here is the run behind this project on MPS. The GPT has 4 blocks of size
-    128, reads 128 characters at a time, and holds 818,048 weights.
+    Here are the runs behind this project, on 3 seeds, with seed 0 being the
+    file's own run. The GPT has 4 blocks of size 128, reads 128 characters at
+    a time, and holds 818,048 weights.
 
     | Step | 0 | 500 | 1,000 | 2,000 | 3,000 |
     |---|---|---|---|---|---|
-    | Validation loss | 4.19 | 2.02 | 1.73 | 1.57 | 1.54 |
+    | Validation loss | 4.16 to 4.20 | 1.98 to 2.01 | 1.71 to 1.74 | 1.56 to 1.58 | 1.52 to 1.55 |
 
-    It took about 5 minutes on this Mac's GPU. The check asks for a
-    validation loss below 1.7. nanoGPT's own Shakespeare
-    model, 6 blocks of size 384, reaches about 1.47 on a GPU.
+    Each run took 8 to 14 minutes on this Mac's GPU through MPS, slower when
+    other work shared the machine. The check asks for a validation loss
+    below 1.7. nanoGPT's own Shakespeare model, 6 blocks of size 384,
+    reaches about 1.47 on a GPU.
     """,
 )
 
@@ -1212,6 +1290,45 @@ GPT3 = Exercise(
 )
 
 
+def measure_gpt3(
+    seeds: tuple[int, ...] = (0, 1, 2),
+    device: torch.device | None = None,
+) -> dict[int, tuple[dict[int, float], float]]:
+    """gpt3's curve: main's run from each seed, the validation loss at step 0 and every 500 steps, and the
+    seconds each run took. Seed 0 is main itself. Nothing is saved, so the checkpoint stays as it is."""
+    device = device or best_device()
+    characters, train_data, validation_data = TRAIN_REFERENCE["shakespeare_splits"]()
+    results: dict[int, tuple[dict[int, float], float]] = {}
+
+    with pinned_threads():
+        for seed in seeds:
+            start = time.time()
+            torch.manual_seed(seed)
+            model = TRAIN_REFERENCE["GPT"](len(characters), 128, 128, 4, 4).to(device)
+            steps, warmup = 3000, 150
+            optimizer = TRAIN_REFERENCE["make_optimizer"](model, 1e-3, 0.1)
+            generator = torch.Generator().manual_seed(seed)
+            curve = {0: TRAIN_REFERENCE["validation_loss"](model, validation_data, 20, torch.Generator().manual_seed(1), device)}
+
+            for step in range(steps):
+                x, y = TRAIN_REFERENCE["get_batch"](train_data, 128, 64, generator)
+                lr = TRAIN_REFERENCE["learning_rate"](step, 1e-3, warmup, steps, 1e-4)
+                TRAIN_REFERENCE["train_step"](model, optimizer, x.to(device), y.to(device), lr, 1.0)
+
+                if (step + 1) % 500 == 0:
+                    curve[step + 1] = TRAIN_REFERENCE["validation_loss"](
+                        model,
+                        validation_data,
+                        20,
+                        torch.Generator().manual_seed(1),
+                        device,
+                    )
+
+            results[seed] = (curve, time.time() - start)
+
+    return results
+
+
 # ---------------------------------------------------------------------------
 # gpt4
 # ---------------------------------------------------------------------------
@@ -1288,11 +1405,29 @@ GPT4_LESSON = prose(
 
     At 0.5 the words are real and the lines play safe. At 1.5 the spelling
     falls apart. At 1.0 with every character allowed, rare picks slip through,
-    like `kiss solemeRoH`, which top k would have cut.
+    like `kiss solemeRoH`. The model ranked its `k` 26th and its `H` 24th, so
+    top k of 20 would have cut both.
 
-    In 5 minutes and 818,048 weights the model learned spelling, line breaks
-    and the look of a speaker's name. GPT-2's largest model is the same kind of stack with about 1,800 times as
-    many weights, trained on 40 GB of web text.
+    Here is the same model over 5 seeds of 2,000 characters each. The table
+    gives the share of written words found in the training text. It also
+    gives the distinct words per word written, which falls as text repeats.
+
+    | Temperature, top k | Real words | Distinct words per word |
+    |---|---|---|
+    | 0.5, 20 | 95.0% to 99.3% | 0.41 to 0.46 |
+    | 0.8, 20 | 91.9% to 95.2% | 0.52 to 0.56 |
+    | 1.0, 20 | 88.7% to 90.8% | 0.57 to 0.60 |
+    | 1.0, all 65 | 83.3% to 89.6% | 0.62 to 0.67 |
+    | 1.5, 20 | 66.0% to 70.6% | 0.74 to 0.79 |
+
+    A lower temperature writes more real words and repeats more. Top k cuts
+    the rare picks, which lifts the worst seed at 1.0 from 83.3% to 88.7%.
+    So pick the temperature for the trade you want, and keep a top k.
+
+    In 8 to 14 minutes and 818,048 weights the model learned spelling, line
+    breaks and the look of a speaker's name. GPT-2's largest model is the
+    same kind of stack with about 1,900 times as many weights, trained on 40
+    GB of web text.
     """,
 )
 
@@ -1544,3 +1679,54 @@ GPT4 = Exercise(
     check=check_gpt4,
     time_limit=120,
 )
+
+
+def measure_samples(seed: int = 0) -> tuple[dict[tuple[float, int], str], list[tuple[str, int]]]:
+    """gpt4's samples: 200 characters after ROMEO: from the gpt3 checkpoint, at each temperature and top k of the
+    lesson. Also gives each character of the 1.0 sample with all 65 allowed that the model ranked below 20th."""
+    characters, _, _ = TRAIN_REFERENCE["shakespeare_splits"]()
+    model = trained_gpt(MODEL_REFERENCE["GPT"]).eval()
+    samples = {}
+
+    with pinned_threads():
+        for temperature, top_k in ((0.5, 20), (1.0, 20), (1.5, 20), (1.0, 65)):
+            samples[(temperature, top_k)] = reference_sample(model, characters, "ROMEO:", 200, temperature, top_k, seed)
+
+        ids = torch.tensor([[characters.index(character) for character in samples[(1.0, 65)]]])
+        cut = []
+
+        with torch.no_grad():
+            for step in range(len("ROMEO:"), ids.shape[1]):
+                scores = model(ids[:, max(0, step - model.block_size) : step])[0, -1]
+                rank = (scores > scores[ids[0, step]]).sum().item() + 1
+
+                if rank > 20:
+                    cut.append((characters[ids[0, step]], rank))
+
+    return samples, cut
+
+
+def measure_sampling(
+    seeds: tuple[int, ...] = (0, 1, 2, 3, 4),
+    length: int = 2000,
+) -> dict[tuple[float, int], list[tuple[float, float]]]:
+    """gpt4's table: length characters after ROMEO: from the gpt3 checkpoint, from each seed, at each temperature
+    and top k. Gives the share of the written words, runs of letters, that appear in the training text, and the
+    distinct words, ignoring case, per word written."""
+    characters, _, _ = TRAIN_REFERENCE["shakespeare_splits"]()
+    model = trained_gpt(MODEL_REFERENCE["GPT"]).eval()
+    text = load_shakespeare()
+    known = set(re.findall(r"[A-Za-z]+", text[: int(0.9 * len(text))]))
+    prompt = torch.tensor([[characters.index(character) for character in "ROMEO:"]])
+    results: dict[tuple[float, int], list[tuple[float, float]]] = {}
+
+    with pinned_threads():
+        for temperature, top_k in ((0.5, 20), (0.8, 20), (1.0, 20), (1.0, 65), (1.5, 20)):
+            for seed in seeds:
+                written = SAMPLING_REFERENCE["generate"](model, prompt, length, temperature, top_k, torch.Generator().manual_seed(seed))
+                words = re.findall(r"[A-Za-z]+", "".join(characters[index] for index in written[0, len("ROMEO:") :].tolist()))
+                real = sum(word in known for word in words) / len(words)
+                distinct = len({word.lower() for word in words}) / len(words)
+                results.setdefault((temperature, top_k), []).append((real, distinct))
+
+    return results

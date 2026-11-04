@@ -145,10 +145,19 @@ VIT1_LESSON = prose(
     whose kernel and stride both equal the patch size does exactly the same
     sums. Real code uses it, since one call cuts and embeds at once.
 
+    The Linear's weight has one row per output, holding a patch's numbers in
+    patchify's order, channel, then row, then column. So
+    `.reshape(size, channels, patch, patch)` lays each row out as one kernel
+    of that Conv2d.
+
     Two more pieces finish the input.
 
     - The **class token** is a learned vector put in front of the patches. It belongs to no patch, so the head reads its output alone.
     - A learned position vector is added to every token, the class token too, since attention ignores order, as position1 showed.
+
+    One class token serves every image, so it is repeated along the batch.
+    `.expand(2, -1, -1)` turns a size 1 dimension into 2 copies without
+    copying memory, and each -1 keeps that size as it is.
 
     After the blocks, the class token has gathered from every patch what the
     head needs. The paper took the idea from BERT's class token. It also found
@@ -448,47 +457,48 @@ VIT2_LESSON = prose(
     weights in all. Next to it is LeNet from lenet1, with 61,706.
 
     PyTorch's `nn.TransformerEncoderLayer` is block2's block without the mask.
-    `norm_first=True` gives the pre norm order, and dropout is off here.
+    `norm_first=True` gives the pre norm order. Its defaults are a ReLU and a
+    dropout of 0.1, so the ViT here sets a GELU and no dropout.
 
     ```python
     block = nn.TransformerEncoderLayer(16, 2, 32, batch_first=True, norm_first=True)
     block(torch.zeros(3, 5, 16)).shape    # torch.Size([3, 5, 16]), the shape it was given
     ```
 
-    Both models trained the same way, 3,000 steps of AdamW on batches of 128,
-    on the first N training images. Here is their accuracy on the 10,000
-    validation images, from one seed.
+    A convolution builds in two assumptions. Nearby pixels go together, which
+    is called **locality**. A pattern means the same thing anywhere in the
+    image, which is **translation equivariance**. The assumptions a layer
+    builds in are its **inductive bias**. A ViT has almost none. Only the cut
+    into patches keeps neighbours together, and attention lets any patch use
+    any other from the first block on.
 
-    | Training images | 500 | 2,000 | 10,000 | 50,000 |
-    |---|---|---|---|---|
-    | LeNet | 89.9% | 94.1% | 97.0% | 98.4% |
-    | ViT | 75.7% | 87.9% | 95.5% | 96.9% |
+    Both models trained 3,000 steps of AdamW on batches of 128, on the first N
+    training images, and were scored on the 10,000 validation images. On plain
+    digits, whose layout holds, LeNet led at every size on one seed. It scored
+    89.8% to the ViT's 76.2% at 500 images, and 98.6% to 97.2% at 50,000.
 
-    A convolution builds in two assumptions. Nearby pixels go together, and a
-    pattern means the same thing anywhere in the image. A ViT has neither,
-    beyond cutting patches. Attention lets any patch use any other from the
-    first block on. So the ViT learns from examples what a convolution is
-    given, and on MNIST's digits those assumptions hold.
-
-    Take them away. Shuffle every image the same fixed way, the 16 patches and
-    the 49 pixels inside each, as MLP-Mixer's authors did. The patch Linear and
-    the learned positions can absorb that shuffle, so the ViT meets the same
-    task as before. LeNet's neighbouring pixels are no longer neighbours. Here
-    are three seeds of each.
+    MLP-Mixer's authors tested what a convolution assumes by taking it away.
+    Shuffle every image the same fixed way, the 16 patches and the 49 pixels
+    inside each. The patch Linear and the learned positions can absorb that
+    shuffle, so the ViT meets the same task as before. LeNet's neighbouring
+    pixels are no longer neighbours. Here are three seeds of each, all run on
+    this Mac's GPU.
 
     | Shuffled, training images | 500 | 2,000 | 10,000 | 50,000 |
     |---|---|---|---|---|
     | LeNet | 79.8% to 81.1% | 89.4% to 90.2% | 94.1% to 94.3% | 95.6% to 96.0% |
-    | ViT | 73.5% to 77.8% | 87.3% to 89.4% | 94.3% to 95.8% | 96.2% to 97.1% |
+    | ViT | 73.5% to 77.8% | 87.3% to 89.4% | 94.3% to 96.0% | 96.4% to 97.1% |
 
-    The ViT scores about what it scored on plain digits. LeNet still leads at
-    2,000 images and below. From 10,000 images on, the ViT won on every seed.
+    LeNet still leads at 2,000 images and below, on every seed. The ViT
+    scores about what it scored on plain digits. From 10,000 images on, the
+    ViT won on every seed, by 0.1 to 1.7 points at 10,000 and 0.6 to 1.3 at
+    50,000.
 
-    That is the ViT paper's finding in small. ViTs lack the locality and
-    translation equivariance of CNNs, so they need more data, and with it
-    "large scale training trumps inductive bias". On 9 million JFT images
-    ViT-B/32 did much worse than a ResNet, and from 90 million on it did
-    better.
+    That is the trade the ViT paper measured. A model with little inductive
+    bias needs more data, and with enough "large scale training trumps
+    inductive bias". There the bias held, on photos, and ViT-B/32 needed 90
+    million JFT images to pass ResNet50. MNIST has 50,000, so here the
+    shuffle takes LeNet's bias away instead.
     """,
 )
 
@@ -785,10 +795,10 @@ def measure_data_appetite(
     seeds: tuple[int, ...] = (0, 1, 2),
     device: torch.device | None = None,
 ) -> dict[tuple[str, int], list[float]]:
-    """vit2's tables: LeNet and the SmallViT trained 3,000 steps of AdamW at 1e-3 on batches of 128, on the
+    """vit2's numbers: LeNet and the SmallViT trained 3,000 steps of AdamW at 1e-3 on batches of 128, on the
     first size training images, scored on the 10,000 validation images. With shuffle, every image goes through
-    the same shuffled first. The lesson's shuffled runs were split between the CPU and the GPU, so a rerun lands
-    within the seed spread rather than on the same digits."""
+    the same shuffle first. The lesson's table is shuffle=True on seeds 0 to 2, and its plain line is
+    shuffle=False on seed 0, both run on this Mac's GPU through MPS."""
     device = device or best_device()
     images = mnist_images()
     x, y = images["train_x"], images["train_y"]
