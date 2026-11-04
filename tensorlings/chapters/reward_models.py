@@ -284,9 +284,10 @@ def measure_reward_models() -> dict[str, float]:
 REWARD1_LESSON = prose(
     """
     People find it easier to pick the better of two answers than to write
-    the best one. InstructGPT's labelers ranked 4 to 9 answers to each prompt,
-    and every two of them made one comparison. A reward model learns a score
-    for any answer from such picks.
+    the best one. InstructGPT is GPT-3 trained to follow instructions, by
+    Ouyang and colleagues at OpenAI. Its labelers ranked 4 to 9 answers to
+    each prompt, and every two of them made one comparison. A reward model
+    learns a score for any answer from such picks.
 
     The Bradley Terry model says how scores turn into picks. The chance that
     answer a beats answer b is the sigmoid of the gap between their scores.
@@ -297,7 +298,8 @@ REWARD1_LESSON = prose(
 
     Only the gap counts, so adding a number to every score changes nothing.
     The loss is minus the log of that chance for the answer that won, as in
-    InstructGPT. `F.logsigmoid` takes it without rounding to 0, as gan1 did.
+    InstructGPT. `F.logsigmoid` takes it in one step, as gan1 did, so a
+    sigmoid that rounds to 0 never turns the log into minus infinity.
 
     ```python
     F.logsigmoid(torch.tensor([2.0, -200.0]))    # tensor([-1.2693e-01, -2.0000e+02]), the -200 kept exact
@@ -815,8 +817,10 @@ REWARD2_LESSON = prose(
     That jump comes from a floor in the reference, which adds 1e-6 to every
     length's weight before the chances are scaled. A language model too
     gives every answer some chance. At 40 characters the floor leaves a
-    chance of about 1 in 7 million. A beta of 1 multiplies it by e^22, enough
-    for the longest answers to win. Without the floor the chance there is
+    chance of about 1 in 7.5 million. A beta of 1 multiplies every length's
+    chance by e to the power of its learned reward, e^22 at 40 against e^4.4
+    at 8. That is enough for the longest answers to win. Without the floor
+    the chance there is
     about e^-59, and a beta of 1 settles near 13 characters, with a true
     reward of -1.09.
 

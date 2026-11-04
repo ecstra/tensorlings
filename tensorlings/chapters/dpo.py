@@ -24,6 +24,7 @@ from ..engine import (
     expect_close,
     expect_tensor,
     small_tensor,
+    value_text,
 )
 from ..paths import CHECKPOINTS_DIR
 from ..text import prose, source_file
@@ -417,8 +418,9 @@ def pinned_threads() -> Iterator[None]:
 
 
 def measure_dpo() -> dict[str, float]:
-    """Every number in dpo2's table, from a GPT given 200 steps of SFT, averaged over seeds 0 to 2, on 4 threads. The
-    pairs are the start's own answers, two to each training word, ranked by letters right."""
+    """Every number in dpo2's tables, from a GPT given 200 steps of SFT, averaged over seeds 0 to 2, on 4 threads. The
+    pairs are the start's own answers, two to each training word, ranked by letters right. Best of n picks with
+    reward1's model after 50 steps and after 1,000."""
     results: dict[str, float] = {}
 
     with pinned_threads():
@@ -446,12 +448,14 @@ def measure_dpo() -> dict[str, float]:
 
                 print(seed, name, {key: round(value, 3) for key, value in numbers.items()}, flush=True)
 
-            reward_model = trained_reward_model(50, seed=seed)
+            for reward_steps in (50, 1000):
+                reward_model = trained_reward_model(reward_steps, seed=seed)
 
-            for count in (1, 4, 16):
-                score = best_of(start, reward_model, count, seed)
-                results[f"best of {count}"] = results.get(f"best of {count}", 0.0) + score / 3
-                print(seed, "best of", count, round(score, 3), flush=True)
+                for count in (1, 4, 16):
+                    score = best_of(start, reward_model, count, seed)
+                    key = f"best of {count}, reward model after {reward_steps} steps"
+                    results[key] = results.get(key, 0.0) + score / 3
+                    print(seed, key, round(score, 3), flush=True)
 
     return results
 
@@ -775,20 +779,25 @@ DPO2_LESSON = prose(
     reward1's pairs.
 
     In InstructGPT, RLHF with PPO holds four models at once. They are the
-    policy, the reference, the reward model, and a value model started from
-    the reward model. It also writes answers during training, which is slow.
-    DPO holds two, and here it wrote its answers once, before training.
+    policy, the reference, the reward model, and a value network, as in
+    ppo2, started from the reward model. It also writes answers during
+    training, which is slow. DPO holds two, and here it wrote its answers
+    once, before training.
 
-    Without training the policy at all, the reward model can pick the best
-    of several answers drawn at a temperature of 1.
+    Without training the policy, the reward model can pick the best of
+    several answers drawn at a temperature of 1. The start's 74% always
+    wrote the likeliest character, and one drawn answer is right less often.
 
     | Answers drawn per question | 1 | 4 | 16 |
     |---|---|---|---|
-    | Exact answers, reward1's model picking | 60% | 65% | 47% |
+    | Exact answers, reward1's model after 50 steps picking | 60% | 65% | 47% |
+    | Exact answers, reward1's model after 1,000 steps picking | 60% | 69% | 57.5% |
 
-    Best of 4 helps, but best of 16 hurts. The more answers it sees, the more
-    chances the reward model gets to pick one it overrates. That is reward2's
-    hacking, with no training of the policy at all.
+    On average the pick of 4 beats one drawn answer, but 16 does worse. The
+    more answers it sees, the more chances the reward model gets to pick one
+    it overrates. That is reward2's hacking, with no training of the policy.
+    Training the reward model 20 times longer softens the fall without
+    stopping it, and no pick reaches the start's 74%.
     """,
 )
 
@@ -1064,8 +1073,9 @@ DPO2 = Exercise(
 
 GRPO1_LESSON = prose(
     """
-    PPO needs a value model to know what reward to expect, and it is usually
-    about as large as the policy. GRPO, from DeepSeekMath, drops it. For each question it writes a
+    PPO needs a value network, ppo2's V, to know what reward to expect, and
+    it is usually about as large as the policy. GRPO, from DeepSeekMath,
+    drops it. For each question it writes a
     group of answers and scores each one. The group's mean reward is the
     baseline, as in reinforce2, and each advantage is measured against it.
 
@@ -1108,6 +1118,12 @@ GRPO1_LESSON = prose(
     out, only a check of its own. As the GPT improved, more groups came back
     all right, and those teach nothing. By step 60 most groups gave no
     signal, and the gains slowed.
+
+    dpo2 started from the same GPT and scored the same 200 words. There DPO
+    with the SFT term reached 83%, and SFT on the chosen answers 73%. GRPO
+    needs a check it can run on any answer it writes, and it writes answers
+    all through training. DPO needs only pairs judged once, so it fits when
+    answers can be compared but not checked.
     """,
 )
 
@@ -1265,9 +1281,9 @@ QUIZ14_LESSON = prose(
     | `merged_weight` | the update B times A, scaled by alpha over the rank, added to the weight | lora2 |
     | `answer_only_targets` | the ids moved one along, with every target before the answer set to -100 | sft1 |
     | `baseline_loss` | REINFORCE's loss with the batch's average reward taken off each reward | reinforce2 |
-    | `ppo_loss` | the probability ratio and its clipped copy, the smaller objective, negated | ppo1 |
-    | `dpo_loss` | each answer's log chance against the reference's, the gap times beta, then logsigmoid | dpo1 |
-    | `group_advantages` | each reward against its own group's mean and spread | grpo1 |
+    | `ppo_loss_from_rewards` | each reward less the batch's average as its advantage, then the clipped ratio's smaller objective, negated | reinforce2, ppo1 |
+    | `dpo_loss_from_tokens` | each answer's token log chances summed over its mask, then the DPO loss of the log ratios | dpo1 |
+    | `exact_match_advantages` | a reward of 1 for an exact answer and 0 otherwise, then each reward against its group's mean and spread | sft2, grpo1 |
     """,
 )
 
@@ -1302,7 +1318,8 @@ QUIZ14_SOURCE = source_file(
 
     # TODO: Return the targets for one chat of ids, the next id at every
     #   position, with -100 at every target before the answer. The answer's
-    #   first id sits at ids[start]. Keep the targets whole numbers.
+    #   first id sits at ids[start]. Keep the targets whole numbers, and leave
+    #   ids itself unchanged.
     def answer_only_targets(
         ids: Tensor,
         start: int,
@@ -1320,31 +1337,43 @@ QUIZ14_SOURCE = source_file(
 
 
     # TODO: Return PPO's clipped loss, averaged over the actions, from the new
-    #   and old log chances of each action and its advantage.
-    def ppo_loss(
+    #   and old log chances of each action and its reward. Each action's
+    #   advantage is its reward less the average of all the rewards.
+    def ppo_loss_from_rewards(
         new_log_probs: Tensor,
         old_log_probs: Tensor,
-        advantages: Tensor,
+        rewards: Tensor,
         epsilon: float,
     ) -> Tensor:
         ...
 
 
-    # TODO: Return the DPO loss, averaged over the pairs, from the log chances
-    #   of the chosen and rejected answers under the policy and the reference.
-    def dpo_loss(
+    # TODO: Return the DPO loss, averaged over the pairs. The first four hold
+    #   each token's log chance, of shape (pairs, tokens), for the chosen and
+    #   rejected answers under the policy and the reference. A mask is 1 on an
+    #   answer's tokens and 0 on its padding. Sum each answer's masked tokens
+    #   into its log chance first.
+    def dpo_loss_from_tokens(
         policy_chosen: Tensor,
         policy_rejected: Tensor,
         reference_chosen: Tensor,
         reference_rejected: Tensor,
+        chosen_mask: Tensor,
+        rejected_mask: Tensor,
         beta: float,
     ) -> Tensor:
         ...
 
 
-    # TODO: Return each reward measured against its own row, one row per group:
-    #   the row's mean taken off, then divided by the row's std plus 1e-4.
-    def group_advantages(rewards: Tensor) -> Tensor:
+    # TODO: Return each answer's advantage within its group, one row per
+    #   question. answers holds each question's group of answers, and right
+    #   each question's right answer. An answer's reward is 1.0 when it equals
+    #   the right answer and 0.0 otherwise. Take off each row's mean, then
+    #   divide by the row's std plus 1e-4.
+    def exact_match_advantages(
+        answers: list[list[str]],
+        right: list[str],
+    ) -> Tensor:
         ...
     ''',
 )
@@ -1392,31 +1421,40 @@ QUIZ14_SOLUTION = source_file(
         return -(log_probs * (rewards - rewards.mean())).mean()
 
 
-    def ppo_loss(
+    def ppo_loss_from_rewards(
         new_log_probs: Tensor,
         old_log_probs: Tensor,
-        advantages: Tensor,
+        rewards: Tensor,
         epsilon: float,
     ) -> Tensor:
+        advantages = rewards - rewards.mean()
         ratio = (new_log_probs - old_log_probs).exp()
         clipped = ratio.clamp(1 - epsilon, 1 + epsilon)
 
         return -torch.min(ratio * advantages, clipped * advantages).mean()
 
 
-    def dpo_loss(
+    def dpo_loss_from_tokens(
         policy_chosen: Tensor,
         policy_rejected: Tensor,
         reference_chosen: Tensor,
         reference_rejected: Tensor,
+        chosen_mask: Tensor,
+        rejected_mask: Tensor,
         beta: float,
     ) -> Tensor:
-        gap = (policy_chosen - reference_chosen) - (policy_rejected - reference_rejected)
+        chosen_ratio = ((policy_chosen - reference_chosen) * chosen_mask).sum(dim=1)
+        rejected_ratio = ((policy_rejected - reference_rejected) * rejected_mask).sum(dim=1)
 
-        return -F.logsigmoid(beta * gap).mean()
+        return -F.logsigmoid(beta * (chosen_ratio - rejected_ratio)).mean()
 
 
-    def group_advantages(rewards: Tensor) -> Tensor:
+    def exact_match_advantages(
+        answers: list[list[str]],
+        right: list[str],
+    ) -> Tensor:
+        rewards = torch.tensor([[float(answer == wanted) for answer in group] for group, wanted in zip(answers, right)])
+
         return (rewards - rewards.mean(dim=1, keepdim=True)) / (rewards.std(dim=1, keepdim=True) + 1e-4)
     ''',
 )
@@ -1475,6 +1513,64 @@ def expect_whole_targets(
     )
 
 
+def check_answer_only_targets(found: object) -> None:
+    for ids, start in ((torch.tensor([5, 1, 2, 7, 3, 4, 9]), 4), (torch.tensor([8, 0, 6, 6, 2]), 2)):
+        given = ids.clone()
+        call = f"answer_only_targets({value_text(ids)}, {start})"
+        actual = found(given, start)
+
+        if not torch.equal(given, ids):
+            raise Mismatch(
+                f"{call} changed ids, the caller's tensor, so the chat it came from now holds -100s. ids[1:] shares "
+                "its numbers with ids, so .clone() it before writing -100.",
+            )
+
+        expect_whole_targets(
+            call=call,
+            actual=actual,
+            expected=reference_answer_only_targets(ids, start),
+        )
+
+
+def reference_ppo_loss_from_rewards(
+    new_log_probs: Tensor,
+    old_log_probs: Tensor,
+    rewards: Tensor,
+    epsilon: float,
+) -> Tensor:
+    advantages = rewards - rewards.mean()
+    ratio = (new_log_probs - old_log_probs).exp()
+
+    return -torch.min(ratio * advantages, ratio.clamp(1 - epsilon, 1 + epsilon) * advantages).mean()
+
+
+def reference_dpo_loss_from_tokens(
+    policy_chosen: Tensor,
+    policy_rejected: Tensor,
+    reference_chosen: Tensor,
+    reference_rejected: Tensor,
+    chosen_mask: Tensor,
+    rejected_mask: Tensor,
+    beta: float,
+) -> Tensor:
+    return DPO_REFERENCE["dpo_loss"](
+        (policy_chosen * chosen_mask).sum(dim=1),
+        (policy_rejected * rejected_mask).sum(dim=1),
+        (reference_chosen * chosen_mask).sum(dim=1),
+        (reference_rejected * rejected_mask).sum(dim=1),
+        beta,
+    )
+
+
+def reference_exact_match_advantages(
+    answers: list[list[str]],
+    right: list[str],
+) -> Tensor:
+    rewards = torch.tensor([[float(answer == wanted) for answer in group] for group, wanted in zip(answers, right)])
+
+    return DPO_REFERENCE["group_advantages"](rewards)
+
+
 def check_quiz14(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
@@ -1499,16 +1595,10 @@ def check_quiz14(checker: Checker) -> None:
         reference=lambda weight, A, B, alpha: weight + alpha / A.shape[0] * B @ A,
         expect=expect_tensor,
     )
-    check_on_inputs(
-        checker=checker,
+    checker.test(
         function="answer_only_targets",
-        description="moves the ids one along and leaves the question out",
-        inputs=(
-            (torch.tensor([5, 1, 2, 7, 3, 4, 9]), 4),
-            (torch.tensor([8, 0, 6, 6, 2]), 2),
-        ),
-        reference=reference_answer_only_targets,
-        expect=expect_whole_targets,
+        description="moves the ids one along and leaves the question out, ids unchanged",
+        run=check_answer_only_targets,
     )
     check_on_inputs(
         checker=checker,
@@ -1523,38 +1613,51 @@ def check_quiz14(checker: Checker) -> None:
     )
     check_on_inputs(
         checker=checker,
-        function="ppo_loss",
-        description="takes the smaller of the plain and clipped objectives",
+        function="ppo_loss_from_rewards",
+        description="clips the ratio, with each reward less the average as its advantage",
         inputs=(
-            (torch.tensor([-0.2, -1.5, -0.7, -0.1]), torch.tensor([-0.6, -1.0, -0.7, -0.9]), torch.tensor([1.0, -2.0, 0.5, -1.0]), 0.2),
-            (torch.tensor([-1.0, -0.4, -2.2]), torch.tensor([-1.3, -0.3, -1.0]), torch.tensor([-0.5, 1.5, 2.0]), 0.1),
+            (torch.tensor([-0.2, -1.5, -0.7, -0.1]), torch.tensor([-0.6, -1.0, -0.7, -0.9]), torch.tensor([1.0, 0.0, 1.0, 0.0]), 0.2),
+            (torch.tensor([-1.0, -0.4, -2.2]), torch.tensor([-1.3, -0.3, -1.0]), torch.tensor([3.0, 5.0, 4.0]), 0.1),
         ),
-        reference=lambda new, old, advantages, epsilon: -torch.min(
-            (new - old).exp() * advantages,
-            (new - old).exp().clamp(1 - epsilon, 1 + epsilon) * advantages,
-        ).mean(),
+        reference=reference_ppo_loss_from_rewards,
         expect=expect_tensor,
     )
     check_on_inputs(
         checker=checker,
-        function="dpo_loss",
-        description="compares the chosen and rejected gaps from the reference",
+        function="dpo_loss_from_tokens",
+        description="sums each answer's masked tokens, then compares the gaps from the reference",
         inputs=(
-            (torch.tensor([-1.0, -3.0]), torch.tensor([-4.0, -2.5]), torch.tensor([-2.0, -3.5]), torch.tensor([-3.0, -2.0]), 0.1),
-            (torch.tensor([-0.5, -2.0, -1.0]), torch.tensor([-1.5, -1.0, -6.0]), torch.tensor([-0.8, -2.2, -1.0]), torch.tensor([-1.0, -1.5, -5.0]), 0.5),
+            (
+                torch.tensor([[-1.0, -2.0, -0.5], [-0.3, -1.2, -4.0]]),
+                torch.tensor([[-2.0, -0.7, -3.0], [-1.5, -2.5, -0.9]]),
+                torch.tensor([[-1.2, -1.8, -0.9], [-0.6, -1.0, -2.0]]),
+                torch.tensor([[-1.5, -1.0, -2.0], [-1.0, -2.0, -1.5]]),
+                torch.tensor([[1.0, 1.0, 0.0], [1.0, 1.0, 1.0]]),
+                torch.tensor([[1.0, 1.0, 1.0], [1.0, 0.0, 0.0]]),
+                0.1,
+            ),
+            (
+                torch.tensor([[-0.4, -3.0], [-1.0, -0.2], [-2.0, -2.5]]),
+                torch.tensor([[-0.9, -1.0], [-3.0, -0.5], [-0.5, -6.0]]),
+                torch.tensor([[-0.6, -2.0], [-1.1, -0.8], [-1.0, -2.0]]),
+                torch.tensor([[-0.8, -2.0], [-2.0, -0.4], [-0.6, -1.0]]),
+                torch.tensor([[1.0, 0.0], [1.0, 1.0], [1.0, 1.0]]),
+                torch.tensor([[1.0, 1.0], [1.0, 0.0], [1.0, 0.0]]),
+                0.5,
+            ),
         ),
-        reference=DPO_REFERENCE["dpo_loss"],
+        reference=reference_dpo_loss_from_tokens,
         expect=expect_tensor,
     )
     check_on_inputs(
         checker=checker,
-        function="group_advantages",
-        description="measures each reward against its own group",
+        function="exact_match_advantages",
+        description="rewards exact answers, then measures each against its own group",
         inputs=(
-            (torch.tensor([[1.0, 0.0, 1.0, 1.0], [0.0, 0.0, 0.0, 0.0]]),),
-            (torch.tensor([[2.0, -1.0, 0.5], [4.0, 1.0, 1.0], [0.0, 3.0, 0.0]]),),
+            ([["CAT", "CT", "CAT", "CAAT"], ["SKY", "SKY", "SKY", "SKY"]], ["CAT", "SKY"]),
+            ([["AB", "BA", "AB"], ["ABC", "AB", "ABC"], ["BC", "BC", "AB"]], ["BA", "AB", "XY"]),
         ),
-        reference=DPO_REFERENCE["group_advantages"],
+        reference=reference_exact_match_advantages,
         expect=expect_tensor,
     )
 
@@ -1574,11 +1677,13 @@ QUIZ14 = Exercise(
         "answer_only_targets": "ids[1:] gives the next id at every position. Clone it, then set every target before "
         "place start - 1 to -100.",
         "baseline_loss": "Take rewards.mean() off every reward, multiply by log_probs, average, and negate.",
-        "ppo_loss": "The ratio is the exp of new minus old. Clamp it to 1 - epsilon and 1 + epsilon. torch.min of the "
-        "two times the advantages, averaged and negated.",
-        "dpo_loss": "Each answer's gap is the policy's log chance less the reference's. Take chosen's gap less "
-        "rejected's, times beta, through F.logsigmoid, averaged and negated.",
-        "group_advantages": "mean(dim=1, keepdim=True) and std(dim=1, keepdim=True) keep one number per row that "
+        "ppo_loss_from_rewards": "The advantages are rewards - rewards.mean(). The ratio is the exp of new minus old. "
+        "Clamp it to 1 - epsilon and 1 + epsilon. torch.min of the two times the advantages, averaged and negated.",
+        "dpo_loss_from_tokens": "Multiply each side's tokens by its mask and sum over dim=1, which gives one log chance "
+        "per answer. Then chosen's policy less reference gap, less rejected's, times beta, through F.logsigmoid, "
+        "averaged and negated.",
+        "exact_match_advantages": "Build rewards with torch.tensor of a list of rows, float(answer == wanted) for each "
+        "answer of a group. Then mean(dim=1, keepdim=True) and std(dim=1, keepdim=True) keep one number per row that "
         "broadcasts back.",
     },
     introduces=(),

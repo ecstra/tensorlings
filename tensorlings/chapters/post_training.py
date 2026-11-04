@@ -1499,29 +1499,30 @@ POST3_LESSON = prose(
     torch.full((2, 3), 9)    # tensor([[9, 9, 9], [9, 9, 9]])
     ```
 
-    Each of 3 seeds trained its own reward model. Each one ranked the right
-    answer above its slip in all 500 held out pairs, for every kind of word.
-    Here is each stage's own answers to 200 held out words, scored both
-    ways, for each seed.
+    Each of 3 seeds trained its own reward model on the CPU, where a seed
+    gives the same model every time. Each one ranked the right answer above
+    its slip in all 500 held out pairs, for every kind of word. Here is each
+    stage's own answers to 200 held out words, scored both ways, for each
+    seed.
 
     | Seed | post1, right | post1, mean reward | post2, right | post2, mean reward |
     |---|---|---|---|---|
-    | 0 | 77.5% | 6.56 | 87.5% | 9.25 |
-    | 1 | 78.5% | 5.65 | 95% | 8.62 |
-    | 2 | 79.5% | 5.93 | 91% | 8.31 |
+    | 0 | 77.5% | 5.53 | 87.5% | 8.19 |
+    | 1 | 78.5% | 6.29 | 95% | 8.63 |
+    | 2 | 79.5% | 6.31 | 91% | 9.30 |
 
-    In every seed both scores put post2 above post1. post2 wrote the slip for
-    1 word of the 200, where post1 wrote it for 18% to 19.5% of them. Each
-    reward model has its own scale, so compare rewards within a row, never
-    across rows.
+    post2 wrote the slip for 1 word of the 200, where post1 wrote it for 18%
+    to 19.5% of them. Each reward model has its own scale, so compare rewards
+    within a row, never across rows. Your own run of main trains on the GPU
+    when there is one, and there even one seed lands on a new scale each run.
 
-    Ranking pairs well doesn't make it a judge of right answers. Across 3
-    seeds and one more run of main, right answers averaged 8.2 to 9.5, and
-    post1's slips -6.4 to -3.3. Mistakes it never saw averaged 4.0 to 8.9.
-    In every run, several of post2's other mistakes scored above post2's
-    average right answer. It learned what tells the slip from the right
-    answer, nothing more. A model trained against it could learn mistakes it
-    can't see, the hacking reward2 showed on a toy.
+    Some things held in every run, these 3 and 6 more on the GPU, main's
+    among them. post2 scored above post1 both ways, and post1's slips
+    averaged below 0. Yet 6 to 16 of post2's other mistakes scored above its
+    average right answer. Ranking pairs well doesn't make it a judge of right
+    answers. It learned what tells the slip from the right answer, nothing
+    more. A model trained against it could learn mistakes it can't see, the
+    hacking reward2 showed on a toy.
 
     Once every check passes, train from the project folder. It took about
     half a minute on an Apple M5's GPU, and about 2 minutes on 4 CPU threads.
@@ -2022,8 +2023,9 @@ def measure_post_training(
     seeds: tuple[int, ...] = (0, 1, 2),
     device: torch.device | None = None,
 ) -> dict[str, object]:
-    """Every number in the three lessons' tables, on this Mac's GPU. Seed 0 runs main's settings, though two runs on
-    MPS can differ by a few points, as post2's 90% from main against 87.5% here."""
+    """Every number in the three lessons' tables. post1 and post2 train on this Mac's GPU, and the reward models on the
+    CPU at 4 threads. Seed 0 runs main's settings, though two runs on MPS can differ by a few points, as post2's 90%
+    from main against 87.5% here."""
     device = device or best_device()
     results: dict[str, object] = {"cluster share": measure_cluster_share()}
 
@@ -2046,7 +2048,16 @@ def measure_post_training(
         results[f"pairs made {seed}"] = pair_counts(pairs)
         print(seed, results[f"pairs made {seed}"], flush=True)
 
-        reward_model = reward_reference(seed, device)
+        # On MPS the same seed's reward model lands on a different scale every run, which moved a stage's mean reward
+        # by more than 1, so it trains on the CPU, where a seed gives the same model every time.
+        threads = torch.get_num_threads()
+        torch.set_num_threads(4)
+
+        try:
+            reward_model = reward_reference(seed, torch.device("cpu"))
+        finally:
+            torch.set_num_threads(threads)
+
         results[f"pairs {seed}"] = held_out_pair_accuracy(reward_model, 500)
         results[f"post1 rewards {seed}"] = stage_rewards(taught, reward_model)
         results[f"post2 rewards {seed}"] = stage_rewards(preferred, reward_model)
