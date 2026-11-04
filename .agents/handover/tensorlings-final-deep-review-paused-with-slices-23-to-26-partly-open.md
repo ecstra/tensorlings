@@ -13,9 +13,9 @@ The branch is feat/tensorlings-phase-6, with 370 exercises in 14 sections. Every
 The final deep review, TODO-020, ran one fresh reviewer per slice of chapters with a shared brief, then had the same agent fix its own findings. Each slice was committed only after its dev check and wrong answers passed on a staged copy of the tree.
 
 - Slices 1 to 22 are reviewed, fixed and committed.
-- Slices 23 and 24 are committed with their quick fixes, and each has research redesigns still open (below).
-- Slice 25 was under review at the stop, and slice 26 had its quick fixes in progress.
+- Slices 23 to 26 are reviewed and committed with their quick fixes. Each has research redesigns or reworks still open (below).
 - The check on quiz1 to quiz8 is done and its rework is open.
+- Every agent from this session can be resumed by message with its context and scratch work intact, as this morning's were. The slice 23 to 26 reviewers and the quiz check agent hold the detail behind items 1 to 7.
 
 ## Open, in the order to take them
 
