@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 import textwrap
 import time
+from collections.abc import Callable
 
 import torch
 import torch.nn as nn
@@ -1227,15 +1228,16 @@ QUIZ9 = Exercise(
 QUIZ10_LESSON = prose(
     """
     This quiz has no examples and no new tools. Each function combines moves
-    from the transformer chapters of Section 7. If a step is unclear, the
-    exercise in the table shows it.
+    from the transformer chapters of Section 7, and `greedy_text` brings back
+    the greedy writing of Section 6. If a step is unclear, the exercise in
+    the table shows it.
 
     | Function | Moves | Shown in |
     |---|---|---|
-    | `rms_pre_norm_block` | each row divided by its root mean square and scaled, before attention and before the MLP, each output added back | rmsnorm1, block1 |
     | `mixtral_layer` | each token's top k experts and their softmax, every expert a SwiGLU MLP, the outputs weighted and summed | moe1, llama2, dynamic1 |
     | `embed_patches` | an image cut into patches, each embedded by one matrix, a class token in front and positions added | vit1 |
     | `apply_merges` | every merge applied in the order it was made, each replacing its pair from left to right | bpe3, bpe2 |
+    | `greedy_text` | the model's best last id fed back each step, the new ids spelled by the merges' bytes | bidir2, greedy1, bpe3 |
     """,
 )
 
@@ -1243,28 +1245,13 @@ QUIZ10_SOURCE = source_file(
     '''
     # quiz10.py
     #
-    # No examples and no new tools. Each function combines moves from Section 7.
+    # No examples and no new tools. Each function combines moves from Sections
+    # 6 and 7.
 
     import torch
     import torch.nn as nn
     import torch.nn.functional as F
     from torch import Tensor
-
-
-    # TODO: Return x after a pre norm block with RMSNorm. The norm divides each
-    #   row by the square root of its mean square plus eps, with eps inside
-    #   the root, then multiplies by a weight. attention reads x normed with
-    #   weight1 and its output is added to x. Then mlp reads that normed with
-    #   weight2, and its output is added too.
-    def rms_pre_norm_block(
-        x: Tensor,
-        attention: nn.Module,
-        mlp: nn.Module,
-        weight1: Tensor,
-        weight2: Tensor,
-        eps: float,
-    ) -> Tensor:
-        ...
 
 
     # TODO: Return Mixtral's layer for x, of shape (tokens, size). The router's
@@ -1306,6 +1293,22 @@ QUIZ10_SOURCE = source_file(
         merges: dict[tuple[int, int], int],
     ) -> list[int]:
         ...
+
+
+    # TODO: Return the text model writes after ids, a list of token ids. model
+    #   takes ids of shape (1, steps) and gives scores of shape (1, steps,
+    #   tokens). Run it on every id so far, append the highest scoring id at
+    #   the last position, and repeat until count new ids are written,
+    #   recording nothing for autograd. Then spell the new ids alone with the
+    #   bytes of the tokens merges builds, with � for bytes that aren't valid
+    #   UTF-8.
+    def greedy_text(
+        model: nn.Module,
+        ids: list[int],
+        count: int,
+        merges: dict[tuple[int, int], int],
+    ) -> str:
+        ...
     ''',
 )
 
@@ -1317,25 +1320,6 @@ QUIZ10_SOLUTION = source_file(
     import torch.nn as nn
     import torch.nn.functional as F
     from torch import Tensor
-
-
-    def rms_pre_norm_block(
-        x: Tensor,
-        attention: nn.Module,
-        mlp: nn.Module,
-        weight1: Tensor,
-        weight2: Tensor,
-        eps: float,
-    ) -> Tensor:
-        def norm(
-            y: Tensor,
-            weight: Tensor,
-        ) -> Tensor:
-            return y / torch.sqrt((y**2).mean(dim=-1, keepdim=True) + eps) * weight
-
-        x = x + attention(norm(x, weight1))
-
-        return x + mlp(norm(x, weight2))
 
 
     def mixtral_layer(
@@ -1388,34 +1372,32 @@ QUIZ10_SOLUTION = source_file(
             ids = merged
 
         return ids
+
+
+    # The model reads every id so far at each step, and only the new ids become
+    # text. Their bytes are joined before decoding, since one character's bytes
+    # can be split across tokens.
+    def greedy_text(
+        model: nn.Module,
+        ids: list[int],
+        count: int,
+        merges: dict[tuple[int, int], int],
+    ) -> str:
+        written = list(ids)
+
+        with torch.no_grad():
+            for _ in range(count):
+                scores = model(torch.tensor([written]))
+                written.append(scores[0, -1].argmax().item())
+
+        tokens = {index: bytes([index]) for index in range(256)}
+
+        for (first, second), new_id in merges.items():
+            tokens[new_id] = tokens[first] + tokens[second]
+
+        return b"".join(tokens[index] for index in written[len(ids) :]).decode("utf-8", errors="replace")
     ''',
 )
-
-
-def quiz_module(
-    seed: int,
-    module: nn.Module,
-) -> nn.Module:
-    torch.manual_seed(seed)
-
-    for parameter in module.parameters():
-        nn.init.normal_(parameter, std=0.5)
-
-    return module
-
-
-def reference_rms_pre_norm_block(
-    x: Tensor,
-    attention: nn.Module,
-    mlp: nn.Module,
-    weight1: Tensor,
-    weight2: Tensor,
-    eps: float,
-) -> Tensor:
-    with torch.no_grad():
-        x = x + attention(F.rms_norm(x, (x.shape[-1],), weight1, eps))
-
-        return x + mlp(F.rms_norm(x, (x.shape[-1],), weight2, eps))
 
 
 def reference_mixtral_layer(
@@ -1461,21 +1443,92 @@ def reference_apply_merges(
     return ids
 
 
+# é is the two bytes 195 and 169, so a script that writes them as two tokens shows whether the bytes are joined
+# before decoding. 258 spells hi!, two merges deep.
+WRITER_MERGES = {(195, 169): 256, (104, 105): 257, (257, 33): 258}
+
+# (id, place) to the id written after it. From [72, 105] the script writes " ", 195, 169, 258 and 256, which spell
+# " éhi!é". From [258] it writes 257, 256 and a lone 195, which spell "hié" and a �.
+WRITER_SCRIPT = {
+    (105, 1): 32,
+    (32, 2): 195,
+    (195, 3): 169,
+    (169, 4): 258,
+    (258, 5): 256,
+    (258, 0): 257,
+    (257, 1): 256,
+    (256, 2): 195,
+}
+
+
+class ScriptedWriter(nn.Module):
+    """A stand in language model whose score at each position picks the id its script puts after that position's
+    id at that place, so what it writes depends on the whole sequence so far. Every other pair gets a fixed random
+    byte. It notes whether autograd was recording while it ran."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        follows = torch.randint(0, 256, (256 + len(WRITER_MERGES), 8), generator=torch.Generator().manual_seed(976))
+
+        for (token, place), next_id in WRITER_SCRIPT.items():
+            follows[token, place] = next_id
+
+        self.follows = follows
+        self.scale = nn.Parameter(torch.ones(()))
+        self.recorded = False
+
+    def forward(self, ids: Tensor) -> Tensor:
+        if ids.dim() != 2:
+            raise Mismatch(
+                f"model was given ids of shape {tuple(ids.shape)}, but it takes shape (1, steps). Make the ids so "
+                "far one row of a batch of one.",
+            )
+
+        self.recorded = self.recorded or torch.is_grad_enabled()
+        places = torch.arange(ids.shape[1]).clamp(max=self.follows.shape[1] - 1)
+
+        return F.one_hot(self.follows[ids, places], len(self.follows)).float() * self.scale
+
+
+def reference_greedy_text(
+    ids: list[int],
+    count: int,
+) -> str:
+    """The script followed by hand, and each token's bytes found by unmerging it down to single bytes."""
+    unmerged = {new_id: pair for pair, new_id in WRITER_MERGES.items()}
+    written = list(ids)
+
+    for _ in range(count):
+        written.append(WRITER_SCRIPT[(written[-1], len(written) - 1)])
+
+    def spell(token: int) -> bytes:
+        if token < 256:
+            return bytes([token])
+
+        first, second = unmerged[token]
+
+        return spell(first) + spell(second)
+
+    return b"".join(spell(token) for token in written[len(ids) :]).decode("utf-8", errors="replace")
+
+
+def check_greedy_text(found: Callable[..., object]) -> None:
+    for ids, count in (([72, 105], 5), ([258], 3)):
+        call = f"greedy_text(a model that follows a script, {ids}, {count}, {WRITER_MERGES})"
+        model = ScriptedWriter()
+        actual = found(model, list(ids), count, dict(WRITER_MERGES))
+
+        if model.recorded:
+            raise Mismatch(f"{call} ran model while autograd was recording. Run the loop inside torch.no_grad().")
+
+        expect_value(
+            call=call,
+            actual=actual,
+            expected=reference_greedy_text(ids, count),
+        )
+
+
 def check_quiz10(checker: Checker) -> None:
-    attention = Described(quiz_module(952, nn.Linear(4, 4)), "a Linear standing in for attention")
-    mlp = Described(quiz_module(954, nn.Sequential(nn.Linear(4, 8), nn.GELU(), nn.Linear(8, 4))), "an MLP")
-    check_on_inputs(
-        checker=checker,
-        function="rms_pre_norm_block",
-        description="norms with RMSNorm before each part and adds its output back",
-        inputs=(
-            (quiz_tensor(950, 2, 3, 4), attention, mlp, quiz_tensor(951, 4), quiz_tensor(953, 4), 1e-5),
-            # An eps this large tells eps inside the root from eps added after it.
-            (quiz_tensor(955, 2, 3, 4), attention, mlp, quiz_tensor(956, 4), quiz_tensor(957, 4), 0.5),
-        ),
-        reference=reference_rms_pre_norm_block,
-        expect=expect_tensor,
-    )
     check_on_inputs(
         checker=checker,
         function="mixtral_layer",
@@ -1524,6 +1577,11 @@ def check_quiz10(checker: Checker) -> None:
         reference=reference_apply_merges,
         expect=expect_value,
     )
+    checker.test(
+        function="greedy_text",
+        description="writes greedily from the ids so far and spells only the new ids",
+        run=check_greedy_text,
+    )
 
 
 QUIZ10 = Exercise(
@@ -1534,14 +1592,15 @@ QUIZ10 = Exercise(
     source=QUIZ10_SOURCE,
     solution=QUIZ10_SOLUTION,
     hints={
-        "rms_pre_norm_block": "A small function inside, norm(y, weight), keeps the two norms from repeating. "
-        "(y**2).mean(dim=-1, keepdim=True) is each row's mean square.",
         "mixtral_layer": "topk the router's scores, then scatter their softmax into torch.zeros(len(x), len(router)), "
         "as dynamic1 did. torch.stack every expert's SwiGLU output on dim=1, weight it and sum over dim=1.",
         "embed_patches": "vit1's reshape, permute and reshape cut the patches. class_token.expand(batch, 1, -1) gives "
         "one per image to torch.cat in front on dim=1.",
         "apply_merges": "Loop over merges.items(), and for each one walk a position along ids as bpe2's merge did, "
         "building a new list.",
+        "greedy_text": "Keep a list of every id so far. Each step, run model on it as one row, as generate does in "
+        "bidir2. Append the argmax at the last position, as greedy_decode does in greedy1. Then build each token's "
+        "bytes as vocabulary does in bpe3, and join the new ids' bytes before decoding, as decode does.",
     },
     introduces=(),
     check=check_quiz10,

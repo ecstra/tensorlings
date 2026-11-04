@@ -825,7 +825,7 @@ QUIZ2_LESSON = prose(
 
     | Function | Moves | Shown in |
     |---|---|---|
-    | `partials_of_exp_product` | partial derivatives, the chain rule through exp | derivatives3, chain1 |
+    | `partials_of_x_times_exp` | the product rule, the chain rule through exp, a variable reaching f along two paths | derivatives2, chain1, chain2 |
     | `largest_partial` | a gradient from autograd, the position of its largest entry | autograd4, reductions1 |
     | `squared_matmul_grad_w` | backward through a square, then through a matrix multiplication | backprop1, backprop3 |
     | `shifted_row_sums_grad` | backward through a row sum, then through broadcasting | backprop2 |
@@ -846,10 +846,10 @@ QUIZ2_SOURCE = source_file(
     from torch import Tensor
 
 
-    # TODO: Return the partial derivatives of f(x, y) = exp(x * y), first with
-    #   respect to x, then with respect to y. x and y are plain numbers, so use
-    #   math.exp.
-    def partials_of_exp_product(
+    # TODO: Return the partial derivatives of f(x, y) = x * exp(x * y), first
+    #   with respect to x, then with respect to y. x and y are plain numbers,
+    #   so use math.exp.
+    def partials_of_x_times_exp(
         x: float,
         y: float,
     ) -> tuple[float, float]:
@@ -902,15 +902,16 @@ QUIZ2_SOLUTION = source_file(
     from torch import Tensor
 
 
-    # The outer step is exp, whose local derivative is exp(x * y). The inner step
-    # x * y gives y for x and x for y.
-    def partials_of_exp_product(
+    # x reaches f twice, as the left factor and inside exp, so the product rule
+    # adds a term for each. The one inside exp chains through exp to x * y,
+    # whose partial is y for x and x for y.
+    def partials_of_x_times_exp(
         x: float,
         y: float,
     ) -> tuple[float, float]:
-        outer = math.exp(x * y)
+        exp_of_product = math.exp(x * y)
 
-        return outer * y, outer * x
+        return exp_of_product + x * y * exp_of_product, x * x * exp_of_product
 
 
     def largest_partial(
@@ -951,13 +952,14 @@ QUIZ2_SOLUTION = source_file(
 def check_quiz2(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
-        function="partials_of_exp_product",
-        description="gives both partials of exp(x * y)",
+        function="partials_of_x_times_exp",
+        description="gives both partials of x * exp(x * y)",
         inputs=(
-            (1.0, 2.0),
-            (-0.5, 1.5),
+            (0.5, 2.0),
+            (-1.5, 0.5),
+            (2.0, -0.25),
         ),
-        reference=lambda x, y: (y * math.exp(x * y), x * math.exp(x * y)),
+        reference=lambda x, y: ((1 + x * y) * math.exp(x * y), x * x * math.exp(x * y)),
         expect=expect_parts("the x partial", "the y partial"),
     )
     check_on_inputs(
@@ -1007,8 +1009,9 @@ QUIZ2 = Exercise(
     source=QUIZ2_SOURCE,
     solution=QUIZ2_SOLUTION,
     hints={
-        "partials_of_exp_product": "The outer step is exp, with local derivative exp(x * y). The inner step x * y "
-        "has partial y for x and x for y. Multiply each by the outer one.",
+        "partials_of_x_times_exp": "f is x times exp(x * y). For x, the product rule from derivatives2 gives one "
+        "term per factor. The derivative of exp(x * y) comes from the chain rule, as in chain1, with the inner step "
+        "x * y. y only reaches f inside exp, so its partial keeps the x in front.",
         "largest_partial": "Get the gradient of f at v as autograd_gradient does in autograd4, then find the "
         "position of its largest entry with argmax.",
         "squared_matmul_grad_w": "The square is elementwise, so grad_z is grad_y times its local derivative at z. "

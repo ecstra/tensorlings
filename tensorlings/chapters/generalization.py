@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import torch
 import torch.nn.functional as F
 from torch import Tensor
@@ -10,6 +12,7 @@ from ..course import QUIZZES, Chapter, Exercise
 from ..engine import (
     Checker,
     Described,
+    Mismatch,
     check_on_inputs,
     expect_close,
     expect_parts,
@@ -17,6 +20,7 @@ from ..engine import (
     expect_value,
     seeded,
     small_tensor,
+    value_text,
 )
 from ..text import prose, source_file
 from .gradient_descent import linear_data, named
@@ -1334,7 +1338,7 @@ QUIZ3_LESSON = prose(
     | Function | Moves | Shown in |
     |---|---|---|
     | `classifier_loss` | class scores, cross entropy from logits | softmax3, likelihood2 |
-    | `standardize_both` | the training set's mean and spread, used on both sets | descent4, splits1 |
+    | `standardized_validation_loss` | the training set's mean and spread used on new rows, a linear model's predictions, the mean squared error | descent4, linreg1, linreg2 |
     | `minibatch_step` | the loss on a minibatch's rows, one step of gradient descent | minibatch1, descent2 |
     | `decayed_classifier_loss` | cross entropy, plus weight decay on the weights | likelihood2, decay1 |
     """,
@@ -1362,15 +1366,18 @@ QUIZ3_SOURCE = source_file(
         ...
 
 
-    # TODO: Finish both lines, so this returns train_x and test_x, both
-    #   standardized with the mean and the spread of train_x's columns.
-    def standardize_both(
+    # TODO: Return the mean squared error of the model x @ w + b on
+    #   validation_x against validation_y, as a plain number. w and b were
+    #   learned on train_x standardized, so standardize validation_x with the
+    #   mean and the spread of train_x's columns first.
+    def standardized_validation_loss(
         train_x: Tensor,
-        test_x: Tensor,
-    ) -> tuple[Tensor, Tensor]:
-        mean, spread = ...
-
-        return ...
+        validation_x: Tensor,
+        validation_y: Tensor,
+        w: Tensor,
+        b: Tensor,
+    ) -> float:
+        ...
 
 
     # TODO: Finish the line that sets loss and the last line, so this returns w
@@ -1423,14 +1430,18 @@ QUIZ3_SOLUTION = source_file(
         return F.cross_entropy(x @ W + b, labels)
 
 
-    # The test set gets the training set's numbers, never its own.
-    def standardize_both(
+    # validation_x gets the training set's numbers, never its own, since w and b
+    # were learned on that scale.
+    def standardized_validation_loss(
         train_x: Tensor,
-        test_x: Tensor,
-    ) -> tuple[Tensor, Tensor]:
-        mean, spread = train_x.mean(dim=0), train_x.std(dim=0)
+        validation_x: Tensor,
+        validation_y: Tensor,
+        w: Tensor,
+        b: Tensor,
+    ) -> float:
+        standardized = (validation_x - train_x.mean(dim=0)) / train_x.std(dim=0)
 
-        return (train_x - mean) / spread, (test_x - mean) / spread
+        return ((standardized @ w + b - validation_y) ** 2).mean().item()
 
 
     def minibatch_step(
@@ -1476,6 +1487,82 @@ def reference_minibatch_step(
     return (w - learning_rate * w.grad).detach(), (b - learning_rate * b.grad).detach()
 
 
+def loss_after_standardizing(
+    x: Tensor,
+    y: Tensor,
+    w: Tensor,
+    b: Tensor,
+    mean: Tensor,
+    spread: Tensor,
+) -> float:
+    return ((((x - mean) / spread) @ w + b - y) ** 2).mean().item()
+
+
+def check_standardized_validation_loss(
+    checker: Checker,
+    train_x: Tensor,
+    validation_x: Tensor,
+    validation_y: Tensor,
+    w: Tensor,
+    b: Tensor,
+) -> None:
+    inputs = (train_x, validation_x, validation_y, w, b)
+    call = f"standardized_validation_loss({', '.join(value_text(value) for value in inputs)})"
+    expected = loss_after_standardizing(
+        x=validation_x,
+        y=validation_y,
+        w=w,
+        b=b,
+        mean=train_x.mean(dim=0),
+        spread=train_x.std(dim=0),
+    )
+    slips = (
+        (
+            loss_after_standardizing(
+                x=validation_x,
+                y=validation_y,
+                w=w,
+                b=b,
+                mean=validation_x.mean(dim=0),
+                spread=validation_x.std(dim=0),
+            ),
+            "standardizing validation_x with its own mean and spread gives. Use train_x's, the scale w and b were "
+            "learned on.",
+        ),
+        (
+            loss_after_standardizing(
+                x=validation_x,
+                y=validation_y,
+                w=w,
+                b=b,
+                mean=torch.tensor(0.0),
+                spread=torch.tensor(1.0),
+            ),
+            "validation_x gives as it is. Standardize it with the mean and the spread of train_x's columns first.",
+        ),
+    )
+
+    def run(found: Callable[..., object]) -> None:
+        actual = found(*[value.clone() for value in inputs])
+
+        for slip_loss, slip in slips:
+            if isinstance(actual, float) and abs(actual - slip_loss) <= 1e-4:
+                raise Mismatch(f"{call} is {actual:.10g}, which is the loss that {slip}")
+
+        expect_close(
+            call=call,
+            actual=actual,
+            expected=expected,
+            tolerance=1e-4,
+        )
+
+    checker.test(
+        function="standardized_validation_loss",
+        description="gives the loss on validation_x standardized with train_x's numbers",
+        run=run,
+    )
+
+
 def check_quiz3(checker: Checker) -> None:
     classifiers = (
         (small_tensor(144, 5, 2), small_tensor(145, 2, 3) / 2, small_tensor(146, 3) / 2, torch.tensor([0, 2, 1, 1, 0])),
@@ -1494,19 +1581,23 @@ def check_quiz3(checker: Checker) -> None:
             tolerance=1e-5,
         ),
     )
-    # The test set is shifted far from the training set, so standardizing it with its own numbers gives other values.
-    check_on_inputs(
+    # The validation rows sit shifted from the training rows, so standardizing them with their own numbers, or not
+    # at all, gives another loss.
+    check_standardized_validation_loss(
         checker=checker,
-        function="standardize_both",
-        description="standardizes both sets with the training set's numbers",
-        inputs=(
-            (small_tensor(150, 6, 2), small_tensor(151, 3, 2) + 10),
-        ),
-        reference=lambda train_x, test_x: (
-            (train_x - train_x.mean(dim=0)) / train_x.std(dim=0),
-            (test_x - train_x.mean(dim=0)) / train_x.std(dim=0),
-        ),
-        expect=expect_parts("the training set", "the test set"),
+        train_x=small_tensor(150, 6, 2),
+        validation_x=small_tensor(151, 3, 2) + 4,
+        validation_y=small_tensor(154, 3),
+        w=small_tensor(155, 2),
+        b=torch.tensor(0.5),
+    )
+    check_standardized_validation_loss(
+        checker=checker,
+        train_x=small_tensor(156, 8, 3),
+        validation_x=small_tensor(157, 4, 3) + 4,
+        validation_y=small_tensor(158, 4),
+        w=small_tensor(159, 3),
+        b=torch.tensor(-1.0),
     )
     x, y = linear_data(152, 8, 2)
     check_on_inputs(
@@ -1544,8 +1635,9 @@ QUIZ3 = Exercise(
     hints={
         "classifier_loss": "The scores are x @ W + b, as in softmax3. F.cross_entropy takes the scores and the "
         "labels.",
-        "standardize_both": "Take the mean and the spread of train_x's columns, as column_stats does in descent4. "
-        "Use those same two on both sets.",
+        "standardized_validation_loss": "Standardize validation_x with the mean and the spread of train_x's columns, "
+        "as fit_loss does with column_stats in descent4. Then predict as predict does in linreg1, measure the error "
+        "as mean_squared_error does in linreg2, and turn it into a plain number with .item().",
         "minibatch_step": "The loss is the mean squared error on x[positions] and y[positions]. Then step each of w "
         "and b against its gradient, and .detach() the results.",
         "decayed_classifier_loss": "The cross entropy from classifier_loss, plus strength times (W ** 2).sum().",

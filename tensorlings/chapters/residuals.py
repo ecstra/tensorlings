@@ -5,6 +5,7 @@ quiz4 and quiz5 close the blocks of Section 3 here."""
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 
 import torch
 import torch.nn as nn
@@ -1241,8 +1242,8 @@ QUIZ4_LESSON = prose(
     | Function | Moves | Shown in |
     |---|---|---|
     | `kaiming_dropout_mlp` | an MLP from a list of sizes with dropout after each hidden ReLU, Kaiming weights and zero biases | dropout3, init3 |
-    | `batchnorm_mlp` | hidden layers of a Linear without a bias, BatchNorm and ReLU | norm1, mlp1 |
-    | `eval_accuracy` | eval mode, no autograd, the share of right answers | dropout2, planets2 |
+    | `batch_normed_hidden` | a Linear without a bias, batch normalization with a scale and a shift, then ReLU | linear1, batchnorm1, relu1 |
+    | `eval_confusion_matrix` | eval mode without autograd, each row's predicted class, the confusion matrix | dropout2, softmax3, planets3 |
     | `normed_embeddings` | the rows of a table for ids, then layer normalization of each | embedding1, layernorm1 |
     """,
 )
@@ -1270,20 +1271,31 @@ QUIZ4_SOURCE = source_file(
         ...
 
 
-    # TODO: Return an nn.Sequential for the layer sizes in sizes. Each hidden
-    #   layer is a Linear with no bias, a BatchNorm1d and a ReLU, and a last
-    #   Linear, with its bias, gives the outputs.
-    def batchnorm_mlp(sizes: list[int]) -> nn.Sequential:
+    # TODO: Return x through a Linear layer with weights W and no bias, then
+    #   batch normalization scaled by weight and shifted by bias, then a ReLU.
+    #   W has one row per output, as a Linear layer keeps it. The batch
+    #   normalization gives each feature mean 0 and spread 1 over the batch,
+    #   the variance dividing by n, with eps added to it.
+    def batch_normed_hidden(
+        x: Tensor,
+        W: Tensor,
+        weight: Tensor,
+        bias: Tensor,
+        eps: float,
+    ) -> Tensor:
         ...
 
 
-    # TODO: Return the share of rows of x the model labels as y, as a plain number,
-    #   measured in eval mode without recording anything for autograd.
-    def eval_accuracy(
+    # TODO: Return the confusion matrix of the model's predicted classes for x
+    #   against the labels y, of shape (classes, classes). The row is the true
+    #   class and the column the predicted one. Measure in eval mode without
+    #   recording anything for autograd.
+    def eval_confusion_matrix(
         model: nn.Module,
         x: Tensor,
         y: Tensor,
-    ) -> float:
+        classes: int,
+    ) -> Tensor:
         ...
 
 
@@ -1330,26 +1342,40 @@ QUIZ4_SOLUTION = source_file(
         return model
 
 
-    def batchnorm_mlp(sizes: list[int]) -> nn.Sequential:
-        layers = []
+    # A bias before the normalization would be taken away with the mean, so the
+    # Linear has none, and the normalization's own bias does the shifting.
+    def batch_normed_hidden(
+        x: Tensor,
+        W: Tensor,
+        weight: Tensor,
+        bias: Tensor,
+        eps: float,
+    ) -> Tensor:
+        hidden = x @ W.T
+        mean = hidden.mean(dim=0)
+        variance = hidden.var(dim=0, unbiased=False)
+        normalized = (hidden - mean) / torch.sqrt(variance + eps)
 
-        for inputs, outputs in zip(sizes[:-2], sizes[1:-1]):
-            layers.extend([nn.Linear(inputs, outputs, bias=False), nn.BatchNorm1d(outputs), nn.ReLU()])
-
-        layers.append(nn.Linear(sizes[-2], sizes[-1]))
-
-        return nn.Sequential(*layers)
+        return torch.relu(normalized * weight + bias)
 
 
-    def eval_accuracy(
+    def eval_confusion_matrix(
         model: nn.Module,
         x: Tensor,
         y: Tensor,
-    ) -> float:
+        classes: int,
+    ) -> Tensor:
         model.eval()
 
         with torch.no_grad():
-            return (model(x).argmax(dim=1) == y).float().mean().item()
+            predicted = model(x).argmax(dim=1)
+
+        counts = torch.zeros(classes, classes, dtype=torch.long)
+
+        for true_class, guess in zip(y.tolist(), predicted.tolist()):
+            counts[true_class, guess] += 1
+
+        return counts
 
 
     def normed_embeddings(
@@ -1463,13 +1489,16 @@ def batchnorm_classifier(seed: int) -> nn.Sequential:
     return model
 
 
-def check_eval_accuracy(found: object) -> None:
+def check_eval_confusion_matrix(found: Callable[..., object]) -> None:
     for seed in (420, 430):
         x, y = labelled_points(seed, 40, 6, 3)
-        call = "eval_accuracy on a model with BatchNorm, passed in still in training mode, and 40 labelled points"
+        call = (
+            "eval_confusion_matrix on a model with BatchNorm, passed in still in training mode, 40 labelled points "
+            "and 3 classes"
+        )
         model = batchnorm_classifier(seed)
         before = model[1].running_mean.clone()
-        actual = found(model, x, y)
+        actual = found(model, x, y, 3)
 
         if not torch.equal(model[1].running_mean, before):
             raise Mismatch(f"{call} changed the model's running mean, so it measured in training mode. Call model.eval() first.")
@@ -1478,9 +1507,23 @@ def check_eval_accuracy(found: object) -> None:
         reference.eval()
 
         with torch.no_grad():
-            expected = (reference(x).argmax(dim=1) == y).float().mean().item()
+            predicted = reference(x).argmax(dim=1)
 
-        expect_close(
+        expected = torch.bincount(y * 3 + predicted, minlength=9).view(3, 3)
+        swapped = (
+            isinstance(actual, Tensor)
+            and actual.shape == expected.shape
+            and not torch.equal(expected, expected.T)
+            and torch.equal(actual.double(), expected.T.double())
+        )
+
+        if swapped:
+            raise Mismatch(
+                f"{call} has the true class along the columns. Make the true class the row and the predicted class "
+                "the column.",
+            )
+
+        expect_tensor(
             call=call,
             actual=actual,
             expected=expected,
@@ -1499,21 +1542,45 @@ def check_quiz4(checker: Checker) -> None:
         reference=reference_dropout_layers,
         expect=expect_kaiming_dropout_mlp,
     )
+    # Batches of 5 and 6 rows keep the n and n - 1 variances apart, and eps of 0.1 keeps it inside the root or
+    # outside apart.
     check_on_inputs(
         checker=checker,
-        function="batchnorm_mlp",
-        description="builds hidden layers of Linear without bias, BatchNorm and ReLU",
+        function="batch_normed_hidden",
+        description="runs the Linear, normalizes each feature over the batch, scales, shifts and applies ReLU",
         inputs=(
-            ([784, 64, 64, 10],),
-            ([8, 16, 2],),
+            (
+                small_tensor(417, 5, 4),
+                small_tensor(418, 3, 4),
+                torch.tensor([1.5, 0.5, -1.0]),
+                torch.tensor([0.2, -0.3, 0.1]),
+                1e-5,
+            ),
+            (
+                small_tensor(421, 6, 3),
+                small_tensor(422, 5, 3),
+                torch.tensor([2.0, -0.5, 1.0, 0.75, 1.25]),
+                torch.tensor([-0.5, 0.25, 0.5, 0.0, 1.0]),
+                0.1,
+            ),
         ),
-        reference=reference_batchnorm_layers,
-        expect=expect_layer_list,
+        reference=lambda x, W, weight, bias, eps: F.relu(
+            F.batch_norm(
+                x @ W.T,
+                None,
+                None,
+                weight,
+                bias,
+                training=True,
+                eps=eps,
+            ),
+        ),
+        expect=expect_tensor,
     )
     checker.test(
-        function="eval_accuracy",
-        description="measures the share of right answers in eval mode",
-        run=check_eval_accuracy,
+        function="eval_confusion_matrix",
+        description="counts each pair of true and predicted class in eval mode",
+        run=check_eval_confusion_matrix,
     )
     check_on_inputs(
         checker=checker,
@@ -1538,10 +1605,11 @@ QUIZ4 = Exercise(
     hints={
         "kaiming_dropout_mlp": "Build the list of layers as dropout3's dropout_mlp does, without the input dropout. "
         "Then give every nn.Linear in model.modules() Kaiming's start, as init3 does.",
-        "batchnorm_mlp": "Each hidden layer adds nn.Linear(inputs, outputs, bias=False), nn.BatchNorm1d(outputs) and "
-        "nn.ReLU().",
-        "eval_accuracy": "Call model.eval(). Then, inside a with torch.no_grad() block, compare "
-        "model(x).argmax(dim=1) with y and take the mean of the matches as floats.",
+        "batch_normed_hidden": "Run x through W as linear does in linear1, leaving out the bias. Normalize each "
+        "column of the result over the batch as MyBatchNorm does in batchnorm1, with its scale and shift. Finish "
+        "with ReLU, as in relu1.",
+        "eval_confusion_matrix": "Get the predicted classes in eval mode without autograd, as evaluate does in "
+        "dropout2. Then count each pair of a true class and its prediction, as confusion_matrix does in planets3.",
         "normed_embeddings": "Index table with ids, then normalize along dim=-1 as layer_normalize does in "
         "layernorm1.",
     },
