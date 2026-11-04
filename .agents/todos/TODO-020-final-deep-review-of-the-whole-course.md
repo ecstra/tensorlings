@@ -36,10 +36,10 @@ The owner asked for one last deep review with research before they start, "so I 
 | 16 | Review and fix 65_sampling to 68_flows | | owner | done |
 | 17 | Review and fix 69_diffusion to 71_digit_diffusion, with quiz12 | | owner | done |
 | 18 | Review and fix 72_sets to 75_shortest_paths, with quiz13 | | owner | done |
-| 19 | Review and fix 76_finetuning to 80_ppo | | owner | pending |
+| 19 | Review and fix 76_finetuning to 80_ppo | | owner | done |
 | 20 | Review and fix 81_reward_models to 83_post_training, with quiz14 | | owner | pending |
 | 21 | Review and fix 84_cost to 89_quantization | | owner | done |
-| 22 | Review and fix 90_parallel to 93_fast_gpt, with quiz15 | | owner | pending |
+| 22 | Review and fix 90_parallel to 93_fast_gpt, with quiz15 | | owner | done |
 | 23 | Review and fix 94_tables to 99_shared_space | | owner | pending |
 | 24 | Review and fix 100_fusion to 103_signal_reader, with quiz16 | | owner | pending |
 | 25 | Review and fix 104_combining to 106_papers | | owner | pending |

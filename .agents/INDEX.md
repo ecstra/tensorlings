@@ -2,7 +2,7 @@
 name: agent-index
 kind: doc
 description: the spine of the agent directory, what exists and where
-updated: 2026-11-03
+updated: 2026-11-04
 links: [README.md, spec/conventions.md, house-rules.md]
 ---
 
@@ -45,4 +45,4 @@ rather than this one.
 ## Memory and handovers
 
 - [memory/INDEX.md](memory/INDEX.md), project facts: 4 facts
-- handover/, 14 handovers, newest [tensorlings-waiting-for-the-owner-s-verdict-on-phase-1a](handover/tensorlings-waiting-for-the-owner-s-verdict-on-phase-1a.md)
+- handover/, 15 handovers, newest [tensorlings-waiting-for-the-owner-s-verdict-on-phase-1a](handover/tensorlings-waiting-for-the-owner-s-verdict-on-phase-1a.md)

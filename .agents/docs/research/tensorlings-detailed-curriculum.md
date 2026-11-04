@@ -360,7 +360,7 @@ The project follows Xu and colleagues' algorithmic alignment. It shows structure
 | | finetune2 | freezing layers, and which ones to freeze |
 | 77_lora | lora1 | LoRA from its paper, a low rank update that starts at zero |
 | | lora2 | the parameters it saves, and merging the update back |
-| | lora3 | when a low rank is enough, LoRA within a few points of full fine tuning on post training data with 4% of the weights, and full fine tuning for a large new text |
+| | lora3 | when a low rank is enough, LoRA matching full fine tuning on post training data with 4% of the weights once the rate decays, and full fine tuning for a large new text |
 | 78_sft | sft1 | a chat format with special tokens, and a loss on the answer tokens only |
 | | sft2 | the GPT taught a question and answer format |
 | 79_policy_gradients | rl1 | policy, action, reward and episode on a bandit |
@@ -404,12 +404,12 @@ The project works on the GPT the learner already trained, the way nanochat runs 
 | 91_scaling | scaling1 | a power law fitted in log space |
 | | scaling2 | Chinchilla's compute optimal size for a budget |
 | | scaling3 | your own small sweep of GPT sizes and its fitted curve |
-| 92_data | data1 | exact and near duplicate removal |
+| 92_data | data1 | exact and near duplicate removal, after measuring how a GPT memorizes text repeated in training |
 | | data2 | quality filters, and checking the test set for leaked text |
 | quizzes | quiz15 | Section 12 together |
 | 93_fast_gpt | fast1 | the project starts, your GPT's generation profiled |
 | | fast2 | the KV cache and int8 weights added |
-| | fast3 | tokens per second and validation loss before and after |
+| | fast3 | tokens per second and validation loss before and after, and the model size where fused int8 starts to pay |
 
 The project lands the section's main tools on one model and measures them end to end. CUDA kernels, Triton and several GPUs can't run on the owner's Mac, so those ideas are taught in plain PyTorch, per [the limits](tensorlings-course-design.md#limits-on-this-machine).
 
