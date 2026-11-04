@@ -8,6 +8,7 @@ from collections.abc import Callable
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch import Tensor
 
 from ..course import Chapter, Exercise
@@ -40,6 +41,7 @@ POSITIONS = Chapter(
         - [Vaswani and colleagues, attention is all you need](https://arxiv.org/abs/1706.03762)
         - [Su and colleagues, RoFormer and rotary position embedding](https://arxiv.org/abs/2104.09864)
         - [EleutherAI, rotary embeddings explained](https://blog.eleuther.ai/rotary-embeddings/)
+        - [Press, Smith and Lewis, train short, test long](https://arxiv.org/abs/2108.12409)
         """,
     ),
 )
@@ -208,6 +210,21 @@ def linear_layer(seed: int) -> Callable[[Tensor], Tensor]:
     return run
 
 
+def measure_shuffle_gaps() -> dict[str, float]:
+    """position1's two numbers, the largest gap between the output of the shuffled input and the shuffled output,
+    for 5 positions of 8 features in the order 3, 0, 4, 1, 2, without and with the causal mask."""
+    x = torch.randn(1, 5, 8, generator=torch.Generator().manual_seed(1))
+    order = torch.tensor([3, 0, 4, 1, 2])
+
+    return {
+        name: (layer(x[:, order]) - layer(x)[:, order]).abs().max().item()
+        for name, layer in (
+            ("without the mask", attention_layer(0, 8, causal=False)),
+            ("with the causal mask", attention_layer(0, 8, causal=True)),
+        )
+    }
+
+
 def check_position1(checker: Checker) -> None:
     order = torch.tensor([3, 0, 4, 1, 2])
     x = small_tensor(520, 2, 5, 4) / 3
@@ -295,6 +312,7 @@ POSITION2_LESSON = prose(
     ```python
     p = torch.arange(4)       # tensor([0, 1, 2, 3])
     torch.sin(p / 2.0)        # tensor([0.0000, 0.4794, 0.8415, 0.9975])
+    torch.arange(0, 8, 2)     # tensor([0, 2, 4, 6]), from 0 up to 8 in steps of 2
     ```
 
     Their dot products depend only on how far apart two positions are. With a
@@ -308,6 +326,12 @@ POSITION2_LESSON = prose(
     Rows of a learned table start out random and have no such pattern until
     training gives them one. RoPE in rope1 builds on this property of the
     waves.
+
+    Vaswani's team found the two kinds gave nearly identical results. They
+    picked the waves hoping the model would read longer text than it trained
+    on. Press and colleagues later found that a sinusoidal model reads only a
+    few dozen tokens past its training length before it gets worse. So with
+    either kind, train on the lengths the model will read.
     """,
 )
 
@@ -321,6 +345,7 @@ POSITION2_SOURCE = source_file(
 
     p = torch.arange(4)       # tensor([0, 1, 2, 3])
     waves = torch.sin(p / 2.0)    # tensor([0.0000, 0.4794, 0.8415, 0.9975])
+    evens = torch.arange(0, 8, 2)    # tensor([0, 2, 4, 6])
 
 
     # TODO: Return the steps by size table of sinusoidal positions from the
@@ -370,6 +395,7 @@ POSITION2_SOLUTION = source_file(
 
     p = torch.arange(4)
     waves = torch.sin(p / 2.0)
+    evens = torch.arange(0, 8, 2)
 
 
     def sinusoidal_positions(
@@ -418,6 +444,13 @@ def reference_sinusoidal(
     angles = torch.arange(steps).unsqueeze(1) * 10000 ** (-torch.arange(0, size, 2) / size)
 
     return torch.stack([torch.sin(angles), torch.cos(angles)], dim=-1).flatten(1)
+
+
+def measure_distance_table() -> dict[int, list[float]]:
+    """position2's table, rows 0 and 1000 of a size 16 sinusoidal table against the rows 0, 1, 2, 5 and 20 on."""
+    table = reference_sinusoidal(1021, 16)
+
+    return {row: [(table[row] @ table[row + distance]).item() for distance in (0, 1, 2, 5, 20)] for row in (0, 1000)}
 
 
 class ReferencePositionalEmbedding(nn.Module):
@@ -533,6 +566,10 @@ ROPE1_LESSON = prose(
     1.0 * torch.cos(phi) - 0.0 * torch.sin(phi), 1.0 * torch.sin(phi) + 0.0 * torch.cos(phi)
     # (tensor(-4.3711e-08), tensor(1.)), so (1, 0) became (0, 1)
     ```
+
+    In an index, `...` stands for every dimension before the ones named, so
+    `x[..., 0]` is the first feature of every row, whatever x's shape. A shape
+    written `(..., size)` means the same, any dimensions, then size.
 
     `x[..., 0::2]` takes every other feature from the first, the a of each
     pair, and `x[..., 1::2]` the b. Stacking the new a and b on a last
@@ -741,6 +778,21 @@ ROPE2_LESSON = prose(
     RoPE a pattern learned at one place, like "look one back", means the same
     at position 5 and at position 500.
 
+    A trained model shows it. One attention layer learned to give the token
+    one place back, on sequences at positions 0 to 31. Then it read new
+    sequences there and at positions 500 to 531. Here is the share right, from
+    three seeds.
+
+    | Positions | At 0 to 31 | At 500 to 531 |
+    |---|---|---|
+    | learned | 100% | 15.7% to 19.0% |
+    | sinusoidal, added | 100% | 40.1% to 63.6% |
+    | RoPE | 100% | 100% |
+
+    The learned rows past 31 never trained, and the added waves take values
+    there the layer never saw. RoPE's scores depend only on the distance, so
+    the layer reads every place the same.
+
     The angles grow with the position, so a model trained on 2,000 positions
     meets new angles past that. Chen and colleagues' position interpolation
     scales every position down to fit the trained range. With under 1,000
@@ -853,6 +905,105 @@ def reference_rope_score(
     angles = reference_angles(max(m, n) + 1, len(q))
 
     return complex_rope(q, angles[m]) @ complex_rope(k, angles[n])
+
+
+def measure_rope_scores() -> dict[str, list[float]]:
+    """rope2's first table, one query and one key of size 8, three positions apart, at four places."""
+    generator = torch.Generator().manual_seed(3)
+    q, k = torch.randn(8, generator=generator), torch.randn(8, generator=generator)
+    table = reference_sinusoidal(1003 + 1, 8)
+    starts = (0, 10, 100, 1000)
+
+    return {
+        "RoPE": [reference_rope_score(q, k, m, m + 3).item() for m in starts],
+        "Added positions": [((q + table[m]) @ (k + table[m + 3])).item() for m in starts],
+    }
+
+
+LOOK_BACK_TOKENS = 16
+LOOK_BACK_SIZE = 32
+LOOK_BACK_STEPS = 32
+
+
+class LookBack(nn.Module):
+    """One head of causal attention and a head, trained to give the token one place back, with learned positions,
+    added sinusoidal ones or RoPE. start says where the sequence sits, so it can be read at positions it never
+    trained on."""
+
+    def __init__(self, kind: str) -> None:
+        super().__init__()
+        self.kind = kind
+        self.embed = nn.Embedding(LOOK_BACK_TOKENS, LOOK_BACK_SIZE)
+
+        if kind == "learned":
+            self.positions = nn.Embedding(1024, LOOK_BACK_SIZE)
+
+        self.query = nn.Linear(LOOK_BACK_SIZE, LOOK_BACK_SIZE, bias=False)
+        self.key = nn.Linear(LOOK_BACK_SIZE, LOOK_BACK_SIZE, bias=False)
+        self.value = nn.Linear(LOOK_BACK_SIZE, LOOK_BACK_SIZE, bias=False)
+        self.head = nn.Linear(LOOK_BACK_SIZE, LOOK_BACK_TOKENS)
+
+    def forward(
+        self,
+        tokens: Tensor,
+        start: int = 0,
+    ) -> Tensor:
+        steps = tokens.shape[1]
+        x = self.embed(tokens)
+
+        if self.kind == "learned":
+            x = x + self.positions(torch.arange(start, start + steps))
+        elif self.kind == "sinusoidal":
+            x = x + reference_sinusoidal(start + steps, LOOK_BACK_SIZE)[start:]
+
+        q, k = self.query(x), self.key(x)
+
+        if self.kind == "rope":
+            angles = reference_angles(start + steps, LOOK_BACK_SIZE)[start:]
+            q, k = complex_rope(q, angles), complex_rope(k, angles)
+
+        scores = q @ k.transpose(-2, -1) / math.sqrt(LOOK_BACK_SIZE)
+        future = torch.triu(torch.ones(steps, steps, dtype=torch.bool), diagonal=1)
+
+        return self.head(torch.softmax(scores.masked_fill(future, float("-inf")), dim=-1) @ self.value(x))
+
+
+def look_back_accuracy(
+    model: nn.Module,
+    tokens: Tensor,
+    start: int,
+) -> float:
+    """The share of positions after the first whose guess is the token one place back."""
+    with torch.no_grad():
+        guesses = model(tokens, start).argmax(dim=-1)
+
+    return (guesses[:, 1:] == tokens[:, :-1]).float().mean().item()
+
+
+def measure_shifted_reading(seeds: tuple[int, ...] = (0, 1, 2)) -> dict[str, list[tuple[float, float]]]:
+    """rope2's second table. Each kind of position trains 1,500 steps of Adam at 3e-3 on batches of 64 sequences
+    at positions 0 to 31, then reads 500 new sequences there and at positions 500 to 531. Measured at 4 threads."""
+    results: dict[str, list[tuple[float, float]]] = {}
+    test = torch.randint(0, LOOK_BACK_TOKENS, (500, LOOK_BACK_STEPS), generator=torch.Generator().manual_seed(7))
+
+    for kind in ("learned", "sinusoidal", "rope"):
+        for seed in seeds:
+            torch.manual_seed(seed)
+            model = LookBack(kind)
+            optimizer = torch.optim.Adam(model.parameters(), lr=3e-3)
+            generator = torch.Generator().manual_seed(seed + 100)
+
+            for _ in range(1500):
+                tokens = torch.randint(0, LOOK_BACK_TOKENS, (64, LOOK_BACK_STEPS), generator=generator)
+                logits = model(tokens)[:, 1:]
+                loss = F.cross_entropy(logits.reshape(-1, LOOK_BACK_TOKENS), tokens[:, :-1].reshape(-1))
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+
+            results.setdefault(kind, []).append((look_back_accuracy(model, test, 0), look_back_accuracy(model, test, 500)))
+
+    return results
 
 
 def expect_close_scores(

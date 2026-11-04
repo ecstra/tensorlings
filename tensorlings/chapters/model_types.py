@@ -102,14 +102,28 @@ ENCODER1_LESSON = prose(
     of a sentence to read its start. BERT reads the left and the right at
     once, which suits labelling. GPT reads only the left, which suits writing.
 
+    A labelling task shows the gap. Two blocks tag each of 16 random digits
+    with whether the digit after it is bigger. Here is the share of tags right
+    on new rows after 800 steps, from three seeds.
+
+    | Mask | Tags right |
+    |---|---|
+    | an encoder's | 100% |
+    | a decoder's | 75.3% to 75.5% |
+
+    The decoder never sees the next digit, so it can only guess from the
+    current one. A 0 is followed by a bigger digit 9 times in 10, a 9 never,
+    and such guesses get 75% at best. When the whole input is there before
+    any output, read it with an encoder.
+
     In an encoder decoder the decoder's queries look at the encoder's keys, as
     cross1 showed. Its cross mask is all True, one row per output position
     and one column per input position.
 
     The mask shows in what each output can reach. Nudge input j, and output t
     moves only if position t may look at j. Autograd measures that, as causal1
-    did. Here is a one layer decoder over 4 positions, a 1 where output t
-    reaches input j.
+    did. Here is a one layer decoder over 4 positions. Row t is output t, the
+    other way round from block1's map, and a 1 marks each input j it reaches.
 
     ```text
     1 0 0 0
@@ -311,12 +325,97 @@ def seeded_layers(
     return MaskedLayers(size, layers, mask)
 
 
+TAG_DIGITS = 10
+TAG_STEPS = 16
+
+
+class MaskTagger(nn.Module):
+    """Two pre norm blocks of MaskedAttention and an MLP, size 32, with an encoder's or a decoder's mask, and a head
+    that tags each position, for encoder1's table."""
+
+    def __init__(self, kind: str) -> None:
+        super().__init__()
+        self.mask = reference_self_mask(kind, TAG_STEPS)
+        self.embed = nn.Embedding(TAG_DIGITS, 32)
+        self.positions = nn.Embedding(TAG_STEPS, 32)
+        self.layers = nn.ModuleList([MASKED_ATTENTION(32) for _ in range(2)])
+        self.mlps = nn.ModuleList([nn.Sequential(nn.Linear(32, 128), nn.GELU(), nn.Linear(128, 32)) for _ in range(2)])
+        self.norms = nn.ModuleList([nn.LayerNorm(32) for _ in range(4)])
+        self.head = nn.Linear(32, 2)
+
+    def forward(self, digits: Tensor) -> Tensor:
+        x = self.embed(digits) + self.positions(torch.arange(TAG_STEPS))
+
+        for index, (attention, mlp) in enumerate(zip(self.layers, self.mlps)):
+            x = x + attention(self.norms[2 * index](x), self.mask)
+            x = x + mlp(self.norms[2 * index + 1](x))
+
+        return self.head(x)
+
+
+def bigger_next(
+    count: int,
+    generator: torch.Generator,
+) -> tuple[Tensor, Tensor]:
+    """Rows of random digits, and for every digit but the last, 1 when the digit after it is bigger."""
+    digits = torch.randint(0, TAG_DIGITS, (count, TAG_STEPS), generator=generator)
+
+    return digits, (digits[:, 1:] > digits[:, :-1]).long()
+
+
+def measure_mask_tagging(seeds: tuple[int, ...] = (0, 1, 2)) -> dict[str, list[float]]:
+    """encoder1's table, the share of tags right on 2,000 new rows after 800 steps of Adam at 3e-3 on batches of 64,
+    with each mask. Measured at 4 threads."""
+    results: dict[str, list[float]] = {}
+    digits, tags = bigger_next(2000, torch.Generator().manual_seed(9))
+
+    for kind in ("encoder", "decoder"):
+        for seed in seeds:
+            torch.manual_seed(seed)
+            model = MaskTagger(kind)
+            optimizer = torch.optim.Adam(model.parameters(), lr=3e-3)
+            generator = torch.Generator().manual_seed(seed + 50)
+
+            for _ in range(800):
+                batch, wanted = bigger_next(64, generator)
+                loss = F.cross_entropy(model(batch)[:, :-1].reshape(-1, 2), wanted.reshape(-1))
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+
+            with torch.no_grad():
+                right = (model(digits)[:, :-1].argmax(dim=-1) == tags).float().mean().item()
+
+            results.setdefault(kind, []).append(right)
+
+    return results
+
+
 def leaky_mask(steps: int) -> Tensor:
     """A causal mask with one future position let in, so reach has to read the gradients and not the mask's shape."""
     mask = reference_self_mask("decoder", steps)
     mask[0, steps - 1] = True
 
     return mask
+
+
+def expect_mask(
+    call: str,
+    actual: object,
+    expected: Tensor,
+) -> None:
+    """A mask of 1.0 and 0.0 matches True and False as numbers, but ~ and masked_fill need True and False."""
+    if isinstance(actual, Tensor) and actual.dtype != torch.bool:
+        raise Mismatch(
+            f"{call} holds numbers of dtype {actual.dtype}, but a mask should hold True and False. "
+            "Give torch.ones dtype=torch.bool, as the lesson's example does.",
+        )
+
+    expect_tensor(
+        call=call,
+        actual=actual,
+        expected=expected,
+    )
 
 
 def expect_three_masks(
@@ -328,7 +427,7 @@ def expect_three_masks(
         raise Mismatch(f"{call} should give three masks in a tuple, the encoder's, the decoder's and the cross mask.")
 
     for name, part, wanted in zip(("the encoder's mask", "the decoder's mask", "the cross mask"), actual, expected):
-        expect_tensor(
+        expect_mask(
             call=f"{name} from {call}",
             actual=part,
             expected=wanted,
@@ -346,7 +445,7 @@ def check_encoder1(checker: Checker) -> None:
             ("decoder", 1),
         ),
         reference=reference_self_mask,
-        expect=expect_tensor,
+        expect=expect_mask,
     )
     check_on_inputs(
         checker=checker,
@@ -540,11 +639,12 @@ DECODER1_LESSON = prose(
     at most.
 
     Here is the run behind this exercise, 2 blocks and 27,861 weights, with
-    Adam at a rate of 0.01 and batches of 32 windows.
+    Adam at a rate of 0.01 and batches of 32 windows. The validation text is
+    2,000 more sentences of the language that training never saw.
 
     | Steps | 0 | 100 | 200 |
     |---|---|---|---|
-    | Validation loss, per character | 3.205 | 0.372 | 0.267 |
+    | Validation loss, per character | 3.203 | 0.379 | 0.268 |
 
     The loss starts near `log(21) = 3.04`, a guess among the 21 characters.
     No model can get below about 0.19 here, since three words in each
@@ -658,6 +758,9 @@ CORPUS = DECODER_REFERENCE["corpus"](2000, torch.Generator().manual_seed(0))
 CHARACTERS = sorted(set(CORPUS))
 CORPUS_IDS = torch.tensor([CHARACTERS.index(character) for character in CORPUS])
 
+# 2,000 more sentences from another seed, which training never reads, for the validation loss.
+HELD_OUT_IDS = torch.tensor([CHARACTERS.index(character) for character in DECODER_REFERENCE["corpus"](2000, torch.Generator().manual_seed(1))])
+
 
 def seeded_decoder(
     make: type,
@@ -693,6 +796,35 @@ def train_decoder(
         optimizer.step()
 
     return model
+
+
+def held_out_loss(model: nn.Module) -> float:
+    """lm_loss on 256 windows of the held out sentences."""
+    tokens = DECODER_REFERENCE["random_windows"](HELD_OUT_IDS, 256, 32, torch.Generator().manual_seed(2))
+
+    with torch.no_grad():
+        return DECODER_REFERENCE["lm_loss"](model, tokens).item()
+
+
+def measure_decoder_run() -> dict[str, object]:
+    """decoder1's numbers, the weights, the characters, the validation loss after 0, 100 and 200 steps of the run
+    train_decoder makes, and what the trained model writes from "the dog "."""
+    model = seeded_decoder(DECODER_REFERENCE["TinyDecoder"])
+    losses = {0: held_out_loss(model)}
+
+    for steps in (100, 200):
+        losses[steps] = held_out_loss(train_decoder(seeded_decoder(DECODER_REFERENCE["TinyDecoder"]), DECODER_REFERENCE["lm_loss"], steps))
+
+    trained = train_decoder(seeded_decoder(DECODER_REFERENCE["TinyDecoder"]), DECODER_REFERENCE["lm_loss"], 200)
+    prompt = [CHARACTERS.index(character) for character in "the dog "]
+    written = DECODER_REFERENCE["generate"](trained, prompt, 42, 32)
+
+    return {
+        "weights": sum(parameter.numel() for parameter in model.parameters()),
+        "characters": len(CHARACTERS),
+        "losses": losses,
+        "written": "".join(CHARACTERS[index] for index in written),
+    }
 
 
 def expect_shifted(
@@ -742,14 +874,38 @@ def check_lm_loss(found: object) -> None:
     )
 
 
+class GradRecorder(nn.Module):
+    """A model that notes whether any call to it ran with autograd recording."""
+
+    def __init__(self, model: nn.Module) -> None:
+        super().__init__()
+        self.model = model
+        self.recorded = False
+
+    def forward(self, ids: Tensor) -> Tensor:
+        self.recorded = self.recorded or torch.is_grad_enabled()
+
+        return self.model(ids)
+
+
 def check_generate(found: object) -> None:
     model = seeded_decoder(DECODER_REFERENCE["TinyDecoder"], context=8)
+    watched = GradRecorder(model)
     prompt = CORPUS_IDS[:12].tolist()
+    call = "generate(an untrained TinyDecoder with a context of 8, a prompt of 12 tokens, 6, 8)"
+    actual = found(watched, prompt, 6, 8)
+
+    if isinstance(actual, list) and any(isinstance(entry, Tensor) for entry in actual):
+        raise Mismatch(f"{call} holds tensors among its ids, but every id should be a plain int. .item() gives one.")
+
     expect_value(
-        call="generate(an untrained TinyDecoder with a context of 8, a prompt of 12 tokens, 6, 8)",
-        actual=found(model, prompt, 6, 8),
+        call=call,
+        actual=actual,
         expected=DECODER_REFERENCE["generate"](model, prompt, 6, 8),
     )
+
+    if watched.recorded:
+        raise Mismatch(f"{call} ran the model while autograd was recording. Put the loop inside with torch.no_grad():.")
 
 
 def check_decoder_learns(found: object) -> None:
@@ -759,9 +915,7 @@ def check_decoder_learns(found: object) -> None:
         raise Mismatch("decoder1.py has no TinyDecoder class to train.")
 
     model = train_decoder(seeded_decoder(model_class), found, 150)
-
-    with torch.no_grad():
-        loss = DECODER_REFERENCE["lm_loss"](model, windows(2, 256)).item()
+    loss = held_out_loss(model)
 
     if loss > 0.6:
         raise Mismatch(f"After 150 steps of training with lm_loss, the validation loss is {loss:.3f}, but it should be below 0.6.")

@@ -112,7 +112,8 @@ BLOCK1_LESSON = prose(
 
     Attention mixes across positions, each one gathering from its past. The
     MLP works within each position alone, with the same weights for all. So
-    a transformer mixes, then thinks, then mixes again, block after block.
+    a transformer alternates the two, across positions then within each,
+    block after block.
 
     To see which positions a layer reaches, nudge one input position and see
     which outputs move. Nudge one feature, not all of them. LayerNorm takes the
@@ -318,16 +319,56 @@ def reference_positions_reached(
     return (layer(nudged) - layer(x)).abs().amax(dim=-1)[0] > 1e-6
 
 
+def measure_reach_table() -> dict[str, list[int]]:
+    """block1's table, the outputs that change when position 2 of 5 changes, for the check's attention, MLP and block."""
+    block = seeded_module(ReferenceBlock, 8, 2)
+    parts = {
+        "attention": seeded_module(SelfAttention, 8, 2),
+        "MLP": block.mlp,
+        "the whole block": block,
+    }
+    x = small_tensor(533, 1, 5, 8) / 3
+
+    return {
+        name: reference_positions_reached(frozen(part), x, 2).nonzero().flatten().tolist()
+        for name, part in parts.items()
+    }
+
+
+def distinct_norms(
+    module: nn.Module,
+    names: tuple[str, ...],
+) -> dict[str, Tensor]:
+    """module's weights with its norms given different scales and shifts. Fresh LayerNorms all start at 1 and 0, so
+    a forward that runs one norm twice would otherwise pass."""
+    generator = torch.Generator().manual_seed(539)
+
+    with torch.no_grad():
+        for name in names:
+            norm = getattr(module, name)
+            norm.weight.copy_(torch.rand(norm.weight.shape, generator=generator) + 0.5)
+            norm.bias.copy_(torch.rand(norm.bias.shape, generator=generator) - 0.5)
+
+    return module.state_dict()
+
+
 def check_block_forward(found: type) -> None:
     model = expect_module("Block(8, 2)", seeded_module(found, 8, 2))
+    reference = seeded_module(ReferenceBlock, 8, 2)
+    expect_same_layers(
+        call="Block(8, 2)",
+        model=model,
+        reference=reference,
+    )
+    model.load_state_dict(distinct_norms(reference, ("norm1", "norm2")))
     x = small_tensor(531, 2, 5, 8) / 3
 
     with torch.no_grad():
-        expected = seeded_module(ReferenceBlock, 8, 2)(x)
+        expected = reference(x)
         actual = model(x)
 
     expect_tensor(
-        call="Block(8, 2) on 2 sequences of 5",
+        call="Block(8, 2) with norm1 and norm2 given different weights, on 2 sequences of 5",
         actual=actual,
         expected=expected,
     )
@@ -419,9 +460,10 @@ BLOCK2_LESSON = prose(
 
     So two thirds of a block's weights sit in its MLP. At GPT-2 small's size of
     768, a block holds 7,087,872. Twelve blocks, a table of 50,257 token rows,
-    a table of 1,024 position rows and a final LayerNorm make 124,439,808. That
-    is the 124M of its name. The output head reuses the token table, so it
-    adds nothing.
+    a table of 1,024 position rows and a final LayerNorm make 124,439,808. The
+    output head reuses the token table, so it adds nothing. The GPT-2 paper
+    listed this model as 117M. Counting the released weights gives the number
+    above, which is why code like nanoGPT calls it GPT-2 124M.
     """,
 )
 
@@ -628,14 +670,21 @@ def check_gpt2_mlp(found: type) -> None:
 
 def check_gpt2_block(found: type) -> None:
     model = expect_module("GPT2Block(8, 2)", seeded_module(found, 8, 2))
+    reference = seeded_module(ReferenceGPT2Block, 8, 2)
+    expect_same_layers(
+        call="GPT2Block(8, 2)",
+        model=model,
+        reference=reference,
+    )
+    model.load_state_dict(distinct_norms(reference, ("ln_1", "ln_2")))
     x = small_tensor(535, 2, 5, 8) / 3
 
     with torch.no_grad():
-        expected = seeded_module(ReferenceGPT2Block, 8, 2)(x)
+        expected = reference(x)
         actual = model(x)
 
     expect_tensor(
-        call="GPT2Block(8, 2) on 2 sequences of 5",
+        call="GPT2Block(8, 2) with ln_1 and ln_2 given different weights, on 2 sequences of 5",
         actual=actual,
         expected=expected,
     )
@@ -830,17 +879,19 @@ TEXT_CONTEXT = 64
 
 
 class TextModel(nn.Module):
-    """Characters in, six ToyBlocks of size 64 with causal attention, then a head, for block3's table."""
+    """Characters in, ToyBlocks of size 64 with causal attention, six unless told otherwise, then a head, for
+    block3's tables."""
 
     def __init__(
         self,
         vocabulary: int,
+        layers: int = TEXT_LAYERS,
         **flags: bool,
     ) -> None:
         super().__init__()
         self.embed = nn.Embedding(vocabulary, TEXT_SIZE)
         self.positions = nn.Embedding(TEXT_CONTEXT, TEXT_SIZE)
-        self.blocks = nn.Sequential(*[ReferenceToyBlock(TEXT_SIZE, TEXT_HEADS, **flags) for _ in range(TEXT_LAYERS)])
+        self.blocks = nn.Sequential(*[ReferenceToyBlock(TEXT_SIZE, TEXT_HEADS, **flags) for _ in range(layers)])
         self.norm = nn.LayerNorm(TEXT_SIZE)
         self.head = nn.Linear(TEXT_SIZE, vocabulary)
 
@@ -867,11 +918,13 @@ def train_text(
     rate: float,
     seed: int,
     steps: int = 1000,
+    layers: int = TEXT_LAYERS,
+    warmup: int = 100,
     **flags: bool,
 ) -> float:
-    """One run behind block3's table, on tiny Shakespeare's characters. AdamW with weight decay 0.1 on batches of
-    32, warmed up over 100 steps then cosine down to a tenth, clipped at 1. Gives the validation loss on 20 batches
-    of 64."""
+    """One run behind block3's tables, on tiny Shakespeare's characters. AdamW with weight decay 0.1 on batches of
+    32, warmed up over warmup steps, or not at all at 0, then cosine down to a tenth, clipped at 1. Gives the
+    validation loss on 20 batches of 64."""
     text = load_shakespeare()
     characters = sorted(set(text))
     positions = {character: position for position, character in enumerate(characters)}
@@ -880,15 +933,16 @@ def train_text(
     train, validation = data[:cut], data[cut:]
 
     torch.manual_seed(seed)
-    model = TextModel(len(characters), **flags)
+    model = TextModel(len(characters), layers, **flags)
     optimizer = torch.optim.AdamW(model.parameters(), lr=rate, weight_decay=0.1)
     generator = torch.Generator().manual_seed(seed + 1)
 
     for step in range(steps):
         progress = step / steps
+        ramp = min(1, (step + 1) / warmup) if warmup else 1
 
         for group in optimizer.param_groups:
-            group["lr"] = rate * min(1, (step + 1) / 100) * (0.1 + 0.9 * 0.5 * (1 + math.cos(math.pi * progress)))
+            group["lr"] = rate * ramp * (0.1 + 0.9 * 0.5 * (1 + math.cos(math.pi * progress)))
 
         x, y = text_batch(train, 32, generator)
         loss = F.cross_entropy(model(x).reshape(-1, len(characters)), y.reshape(-1))
@@ -917,32 +971,43 @@ BLOCK3_LESSON = prose(
     reads later.
 
     Six blocks of size 64 with 4 heads read 64 characters and guess each next
-    one. Each model trained 1,000 steps of AdamW, warmed up then cosine down,
-    clipped at 1, at two peak rates. Here is the validation loss from two
-    seeds, where lower is better.
+    one. Each model trained 1,000 steps of AdamW at a peak rate of 0.01,
+    warmed up then cosine down, clipped at 1. Here is the validation loss from
+    two seeds, where lower is better.
 
-    | Taken out | Rate 0.01 | Rate 0.003 |
-    |---|---|---|
-    | nothing | 1.737 to 1.743 | 1.890 to 1.899 |
-    | attention | 2.490 | 2.490 to 2.491 |
-    | the MLP | 1.908 to 1.930 | 2.091 to 2.121 |
-    | the residuals | 3.353 to 3.355 | 3.353 to 3.355 |
-    | the norms | blew up to nan | 1.809 to 1.811 |
+    | Taken out | Validation loss |
+    |---|---|
+    | nothing | 1.737 to 1.743 |
+    | attention | 2.490 |
+    | the MLP | 1.908 to 1.930 |
+    | the residuals | 3.353 to 3.355 |
+    | the norms | blew up to nan |
 
     Attention is the only part that moves information between positions.
     Without it each position sees only its own character, and the loss sits at
     2.49. names1's counting bigram model gets 2.48 on this text. The MLP works
-    within each position, and taking it out costs about 0.18 at either rate.
+    within each position, and taking it out costs about 0.18.
 
     Without residuals, six blocks never got past 3.35, what counting
     characters alone gives. Dong and colleagues showed why. Stacked attention
-    alone collapses its output toward one row repeated, and the skips and MLPs
-    stop that.
+    without skips collapses its output toward one row repeated. The skips stop
+    that. MLPs only slow it, which is why six blocks with MLPs still failed.
 
-    The norms buy the rate. Without them the stack blew up at 0.01, so it had
-    to train at 0.003. There it reached 1.81, a little below the full block's
-    1.89. With them 0.01 trained too, to 1.74, the best in the table. Xiong and colleagues found that a norm before
-    each part, as here, lets a transformer train without warmup.
+    Without norms the stack blew up at 0.01. A fair test gives each stack the
+    rates that suit it, so here is each at its best of the rates tried.
+
+    | Stack | Rates tried | Best |
+    |---|---|---|
+    | 6 blocks without norms | 0.003 to 0.01 | 1.726 to 1.770 at 0.007 |
+    | 6 blocks with norms | 0.01 and 0.02 | 1.723 to 1.724 at 0.02 |
+    | 12 blocks without norms | 0.001 and 0.003 | 1.948 to 1.957 at 0.001 |
+    | 12 blocks with norms | 0.02 | 1.709 to 1.733 |
+
+    The norms buy the rate. At 6 blocks the stack without norms trained only
+    up to 0.007, and still came out behind on both seeds. At 12 blocks it blew
+    up at 0.003 and trained only at 0.001. The normed stack trained at 0.02
+    and matched its 6 block loss. Xiong and colleagues found that a norm
+    before each part, as here, also lets a transformer train without warmup.
 
     So every part earns its place. Attention and the MLP do the work, and the
     residuals and norms keep a deep stack trainable.
@@ -1104,11 +1169,11 @@ def pinned_threads() -> Iterator[None]:
 
 
 def measure_text_ablation(
-    rates: tuple[float, ...] = (0.01, 0.003),
+    rates: tuple[float, ...] = (0.01,),
     seeds: tuple[int, ...] = (0, 1),
     variants: tuple[tuple[str, dict[str, bool]], ...] = TOY_VARIANTS,
 ) -> dict[tuple[float, str], list[float]]:
-    """block3's table, the validation loss of each variant at each peak rate, from each seed."""
+    """block3's first table, the validation loss of each variant at each peak rate, from each seed."""
     results: dict[tuple[float, str], list[float]] = {}
 
     with pinned_threads():
@@ -1116,6 +1181,46 @@ def measure_text_ablation(
             for name, flags in variants:
                 for seed in seeds:
                     results.setdefault((rate, name), []).append(train_text(rate, seed, **flags))
+
+    return results
+
+
+# (blocks, peak rate, warmup steps, variant) for block3's second table.
+NORM_RUNS: tuple[tuple[int, float, int, str], ...] = (
+    (6, 0.003, 100, "no norms"),
+    (6, 0.005, 100, "no norms"),
+    (6, 0.007, 100, "no norms"),
+    (6, 0.01, 100, "no norms"),
+    (6, 0.01, 100, "every part"),
+    (6, 0.02, 100, "every part"),
+    (12, 0.001, 100, "no norms"),
+    (12, 0.003, 100, "no norms"),
+    (12, 0.02, 100, "every part"),
+)
+
+# The same 6 block stacks without warmup. On two seeds they gave a mixed answer, 0.004 and 0.018 worse than with
+# warmup for the full block and 0.033 and 0.018 for the one without norms, so block3 leaves Xiong's warmup result as
+# a citation and shows no table for it.
+WARMUP_RUNS: tuple[tuple[int, float, int, str], ...] = (
+    (6, 0.005, 0, "no norms"),
+    (6, 0.01, 0, "every part"),
+)
+
+
+def measure_norm_rates(
+    runs: tuple[tuple[int, float, int, str], ...] = NORM_RUNS,
+    seeds: tuple[int, ...] = (0, 1),
+) -> dict[tuple[int, float, int, str], list[float]]:
+    """block3's second table, each stack with and without norms at the rates it was tried at, at 6 and 12 blocks,
+    from each seed. A run with warmup 0 measures the same stack without warmup."""
+    variants = dict(TOY_VARIANTS)
+    results: dict[tuple[int, float, int, str], list[float]] = {}
+
+    with pinned_threads():
+        for layers, rate, warmup, name in runs:
+            for seed in seeds:
+                loss = train_text(rate, seed, layers=layers, warmup=warmup, **variants[name])
+                results.setdefault((layers, rate, warmup, name), []).append(loss)
 
     return results
 
@@ -1282,8 +1387,9 @@ INDUCTION1_LESSON = prose(
 
     Two layers can. The first copies each position's previous token into it,
     a shift by one, so C's position also holds "after B". The second layer's
-    query asks for "after B", matches C, and copies C. This pair of layers is
-    an induction head, which Olsson and colleagues found in trained models.
+    query asks for "after B", matches C, and copies C. The first layer is a
+    previous token head and the second an induction head. Olsson and
+    colleagues found this pair working together in trained models.
 
     You build both layers by hand, with one hot tokens and no training. The
     shift is attention whose scores are high right below the diagonal, where

@@ -370,8 +370,9 @@ LLAMA2_LESSON = prose(
     F.silu(torch.tensor([-2.0, 0.0, 2.0]))    # tensor([-0.2384,  0.0000,  1.7616])
     ```
 
-    The paper trained the same T5 model with each MLP. It measured the loss
-    on held out text as a log perplexity, where lower is better.
+    The paper trained the same T5 model with each MLP. It measured the cross
+    entropy loss on held out text, which it calls log perplexity, where lower
+    is better.
 
     | MLP | After 65,536 steps | After 524,288 steps |
     |---|---|---|
@@ -629,8 +630,9 @@ LLAMA3_LESSON = prose(
     In both, the MLP holds two thirds of the block's weights and attention one
     third. The width of llama2 keeps that split as it was.
 
-    Recent models add one more piece, QK norm. Scaling vision models toward
-    ViT-22B, Dehghani and colleagues saw an 8B model diverge in training. Its
+    Recent models add one more piece, QK norm. Scaling vision transformers
+    toward 22 billion weights, Dehghani and colleagues saw a model of 8
+    billion diverge in training. Its
     attention scores grew past 50,000, and a softmax of scores that large puts
     all its weight on one key. Normalizing the queries and the keys before the
     dot product stopped it. OLMo 2 and Qwen3 use RMSNorm there for the same
@@ -769,6 +771,26 @@ def qk_namespace() -> dict[str, object]:
 
 
 QK_REFERENCE = qk_namespace()
+
+
+def measure_qk_table() -> dict[int, tuple[float, float, float, float]]:
+    """llama3's table. For each scale of 16 random queries and 16 keys of size 64, from generators 566 and 567, the
+    largest score and the largest softmax weight averaged over the queries, without and with QK norm."""
+    queries = torch.randn(16, 64, generator=torch.Generator().manual_seed(566))
+    keys = torch.randn(16, 64, generator=torch.Generator().manual_seed(567))
+    results: dict[int, tuple[float, float, float, float]] = {}
+
+    for scale in (1, 4, 16):
+        q, k = queries * scale, keys * scale
+        normed_q, normed_k = QK_REFERENCE["qk_norm"](q, k, torch.ones(64), torch.ones(64))
+        results[scale] = (
+            (q @ k.T / math.sqrt(64)).max().item(),
+            QK_REFERENCE["top_weight"](q, k),
+            (normed_q @ normed_k.T / math.sqrt(64)).max().item(),
+            QK_REFERENCE["top_weight"](normed_q, normed_k),
+        )
+
+    return results
 
 
 def gpt2_block_by_modules(size: int) -> int:

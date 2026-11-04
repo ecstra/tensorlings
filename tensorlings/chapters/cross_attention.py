@@ -514,7 +514,9 @@ CROSS2_LESSON = prose(
     the row has to come back in order.
 
     This is Bahdanau, Cho and Bengio's fix of 2014 for translating long
-    sentences. Three years later the same reading became the whole model.
+    sentences. The layout here, reading after each decoder step and joining
+    what it found to the output, is Luong and colleagues' version from a year
+    later. Three years on, the same reading became the whole model.
     """,
 )
 
@@ -562,8 +564,10 @@ CROSS2_SOURCE = source_file(
 
 
     # TODO: Return model's copy of source, of shape (batch, steps), one symbol
-    #   at a time. Start every row from START, run the decoder one step from
-    #   its state, read with model.read, and feed the likeliest symbol back in.
+    #   at a time. First run model.encoder on the embedded source, for memory
+    #   and the decoder's first state. Then start every row from START, run the
+    #   decoder one step from its state, read with model.read, and feed the
+    #   likeliest symbol back in.
     def greedy_copy(
         model: nn.Module,
         source: Tensor,
@@ -571,7 +575,7 @@ CROSS2_SOURCE = source_file(
         ...
 
 
-    # Training as in encdec2, with the gradients clipped.
+    # Training as in encdec2, at a rate of 3e-3 with the gradients clipped.
 ''' + indented_part(TRAIN_COPIER_PART) + '''
     ''',
 )
@@ -672,6 +676,39 @@ def copy_scores(
     right = written == source
 
     return right.float().mean().item(), right.all(dim=1).float().mean().item()
+
+
+def forced_digits(
+    model: nn.Module,
+    length: int,
+    rows: int = 500,
+) -> float:
+    """The share of digits right with the true ones fed in before each guess, as encdec2 measured."""
+    source = torch.randint(0, 10, (rows, length), generator=torch.Generator().manual_seed(1))
+    so_far = torch.cat([torch.full((rows, 1), START), source], dim=1)
+
+    with torch.no_grad():
+        guesses = model(source, so_far)[:, :-1].argmax(dim=2)
+
+    return (guesses == source).float().mean().item()
+
+
+def measure_copying(
+    lengths: tuple[int, ...] = (20, 40),
+    seeds: tuple[int, ...] = (0,),
+) -> dict[tuple[int, str], list[tuple[float, float, float]]]:
+    """cross2's table, each model trained 1,500 steps by train_copier from seed s, with training rows drawn from
+    generator seed s. Gives the greedy digits and rows right, and the digits right with the true ones fed in."""
+    results: dict[tuple[int, str], list[tuple[float, float, float]]] = {}
+
+    for length in lengths:
+        for name, make in (("one vector", OneVectorCopier), ("cross attention", COPIER_REFERENCE["Copier"])):
+            for seed in seeds:
+                torch.manual_seed(seed)
+                model = COPIER_REFERENCE["train_copier"](make(), length, 1500, torch.Generator().manual_seed(seed))
+                results.setdefault((length, name), []).append((*copy_scores(model, length), forced_digits(model, length)))
+
+    return results
 
 
 def seeded_copier(make: type) -> nn.Module:
