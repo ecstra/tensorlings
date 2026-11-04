@@ -209,7 +209,12 @@ DDP1_LESSON = prose(
 
     The replicas start the same and take the same steps, so they stay the
     same. `copy.deepcopy(model)` makes a replica, a model with its own copy of
-    every weight.
+    every weight. An optimizer steps with whatever each `.grad` holds, so a
+    gradient can be set by hand.
+
+    ```python
+    twin.weight.grad = torch.ones(2, 2)    # twin's optimizer.step() now moves weight by this
+    ```
 
     Here is a small classifier's gradient on 64 rows, against the average of
     its shards' gradients. The gap is the norm of the difference over the norm
@@ -233,8 +238,8 @@ DDP1_LESSON = prose(
     Real training runs one process per GPU, with PyTorch's
     `DistributedDataParallel`. It averages the gradients with an **all
     reduce**, where every worker hands in its gradients and gets the combined
-    result back. It starts that bucket by bucket while the backward pass still
-    runs. Here the workers are a loop in one process, so they run one after
+    result back. It sends the gradients in buckets, a few layers' worth at a
+    time, while the backward pass is still running. Here the workers are a loop in one process, so they run one after
     another on any machine.
     """,
 )
@@ -253,6 +258,7 @@ DDP1_SOURCE = source_file(
     halves = torch.arange(6).chunk(2)                                       # (tensor([0, 1, 2]), tensor([3, 4, 5]))
     middle = torch.stack([torch.tensor([1.0, 2.0]), torch.tensor([3.0, 6.0])]).mean(dim=0)    # tensor([2., 4.])
     twin = copy.deepcopy(nn.Linear(2, 2))                                   # its own copy of every weight
+    twin.weight.grad = torch.ones(2, 2)                                     # a gradient set by hand
 
 
     # TODO: Split x and y into workers equal shards along the batch, and return
@@ -312,6 +318,7 @@ DDP1_SOLUTION = source_file(
     halves = torch.arange(6).chunk(2)
     middle = torch.stack([torch.tensor([1.0, 2.0]), torch.tensor([3.0, 6.0])]).mean(dim=0)
     twin = copy.deepcopy(nn.Linear(2, 2))
+    twin.weight.grad = torch.ones(2, 2)
 
 
 ''' + indented(SHARD_PART) + '''
@@ -434,6 +441,27 @@ def same_weights(
     return all(torch.equal(a, b) for a, b in zip(first.parameters(), second.parameters()))
 
 
+def whole_batch_step(
+    replicas: list[nn.Module],
+    optimizers: list[torch.optim.Optimizer],
+    x: Tensor,
+    y: Tensor,
+) -> None:
+    """The likely mistake, every replica working out the gradient of the whole batch instead of its own shard."""
+    for replica, optimizer in zip(replicas, optimizers):
+        for parameter, gradient in zip(replica.parameters(), PARALLEL_REFERENCE["local_gradients"](replica, x, y)):
+            parameter.grad = gradient
+
+        optimizer.step()
+
+
+def close_weights(
+    first: nn.Module,
+    second: nn.Module,
+) -> bool:
+    return all(torch.allclose(a, b, rtol=1e-5, atol=1e-6) for a, b in zip(first.parameters(), second.parameters()))
+
+
 def check_data_parallel_step(found: object) -> None:
     for workers in (4, 2):
         replicas: list[nn.Module] = []
@@ -451,6 +479,15 @@ def check_data_parallel_step(found: object) -> None:
             raise Mismatch(
                 f"After {call}, the replicas differ from each other. Every replica should take its step with the "
                 "same averaged gradient, so they all stay the same.",
+            )
+
+        whole = train_replicas(whole_batch_step, workers, 2)
+
+        if all(close_weights(replica, wrong) for replica, wrong in zip(replicas, whole)):
+            raise Mismatch(
+                f"After {call}, every replica moved as if it worked out the gradient of the whole batch. Each "
+                "replica works out the gradient of its own shard, the one shard(x, y, len(replicas)) gives it, "
+                "and the replicas step with the average of those.",
             )
 
         for index, (replica, wanted) in enumerate(zip(replicas, expected)):
@@ -494,8 +531,8 @@ DDP1 = Exercise(
     solution=DDP1_SOLUTION,
     hints={
         "shard": "x.chunk(workers) and y.chunk(workers) split each one. zip pairs them up, and list() makes the list.",
-        "local_gradients": "model.zero_grad(), then F.cross_entropy(model(x), y).backward(). Keep parameter.grad.clone() "
-        "for each of model.parameters().",
+        "local_gradients": "Clear with model.zero_grad(), then call backward on F.cross_entropy of the model's scores "
+        "for x against y. The list holds a .clone() of each parameter's .grad, in the order of model.parameters().",
         "all_reduce_mean": "zip(*gradients) groups each parameter's gradients from every worker. torch.stack them and "
         "take .mean(dim=0).",
         "data_parallel_step": "Call local_gradients on each replica with its shard, all_reduce_mean the lists, then set "

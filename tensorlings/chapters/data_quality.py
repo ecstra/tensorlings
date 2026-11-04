@@ -8,6 +8,7 @@ import statistics
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch import Tensor
 
 from ..course import QUIZZES, Chapter, Exercise
@@ -21,7 +22,7 @@ from ..engine import (
 )
 from ..text import prose, source_file
 from .cost import tied_pair
-from .scaling import expect_relative
+from .scaling import SWEEP_REFERENCE, expect_relative
 
 DATA_QUALITY = Chapter(
     folder="92_data",
@@ -212,12 +213,94 @@ def measure_duplicates() -> dict[str, object]:
     return results
 
 
+def text_loss(
+    model: nn.Module,
+    ids: Tensor,
+    block: int,
+) -> float:
+    """The model's mean loss per character over ids, read in windows of block characters."""
+    total = 0.0
+    model.eval()
+
+    with torch.no_grad():
+        for start in range(0, len(ids) - 1, block):
+            piece = ids[start : start + block + 1]
+
+            if len(piece) < 2:
+                break
+
+            scores = model(piece[:-1].unsqueeze(0))
+            total += F.cross_entropy(scores[0], piece[1:], reduction="sum").item()
+
+    model.train()
+
+    return total / (len(ids) - 1)
+
+
+def measure_memorization(
+    seeds: tuple[int, ...] = (0, 1, 2),
+    copies: tuple[int, ...] = (0, 1, 20),
+    steps: int = 3000,
+    width: int = 128,
+) -> dict[tuple[int, int], tuple[float, float]]:
+    """data1's opening table. scaling3's 2 block GPT, at the given width, trains on the first 90% of the play with 20
+    test speeches put in copies times each. For each seed and copy count it gives the mean loss per character on those
+    20 and on 20 other test speeches it never saw. Not run by any check, and about 4 minutes a run on a laptop CPU."""
+    text = load_shakespeare()
+    characters = sorted(set(text))
+    cut = int(0.9 * len(text))
+    _, test = split_speeches()
+    block = SWEEP_REFERENCE["BLOCK"]
+
+    def ids_of(part: str) -> Tensor:
+        return torch.tensor([characters.index(character) for character in part])
+
+    def mean_loss(
+        model: nn.Module,
+        speeches: list[str],
+    ) -> float:
+        return sum(text_loss(model, ids_of("\n\n" + speech + "\n\n"), block) for speech in speeches) / len(speeches)
+
+    results: dict[tuple[int, int], tuple[float, float]] = {}
+
+    for seed in seeds:
+        chosen = random.Random(seed).sample(range(len(test)), 40)
+        planted = [test[position] for position in chosen[:20]]
+        unseen = [test[position] for position in chosen[20:]]
+
+        for count in copies:
+            extra = [speech for speech in planted for _ in range(count)]
+            random.Random(seed + 100).shuffle(extra)
+            data = ids_of(text[:cut] + "".join("\n\n" + speech for speech in extra))
+            torch.manual_seed(seed)
+            model = SWEEP_REFERENCE["GPT"](len(characters), block, width, 2, 4)
+            SWEEP_REFERENCE["train"](model, steps, data, torch.Generator().manual_seed(seed))
+            results[(seed, count)] = (mean_loss(model, planted), mean_loss(model, unseen))
+
+    return results
+
+
 DATA1_LESSON = prose(
     """
     Text gathered from the web repeats itself. Lee and colleagues found one
     61 word sentence repeated over 60,000 times in C4, a common training set.
     Models trained on their deduplicated data gave out memorized text about
     ten times less often.
+
+    A small model does the same. scaling3's GPT, 2 blocks of width 128,
+    trained 3,000 steps on the first 90% of the play. Twenty later speeches
+    went in too, never, once or 20 times each. Here is its loss per character
+    on them and on 20 speeches it never saw, over three seeds.
+
+    | Copies of the 20 in training | Loss on the 20 | Loss on 20 never seen |
+    |---|---|---|
+    | None | 1.55 to 1.62 | 1.50 to 1.60 |
+    | One | 1.47 to 1.55 | 1.47 to 1.58 |
+    | 20 | 0.94 to 1.00 | 1.49 to 1.57 |
+
+    Twenty copies cut the loss by more than a third, while unseen speeches
+    barely moved. One copy lowered it by 0.05 to 0.10 in each seed, more than
+    the unseen ones moved. That is why data2 checks test sets for leaks.
 
     Exact copies are the easy part. Bring every document to one plain form,
     lowercase with only letters, digits and single spaces, and keep the first
@@ -229,14 +312,12 @@ DATA1_LESSON = prose(
     seen = {"a b"}; "a b" in seen        # True
     ```
 
-    The play repeats itself too. Of its 7,097 speeches, 19 match an earlier
-    one in that form, short ones like `CATESBY: My lord?`.
-
-    Near copies differ by a few words, so no plain form catches them. Cut
-    each document into **shingles**, every run of n words. Then compare the
-    sets with Jaccard similarity, the size of their overlap over the size of
-    their union. It is 1 for the same sets and 0 for sets with nothing in
-    common.
+    The play repeats itself too. 19 of its 7,097 speeches match an earlier
+    one, like `CATESBY: My lord?`. Near copies differ by a few words, so no
+    plain form catches them. Cut each document into **shingles**, every run
+    of n words. Then compare the sets with Jaccard similarity, the size of
+    their overlap over the size of their union. It is 1 for equal sets and 0
+    for sets with nothing shared.
 
     ```python
     words = "to be or not".split()
@@ -258,14 +339,11 @@ DATA1_LESSON = prose(
 
     One swapped word breaks every shingle that holds it, n of them. Gopher
     used 13 word shingles on web text. Speeches of a few dozen words need
-    shorter ones.
-
-    Comparing every pair takes time that grows with the square of the
-    documents. Broder's MinHash shrinks each set to a short signature. Two
-    sets share their smallest hash with a chance equal to their similarity,
-    so a few hundred hashes estimate it, and each comparison gets cheap.
-    Skipping most pairs takes one more step, locality sensitive hashing,
-    which buckets signatures by their parts so only likely pairs meet.
+    shorter ones. Comparing every pair grows with the square of the
+    documents. Broder's MinHash keeps each set's smallest hash under a few
+    hundred hash functions. Two sets share a smallest hash with a chance
+    equal to their similarity, so these short signatures estimate it
+    cheaply. Locality sensitive hashing then lets only likely pairs meet.
     """,
 )
 
@@ -804,9 +882,10 @@ def made_document(
 
 HARBOUR = "The ship sailed to the harbour with all of its crew and cargo."
 
-# Each passes or breaks one rule, so a rule left out shows. The last five pass while sitting exactly on a
-# threshold, 50 words, a mean length of 3, 2 stop words, 80% with a letter and one # per 10 words, so a rule
-# written one step off shows too.
+# Each passes or breaks one rule, so a rule left out shows. The five before the last pass while sitting exactly on
+# a threshold, 50 words, a mean length of 3, 2 stop words, 80% with a letter and one # per 10 words, so a rule
+# written one step off shows too. The last passes with a full stop every 6 words, so counting single dots as ...
+# drops it.
 QUALITY_DOCUMENTS = (
     made_document(HARBOUR, 6),
     made_document(HARBOUR, 3),
@@ -822,6 +901,7 @@ QUALITY_DOCUMENTS = (
     made_document("Sailors rowed the heavy boats toward distant harbours with patience", 6),
     made_document("Sailors rowed 1234 heavy boats with 5678 the distant harbours", 6),
     made_document("Sailors rowed the heavy #boats with distant harbours and patience", 6),
+    made_document("The ship sailed to port. The crew went home with the cargo.", 5),
 )
 
 LEAK_TRAIN = [
@@ -848,9 +928,11 @@ def check_data2(checker: Checker) -> None:
             checker=checker,
             function=function,
             description=description,
+            # The third has words whose letters come after their first character, like 3rd and 'tis.
             inputs=(
                 ("The tide, came in at 3!",),
                 ("#1 ... 42 is it",),
+                ("The 3rd 'tis 42",),
                 ("",),
             ),
             reference=FILTER_REFERENCE[function],

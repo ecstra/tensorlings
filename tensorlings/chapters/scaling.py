@@ -389,14 +389,16 @@ SCALING1 = Exercise(
 PRINTED = (1.69, 406.4, 410.7, 0.34, 0.28)
 REFIT = (1.8172, 482.01, 2085.43, 0.3478, 0.3658)
 
-BUDGET_SOLUTION = '''
+# cost2's training_flops, given in scaling2's file so the learner doesn't write it twice.
+TRAINING_FLOPS_PART = '''
 def training_flops(
     parameters: float,
     tokens: float,
 ) -> float:
     return 6 * parameters * tokens
+'''
 
-
+BUDGET_SOLUTION = '''
 def chinchilla_loss(
     parameters: Tensor,
     tokens: Tensor,
@@ -428,7 +430,7 @@ def tokens_per_parameter(
     return budget / (6 * size) / size
 '''
 
-BUDGET_REFERENCE = namespace_of(BUDGET_SOLUTION)
+BUDGET_REFERENCE = namespace_of(TRAINING_FLOPS_PART + BUDGET_SOLUTION)
 
 GRID = torch.logspace(7, 12, 1001, dtype=torch.float64)
 
@@ -453,10 +455,10 @@ def measure_budgets() -> list[tuple[float, float, float, float, float]]:
 
 SCALING2_LESSON = prose(
     """
-    Training costs about 6 FLOPs, floating point operations, for every
-    parameter and every token. Kaplan and colleagues count 2 for the forward
-    pass and twice that for the backward pass. So a budget of C FLOPs buys
-    any split with `6 * N * D = C`, N parameters trained on D tokens.
+    cost2's `training_flops` charged training 6 FLOPs for every parameter and
+    every token, 2 going forward and 4 going back. Your file has it, given.
+    So a budget of C FLOPs buys any split with `6 * N * D = C`, N parameters
+    trained on D tokens.
 
     A bigger model on fewer tokens, or a smaller one on more? Hoffmann and
     colleagues trained over 400 models and fitted the loss to both.
@@ -514,13 +516,8 @@ SCALING2_SOURCE = source_file(
     lowest = torch.tensor([3.0, 1.0, 2.0]).argmin()  # tensor(1)
 
 
-    # TODO: Return the FLOPs of training parameters parameters on tokens tokens,
-    #   6 for every parameter and every token.
-    def training_flops(
-        parameters: float,
-        tokens: float,
-    ) -> float:
-        ...
+    # training_flops from cost2.
+''' + indented(TRAINING_FLOPS_PART) + '''
 
 
     # TODO: Return fit's loss for each pair of a size in parameters and a count
@@ -567,6 +564,9 @@ SCALING2_SOLUTION = source_file(
     lowest = torch.tensor([3.0, 1.0, 2.0]).argmin()
 
 
+''' + indented(TRAINING_FLOPS_PART) + '''
+
+
 ''' + indented(BUDGET_SOLUTION) + '''
     ''',
 )
@@ -579,22 +579,16 @@ def size_grid(
     low: float,
     high: float,
     count: int,
-) -> Tensor:
-    return torch.logspace(low, high, count, dtype=torch.float64)
+) -> Described:
+    """A grid of sizes, shown in a failing call by the line that makes it, since its hundreds of entries would bury
+    the message."""
+    return Described(
+        value=torch.logspace(low, high, count, dtype=torch.float64),
+        text=f"torch.logspace({low}, {high}, {count}, dtype=torch.float64)",
+    )
 
 
 def check_scaling2(checker: Checker) -> None:
-    check_on_inputs(
-        checker=checker,
-        function="training_flops",
-        description="gives 6 FLOPs per parameter per token",
-        inputs=(
-            (70e9, 1.4e12),
-            (818048.0, 24576000.0),
-        ),
-        reference=BUDGET_REFERENCE["training_flops"],
-        expect=expect_relative,
-    )
     check_on_inputs(
         checker=checker,
         function="chinchilla_loss",
@@ -639,7 +633,6 @@ SCALING2 = Exercise(
     source=SCALING2_SOURCE,
     solution=SCALING2_SOLUTION,
     hints={
-        "training_flops": "Multiply 6, parameters and tokens.",
         "chinchilla_loss": "Unpack fit into five names first. Then E plus A over parameters ** alpha plus B over "
         "tokens ** beta, on whole tensors at once.",
         "best_size": "Each size gets budget / (6 * sizes) tokens. Score them all with chinchilla_loss, then index "
@@ -790,15 +783,30 @@ def sweep_tokens(
     return SWEEP_REFERENCE["steps_for_budget"](budget, flops) * SWEEP_REFERENCE["BLOCK"] * SWEEP_REFERENCE["BATCH"]
 
 
-def measure_isoflops() -> list[dict[str, object]]:
+def measure_isoflops(
+    peak: float = 3e-3,
+    budgets: int = len(SWEEPS),
+) -> list[dict[str, object]]:
     """scaling3's table, every sweep on the CPU, where the same seeds give the same numbers. Not run by any check.
     The best size's tokens come from a line through log tokens against log size, since that size sits between
-    widths. The same losses are fitted once more against the non embedding count, Kaplan's N."""
+    widths. The same losses are fitted once more against the non embedding count, Kaplan's N.
+
+    peak swaps the learning rate every width trains at, for the lesson's line on Porian and colleagues' tuning.
+    The lesson's 1e-2 numbers ran the first three budgets, about 11 minutes on a shared laptop CPU."""
     _, train_data, validation_data = SWEEP_REFERENCE["shakespeare_splits"]()
     rows = []
+    usual = SWEEP_REFERENCE["PEAK"]
+    SWEEP_REFERENCE["PEAK"] = peak
 
-    for budget, widths in SWEEPS:
-        points = [SWEEP_REFERENCE["isoflop_point"](width, budget, train_data, validation_data) for width in widths]
+    try:
+        sweeps = [
+            (budget, widths, [SWEEP_REFERENCE["isoflop_point"](width, budget, train_data, validation_data) for width in widths])
+            for budget, widths in SWEEPS[:budgets]
+        ]
+    finally:
+        SWEEP_REFERENCE["PEAK"] = usual
+
+    for budget, widths, points in sweeps:
         best = SWEEP_REFERENCE["fit_parabola"](points)
         lowest = min(range(len(points)), key=lambda position: points[position][1])
 
@@ -850,16 +858,16 @@ SCALING3_LESSON = prose(
     - Loss against log N makes a valley. Fit a parabola to it, and its bottom is the compute optimal size.
 
     N counts every parameter, as Chinchilla counted. Each run is charged the
-    FLOPs it really spends, as Chinchilla's appendix F counts them. Going
-    forward, one token costs
+    FLOPs it really spends, close to Chinchilla's appendix F. Going forward,
+    one token costs
 
     - 2 FLOPs per parameter outside the embeddings `wte` and `wpe`,
     - 2 FLOPs per number in the head, which reuses `wte`'s table of `VOCABULARY * width`,
-    - and `4 * BLOCK * width` in each block's attention, its query against `BLOCK` keys and its weights against `BLOCK` values.
+    - and `4 * BLOCK * width` in each block's attention, against `BLOCK` keys and values.
 
-    Looking a token up in `wte` or `wpe` multiplies nothing. Going back costs
-    twice going forward, so training costs 3 times the forward pass.
-    `named_parameters()` gives each parameter with its name.
+    Appendix F also charges the input embedding as a multiply. Here looking a
+    token up in `wte` or `wpe` costs nothing. Going back costs twice going
+    forward, so training costs 3 times the forward pass.
 
     ```python
     layer = nn.Linear(2, 3)
@@ -869,13 +877,14 @@ SCALING3_LESSON = prose(
     round(2.5), round(3.7)                                          # (2, 4)
     ```
 
-    Each step trains on `BATCH * BLOCK` tokens, so a budget C buys a model
-    that costs F FLOPs a token `C / (F * BATCH * BLOCK)` steps.
+    `named_parameters()` gives each parameter with its name. Each step trains
+    on `BATCH * BLOCK` tokens, so a budget C buys `C / (F * BATCH * BLOCK)`
+    steps of a model that costs F FLOPs a token.
 
     The parabola is `a * x ** 2 + b * x + c` with `x = log N`, a least
     squares fit on the columns `x ** 2`, `x` and 1. Its bottom sits at `x =
-    -b / (2 * a)`. A parabola only fits near its bottom, so each budget below
-    tried four or five widths around its valley, 2 blocks each.
+    -b / (2 * a)`. A parabola only fits near its bottom, so each budget tried
+    four or five widths around its valley, 2 blocks each.
 
     | Budget in FLOPs | Widths | Lowest loss, at width | Best N, to 2 figures | Tokens per parameter |
     |---|---|---|---|---|
@@ -886,22 +895,23 @@ SCALING3_LESSON = prose(
     | 3e12 | 24 to 96 | 1.747 at 48 | 61,000 | 115 |
 
     The best size grows with the budget, as scaling2 said. scaling1's power
-    law fitted to the five grows N as C to the 0.61. Chinchilla puts Kaplan's
-    exponent at 0.73 and its own near 0.5.
+    law fitted to the five grows N as C to the 0.61. Chinchilla's fits put it
+    near 0.5, which holds tokens per parameter near 20 at every budget. Here
+    they fall from 263 to 115.
 
-    Kaplan and colleagues left the embeddings out of N. Their budget charged
-    a token 6 FLOPs per such parameter, and nothing for the head or
-    attention. At width 6 those two cost 1.9 times the rest, at width 96 a
-    seventh of it. So a budget buys the smallest models the most extra tokens.
+    Porian and colleagues found three things that lift a sweep's exponent
+    above 0.5. They are leaving the head's FLOPs out, a warmup too long for
+    small models, and one optimizer setting for every size. This sweep
+    charges the head and warms up for a twentieth of each run. Every width
+    trains at one peak rate, 3e-3. At 1e-2 every width up to 24 did better on
+    the first three budgets, 2.530 against 2.645 at 3e10. Width 48 did worse.
 
-    Fitted to the same losses with Kaplan's N, this sweep's best size grows
-    as C to the 0.68. Pearce and Song traced much of the gap between the two
-    papers to this choice of N. Porian and colleagues named the head's cost,
-    the warmup's length, and tuning the optimizer for each size. With those
-    fixed, their rerun of Kaplan's setup matched Chinchilla's law.
+    Kaplan and colleagues left the embeddings out of N and found 0.73. Fitted
+    with that N, this sweep's best size grows as C to the 0.68. Pearce and
+    Song traced much of the gap between the papers to this.
 
-    The last lines of your file run the first row's sweep each time the file
-    is checked, four small models on the CPU. Its numbers show in the result.
+    Your file's last lines run the first row's sweep at every check. Its
+    numbers show in the result.
     """,
 )
 
@@ -970,18 +980,23 @@ SCALING3_SOURCE = source_file(
         ...
 
 
-    # TODO: Seed torch with 0 and make GPT(VOCABULARY, BLOCK, width, LAYERS,
-    #   max(1, width // 16)). Train it for the steps budget buys it at its
-    #   flops_per_token, drawing batches from train_data with a generator
-    #   seeded with 0. Return how many numbers all its parameters hold, and
-    #   its validation_score on validation_data.
+    # TODO: Finish isoflop_point. Set flops to what one token costs this model,
+    #   with flops_per_token. Then call train on it for the steps budget buys
+    #   at flops a token, with batches from train_data and a generator seeded
+    #   with 0.
     def isoflop_point(
         width: int,
         budget: float,
         train_data: Tensor,
         validation_data: Tensor,
     ) -> tuple[int, float]:
+        torch.manual_seed(0)
+        model = GPT(VOCABULARY, BLOCK, width, LAYERS, max(1, width // 16))
+        parameters = sum(parameter.numel() for parameter in model.parameters())
+        flops = ...
         ...
+
+        return parameters, validation_score(model, validation_data)
 
 
     # TODO: Fit loss = a * x ** 2 + b * x + c to points, pairs of a size and a
@@ -1120,6 +1135,15 @@ def check_isoflop_point(found: object) -> None:
             actual=actual[0],
             expected=expected[0],
         )
+        untrained = SWEEP_REFERENCE["validation_score"](seeded_sweep_gpt(width), validation_data)
+
+        # The starting file's lines already score the model, so one left untrained gives a plausible loss.
+        if isinstance(actual[1], float) and abs(actual[1] - untrained) < 1e-6:
+            raise Mismatch(
+                f"The loss from {call} is the model's loss before any training, so isoflop_point is not written yet. "
+                "Train it with train before it is scored.",
+            )
+
         # Both sides train the same model with the same seeds on the CPU, so a right loss matches closely.
         expect_close(
             call=f"the loss from {call}",
@@ -1267,12 +1291,12 @@ SCALING3 = Exercise(
     hints={
         "non_embedding_parameters": "Sum parameter.numel() over model.named_parameters(), skipping the names "
         "that start with wte or wpe.",
-        "flops_per_token": "Name head = VOCABULARY * width and attention = LAYERS * 4 * BLOCK * width. Return 3 "
-        "times 2 * non_embedding + 2 * head + attention.",
+        "flops_per_token": "Going forward, a token costs 2 per non embedding parameter and 2 per number of the "
+        "VOCABULARY by width head. Each of the LAYERS blocks adds 4 * BLOCK * width. Multiply that whole sum by 3.",
         "steps_for_budget": "Divide budget by flops * BLOCK * BATCH, round it, and take the max of that and 1.",
-        "isoflop_point": "Sum p.numel() over model.parameters() for the count. Give flops_per_token the "
-        "non_embedding_parameters and width, and steps_for_budget its result. Call train with "
-        "torch.Generator().manual_seed(0), then return the count and validation_score.",
+        "isoflop_point": "flops_per_token wants the model's non_embedding_parameters and its width. train wants the "
+        "model, the steps that steps_for_budget gives for budget and flops, train_data, and a new generator "
+        "seeded with 0.",
         "fit_parabola": "Make float64 tensors of torch.log of the sizes and of the losses. Stack x ** 2, x and "
         "ones as columns, solve with torch.linalg.lstsq, and turn -b / (2 * a) back with math.exp.",
         "points": "Write the four functions above first. This line only calls isoflop_point once per width.",

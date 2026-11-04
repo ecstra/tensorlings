@@ -63,6 +63,7 @@ FAST_GPT = Chapter(
         - [Pope and colleagues, efficiently scaling transformer inference](https://arxiv.org/abs/2211.05102)
         - [Dettmers and colleagues, LLM.int8()](https://arxiv.org/abs/2208.07339)
         - [Frantar and colleagues, GPTQ, section on practical speedups](https://arxiv.org/abs/2210.17323)
+        - [PyTorch, GPT fast, the int8 step and why its kernel must be fused](https://pytorch.org/blog/accelerating-generative-ai-2/)
         - [Horace He, making deep learning go brrrr from first principles](https://horace.io/brrr_intro.html)
         """,
     ),
@@ -527,10 +528,16 @@ def check_step_seconds(
     if seen["ids"] != "meta":
         raise Mismatch(f"{call} made the ids on the CPU. Make them on device, with device=device.")
 
-    if seen["shape"] != (1, length) or seen["dtype"] != torch.long:
+    if seen["shape"] != (1, length):
         raise Mismatch(
-            f"{call} ran the model on ids of shape {seen['shape']} and dtype {seen['dtype']}, but they should be of "
-            f"shape (1, {length}) and dtype torch.long.",
+            f"{call} ran the model on ids of shape {seen['shape']}, but they should be of shape (1, {length}), a "
+            "batch of one text.",
+        )
+
+    if seen["dtype"] != torch.long:
+        raise Mismatch(
+            f"{call} ran the model on ids of dtype {seen['dtype']}, but they should be torch.long, whole numbers the "
+            "embedding can look up.",
         )
 
     if seen["training"]:
@@ -1046,26 +1053,30 @@ FAST3_LESSON = prose(
 
     quant3 said fast kernels turn each whole number into a float inside the
     multiply. PyTorch has such a fused kernel for the CPU, `torch._weight_int8pack_mm`.
+    Its leading underscore marks it private, free to change between versions.
     It scales each output inside the multiply, so no float32 weight is built.
-    Here is one cached step of an untrained GPT, 12 blocks of size 1,024,
-    after 64 tokens on 4 threads. The three took turns, over three runs.
+    On gpt3's trained model its scores matched `Int8Linear`'s to 1.4e-5.
 
-    | Weights | One step | Bytes |
-    |---|---|---|
-    | float32 | 19 to 29 ms | 609,087,488 |
-    | quant3's `Int8Linear` | 62 to 92 ms | 156,545,024 |
-    | Fused int8 | 15 to 24 ms | 156,545,024 |
+    Here is one cached step after 64 tokens on 4 threads, for three untrained
+    GPTs. The three kinds of weights took turns, over three runs or more.
 
-    The fused step took 75 to 84 percent of float32's time in each run, and
-    gave the same scores as `Int8Linear`. PyTorch's gpt-fast found the same
-    order on an A100. Unfused int8 ran slower than 16 bits there, and fused
-    int8 took a 7 billion parameter Llama from 107 tokens a second to 157.
+    | Model | float32 bytes | float32 | `Int8Linear` | Fused int8 |
+    |---|---|---|---|---|
+    | gpt3's, 4 blocks of 128 | 3.3 MB | 0.62 to 0.72 ms | 1.74 to 1.92 ms | 1.32 to 1.45 ms |
+    | 8 blocks of 512 | 102 MB | 3.5 to 4.3 ms | 10.1 to 12.1 ms | 4.8 to 6.1 ms |
+    | 12 blocks of 1,024 | 609 MB | 19 to 26 ms | 66 to 80 ms | 15 to 19 ms |
 
-    Writing one token multiplies matrices by vectors, which is memory bound
-    in profile2's sense, so reading fewer bytes wins. GPTQ's kernel reads 3
-    bit weights and turns each into a float only inside the multiply. On a
-    175 billion parameter model its authors measured 71 ms a token on one
-    A100. FP16 needed five A100s and took 230 ms.
+    Fused int8 won only on the biggest, at 71 to 81 percent of float32's time.
+    Writing one token multiplies matrices by vectors. With big weights,
+    reading them takes longer than the math, memory bound in profile2's
+    sense, so reading fewer bytes wins. With small ones the reading is quick,
+    and turning each whole number into a float costs more than it saves.
+
+    PyTorch's gpt-fast found the same on an A100. Unfused int8 ran slower
+    than 16 bits, and fused int8 took a 7 billion parameter Llama from 107
+    tokens a second to 157. GPTQ's kernel reads 3 bit weights and turns each
+    into a float only inside the multiply. On a 175 billion parameter model
+    it took 71 ms a token on one A100, where FP16 needed five and took 230 ms.
 
     The last line of the file runs `compare` on your CPU, writing 100 tokens
     as the table did, and the result shows your table. It scores 5
@@ -1119,13 +1130,10 @@ FAST3_SOURCE = source_file(
         ...
 
 
-    # TODO: Return a dict from each setup's name to (tokens per second, validation
-    #   loss, bytes). The setups are "plain", model with generate, "int8", its
-    #   int8 copy with generate, "cache", fast_model without int8 with
-    #   cached_generate, and "cache and int8", fast_model with int8 with
-    #   cached_generate. Time with tokens_per_second on prompt and steps, score
-    #   with validation_loss on data for batches batches, a generator seeded
-    #   with 1 and device, and count bytes with model_bytes.
+    # TODO: Finish compare. Set speed to the tokens per second of write on setup,
+    #   with tokens_per_second, prompt, steps and device. Set loss to the
+    #   validation_loss of scored on data over batches batches, with a new
+    #   generator seeded with 1 and device.
     def compare(
         model: nn.Module,
         prompt: Tensor,
@@ -1134,7 +1142,21 @@ FAST3_SOURCE = source_file(
         data: Tensor,
         batches: int,
     ) -> dict[str, tuple[float, float, int]]:
-        ...
+        setups = {
+            "plain": (model, generate),
+            "int8": (int8_copy(model), generate),
+            "cache": (fast_model(model, False), cached_generate),
+            "cache and int8": (fast_model(model, True), cached_generate),
+        }
+        results = {}
+
+        for name, (setup, write) in setups.items():
+            speed = ...
+            scored = ScoresOnly(setup) if write is cached_generate else setup
+            loss = ...
+            results[name] = (speed, loss, model_bytes(setup))
+
+        return results
 
 ''' + LOADED_MODEL + FAST3_NAMES + '''    ''',
 )
@@ -1443,11 +1465,11 @@ FAST3 = Exercise(
     source=FAST3_SOURCE,
     solution=FAST3_SOLUTION,
     hints={
-        "ScoresOnly.forward": "Keep self.model = model and self.block_size = model.block_size in __init__. forward "
-        "takes [0] of what self.model(ids) returns.",
+        "ScoresOnly.forward": "In __init__, keep the model and its block_size as attributes of self. forward runs the "
+        "kept model on ids and hands back the first of the two things it returns.",
         "int8_copy": "deepcopy(model) first, then quantize_linears_ on the copy's .h, and return the copy after .eval().",
-        "compare": "Make the four (model, writing function) pairs first, then loop over them. A cached setup goes "
-        "through ScoresOnly before validation_loss.",
+        "compare": "tokens_per_second takes write, setup, prompt, steps and device in that order. validation_loss "
+        "takes scored, data, batches, torch.Generator().manual_seed(1) and device.",
         "table": "It comes from compare. Make that pass first.",
     },
     introduces=(),
@@ -1589,30 +1611,35 @@ def fuse_linears_(module: nn.Module) -> None:
         fuse_linears_(child)
 
 
-# fast3's bigger GPT, untrained: vocabulary, block size, size, blocks and heads.
-FUSED_SETTINGS: tuple[int, int, int, int, int] = (65, 1024, 1024, 12, 16)
+# fast3's three untrained GPTs, as vocabulary, block size, size, blocks and heads: gpt3's own settings, a middle
+# one, and a big one whose float32 weights take 609 MB.
+FUSED_SIZES: tuple[tuple[int, int, int, int, int], ...] = (
+    (65, 128, 128, 4, 4),
+    (65, 256, 512, 8, 8),
+    (65, 1024, 1024, 12, 16),
+)
 
 
 def measure_fused_int8(
+    settings: tuple[int, int, int, int, int] = FUSED_SIZES[-1],
     threads: int = 4,
     text: int = 64,
     rounds: int = 15,
     repeats: int = 5,
 ) -> dict[str, float]:
-    """fast3's second table: one cached step of the bigger GPT on the CPU after text tokens, in milliseconds, for
-    float32 weights, quant3's Int8Linear and the fused kernel, with each model's bytes. gap is the largest difference
-    between the fused model's scores and quant3's Int8Linear model's, which hold the same whole numbers and scales.
+    """One row of fast3's second table: one cached step of an untrained GPT made with settings on the CPU after text
+    tokens, in milliseconds, for float32 weights, quant3's Int8Linear and the fused kernel, with each model's bytes.
 
     The three kinds take turns inside every round, and each time is the median over the rounds. Timed one kind
     after another instead, a burst of other work on the machine slowed whichever kind it landed on, and once
     made float32 look 1.7 times slower than the fused kernel when, taking turns, the two came out close."""
     torch.manual_seed(0)
-    plain = FAST_REFERENCE["CachedGPT"](*FUSED_SETTINGS).eval()
+    plain = FAST_REFERENCE["CachedGPT"](*settings).eval()
     int8 = deepcopy(plain)
     FAST_REFERENCE["quantize_linears_"](int8.h)
     fused = deepcopy(plain)
     fuse_linears_(fused.h)
-    ids = torch.randint(0, FUSED_SETTINGS[0], (1, text), generator=torch.Generator().manual_seed(884))
+    ids = torch.randint(0, settings[0], (1, text), generator=torch.Generator().manual_seed(884))
     results: dict[str, float] = {}
 
     previous = torch.get_num_threads()
@@ -1620,7 +1647,6 @@ def measure_fused_int8(
 
     try:
         with torch.no_grad():
-            results["gap"] = (fused(ids)[0] - int8(ids)[0]).abs().max().item()
             steps: dict[str, Callable[[], object]] = {}
 
             for kind, model in (("float32", plain), ("int8", int8), ("fused int8", fused)):
@@ -1646,3 +1672,37 @@ def measure_fused_int8(
         results[kind] = statistics.median(kind_times)
 
     return results
+
+
+def measure_fused_sizes(runs: int = 3) -> dict[tuple[int, int, int, int, int], list[dict[str, float]]]:
+    """fast3's second table, measure_fused_int8 run runs times on each of FUSED_SIZES. A small model's step takes
+    under a millisecond, so it repeats 20 times between clock reads.
+
+    The table's runs had a load average of 5 to 7 on this Mac, with another session busy. Under a load of 30 to 50
+    the timings grew many times over and the middle model's fused step beat float32 too, so remeasure on a quiet
+    machine before changing the table."""
+    return {
+        settings: [measure_fused_int8(settings, repeats=20 if settings[2] < 1024 else 5) for _ in range(runs)]
+        for settings in FUSED_SIZES
+    }
+
+
+def measure_fused_gap() -> dict[str, float]:
+    """fast3's claim on the trained model from gpt3, after 64 tokens: the largest difference between the fused
+    kernel's scores and Int8Linear's, which hold the same whole numbers and scales, beside the largest difference
+    between Int8Linear's scores and float32's. An untrained model shows no gap at all, since its blocks barely move
+    the scores."""
+    cached = FAST_REFERENCE["fast_model"](lesson_model(), False)
+    int8 = deepcopy(cached)
+    FAST_REFERENCE["quantize_linears_"](int8.h)
+    fused = deepcopy(cached)
+    fuse_linears_(fused.h)
+    ids = torch.randint(0, 65, (1, 64), generator=torch.Generator().manual_seed(884))
+
+    with torch.no_grad():
+        plain_scores, int8_scores, fused_scores = (model(ids)[0] for model in (cached, int8, fused))
+
+    return {
+        "fused against Int8Linear": (fused_scores - int8_scores).abs().max().item(),
+        "Int8Linear against float32": (int8_scores - plain_scores).abs().max().item(),
+    }
