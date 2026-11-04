@@ -31,7 +31,7 @@ The owner asked for one last deep review with research before they start, "so I 
 | 11 | Review and fix 43_seq2seq to 46_adder, with quiz8 | | owner | done |
 | 12 | Review and fix 47_attention to 50_multihead | | owner | done |
 | 13 | Review and fix 51_cross_attention to 55_modern_llms | | owner | pending |
-| 14 | Review and fix 56_moe to 59_gpt, with quiz9 and quiz10 | | owner | pending |
+| 14 | Review and fix 56_moe to 59_gpt, with quiz9 and quiz10 | | owner | done |
 | 15 | Review and fix 60_word2vec to 64_paper_topics, with quiz11 | | owner | done |
 | 16 | Review and fix 65_sampling to 68_flows | | owner | done |
 | 17 | Review and fix 69_diffusion to 71_digit_diffusion, with quiz12 | | owner | pending |
