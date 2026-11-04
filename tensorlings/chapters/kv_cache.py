@@ -627,23 +627,23 @@ KVCACHE2_LESSON = prose(
     on 128.
 
     Here is the time to write one token after a text of each length, on this
-    Mac on 4 threads over three runs. Another program kept the machine busy.
-    The bigger GPT is untrained, 8 blocks of size 512 reading up to
-    1,024 tokens, since the time doesn't depend on what the weights hold.
+    Mac on 4 threads over three runs. The bigger GPT is untrained, 8 blocks
+    of size 512 reading up to 1,024 tokens, since the time doesn't depend on
+    what the weights hold.
 
     | Model, device | Text | Without the cache | With it |
     |---|---|---|---|
-    | Course GPT, CPU | 16 | 2.9 to 4.7 ms | 1.2 to 2.1 ms |
-    | Course GPT, CPU | 128 | 5.2 to 9.4 ms | 1.1 to 2.8 ms |
-    | Bigger GPT, CPU | 128 | 52 to 93 ms | 7.1 to 12 ms |
-    | Bigger GPT, CPU | 1,024 | 268 to 434 ms | 14 to 29 ms |
-    | Bigger GPT, MPS | 1,024 | 53 to 60 ms | 8.5 to 12 ms |
+    | Course GPT, CPU | 16 | 0.51 to 0.53 ms | 0.25 to 0.26 ms |
+    | Course GPT, CPU | 128 | 1.1 to 1.3 ms | 0.25 to 0.29 ms |
+    | Bigger GPT, CPU | 128 | 9.6 to 12 ms | 2.1 to 2.4 ms |
+    | Bigger GPT, CPU | 1,024 | 74 to 76 ms | 3.5 to 4.2 ms |
+    | Bigger GPT, MPS | 1,024 | 33 to 36 ms | 3.3 to 3.5 ms |
 
-    The cache won on every row in every run, by 1.7 to about 20 times, and
+    The cache won on every row in every run, by 2 to 21 times, and
     its win grew with the text. Without it, each step runs the model over
     every earlier token again, so the step costs more as the text grows.
-    On the CPU, the bigger GPT's step over 1,024 tokens cost 3 to 6 times
-    its step over 128 without the cache. With it, 1.2 to 2.4 times.
+    On the CPU, the bigger GPT's step over 1,024 tokens cost 6.5 to 7.8 times
+    its step over 128 without the cache. With it, 1.7 to 1.8 times.
 
     The time with the cache still grew. Attention reads every cached key,
     and `torch.cat` copies the whole cache each step. PyTorch's gpt-fast

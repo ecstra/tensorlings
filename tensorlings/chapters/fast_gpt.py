@@ -1058,19 +1058,20 @@ FAST3_LESSON = prose(
     On gpt3's trained model its scores matched `Int8Linear`'s to 1.4e-5.
 
     Here is one cached step after 64 tokens on 4 threads, for three untrained
-    GPTs. The three kinds of weights took turns, over three runs or more.
+    GPTs. The three kinds of weights took turns, over six runs.
 
     | Model | float32 bytes | float32 | `Int8Linear` | Fused int8 |
     |---|---|---|---|---|
-    | gpt3's, 4 blocks of 128 | 3.3 MB | 0.62 to 0.72 ms | 1.74 to 1.92 ms | 1.32 to 1.45 ms |
-    | 8 blocks of 512 | 102 MB | 3.5 to 4.3 ms | 10.1 to 12.1 ms | 4.8 to 6.1 ms |
-    | 12 blocks of 1,024 | 609 MB | 19 to 26 ms | 66 to 80 ms | 15 to 19 ms |
+    | gpt3's, 4 blocks of 128 | 3.3 MB | 0.23 to 0.27 ms | 0.52 to 0.65 ms | 0.39 to 0.51 ms |
+    | 8 blocks of 512 | 102 MB | 2.1 to 2.5 ms | 4.0 to 5.9 ms | 1.6 to 2.0 ms |
+    | 12 blocks of 1,024 | 609 MB | 10 to 15 ms | 32 to 48 ms | 5.6 to 8.4 ms |
 
-    Fused int8 won only on the biggest, at 71 to 81 percent of float32's time.
-    Writing one token multiplies matrices by vectors. With big weights,
-    reading them takes longer than the math, memory bound in profile2's
-    sense, so reading fewer bytes wins. With small ones the reading is quick,
-    and turning each whole number into a float costs more than it saves.
+    Fused int8 beat float32 on both bigger models. It took 76 to 92 percent
+    of float32's time on the middle one, and 52 to 63 on the biggest. Writing
+    one token multiplies matrices by vectors. With big weights, reading them
+    takes longer than the math, memory bound in profile2's sense, so reading
+    fewer bytes wins. With small ones the reading is quick, and turning each
+    whole number into a float costs more than it saves.
 
     PyTorch's gpt-fast found the same on an A100. Unfused int8 ran slower
     than 16 bits, and fused int8 took a 7 billion parameter Llama from 107
@@ -1678,9 +1679,10 @@ def measure_fused_sizes(runs: int = 3) -> dict[tuple[int, int, int, int, int], l
     """fast3's second table, measure_fused_int8 run runs times on each of FUSED_SIZES. A small model's step takes
     under a millisecond, so it repeats 20 times between clock reads.
 
-    The table's runs had a load average of 5 to 7 on this Mac, with another session busy. Under a load of 30 to 50
-    the timings grew many times over and the middle model's fused step beat float32 too, so remeasure on a quiet
-    machine before changing the table."""
+    The table's six runs, two calls, had a load average of 4 to 5 on a quiet Mac, and the middle model's fused step
+    beat float32 in all six. An earlier table, at a load of 5 to 7 with another session busy, ran 2 to 3 times
+    slower and had float32 winning on the middle model. A third call, as a build pushed the load toward 10, ran up
+    to 3 times slower and float32 won two of its three middle runs, so remeasure on a quiet machine before changing the table."""
     return {
         settings: [measure_fused_int8(settings, repeats=20 if settings[2] < 1024 else 5) for _ in range(runs)]
         for settings in FUSED_SIZES

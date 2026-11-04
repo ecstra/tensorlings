@@ -152,19 +152,19 @@ PROFILE1_LESSON = prose(
     operations.
 
     Here is a forward pass of the GPT that gpt3 trains, on the CPU on 4
-    threads, while another program kept the machine busy. The shares are of
-    the CPU's own time over 10 passes, in three runs.
+    threads. The shares are of the CPU's own time over 10 passes, in three
+    runs.
 
     | Operation | Calls | Share of CPU time |
     |---|---|---|
-    | `aten::addmm`, the Linears of the blocks | 16 | 21% to 29% |
-    | `aten::gelu` | 4 | 18% to 21% |
-    | `aten::copy_`, copies into new memory | 16 | 16% to 21% |
-    | attention, one kernel for all its steps | 4 | 13% to 19% |
+    | `aten::addmm`, the Linears of the blocks | 16 | 29% to 30% |
+    | `aten::gelu` | 4 | 29% to 31% |
+    | attention, one kernel for all its steps | 4 | 23% to 24% |
+    | `aten::copy_`, copies into new memory | 16 | 5% to 6% |
 
     The calls never change. The 4 GELUs work on 2.1 million numbers, a few
     FLOPs each, while the 16 Linears do 1.6 billion FLOPs. Yet the GELUs took
-    61% to 91% of the Linears' time. On 1 thread they took nearly half the
+    98% to 107% of the Linears' time. On 1 thread they took nearly half the
     time, and on 10 a fifth. `torch.profiler` has no activity for a Mac's
     GPU, so on MPS its times would show only the CPU queueing the work.
     """,
