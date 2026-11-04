@@ -310,22 +310,50 @@ def radius_gap(
     return (points.norm(dim=1).sort().values - data.norm(dim=1).sort().values).abs().mean().item()
 
 
-def arcs(
+# diffusion4's classes, the toy of Ho and Salimans' Figure 2: three Gaussians close enough to overlap, each around its
+# own point on the unit circle, at 90, 210 and 330 degrees.
+CLASS_CENTRES = torch.tensor([[math.cos(angle), math.sin(angle)] for angle in (math.pi / 2, 7 * math.pi / 6, 11 * math.pi / 6)])
+CLASS_SPREAD = 0.6
+
+
+def overlapping_classes(
     count: int,
     generator: torch.Generator,
 ) -> tuple[Tensor, Tensor]:
-    """The ring cut into its four quarters, each quarter one class."""
-    labels = torch.randint(0, 4, (count,), generator=generator)
-    angle = (labels.float() + torch.rand(count, generator=generator)) * (math.pi / 2)
-    radius = 1 + 0.05 * torch.randn(count, generator=generator)
+    labels = torch.randint(0, 3, (count,), generator=generator)
+    points = CLASS_CENTRES[labels] + CLASS_SPREAD * torch.randn(count, 2, generator=generator)
 
-    return torch.stack([radius * torch.cos(angle), radius * torch.sin(angle)], dim=1), labels
+    return points, labels
 
 
-def quarter_of(points: Tensor) -> Tensor:
-    angle = torch.atan2(points[:, 1], points[:, 0]) % (2 * math.pi)
+def centre_distances(points: Tensor) -> Tensor:
+    """Every point's distance to every class's centre, of shape (points, 3)."""
+    return (points.unsqueeze(1) - CLASS_CENTRES.unsqueeze(0)).norm(dim=2)
 
-    return (angle // (math.pi / 2)).long().clamp(max=3)
+
+def read_class(points: Tensor) -> Tensor:
+    """The class whose centre is nearest. The classes share one spread, so no classifier can do better."""
+    return centre_distances(points).argmin(dim=1)
+
+
+def spread_within(
+    points: Tensor,
+    labels: Tensor,
+) -> float:
+    """How far each class's points sit from their own mean, as a root mean square, averaged over the classes."""
+    spreads = [(points[labels == c] - points[labels == c].mean(dim=0)).norm(dim=1).pow(2).mean().sqrt() for c in range(3)]
+
+    return torch.stack(spreads).mean().item()
+
+
+def distance_to_others(
+    points: Tensor,
+    labels: Tensor,
+) -> float:
+    """The average distance from each point to the nearest centre of another class."""
+    others = centre_distances(points).scatter(1, labels.unsqueeze(1), math.inf)
+
+    return others.min(dim=1).values.mean().item()
 
 
 def schedule() -> tuple[Tensor, Tensor]:
@@ -421,19 +449,21 @@ def noise_guess(
     return predict_noise
 
 
-def train_arcs_denoiser(
+def train_class_denoiser(
     model: nn.Module,
     steps: int,
     p: float = 0.1,
     seed: int = 1,
 ) -> nn.Module:
+    """diffusion4's ConditionalDenoiser on the three overlapping classes, Adam at 0.001 on batches of 256, each
+    label swapped for the null label 3 with chance p."""
     _, alpha_bars = schedule()
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
     generator = torch.Generator().manual_seed(seed)
 
     for _ in range(steps):
-        x0, labels = arcs(256, generator)
-        labels = REFERENCE["drop_labels"](labels, p, 4, generator)
+        x0, labels = overlapping_classes(256, generator)
+        labels = REFERENCE["drop_labels"](labels, p, 3, generator)
         t = torch.randint(0, STEPS, (256,), generator=generator)
         noise = torch.randn(x0.shape, generator=generator)
         loss = F.mse_loss(model(REFERENCE["noise_to"](x0, t, alpha_bars, noise), t, labels), noise)
@@ -523,6 +553,7 @@ DIFFUSION1_SOURCE = source_file(
     import torch
     from torch import Tensor
 
+    spaced = torch.linspace(0.0, 1.0, 5)                              # tensor([0.0000, 0.2500, 0.5000, 0.7500, 1.0000])
     products = torch.cumprod(torch.tensor([2.0, 3.0, 4.0]), dim=0)    # tensor([ 2.,  6., 24.])
     column = torch.tensor([0.5, 0.9]).reshape(2, 1, 1)                # shape (2, 1, 1), one number per row
 
@@ -542,7 +573,8 @@ DIFFUSION1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return x after one step of noise, beta of it, using noise.
+    # TODO: Return x after one step of noise, by the lesson's first formula,
+    #   with beta as the amount and noise as the Gaussian noise.
     def noise_step(
         x: Tensor,
         beta: float,
@@ -573,6 +605,7 @@ DIFFUSION1_SOLUTION = source_file(
     import torch
     from torch import Tensor
 
+    spaced = torch.linspace(0.0, 1.0, 5)
     products = torch.cumprod(torch.tensor([2.0, 3.0, 4.0]), dim=0)
     column = torch.tensor([0.5, 0.9]).reshape(2, 1, 1)
 
@@ -608,7 +641,7 @@ def check_diffusion1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="noise_step",
-        description="shrinks x and adds beta of the noise",
+        description="shrinks x and adds the square root of beta times the noise",
         inputs=(
             (small_tensor(690, 3, 2), 0.36, small_tensor(691, 3, 2)),
             (small_tensor(692, 4), 0.02, small_tensor(693, 4)),
@@ -700,8 +733,8 @@ DIFFUSION2_LESSON = prose(
     | A second draw of the data | 0.0014 | 0.040 |
 
     Guessing the noise lands within a hundredth of the data. Guessing `x_0`
-    squeezes the points onto the circle, closer than the data itself sits,
-    so its gap is five times larger.
+    squeezes the points onto the circle, closer than the data itself sits.
+    Its gap is four to eight times larger on the same seed.
     """,
 )
 
@@ -924,6 +957,20 @@ DIFFUSION3_LESSON = prose(
     skipped step trades a little quality for speed. The DDIM paper reports
     10 to 50 times faster sampling on images.
 
+    DDIM can skip steps because it adds no fresh noise. Its path from a given
+    start is fixed, so fewer and larger steps follow nearly the same path.
+    Here is how far DDIM's points land from its own 1,000 step points, all
+    from the same start noise, on 3 seeds.
+
+    | DDIM steps | 50 | 20 | 10 |
+    |---|---|---|---|
+    | Distance from the 1,000 step points | 0.011 to 0.012 | 0.035 to 0.038 | 0.094 to 0.099 |
+
+    Two DDPM runs from that same start end 1.29 apart on average, on a ring
+    of radius 1. Each of DDPM's steps adds its own fresh noise. The DDIM paper
+    saw the same on images, where 20 steps already drew nearly the picture
+    of 1,000.
+
     Both samplers take the model as `predict_noise(x, t)`, a function. That
     lets the same samplers serve any model, the conditional one of diffusion4
     included.
@@ -1117,7 +1164,9 @@ DIFFUSION4_LESSON = prose(
     """
     A model that should draw a chosen class takes the label as one more
     input, as an embedding. Classifier free guidance, from Ho and Salimans,
-    then makes it follow the label harder, with no separate classifier.
+    then makes it follow the label harder. Earlier guidance steered each
+    step with the gradient of a separate classifier trained on noisy data.
+    This needs no classifier.
 
     Training drops the label now and then, 10% of the time here. A dropped
     label becomes a null id, one more row of the embedding. So one model
@@ -1132,21 +1181,29 @@ DIFFUSION4_LESSON = prose(
     The difference between the two guesses points toward what makes the
     class that class. A larger `w` pushes further along it.
 
-    Here is a model trained on the ring cut into four quarters, one class
-    each, drawing 2,000 points with DDIM in 50 steps. Spread is how widely
-    the points fan out along their quarter. Points spread evenly would score
-    0.453.
+    Here is the toy of the paper's Figure 2. Three classes of 2D points, each
+    a Gaussian of spread 0.6 around its own point on a circle of radius 1.
+    The classes overlap. Even the best classifier here, which picks the
+    nearest centre, reads 13.5% of the data as another class.
 
-    | `w` | In the asked quarter | Spread | Distance from the ring |
+    A model trained 12,000 steps drew 1,000 points of each class, with DDIM
+    in 50 steps, on 3 seeds. Spread is how far a class's points sit from
+    their own mean.
+
+    | `w` | Read as the asked class | Spread | Distance to the nearest other centre |
     |---|---|---|---|
-    | 0 | 99.4% | 0.417 | 0.043 |
-    | 1 | 100% | 0.267 | 0.034 |
-    | 3 | 100% | 0.175 | 0.047 |
-    | 7 | 100% | 0.135 | 0.059 |
+    | The data | 86.5% | 0.85 | 1.59 |
+    | 0 | 85.5% to 87.8% | 0.83 to 0.88 | 1.60 to 1.62 |
+    | 0.5 | 97.0% to 98.3% | 0.70 to 0.74 | 1.86 to 1.91 |
+    | 1 | 99.6% to 99.9% | 0.60 to 0.67 | 2.04 to 2.14 |
+    | 2 | 100% | 0.55 to 0.71 | 2.26 to 2.47 |
 
-    Guidance trades variety for certainty. The points crowd into the middle
-    of their quarter, and at large `w` they drift off the ring. The paper
-    found the same on images, less variety and more fidelity as `w` grows.
+    At `w` = 0 the model draws each class as the data has it, overlap
+    included. By `w` = 1 guidance makes nearly every point read as its
+    class, with less variety. As `w` grows the points also move away from
+    the other classes, as the paper's Figure 2 shows. By `w` = 2 the spread
+    stops falling, as the points keep moving out. On images the paper found
+    the same trade, more fidelity and less variety as `w` grows.
     """,
 )
 
@@ -1316,14 +1373,21 @@ def check_guided_sample(found: object) -> None:
 
         return marker
 
+    # Without this, a guided_sample that calls ddpm_sample runs all 1,000 steps and fails as a time out.
+    def refused_ddpm_sample(*arguments: object, **keywords: object) -> Tensor:
+        raise Mismatch("guided_sample called ddpm_sample, which takes all 1,000 steps. Sample with ddim_sample and steps instead.")
+
     namespace = found.__globals__
     original = namespace.get("ddim_sample")
+    original_ddpm = namespace.get("ddpm_sample")
     namespace["ddim_sample"] = scripted_ddim_sample
+    namespace["ddpm_sample"] = refused_ddpm_sample
 
     try:
         actual = found(model, labels, 4, alpha_bars, 25, 3.0, given_generator)
     finally:
         namespace["ddim_sample"] = original
+        namespace["ddpm_sample"] = original_ddpm
 
     if not calls:
         raise Mismatch("guided_sample never called ddim_sample.")
@@ -1456,5 +1520,85 @@ def measure_samplers(seed: int = 1) -> dict[str, tuple[float, float]]:
         for steps in (100, 50, 20, 10):
             samples = REFERENCE["ddim_sample"](predict_noise, (SAMPLES, 2), alpha_bars, steps, torch.Generator().manual_seed(7))
             results[f"DDIM {steps}"] = scores_of(samples)
+
+    return results
+
+
+def ddpm_from(
+    predict_noise: Callable[[Tensor, Tensor], Tensor],
+    start: Tensor,
+    generator: torch.Generator,
+) -> Tensor:
+    """DDPM's 1,000 steps back from a given start, with its fresh noise drawn from generator."""
+    betas, alpha_bars = schedule()
+    x = start
+
+    with torch.no_grad():
+        for t in range(STEPS - 1, -1, -1):
+            eps = predict_noise(x, torch.full((len(x),), t))
+            noise = torch.randn(x.shape, generator=generator) if t > 0 else torch.zeros(x.shape)
+            x = REFERENCE["ddpm_step"](eps, x, t, betas, alpha_bars, noise)
+
+    return x
+
+
+def measure_consistency(seeds: tuple[int, ...] = (1, 2, 3)) -> dict[int, dict[str, float]]:
+    """diffusion3's consistency, from the DDIM paper's Section 5.2. On diffusion2's model for each seed, the average
+    distance between DDIM's points at 10, 20 and 50 steps and its points at 1,000, all from the same start noise. Then
+    the same distance between two runs of DDPM from that start, which differ only in their fresh noise."""
+    _, alpha_bars = schedule()
+    results: dict[int, dict[str, float]] = {}
+
+    with pinned_threads():
+        for seed in seeds:
+            predict_noise = noise_guess(trained_ring_model("noise", seed), "noise")
+            # Every run below starts from this draw, the first one a generator seeded with 7 makes.
+            start = torch.randn(SAMPLES, 2, generator=torch.Generator().manual_seed(7))
+            full = REFERENCE["ddim_sample"](predict_noise, (SAMPLES, 2), alpha_bars, STEPS, torch.Generator().manual_seed(7))
+            results[seed] = {}
+
+            for steps in (10, 20, 50):
+                fewer = REFERENCE["ddim_sample"](predict_noise, (SAMPLES, 2), alpha_bars, steps, torch.Generator().manual_seed(7))
+                results[seed][f"DDIM {steps} against 1000"] = (fewer - full).norm(dim=1).mean().item()
+
+            first = ddpm_from(predict_noise, start, torch.Generator().manual_seed(11))
+            second = ddpm_from(predict_noise, start, torch.Generator().manual_seed(12))
+            results[seed]["DDPM against DDPM"] = (first - second).norm(dim=1).mean().item()
+
+    return results
+
+
+def measure_guidance(
+    seeds: tuple[int, ...] = (1, 2, 3),
+    strengths: tuple[float, ...] = (0.0, 0.5, 1.0, 2.0),
+) -> dict[str, object]:
+    """diffusion4's table. ConditionalDenoiser trained 12,000 steps on the three overlapping classes for each seed,
+    then 1,000 points of each class drawn with guided_sample, DDIM in 50 steps. Each row holds the share read as the
+    asked class, the spread within each class and the distance to the nearest other centre, with the data's own."""
+    _, alpha_bars = schedule()
+    data, data_labels = overlapping_classes(3000, torch.Generator().manual_seed(9))
+    results: dict[str, object] = {
+        "data": (
+            (read_class(data) == data_labels).float().mean().item(),
+            spread_within(data, data_labels),
+            distance_to_others(data, data_labels),
+        ),
+    }
+    labels = torch.arange(3).repeat(1000)
+
+    with pinned_threads():
+        for seed in seeds:
+            model = seeded_model(REFERENCE["ConditionalDenoiser"], STEPS, 3)
+            train_class_denoiser(model, 12000, 0.1, seed)
+            model.eval()
+
+            for w in strengths:
+                points = REFERENCE["guided_sample"](model, labels, 3, alpha_bars, 50, w, torch.Generator().manual_seed(7))
+                row = (
+                    (read_class(points) == labels).float().mean().item(),
+                    spread_within(points, labels),
+                    distance_to_others(points, labels),
+                )
+                results.setdefault(f"w = {w:g}", []).append(row)
 
     return results

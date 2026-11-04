@@ -233,10 +233,10 @@ DIGITS1_SOURCE = source_file(
     # TODO: Finish forward. The condition is self.time of the time features of
     #   t, plus self.labels of labels. down1 reads x. down2 reads down1's
     #   output pooled to half with F.avg_pool2d, and middle reads down2's
-    #   output pooled again. On the way up, F.interpolate doubles each result,
-    #   which is joined with the output of the same size from the way down, the
-    #   upsampled one first, before up2 and then up1. self.out gives the
-    #   predicted noise.
+    #   output pooled again. On the way up, F.interpolate in its default
+    #   nearest mode doubles each result, which is joined with the output of
+    #   the same size from the way down, the upsampled one first, before up2
+    #   and then up1. self.out gives the predicted noise.
 ''' + indented(UNET_INIT) + '''
 
         def forward(
@@ -349,7 +349,8 @@ DIGITS1 = Exercise(
     source=DIGITS1_SOURCE,
     solution=DIGITS1_SOLUTION,
     hints={
-        "to_model_range": "images.float().unsqueeze(1) / 127.5 - 1, then F.pad with (2, 2, 2, 2) and value=-1.0.",
+        "to_model_range": "Turn the images to floats with a channel of 1, divide by 127.5 and take away 1, so 0 "
+        "becomes -1 and 255 becomes 1. Then pad 2 pixels on every side with F.pad, filling with -1.0.",
         "to_picture": "Slice [:, :, 2:30, 2:30], add 1, halve, and .clamp(0, 1).",
         "DigitUNet.forward": "Each torch.cat puts the F.interpolate(..., scale_factor=2) result first and the matching "
         "output from the way down second, on dim=1.",
@@ -665,9 +666,9 @@ DIGITS2 = Exercise(
     source=DIGITS2_SOURCE,
     solution=DIGITS2_SOLUTION,
     hints={
-        "digit_loss": "labels = drop_labels(labels, 0.1, NULL, generator), then t and noise in that order. "
-        "noise_to(x0, t, alpha_bars, noise) gives the noisy digits. Move them, t, the labels and the noise "
-        "to device before the model and F.mse_loss.",
+        "digit_loss": "Pass the labels through drop_labels first, with 0.1 and NULL, then draw t, then the noise, "
+        "all from generator. noise_to gives the noisy digits. Move them, t, the labels and the noise to device "
+        "before the model and F.mse_loss.",
     },
     introduces=(),
     check=check_digits2,
@@ -737,7 +738,9 @@ DIGITS3_LESSON = prose(
     at the finished digit, and a pixel guess outside -1 to 1 is impossible.
     So `clipped_ddim` clamps the guess, then works out the noise again from
     the clamped guess, so the two still agree. Without that second line,
-    strong guidance pulls the steps apart.
+    strong guidance pulls the steps apart. DDPM's own code clamps this guess
+    when it samples, and OpenAI's guided diffusion code works the noise out
+    again from it for DDIM.
 
     To score the samples, a LeNet from lenet1, trained on real digits, reads
     each one. The score is the share it reads as the digit that was asked
@@ -1001,6 +1004,9 @@ def check_trained_samples(found: type) -> None:
         raise Mismatch(f"The LeNet reads {share:.0%} of 50 guided samples as the digit asked for, but it should pass 85%.")
 
 
+DIGITS3_TIME_LIMIT = 300
+
+
 def check_digits3(checker: Checker) -> None:
     checker.test(
         function="clipped_ddim",
@@ -1017,10 +1023,14 @@ def check_digits3(checker: Checker) -> None:
         description="gives the share read as the digit asked for",
         run=check_share_right,
     )
+    # This test runs only the course's own sampler on the saved model, so running out of time means a busy machine.
     checker.test(
         function="guided_digits",
         description="from the trained model, samples a LeNet reads right",
         run=check_trained_samples,
+        when_late=f"The course's own sampler was still drawing digits from your trained model after "
+        f"{DIGITS3_TIME_LIMIT} seconds. That means the machine is too busy, not that your file has a problem. Save "
+        "the file again once other work on the machine has finished.",
     )
 
 
@@ -1032,15 +1042,19 @@ DIGITS3 = Exercise(
     source=DIGITS3_SOURCE,
     solution=DIGITS3_SOLUTION,
     hints={
-        "clipped_ddim": "Take eps from predict_noise and x0 from it as ddim_sample does, with .clamp(-1, 1). Then eps "
-        "becomes (x - alpha_bars[t].sqrt() * x0) / (1 - alpha_bars[t]).sqrt(). The step to before follows ddim_sample.",
-        "guided_digits": "predict = lambda x, t: guided_noise(model, x, t, labels, NULL, w). Pass it to clipped_ddim "
-        "with the shape, the schedule, steps and generator.",
+        "clipped_ddim": "Take eps from predict_noise and x0 from it as ddim_sample does, then clamp x0 to -1 to 1. "
+        "Work eps out again by turning the jump's formula around for the noise, with x and the clamped x0. The step "
+        "to before follows ddim_sample.",
+        "guided_digits": "Make a lambda of x and t that calls guided_noise with model, labels, NULL and w. Pass it to "
+        "clipped_ddim with the shape, the schedule, steps and generator.",
         "share_right": "Inside torch.no_grad(), compare classifier(pictures).argmax(dim=1) with labels and average.",
     },
     introduces=(),
     check=check_digits3,
-    time_limit=300,
+    time_limit=DIGITS3_TIME_LIMIT,
+    imports_first=OPTIMIZER_IMPORTS,
+    # The judge trains for 3,000 steps once per run of the app, which on a busy machine took over 200 seconds.
+    prepare=(judge,),
 )
 
 

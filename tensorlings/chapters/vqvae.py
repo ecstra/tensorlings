@@ -141,14 +141,18 @@ CODES = 32
 
 
 class TokenAutoencoder(nn.Module):
-    """vq2's model, an MNIST digit to a 7 by 7 grid of codes and back, or with no quantizer at all."""
+    """vq2's model, an MNIST digit to a 7 by 7 grid of codes and back, or with no quantizer at all. With straight
+    False the decoder reads the codebook entries as they are, so no gradient from the rebuilt digit reaches the
+    encoder, which then learns from the commitment loss alone."""
 
     def __init__(
         self,
         quantized: bool = True,
+        straight: bool = True,
     ) -> None:
         super().__init__()
         self.quantized = quantized
+        self.straight = straight
         self.encoder = nn.Sequential(
             nn.Conv2d(1, 16, 4, 2, 1),
             nn.ReLU(),
@@ -176,16 +180,17 @@ class TokenAutoencoder(nn.Module):
 
         tokens = REFERENCE["image_tokens"](z, self.codebook.weight)
         quantized = self.codebook(tokens).permute(0, 3, 1, 2)
+        decoded = REFERENCE["straight_through"](z, quantized) if self.straight else quantized
 
-        return self.decoder(REFERENCE["straight_through"](z, quantized)), z, quantized, tokens
+        return self.decoder(decoded), z, quantized, tokens
 
     def start_codebook(
         self,
         images: Tensor,
         generator: torch.Generator,
     ) -> None:
-        """Every entry set to one of the encoder's own vectors on images, as SoundStream starts its codebook from
-        its first batch."""
+        """Every entry set to a different one of the encoder's own vectors on images, the simplest version of
+        SoundStream's start, which runs k-means on the first batch and starts the entries at its centres."""
         with torch.no_grad():
             z = self.encoder(images)
             vectors = z.permute(0, 2, 3, 1).reshape(-1, SIZE).cpu()
@@ -199,16 +204,17 @@ def train_token_autoencoder(
     device: torch.device,
     seed: int = 0,
     start: str = "first batch",
+    straight: bool = True,
 ) -> tuple[float, int | None, float]:
     """The runs behind vq2's table, Adam at 0.002 on batches of 128 MNIST digits. losses is "both", "no codebook"
     or "none" for the model with no quantizer, and a beta of 0 drops the commitment loss. start is "first batch",
     the codebook drawn from the encoder's vectors on the first batch, or "standard normal", nn.Embedding's own
-    start. Gives the reconstruction error, the codes used and the average size of the encoder's vectors, on 2,000
-    validation digits."""
+    start. straight False drops the straight through trick. Gives the reconstruction error, the codes used and the
+    average size of the encoder's vectors, on 2,000 validation digits."""
     from .classic_nets import mnist_images
 
     torch.manual_seed(seed)
-    model = TokenAutoencoder(quantized=losses != "none").to(device)
+    model = TokenAutoencoder(quantized=losses != "none", straight=straight).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=2e-3)
     images = mnist_images()
     train, validation = images["train_x"].to(device), images["validation_x"][:2000].to(device)
@@ -244,19 +250,20 @@ def measure_vq_table(seeds: range = range(3)) -> dict[str, list[tuple[float, int
     """Every row of vq2's table for each seed, on MPS when it is there, with 4 threads. Not run by any check."""
     device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
     rows = {
-        "no quantizer": ("none", 0.25, "first batch"),
-        "both losses, entries from the standard normal": ("both", 0.25, "standard normal"),
-        "both losses": ("both", 0.25, "first batch"),
-        "no codebook loss": ("no codebook", 0.25, "first batch"),
-        "no commitment loss": ("both", 0.0, "first batch"),
+        "no quantizer": ("none", 0.25, "first batch", True),
+        "both losses, entries from the standard normal": ("both", 0.25, "standard normal", True),
+        "both losses": ("both", 0.25, "first batch", True),
+        "no codebook loss": ("no codebook", 0.25, "first batch", True),
+        "no commitment loss": ("both", 0.0, "first batch", True),
+        "no straight through": ("both", 0.25, "first batch", False),
     }
     threads = torch.get_num_threads()
     torch.set_num_threads(4)
 
     try:
         return {
-            name: [train_token_autoencoder(losses, beta, 1500, device, seed, start) for seed in seeds]
-            for name, (losses, beta, start) in rows.items()
+            name: [train_token_autoencoder(losses, beta, 1500, device, seed, start, straight) for seed in seeds]
+            for name, (losses, beta, start, straight) in rows.items()
         }
     finally:
         torch.set_num_threads(threads)
@@ -482,9 +489,9 @@ VQ2_LESSON = prose(
     standard normal, far from the encoder's small vectors. A few entries end
     up nearest to everything, and the rest are never chosen, so no loss ever
     moves them. Jukebox's authors call this codebook collapse. SoundStream
-    starts each entry from the encoder's own vectors on the first batch. The
-    simplest version picks different vectors at random, as `torch.randperm`
-    does.
+    groups the encoder's vectors from the first batch with k-means, and
+    starts the entries at the group centres. The simplest version starts
+    them at different vectors picked at random, as `torch.randperm` does.
 
     ```python
     torch.randperm(6, generator=torch.Generator().manual_seed(0))    # tensor([2, 5, 3, 0, 1, 4])
@@ -500,12 +507,15 @@ VQ2_LESSON = prose(
     | Entries from the standard normal | 0.0106 to 0.0159 | 5 to 8 |
     | Entries from the first batch | 0.0059 to 0.0064 | 32 |
     | First batch, no codebook loss | 0.0145 to 0.0181 | 21 to 22 |
-    | First batch, no commitment loss | 0.056 to 0.080 | 1 to 3 |
+    | First batch, no commitment loss | 0.056 to 0.081 | 1 to 3 |
+    | First batch, no straight through | 0.081 | 1 |
 
     Started from the first batch, every entry gets used and the error falls
     by about half. Without the commitment loss, the encoder's vectors grew to
-    an average size of 0.6 to 1.8 million, far from every entry. Without the
-    codebook loss the entries stayed put while the encoder moved on. The
+    an average size of 0.7 to 1.7 million, far from every entry. Without the
+    codebook loss the entries stayed put while the encoder moved on. Without
+    vq1's straight through trick, no gradient from the rebuilt digit reached
+    the encoder, and every digit came out as one code. The
     quantizer keeps a digit in 49 ids of 5 bits each, for about 6 times the
     error of no quantizer.
 
@@ -683,8 +693,8 @@ VQ2 = Exercise(
     source=VQ2_SOURCE,
     solution=VQ2_SOLUTION,
     hints={
-        "vq_losses": "F.mse_loss(quantized, z.detach()) is the codebook loss. The commitment loss holds quantized "
-        "still instead, and is scaled by beta.",
+        "vq_losses": "Each loss is an F.mse_loss between quantized and z, with .detach() on the side that holds "
+        "still. The codebook loss detaches z, and the commitment loss detaches quantized and is scaled by beta.",
         "image_tokens": "permute z to (batch, height, width, size), reshape to rows of size, take nearest_codes, and "
         "reshape the ids to (batch, height, width).",
         "codes_used": "torch.bincount of the flattened tokens with minlength=codes counts each code. Count the counts "

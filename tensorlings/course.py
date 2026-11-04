@@ -38,6 +38,9 @@ class Exercise:
     time_limit: float = TIME_LIMIT_SECONDS
     # Modules imported before the learner's file runs, so a slow first import doesn't count against the time limit.
     imports_first: tuple[str, ...] = ()
+    # The course's own slow work a check needs, like training the model that judges samples, run before the clock
+    # starts, so it never counts against the time limit. Each should cache what it builds, as attempt runs it often.
+    prepare: tuple[Callable[[], object], ...] = ()
 
     @property
     def path(self) -> Path:
@@ -66,6 +69,9 @@ def attempt(
     with CHECK_LOCK, contextlib.redirect_stdout(printed), contextlib.redirect_stderr(printed):
         for module_name in exercise.imports_first:
             importlib.import_module(module_name)
+
+        for step in exercise.prepare:
+            step()
 
         try:
             module, crashes = load_module(

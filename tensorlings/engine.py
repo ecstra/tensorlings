@@ -357,8 +357,11 @@ class Checker:
         function: str,
         description: str,
         run: Callable[[Callable[..., object]], None],
+        when_late: str = "",
     ) -> None:
-        """Run one test of one function. A missing function fails only its own tests."""
+        """Run one test of one function. A missing function fails only its own tests. when_late replaces the
+        message of a test that runs past the time limit, for a test that runs only the course's own code, where
+        that means a busy machine and not a loop that never ends."""
         found = getattr(self.module, function, None)
 
         if not callable(found):
@@ -373,6 +376,7 @@ class Checker:
             function=function,
             description=description,
             run=lambda: run(found),
+            when_late=when_late,
         )
 
     def test_method(
@@ -466,6 +470,7 @@ class Checker:
         description: str,
         run: Callable[[], None],
         shown: str = "",
+        when_late: str = "",
     ) -> None:
         try:
             run_with_time_limit(
@@ -478,7 +483,8 @@ class Checker:
                     function=function,
                     description=description,
                     passed=False,
-                    detail=f"{function} was still running after {self.seconds:g} seconds. Look for a loop that never ends.",
+                    detail=when_late
+                    or f"{function} was still running after {self.seconds:g} seconds. Look for a loop that never ends.",
                 ),
             )
             return
