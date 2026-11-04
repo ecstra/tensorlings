@@ -1567,7 +1567,7 @@ QUIZ17_LESSON = prose(
     | `ZeroStartBlock` | a block for a deep stack | it starts as exactly its input, and every weight learns after one step |
     | `LocalDetector` | a pattern on a ring of readings, wherever it sits | a turn of the ring turns the scores, and each score sees 5 steps |
     | `ReadingsEncoder` | readings with some missing | a missing reading changes nothing |
-    | `SetCounter` | how many items in a set are marked | the items' order, any number of them, and the count once trained |
+    | `SetCounter` | how many items in a set are marked | the items' order, any number of them, every item listed twice, and the count once trained |
     | `TriangleScorer` | a triangle's shape and size | moving, turning or relisting its corners |
     | `Recall` | the value stored with an asked key | the answer once trained, in sequences longer than any it trained on |
 
@@ -1646,8 +1646,9 @@ QUIZ17_SOURCE = source_file(
     #   and present, of shape (batch, steps), is False where a reading is
     #   missing. Return one vector of width numbers per row, of shape (batch,
     #   width). A missing reading must change nothing. Its numbers don't count,
-    #   and missing ones at the end give what a row stopping before them
-    #   gives. Every row has at least one reading present.
+    #   and a row whose last readings are missing gives the same vector as
+    #   that row cut to the readings before them. Every row has at least one
+    #   reading present.
     class ReadingsEncoder(nn.Module):
         def __init__(
             self,
@@ -1668,9 +1669,10 @@ QUIZ17_SOURCE = source_file(
     # TODO: Finish both methods. items has shape (batch, items, features), one
     #   set of items per row, and an item is marked when its first feature is
     #   1. Return one number per row, of shape (batch,). The items' order can't
-    #   matter, and any number of them must work. Trained with the check's
-    #   recipe, 800 steps of Adam at 0.003 on the squared error over sets of 1
-    #   to 12 items, the number should count the marked items.
+    #   matter, any number of them must work, and listing every item twice
+    #   doubles the marked ones, so it must change the number. Trained with
+    #   the check's recipe, 800 steps of Adam at 0.003 on the squared error
+    #   over sets of 1 to 12 items, the number should count the marked items.
     class SetCounter(nn.Module):
         def __init__(
             self,
@@ -2186,13 +2188,32 @@ def check_counter_counts(found: type) -> None:
 
     held = torch.Generator().manual_seed(1766)
     error = sum(counting_error(counter, items, held) for items in range(1, 13)) / 12
-    error_at_20 = counting_error(counter, 20, held)
 
-    if error > 0.3 or error_at_20 > 1:
+    # A loose bar on purpose: a right module from other starting weights can land near 0.8 after 800 steps.
+    # check_counter_doubled is the sharp test of what joins the items.
+    if error > 1:
         raise Mismatch(
-            f"After the check's 800 steps, the counts are off by {error:.2f} on average for sets of 1 to 12 items, and "
-            f"by {error_at_20:.2f} for sets of 20. They should be off by under 0.3 and under 1. A count grows with "
-            "the set, so what joins the items has to keep how many there are.",
+            f"After the check's 800 steps, the counts are off by {error:.2f} on average for sets of 1 to 12 items, "
+            "but they should be off by under 1. The number has to be able to reach every count, so nothing after "
+            "the join may squash it.",
+        )
+
+
+def check_counter_doubled(found: type) -> None:
+    counter = quiz17_module(found, "SetCounter(4, 32)", 1767, SET_FEATURES, 32)
+    items, _ = marked_items(3, 6, torch.Generator().manual_seed(1768))
+    out = expect_rows("SetCounter(4, 32)(items of shape (3, 6, 4))", counter(items), (3,))
+    doubled = expect_rows(
+        "SetCounter(4, 32)(the same items listed twice, shape (3, 12, 4))",
+        counter(torch.cat([items, items], dim=1)),
+        (3,),
+    )
+    gap = largest_gap(doubled, out)
+
+    if gap <= scale_of(out):
+        raise Mismatch(
+            f"Listing every item twice moved the numbers by only {gap:.3g}, float rounding. That doubles the marked "
+            "items, so the count should change. What joins the items has to keep how many there are.",
         )
 
 
@@ -2354,6 +2375,7 @@ QUIZ17_MODULE_TESTS: dict[str, tuple[tuple[int, ...], tuple[tuple[str, Callable[
         (
             ("gives one number per set, for any number of items", check_counter_sizes),
             ("ignores the order of the items", check_counter_order),
+            ("changes when every item is listed twice", check_counter_doubled),
             ("counts the marked items once trained", check_counter_counts),
         ),
     ),

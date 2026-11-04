@@ -2702,6 +2702,7 @@ CASES: list[tuple[str, str, str, str]] = [
     ("quiz17", "ReadingsEncoder zeroes readings before encoding them", "torch.where(present.unsqueeze(-1), self.each(readings), 0.0)", "self.each(torch.where(present.unsqueeze(-1), readings, 0.0))"),
     ("quiz17", "SetCounter takes the mean", "return self.rho(self.phi(items).sum(dim=1)).squeeze(-1)", "return self.rho(self.phi(items).mean(dim=1)).squeeze(-1)"),
     ("quiz17", "SetCounter takes the max", "return self.rho(self.phi(items).sum(dim=1)).squeeze(-1)", "return self.rho(self.phi(items).amax(dim=1)).squeeze(-1)"),
+    ("quiz17", "SetCounter squashes the count with a sigmoid", "return self.rho(self.phi(items).sum(dim=1)).squeeze(-1)", "return torch.sigmoid(self.rho(self.phi(items).sum(dim=1))).squeeze(-1)"),
     ("quiz17", "SetCounter weights items by place", "return self.rho(self.phi(items).sum(dim=1)).squeeze(-1)", "return self.rho((self.phi(items) * torch.arange(1, items.shape[1] + 1).unsqueeze(1)).sum(dim=1)).squeeze(-1)"),
     ("quiz17", "TriangleScorer reads the corners themselves", "sides = (corners - corners.roll(1, dims=1)).norm(dim=-1, keepdim=True)", "sides = corners[..., :1]"),
     ("quiz17", "TriangleScorer measures from the first corner", "sides = (corners - corners.roll(1, dims=1)).norm(dim=-1, keepdim=True)", "sides = (corners - corners[:, :1]).norm(dim=-1, keepdim=True)"),

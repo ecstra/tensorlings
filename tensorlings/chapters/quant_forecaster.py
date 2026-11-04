@@ -404,9 +404,12 @@ FORECAST1_LESSON = prose(
     market leans on the size of its recent move. A day's return is 0.6 times
     the size of the mean of the last 20 returns, less its average size, plus
     noise of about 1%. So after a big move up or down it tends to
-    rise, and the noise swamps that. Lilien, Engle and Robins' ARCH-in-mean
-    model of 1987 also lets the expected return grow with recent turbulence.
-    Adding up the returns, then taking `exp`, gives the price back.
+    rise, and the noise swamps that. Real models tie the expected return to
+    the recent past too. Engle, Lilien and Robins' ARCH-in-mean model of 1987
+    lets it grow with the recent variance, how widely returns have swung.
+    This market leans on the size of the average move instead, and its noise
+    keeps one size. Adding up the returns, then taking `exp`, gives the price
+    back.
 
     ```python
     torch.tensor([0.1, -0.2, 0.3]).cumsum(0)    # tensor([ 0.1000, -0.1000,  0.2000])
@@ -1452,8 +1455,11 @@ FORECAST4_LESSON = prose(
 
     design2's diagnosis asks whether a model failed to fit or failed to
     generalize. Scored on their own training rows, averaged over every fold,
-    least squares reaches 0.127 and the MLP 0.290. Least squares failed to
-    fit. The market leans on the size of the 20 day mean, a V shape, and a
+    least squares reaches 0.127 and the MLP 0.290. The rule scores 0.203 on
+    those same rows, what the market's real lean earns there. The MLP's
+    excess over it is noise it memorized, and that part is gone on the test
+    rows. Least squares falls short of the rule even on rows it trained on,
+    so it failed to fit. The market leans on the size of the 20 day mean, a V shape, and a
     straight line can't draw a V. A rise and a fall pull its one weight in
     opposite ways, so it ends near 0. The MLP's ReLUs bend, so it fits the V
     and carries it to the test rows.
@@ -1953,6 +1959,7 @@ def measure_forecaster(seeds: range = range(5)) -> dict[str, object]:
             results[f"seed {seed} folds"] = [
                 {
                     "rule": score(best[start:end], y[start:end]),
+                    "rule on training": score(best[:train_end], y[:train_end]),
                     "least squares": baseline,
                     "mlp": model,
                     "least squares on training": score(REFERENCE["linear_forecast"](x[:train_end], y[:train_end], x[:train_end]), y[:train_end]),

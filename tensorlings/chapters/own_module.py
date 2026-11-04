@@ -715,6 +715,12 @@ def check_transforms(module: object) -> Callable[[object], None]:
             try:
                 changed_twice(name, change_answer, answers, "answers from exact")
             except (IndexError, RuntimeError) as error:
+                if isinstance(change, tuple):
+                    raise Mismatch(
+                        f"The second function of TRANSFORMS[{name!r}], the answer's change, crashed on exact's answers: "
+                        f"{error}. It runs on exact's answers, so it has to fit their shape.",
+                    ) from None
+
                 raise Mismatch(
                     f"TRANSFORMS[{name!r}] crashed on exact's answers: {error}. When the answer doesn't move the way "
                     "the input does, give a pair, the input's change and then the answer's.",
