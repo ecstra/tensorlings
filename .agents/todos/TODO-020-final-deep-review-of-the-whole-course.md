@@ -25,7 +25,7 @@ The owner asked for one last deep review with research before they start, "so I 
 | 5 | Review and fix 20_dropout to 22_residuals, with quiz4 and quiz5 | | owner | done |
 | 6 | Review and fix 23_names to 26_schedules | | owner | pending |
 | 7 | Review and fix 27_clipping to 29_broken_training, with quiz6 | | owner | done |
-| 8 | Review and fix 30_convolution to 33_classic_nets | | owner | pending |
+| 8 | Review and fix 30_convolution to 33_classic_nets | | owner | done |
 | 9 | Review and fix 34_upsampling to 38_soft_design, with quiz7 | | owner | done |
 | 10 | Review and fix 39_rnn to 42_bidirectional | | owner | done |
 | 11 | Review and fix 43_seq2seq to 46_adder, with quiz8 | | owner | pending |
