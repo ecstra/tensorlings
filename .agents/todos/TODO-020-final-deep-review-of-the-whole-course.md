@@ -28,7 +28,7 @@ The owner asked for one last deep review with research before they start, "so I 
 | 8 | Review and fix 30_convolution to 33_classic_nets | | owner | done |
 | 9 | Review and fix 34_upsampling to 38_soft_design, with quiz7 | | owner | done |
 | 10 | Review and fix 39_rnn to 42_bidirectional | | owner | done |
-| 11 | Review and fix 43_seq2seq to 46_adder, with quiz8 | | owner | pending |
+| 11 | Review and fix 43_seq2seq to 46_adder, with quiz8 | | owner | done |
 | 12 | Review and fix 47_attention to 50_multihead | | owner | done |
 | 13 | Review and fix 51_cross_attention to 55_modern_llms | | owner | pending |
 | 14 | Review and fix 56_moe to 59_gpt, with quiz9 and quiz10 | | owner | pending |
