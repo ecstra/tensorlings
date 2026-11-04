@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import contextlib
+from collections.abc import Iterator
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -20,6 +23,7 @@ from ..engine import (
 )
 from ..text import prose, source_file
 from .linear_layers import expect_module
+from .tensors import fastest_seconds, pinned_threads
 
 CONVOLUTION = Chapter(
     folder="30_convolution",
@@ -28,8 +32,9 @@ CONVOLUTION = Chapter(
         """
         # Convolution
 
-        Section 5 is about images. A convolution slides one small set of
-        weights along its input and takes a dot product at every place. This
+        Section 5 builds toward its DNA project, a convolutional net that finds
+        patterns in DNA. A convolution slides one small set of weights along
+        its input and takes a dot product at every place. This
         chapter shows it is a Linear layer with most weights zero and the rest
         shared, builds it in 1D and 2D, matches PyTorch's, and shows why a
         model built from it finds a pattern wherever it sits. It ends with the
@@ -86,8 +91,8 @@ def reference_conv_matrix(
 
 CONV1_LESSON = prose(
     """
-    Section 5 is about images, and its block is the **convolution**. Start in
-    one dimension, with a signal `x` of length `n` and a small set of weights
+    Section 5 builds toward a net that finds patterns in DNA, and its block is
+    the **convolution**. Start in one dimension, with a signal `x` of length `n` and a small set of weights
     `w` of length `k`, the **kernel**. The output at position `i` is the dot
     product of `w` with the `k` numbers of `x` starting at `i`.
 
@@ -643,8 +648,8 @@ CONV4_LESSON = prose(
     so it answers to the pattern wherever it sits. The largest response over
     all positions then says whether it showed up anywhere.
 
-    That is the idea of Section 5. A cat is a cat anywhere in a picture, and a
-    convolution doesn't have to learn that again for every place.
+    That is the idea of Section 5. A pattern in DNA means the same wherever it
+    sits, and a convolution doesn't have to learn it again for every place.
 
     `nn.Conv1d(1, 4, 3)` holds 4 kernels of 3. `.amax(dim=2)` keeps the
     largest number along the positions. `F.binary_cross_entropy_with_logits`
@@ -928,25 +933,36 @@ FFT1_LESSON = prose(
     torch.fft.rfft(signal).abs().round()             # tensor([0., 0., 0., 8., 0., 0., 0., 0., 0.])
     ```
 
-    These strengths, one per frequency, are the signal's **spectrum**.
+    These strengths, one per frequency, are the signal's **spectrum**. `rfft`
+    adds over all 16 samples without dividing, so a wave of size 1 shows as
+    n / 2, here 8.
 
     The convolution theorem says that convolving two signals multiplies their
     spectra. Take both spectra, multiply them frequency by frequency, and turn
-    the product back with `irfft`. That costs about n log n. For 100,000
-    samples and a kernel of 10,000, the spectra were 9 to 13 times faster than
-    `F.conv1d` here, over five runs.
+    the product back with `irfft`. That costs about n log n.
 
-    Two details make it match `F.conv1d`.
+    Three details make it match `F.conv1d` and keep it fast.
 
     The waves wrap around, so the plain product gives a circular convolution.
     There the end of the kernel spills onto the start of the signal. Zeros
     added to both, up to the full output length of n + k - 1, stop that.
-    `rfft(x, n=length)` adds the zeros, and `irfft(spectrum, n=length)` gives
-    that length back.
+    `rfft(x, n=size)` adds zeros up to `size`, and `irfft(spectrum, n=size)`
+    gives that length back.
+
+    The FFT inside `rfft` is fastest when the length is a power of 2. So add
+    zeros up to the first power of 2 at or above n + k - 1. Then keep the
+    first n + k - 1 outputs. `.bit_length()` counts the bits a whole number
+    needs, so `2 ** (m - 1).bit_length()` is the first power of 2 at or above
+    `m`.
 
     The theorem's convolution flips the kernel, and `F.conv1d` doesn't, as
     conv2 said. So flip the kernel with `.flip(0)` first. Then keep the
     outputs where it fits fully, from k - 1 up to n.
+
+    For 100,000 samples and a kernel of 10,000, n + k - 1 is 109,999, which is
+    317 times 347. Over ten timed trials here, the spectra at that length beat
+    `F.conv1d` by 3.5 to 4.7 times. Padded to 131,072 they were 28 to 38 times
+    faster.
 
     A kernel's spectrum shows what it does to each frequency. Here is an
     average of 4 samples, with zeros added up to 16.
@@ -992,9 +1008,13 @@ FFT1_SOURCE = source_file(
         ...
 
 
+    padded = 2 ** (10 - 1).bit_length()              # 16, the first power of 2 at or above 10
+
+
     # TODO: Return the full convolution of signal and kernel by multiplying their
-    #   spectra, with zeros added so nothing wraps around. It has length
-    #   len(signal) + len(kernel) - 1.
+    #   spectra. It has length len(signal) + len(kernel) - 1. Add zeros up to
+    #   the first power of 2 at or above that length, so nothing wraps around,
+    #   then keep only that many outputs.
     def fft_convolve(
         signal: Tensor,
         kernel: Tensor,
@@ -1039,14 +1059,18 @@ FFT1_SOLUTION = source_file(
         return torch.fft.irfft(torch.fft.rfft(a) * torch.fft.rfft(b), n=len(a))
 
 
+    padded = 2 ** (10 - 1).bit_length()
+
+
     def fft_convolve(
         signal: Tensor,
         kernel: Tensor,
     ) -> Tensor:
         length = len(signal) + len(kernel) - 1
-        product = torch.fft.rfft(signal, n=length) * torch.fft.rfft(kernel, n=length)
+        size = 2 ** (length - 1).bit_length()
+        product = torch.fft.rfft(signal, n=size) * torch.fft.rfft(kernel, n=size)
 
-        return torch.fft.irfft(product, n=length)
+        return torch.fft.irfft(product, n=size)[:length]
 
 
     # F.conv1d skips the flip, so flipping first cancels the theorem's own flip.
@@ -1134,6 +1158,134 @@ def check_fft1(checker: Checker) -> None:
         reference=lambda signal, kernel: F.conv1d(signal.view(1, 1, -1), kernel.view(1, 1, -1)).flatten(),
         expect=expect_tensor,
     )
+    checker.test(
+        function="fft_convolve",
+        description="multiplies spectra, with no F.conv1d",
+        run=check_spectra_only,
+    )
+    checker.test(
+        function="conv1d_by_fft",
+        description="builds on fft_convolve",
+        run=check_builds_on_fft_convolve,
+    )
+
+
+class RefusedConvolution:
+    """Stands in for F while a function of fft1 runs, so a version that slides the kernel with F.conv1d fails."""
+
+    def __init__(self, message: str) -> None:
+        self.message = message
+
+    def __getattr__(self, name: str) -> object:
+        if name.startswith("conv"):
+            raise Mismatch(self.message)
+
+        return getattr(F, name)
+
+
+@contextlib.contextmanager
+def swapped_globals(
+    namespace: dict[str, object],
+    stand_ins: dict[str, object],
+) -> Iterator[None]:
+    saved = {name: namespace[name] for name in stand_ins if name in namespace}
+    namespace.update(stand_ins)
+
+    try:
+        yield
+    finally:
+        for name in stand_ins:
+            namespace.pop(name, None)
+
+        namespace.update(saved)
+
+
+def check_spectra_only(found: object) -> None:
+    signal, kernel = double_signal(315, 10), double_signal(316, 4)
+    refused = RefusedConvolution(
+        "fft_convolve called F.conv1d, which slides the kernel. Multiply the spectra from torch.fft.rfft and turn the "
+        "product back with torch.fft.irfft.",
+    )
+
+    with swapped_globals(found.__globals__, {"F": refused}):
+        actual = found(signal.clone(), kernel.clone())
+
+    expect_tensor(
+        call="fft_convolve on a signal of 10 and a kernel of 4",
+        actual=actual,
+        expected=reference_full_convolve(signal, kernel),
+    )
+
+
+def check_builds_on_fft_convolve(found: object) -> None:
+    signal, kernel = double_signal(317, 10), double_signal(318, 3)
+    calls: list[int] = []
+
+    def recording_fft_convolve(
+        signal: Tensor,
+        kernel: Tensor,
+    ) -> Tensor:
+        calls.append(len(kernel))
+
+        return reference_full_convolve(signal, kernel)
+
+    refused = RefusedConvolution("conv1d_by_fft called F.conv1d. Build it from fft_convolve, with the kernel flipped.")
+    stand_ins = {"F": refused, "fft_convolve": recording_fft_convolve}
+
+    with swapped_globals(found.__globals__, stand_ins):
+        actual = found(signal.clone(), kernel.clone())
+
+    call = "conv1d_by_fft on a signal of 10 and a kernel of 3"
+    reject_missing_return(
+        call=call,
+        actual=actual,
+    )
+
+    if not calls:
+        raise Mismatch("conv1d_by_fft never called fft_convolve. Call it with the kernel flipped, then keep the outputs where the kernel fits fully.")
+
+    expect_tensor(
+        call=call,
+        actual=actual,
+        expected=F.conv1d(signal.view(1, 1, -1), kernel.view(1, 1, -1)).flatten(),
+    )
+
+
+def spectra_conv1d(
+    signal: Tensor,
+    kernel: Tensor,
+    size: int,
+) -> Tensor:
+    """What F.conv1d gives for signal and kernel, worked out through spectra of size samples."""
+    k = len(kernel)
+    product = torch.fft.rfft(signal, n=size) * torch.fft.rfft(kernel.flip(0), n=size)
+
+    return torch.fft.irfft(product, n=size)[k - 1 : len(signal)]
+
+
+def measure_fft_speedup(
+    trials: int = 10,
+    repeats: int = 15,
+) -> list[tuple[float, float]]:
+    """fft1's speedups for 100,000 samples and a kernel of 10,000. Each trial times F.conv1d and the spectra, at the full
+    length of 109,999 and padded to 131,072, each by its fastest of repeats runs. Gives F.conv1d's time over each. The
+    ratios grow with the load on the machine, since F.conv1d on 4 threads suffers most when other work competes, so the
+    lesson's numbers come from a run with a load average near 7. With a load near 35 they came out about twice as big."""
+    generator = torch.Generator().manual_seed(0)
+    signal = torch.randn(100_000, generator=generator)
+    kernel = torch.randn(10_000, generator=generator)
+    length = len(signal) + len(kernel) - 1
+    padded = 2 ** (length - 1).bit_length()
+    speedups = []
+
+    with pinned_threads():
+        for _ in range(trials):
+            direct = fastest_seconds(lambda: F.conv1d(signal.view(1, 1, -1), kernel.view(1, 1, -1)), repeats)
+            exact = fastest_seconds(lambda: spectra_conv1d(signal, kernel, length), repeats)
+            fast = fastest_seconds(lambda: spectra_conv1d(signal, kernel, padded), repeats)
+            speedups.append((direct / exact, direct / fast))
+
+    return speedups
 
 
 FFT1 = Exercise(
@@ -1147,7 +1299,8 @@ FFT1 = Exercise(
         "frequency_response": "torch.fft.rfft with n=n adds the zeros, then .abs() gives the strengths.",
         "circular_convolve": "Multiply torch.fft.rfft(a) by torch.fft.rfft(b), then torch.fft.irfft the product "
         "with n=len(a), which an odd length needs.",
-        "fft_convolve": "Pass n=length to both rfft calls and to irfft, with length the full output length.",
+        "fft_convolve": "Find the first power of 2 at or above the full length with .bit_length(), as the line that "
+        "sets padded does. Pass it as n to both rfft calls and to irfft, then slice off the first length outputs.",
         "conv1d_by_fft": "Call fft_convolve with kernel.flip(0), then slice from k - 1 up to len(signal).",
     },
     introduces=(),

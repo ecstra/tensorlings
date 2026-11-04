@@ -9,6 +9,7 @@ from torch import Tensor
 
 from ..course import Chapter, Exercise
 from ..engine import (
+    NOT_STARTED,
     Checker,
     Mismatch,
     check_on_inputs,
@@ -65,8 +66,19 @@ def reference_output_size(
 
 CHANNELS1_LESSON = prose(
     """
-    A colour image has 3 numbers per pixel, red, green and blue. Each is a
-    **channel**, so an image is a tensor of shape `(channels, height, width)`.
+    DNA written one hot has 4 numbers per base, one each for A, C, G and T.
+    The DNA project at the end of this section reads it that way. A colour
+    image has 3 numbers per pixel, red, green and blue. Each such number is a
+    **channel**. So DNA is a tensor of shape `(channels, length)`, and an
+    image is `(channels, height, width)`.
+
+    ```python
+    dna = torch.tensor([[1.0, 0.0, 0.0],     # A
+                        [0.0, 0.0, 1.0],     # C
+                        [0.0, 1.0, 0.0],     # G
+                        [0.0, 0.0, 0.0]])    # T, so the 3 bases read A, G, C
+    ```
+
     The layers inside a model make many more channels, each one a map of where
     some pattern showed up.
 
@@ -386,7 +398,23 @@ def check_padding1(checker: Checker) -> None:
             (1,),
         ),
         reference=lambda k: (k - 1) // 2,
-        expect=expect_value,
+        expect=expect_whole_number,
+    )
+
+
+def expect_whole_number(
+    call: str,
+    actual: object,
+    expected: int,
+) -> None:
+    """nn.Conv2d refuses a padding like 1.0, so a float fails here even when it equals the right number."""
+    if isinstance(actual, float):
+        raise Mismatch(f"{call} is {actual!r}, a float, but nn.Conv2d takes its padding as a whole number. Divide with // so it comes out an int.")
+
+    expect_value(
+        call=call,
+        actual=actual,
+        expected=expected,
     )
 
 
@@ -742,7 +770,9 @@ CONV5_LESSON = prose(
     It is a Linear layer from the input channels to the output channels,
     applied at every pixel with the same weights. Models use it to change the
     number of channels cheaply. ResNet-50 shrinks 256 channels to 64 with one,
-    runs its 3 by 3 there, then grows them back.
+    runs its 3 by 3 there, then grows them back. Without biases, those three
+    layers learn 69,632 weights. One 3 by 3 layer from 256 channels to 256
+    would learn 589,824, over 8 times as many.
 
     The usual settings, for a 3 by 3 kernel or bigger:
 
@@ -908,6 +938,8 @@ def check_conv5(checker: Checker) -> None:
             (10, 3, 3, 1),
             # Paddings 1 and 2 both give 3 here, and the smallest is wanted.
             (8, 3, 2, 4),
+            # Only a padding of 1, which is k itself, gives 6 here, so the search has to reach k.
+            (4, 6, 1, 1),
         ),
         reference=reference_padding,
         expect=expect_padding,
@@ -919,6 +951,12 @@ def expect_padding(
     actual: object,
     expected: int | None,
 ) -> None:
+    if expected is not None and actual is None:
+        raise Mismatch(
+            f"{call} is None, but a padding of {expected} gives that size. A None means it is {NOT_STARTED}, "
+            "or the search stopped before it reached that padding.",
+        )
+
     if expected is not None:
         expect_value(
             call=call,

@@ -17,6 +17,7 @@ from ..engine import (
 )
 from ..text import prose, source_file
 from .linear_layers import expect_module
+from .tensors import pinned_threads
 
 POOLING = Chapter(
     folder="32_pooling",
@@ -250,16 +251,26 @@ POOLING2_LESSON = prose(
 
     Here images of 16 by 16 held noise and, in half of them, a small cross.
     In training the cross sat in the left part, and the test moved it right.
-    Both models start with 4 kernels of 3 by 3 and a ReLU.
+    Every model starts with 4 kernels of 3 by 3 and a ReLU, and each was
+    trained three times from different seeds.
 
     | Then | Weights | Training | Cross where it was | Cross moved |
     |---|---|---|---|---|
-    | flatten, then a Linear head | 825 | 100% | 99.9% | 49.0% |
+    | flatten, then a Linear head | 825 | 100% | 99.8% to 99.9% | 47.5% to 47.7% |
     | global max pool, then a Linear head | 45 | 100% | 100% | 100% |
+    | global average pool, then a Linear head | 45 | 97.0% to 98.8% | 96.3% to 98.3% | 95.6% to 97.6% |
 
     Flattening hands the head one weight per place again, so it is back to
-    the MLP of conv4. The global max keeps each kernel's strongest response
-    wherever it was, so the head sees the same numbers wherever the cross is.
+    the MLP of conv4. For a moved cross it says no, so its score sits at the
+    47.4% of moved images that had no cross at all. The global max keeps each
+    kernel's strongest response wherever it was, so the head sees the same
+    numbers wherever the cross is.
+
+    The global average gives the same numbers wherever the cross is too. But
+    it spreads one small cross over all 196 places of the map, so the cross
+    counts for little. Max suits a small pattern that shows up once. Average
+    suits features spread over the whole map, which is why ResNet ends with
+    one.
 
     Real models pool a little at a time, a 2 by 2 max or a stride of 2 after
     a few layers. That tolerates small shifts and shrinks the map. A global
@@ -444,3 +455,77 @@ POOLING2 = Exercise(
     time_limit=60,
     imports_first=OPTIMIZER_IMPORTS,
 )
+
+
+# ---------------------------------------------------------------------------
+# The runs behind the lessons
+# ---------------------------------------------------------------------------
+
+
+class CrossDetector(nn.Module):
+    """pooling2's models: 4 kernels of 3 by 3 and a ReLU, then a global max, a global average or a flatten, then a
+    Linear head."""
+
+    def __init__(
+        self,
+        then: str,
+        size: int = 16,
+    ) -> None:
+        super().__init__()
+        self.then = then
+        self.conv = nn.Conv2d(1, 4, 3)
+        self.head = nn.Linear(4 * (size - 2) * (size - 2) if then == "flatten" else 4, 1)
+
+    def forward(self, x: Tensor) -> Tensor:
+        responses = torch.relu(self.conv(x.unsqueeze(1)))
+
+        if self.then == "max":
+            return self.head(responses.amax(dim=(2, 3))).squeeze(1)
+
+        if self.then == "average":
+            return self.head(responses.mean(dim=(2, 3))).squeeze(1)
+
+        return self.head(responses.flatten(1)).squeeze(1)
+
+
+def labelled_right(
+    model: nn.Module,
+    x: Tensor,
+    y: Tensor,
+) -> float:
+    with torch.no_grad():
+        return ((model(x) > 0).float() == y).float().mean().item()
+
+
+def measure_pooling(seeds: tuple[int, ...] = (0, 1, 2)) -> dict[str, list[tuple[int, float, float, float]]]:
+    """pooling2's table, the data the check trains on, 300 full batch steps of Adam at 0.01 per seed. Gives, for each
+    head, the weights and the share labelled right in training, with the cross where it was, and with it moved."""
+    generator = torch.Generator().manual_seed(784)
+    x, y = cross_images(2000, 16, 0, 6, generator)
+    moved_x, moved_y = cross_images(1000, 16, 8, 14, generator)
+    same_x, same_y = cross_images(1000, 16, 0, 6, generator)
+    results: dict[str, list[tuple[int, float, float, float]]] = {}
+
+    with pinned_threads():
+        for then in ("flatten", "max", "average"):
+            for seed in seeds:
+                torch.manual_seed(seed)
+                model = CrossDetector(then)
+                optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
+
+                for _ in range(300):
+                    loss = F.binary_cross_entropy_with_logits(model(x), y)
+                    optimizer.zero_grad()
+                    loss.backward()
+                    optimizer.step()
+
+                results.setdefault(then, []).append(
+                    (
+                        sum(parameter.numel() for parameter in model.parameters()),
+                        labelled_right(model, x, y),
+                        labelled_right(model, same_x, same_y),
+                        labelled_right(model, moved_x, moved_y),
+                    ),
+                )
+
+    return results
