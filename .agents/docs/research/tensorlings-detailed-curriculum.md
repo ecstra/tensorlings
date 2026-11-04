@@ -266,7 +266,7 @@ The project follows Zaremba and Sutskever's learning to execute and the Keras ad
 | | moe3 | when, more parameters for the same compute |
 | | dynamic1 | gates, attention, SwiGLU and routing as one idea, weights computed from the input on every forward pass instead of fixed by training |
 | 57_vit | vit1 | an image as a sequence of patches, a patch embedding and a class token |
-| | vit2 | a small ViT on MNIST next to a CNN, and how much data each needs |
+| | vit2 | a small ViT next to a CNN on MNIST with its pixels shuffled, MLP-Mixer's test of what a convolution assumes, and how much data each needs |
 | 58_bpe | bpe1 | text as UTF-8 bytes, the 256 starting tokens |
 | | bpe2 | counting pairs and merging the most common one |
 | | bpe3 | training merges, then encoding and decoding with a round trip |
