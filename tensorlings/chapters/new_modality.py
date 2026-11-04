@@ -230,7 +230,7 @@ def stage_one(
 ) -> torch.optim.Optimizer:
     gpt.requires_grad_(False)
 
-    return torch.optim.AdamW(projector.parameters(), lr=2e-3, weight_decay=0.0)
+    return torch.optim.AdamW(projector.parameters(), lr=1e-3, weight_decay=0.0)
 
 
 def stage_two(
@@ -690,9 +690,11 @@ BRIDGE1 = Exercise(
     source=BRIDGE1_SOURCE,
     solution=BRIDGE1_SOLUTION,
     hints={
-        "Projector.__init__": "self.fc = nn.Linear(width, size), self.gelu = nn.GELU(), self.proj = nn.Linear(size, size).",
+        "Projector.__init__": "Three attributes in order. fc is an nn.Linear taking width numbers to size, gelu an "
+        "nn.GELU with no arguments, and proj an nn.Linear from size to size.",
         "Projector.forward": "self.proj of self.gelu of self.fc of tokens.",
-        "projected_tokens": "Inside torch.no_grad(), tokens = encoder(signals). Outside it, return projector(tokens).",
+        "projected_tokens": "Run the encoder on the signals inside a torch.no_grad() block and keep its tokens. After "
+        "the block, give those tokens to the projector and return what it gives.",
         "prefix_forward": "x = torch.cat of prefix and gpt.wte(ids) on dim 1. Add gpt.wpe of torch.arange(x.shape[1], "
         "device=ids.device). Loop over gpt.h, then gpt.lm_head(gpt.ln_f(x)), and slice off the first prefix.shape[1] "
         "places with [:, prefix.shape[1] :].",
@@ -732,54 +734,61 @@ BRIDGE2_LESSON = prose(
     """
     LLaVA trained its bridge in two stages. Stage one froze the encoder and
     the language model. It trained the projection alone on about 595,000
-    image and caption pairs, at a rate of 2e-3 for its one linear layer.
-    LLaVA-1.5 halved that to 1e-3 for its two layer MLP. Stage two kept the
-    encoder frozen and trained the projection and the language model, on
-    158,000 examples of following instructions. Both scored the answer's
-    tokens alone, as sft1's loss did.
+    image and caption pairs, at 2e-3 for its one linear layer. LLaVA-1.5
+    halved that to 1e-3 for its two layer MLP, the projector you built.
+    Stage two kept the encoder frozen and trained the projection and the
+    language model, on 158,000 examples of following instructions. Both
+    scored the answer's tokens alone, as sft1's loss did.
 
-    Here both stages train on captions, the signal's three facts in words.
+    Here stage one trains on captions, the signal's three facts in words.
+    Stage two trains on questions about them, as the project will.
 
     ```text
     Describe it: rises, three waves, spike early
+    Q: how many waves?
+    A: three
     ```
 
     `stage_one` freezes every weight of the GPT and hands AdamW the projector
-    alone, at LLaVA's 2e-3. `stage_two` adds rank 8 LoRA on every Linear, as
-    lora3 did, in place of training the whole GPT. Then it hands AdamW the
+    alone, at LLaVA-1.5's 1e-3. `stage_two` adds rank 8 LoRA on every Linear,
+    as lora3 did, in place of training the whole GPT. Then it hands AdamW the
     projector and the LoRA weights. `bridge_step` runs the signals through
-    the bridge and the GPT, and trains on the caption's loss.
+    the bridge and the GPT, and trains on the answer's loss.
 
-    Each way below trained 1,200 steps on the same captions, over 3 seeds,
-    and wrote captions for 300 new signals. The last column is your GPT's
-    loss on Shakespeare it never trained on, 1.53 before.
+    Captions are plentiful and question examples few, as in LLaVA. Stage one
+    trained 1,200 steps on fresh captions. Stage two trained 300 steps on
+    256 signals with a question each. Each way scored 300 new signals, over
+    3 seeds. Your GPT's loss on held out Shakespeare was 1.53 before.
 
-    | Training | Whole caption right | Shakespeare loss after |
-    |---|---|---|
-    | the projector alone, GPT frozen | 0% | 1.53 |
-    | stage two alone | 98% to 100% | 3.7 to 4.1 |
-    | stage one 300 steps, then stage two 900 | 97% to 98% | 2.8 to 3.1 |
-    | fuse2's gated cross attention, GPT frozen | 85% to 90% | 1.53 |
+    | Training | Rises | Waves | Spike's third | Shakespeare loss after |
+    |---|---|---|---|---|
+    | stage two alone | 96% to 100% | 77% to 95% | 49% to 58% | 2.59 to 2.92 |
+    | stage one, then stage two | 100% | 89% to 97% | 48% to 58% | 2.39 to 2.56 |
 
-    The projector alone gets rises or falls right 88% to 97% of the time,
-    but never a whole caption. With LoRA the GPT can change, and the
-    captions come through. Training on captions alone costs it Shakespeare,
-    and stage one first costs it less on every seed. LLaVA gave that reason
-    for stage one, aligning the features while keeping what the model knew.
-    Skipping it cost LLaVA ScienceQA points, 85.81% against 90.92%. Prismatic
-    VLMs found one stage did as well or better on their tests, at 20% to 25%
-    less cost.
+    Stage one buys a GPT that keeps more of what it knew. Its Shakespeare
+    loss after stage two was lower on every seed, as LLaVA said, aligning
+    the features while keeping the knowledge. Stage two buys the answers,
+    and they come out close either way. Prismatic VLMs found the same at
+    scale, and skipped stage one for 20% to 25% less cost.
 
-    The gated layers leave the GPT exactly as it was. The signal takes none
-    of its positions, where the prefix takes 8. They trained 694,792 weights
-    to the prefix's 86,272. Idefics2's authors measured the same trade at
-    scale. With the image encoder and the language model frozen, cross
-    attention scored 66.7 against the prefix's 60.3. With both trained
-    through LoRA, the prefix won, 69.5
-    against 67.3. So reach for gated cross attention when the language model
-    must stay as it is, or a long input would crowd its positions. Reach for
-    the prefix when LoRA may change the model, for the simpler bridge and the
-    better score.
+    Fuse2's gated cross attention is the other way to join the signal. Both
+    ways below trained 1,200 steps on captions alone, over 3 seeds, and
+    wrote captions for 300 new signals.
+
+    | Bridge | Weights trained | Whole caption right | Shakespeare loss after |
+    |---|---|---|---|
+    | projector and LoRA, the prefix | 86,272 | 98% to 100% | 3.7 to 4.1 |
+    | gated cross attention, GPT frozen | 694,792 | 85% to 90% | 1.53 |
+
+    The gated layers leave the GPT exactly as it was, and the signal takes
+    none of its positions, where the prefix takes 8. Idefics2's authors
+    measured the same trade at scale. With the image encoder and the
+    language model frozen, cross attention scored 66.7 against the prefix's
+    60.3. With both trained through LoRA, the prefix won, 69.5 against 67.3.
+    So reach for gated cross attention when the language model must stay as
+    it is, or a long input would crowd its positions. Reach for the prefix
+    when LoRA may change the model, for the simpler bridge and the better
+    score.
     """,
 )
 
@@ -792,8 +801,8 @@ BRIDGE2_SOURCE = source_file(
 ''' + BRIDGE2_GIVEN + '''
 
     # TODO: Stage one. Freeze every weight of gpt, then return an AdamW over
-    #   the projector's weights alone, at a rate of 2e-3, as LLaVA's stage one
-    #   used, with a weight_decay of 0.
+    #   the projector's weights alone, at a rate of 1e-3, as LLaVA-1.5's stage
+    #   one used for its MLP, with a weight_decay of 0.
     def stage_one(
         gpt: nn.Module,
         projector: nn.Module,
@@ -899,7 +908,7 @@ def check_stage_one(found: object) -> None:
             call=call,
             optimizer=optimizer,
             wanted=list(projector.parameters()),
-            lr=2e-3,
+            lr=1e-3,
         )
 
 
@@ -1034,7 +1043,7 @@ def check_bridge_step(found: object) -> None:
 def check_bridge2(checker: Checker) -> None:
     checker.test(
         function="stage_one",
-        description="freezes the GPT and trains the projector alone at 2e-3",
+        description="freezes the GPT and trains the projector alone at 1e-3",
         run=check_stage_one,
     )
     checker.test(
@@ -1215,13 +1224,14 @@ BRIDGE2 = Exercise(
     source=BRIDGE2_SOURCE,
     solution=BRIDGE2_SOLUTION,
     hints={
-        "stage_one": "gpt.requires_grad_(False), then torch.optim.AdamW(projector.parameters(), lr=2e-3, "
-        "weight_decay=0.0).",
-        "stage_two": "add_lora_everywhere(gpt, 8, 8.0).to(gpt.wte.weight.device). The LoRA weights are the gpt "
-        "parameters whose requires_grad is True. Hand AdamW the projector's parameters and those, at lr=1e-3.",
-        "bridge_step": "scores = prefix_forward(gpt, projected_tokens(encoder, projector, signals.to(device)), "
-        "x.to(device)). Then the cross entropy of the flattened scores and y.to(device), zero_grad, backward, step "
-        "and loss.item().",
+        "stage_one": "requires_grad_ with False on the whole gpt freezes it in one call. Then return an AdamW over the "
+        "projector's parameters, with lr and weight_decay given by name.",
+        "stage_two": "Call add_lora_everywhere with rank 8 and alpha 8.0, and chain .to with the device of "
+        "gpt.wte.weight. The LoRA weights are the gpt parameters whose requires_grad is True. Hand AdamW the "
+        "projector's parameters and those, at lr=1e-3.",
+        "bridge_step": "Move signals and x to device first. projected_tokens of the signals is the prefix for "
+        "prefix_forward, with x as the ids. Then the cross entropy of the flattened scores and y.to(device), "
+        "zero_grad, backward, step and loss.item().",
     },
     introduces=(),
     check=check_bridge2,
@@ -1246,11 +1256,11 @@ BRIDGE3_LESSON = prose(
 
     | Vectors | Cosine with the nearest character | Length |
     |---|---|---|
-    | Projected tokens | 0.22 to 0.25 | 7.5 to 8.8 |
+    | Projected tokens | 0.23 to 0.25 | 6.6 to 9.0 |
     | Character rows | 0.43, to the nearest other character | 1.10 |
 
     The tokens point further from every character than the characters sit
-    from each other, and run about 7 times longer. They are no characters in
+    from each other, and run 6 to 8 times longer. They are no characters in
     disguise. The GPT stays frozen in stage one, so the projector learns to
     write vectors outside its vocabulary that the GPT still responds to.
 
@@ -1266,7 +1276,7 @@ BRIDGE3_LESSON = prose(
     | 8 projected tokens, waves | 100% | 100% | 100% | 100% |
     | 8 encoder tokens, waves | 100% | 100% | 100% | 100% |
     | 64 letters, waves | 87% to 90% | 97% to 98% | 99.4% to 99.8% | 100% |
-    | 8 projected tokens, spike's third | 85% to 97% | 99% to 100% | 100% | 100% |
+    | 8 projected tokens, spike's third | 87% to 98% | 98% to 99.4% | 99.4% to 100% | 100% |
     | 8 encoder tokens, spike's third | 77% to 81% | 92% to 98% | 99% to 100% | 100% |
     | 64 letters, spike's third | 59% to 67% | 68% to 71% | 75% to 79% | 99% to 99.6% |
 
@@ -1290,8 +1300,8 @@ BRIDGE3 = Exercise(
     hints={
         "nearest_characters": "F.normalize both vectors and gpt.wte.weight along dim -1, then multiply the first by "
         "the second's .T. .max(dim=-1) gives the best similarity and its place. Look each place up in characters.",
-        "probe_accuracy": "After torch.manual_seed(0), probe = nn.Linear(train_features.shape[1], classes) and Adam at "
-        "0.01. 300 steps of cross entropy on the whole training set. Then, inside torch.no_grad(), the mean of "
+        "probe_accuracy": "Seed torch with 0 first, then make the probe, an nn.Linear from the training features' "
+        "second dimension to classes, and Adam at 0.01. 300 steps of cross entropy on the whole training set. Then, inside torch.no_grad(), the mean of "
         "argmax(dim=1) == test_labels as floats, with .item().",
     },
     introduces=(),
@@ -1511,38 +1521,102 @@ def train_captions(
         BRIDGE_REFERENCE["bridge_step"](gpt, encoder, projector, optimizer, signals, x, y, device)
 
 
+def shakespeare_step(
+    gpt: nn.Module,
+    optimizer: torch.optim.Optimizer,
+    text: Tensor,
+    generator: torch.Generator,
+) -> None:
+    """One step of the GPT's own next character loss on 32 windows of 128 characters, the text mixed into stage two as
+    LLaVA-1.5 mixed ShareGPT's conversations into its own."""
+    device = gpt.wte.weight.device
+    starts = torch.randint(0, len(text) - 129, (32,), generator=generator).tolist()
+    x = torch.stack([text[start : start + 128] for start in starts]).to(device)
+    y = torch.stack([text[start + 1 : start + 129] for start in starts]).to(device)
+    loss = F.cross_entropy(gpt(x).flatten(0, 1), y.flatten())
+    optimizer.zero_grad()
+    loss.backward()
+    optimizer.step()
+
+
+STAGE_WAYS = (
+    ("stage two alone", False, False),
+    ("stage one then two", True, False),
+    ("stage one then two, Shakespeare mixed in", True, True),
+)
+
+
+def measure_stage_payoff(
+    seeds: range = range(3),
+    stage_one_steps: int = 1200,
+    stage_two_steps: int = 300,
+    examples: int = 256,
+    ways: tuple[tuple[str, bool, bool], ...] = STAGE_WAYS[:2],
+    device: str = "mps",
+) -> dict[str, list[list[float]]]:
+    """bridge2's stage table, in LLaVA's ablation setting: stage one on fresh captions, then stage two on a small fixed
+    set of signals with a question each, against stage two alone on the same set. STAGE_WAYS' last way, not yet in the
+    lesson, adds a step on the GPT's own Shakespeare after each step on the questions. Each gives its share right on
+    each question of reader3's 300 held out signals, then the GPT's Shakespeare loss after."""
+    # Imported here, since 103_signal_reader builds on this module and holds the questions.
+    from .signal_reader import READER_REFERENCE as QUESTION_REFERENCE
+
+    characters, positions = shakespeare_positions()
+    held_signals, held_asked, held_answers = QUESTION_REFERENCE["held_out"](300)
+    whole = load_shakespeare()
+    text = torch.tensor([positions[character] for character in whole[: int(0.9 * len(whole))]])
+    results: dict[str, list[list[float]]] = {}
+    place = torch.device(device)
+
+    with pinned_threads():
+        for seed in seeds:
+            for way, with_stage_one, mixed in ways:
+                encoder, gpt, projector = bridge_models(seed, place)
+                generator = torch.Generator().manual_seed(seed + 7)
+                text_generator = torch.Generator().manual_seed(seed + 11)
+                optimizer = BRIDGE_REFERENCE["stage_one"](gpt, projector)
+                train_captions(gpt, encoder, projector, optimizer, stage_one_steps if with_stage_one else 0, generator)
+                optimizer = BRIDGE_REFERENCE["stage_two"](gpt, projector)
+                signals, asked, answers = QUESTION_REFERENCE["question_batch"](examples, torch.Generator().manual_seed(seed + 300))
+                x, y = QUESTION_REFERENCE["question_rows"](asked, answers, positions)
+
+                for _ in range(stage_two_steps):
+                    picked = torch.randint(0, examples, (32,), generator=generator)
+                    BRIDGE_REFERENCE["bridge_step"](gpt, encoder, projector, optimizer, signals[picked], x[picked], y[picked], place)
+
+                    if mixed:
+                        shakespeare_step(gpt, optimizer, text, text_generator)
+
+                reader = nn.ModuleDict({"encoder": encoder, "projector": projector, "gpt": gpt}).cpu()
+                written = QUESTION_REFERENCE["signal_written"](reader, held_signals, held_asked, positions, characters)
+                shares = QUESTION_REFERENCE["shares_by_question"](held_asked, written, held_answers)
+                results.setdefault(way, []).append([*shares, shakespeare_loss(reader["gpt"])])
+
+    return results
+
+
 def measure_stages(
     seeds: range = range(3),
     steps: int = 1200,
-    stage_one_steps: int = 300,
     device: str = "mps",
 ) -> dict[str, list[dict[str, float]]]:
-    """bridge2's table, every way trained the same steps on the same captions: the projector alone with the GPT frozen,
-    stage two alone from the start, LLaVA's stage one then stage two, and fuse2's gated cross attention on the frozen
-    GPT. Each gives its captions for 300 new signals, the GPT's Shakespeare loss after and the weights it trained."""
+    """bridge2's comparison, both ways trained the same steps on the same captions: the projector and LoRA from the
+    start, and fuse2's gated cross attention on the frozen GPT. Each gives its captions for 300 new signals, the GPT's
+    Shakespeare loss after and the weights it trained."""
     results: dict[str, list[dict[str, float]]] = {}
     place = torch.device(device)
 
     with pinned_threads():
         for seed in seeds:
-            for way in ("projector alone", "stage two alone", "stage one then two"):
-                encoder, gpt, projector = bridge_models(seed, place)
-                before = shakespeare_loss(gpt)
-                generator = torch.Generator().manual_seed(seed + 7)
-                first = {"projector alone": steps, "stage two alone": 0, "stage one then two": stage_one_steps}[way]
-
-                if first:
-                    train_captions(gpt, encoder, projector, BRIDGE_REFERENCE["stage_one"](gpt, projector), first, generator)
-
-                if first < steps:
-                    optimizer = BRIDGE_REFERENCE["stage_two"](gpt, projector)
-                    train_captions(gpt, encoder, projector, optimizer, steps - first, generator)
-
-                scores = caption_scores(gpt, encoder, projector, 300, 999)
-                scores["before"] = before
-                scores["after"] = shakespeare_loss(gpt)
-                scores["trained"] = weights_of(projector) + sum(parameter.numel() for parameter in gpt.parameters() if parameter.requires_grad)
-                results.setdefault(way, []).append(scores)
+            encoder, gpt, projector = bridge_models(seed, place)
+            before = shakespeare_loss(gpt)
+            optimizer = BRIDGE_REFERENCE["stage_two"](gpt, projector)
+            train_captions(gpt, encoder, projector, optimizer, steps, torch.Generator().manual_seed(seed + 7))
+            scores = caption_scores(gpt, encoder, projector, 300, 999)
+            scores["before"] = before
+            scores["after"] = shakespeare_loss(gpt)
+            scores["trained"] = weights_of(projector) + sum(parameter.numel() for parameter in gpt.parameters() if parameter.requires_grad)
+            results.setdefault("prefix with LoRA", []).append(scores)
 
             encoder, gpt, _ = bridge_models(seed, place)
             torch.manual_seed(seed)

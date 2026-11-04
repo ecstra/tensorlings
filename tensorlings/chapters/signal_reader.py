@@ -353,7 +353,7 @@ BRIDGE_GIVEN = '''
 '''
 
 # What reader3 asks of the trained models, on 300 held out signals. Over 3 seeds the text GPT reached 100%, 70% to 86%
-# and 87% to 99% on the three questions, and the signal reader 100%, 100% and 91% to 100%. The bars leave room for a
+# and 87% to 99% on the three questions, and the signal reader 100%, 100% and 88% to 99%. The bars leave room for a
 # run that ends a little lower, since runs on a GPU vary.
 HELD_OUT = 300
 TEXT_BARS = (0.9, 0.5, 0.5)
@@ -705,8 +705,8 @@ READER1 = Exercise(
         "as_letters": "Subtract signal.min(), divide by signal.max() minus signal.min(), times 26, then .long() "
         "and .clamp(0, 25). Join the letter at each level, from its .tolist().",
         "text_prompt": "as_letters(signal) + a newline + \"Q: \" + QUESTIONS[asked] + a newline + \"A: \".",
-        "text_step": "scores = gpt(x.to(device)). F.cross_entropy of scores.flatten(0, 1) and y.to(device).flatten(). "
-        "Then zero_grad, backward, step, and loss.item().",
+        "text_step": "Run gpt on x moved to device for the scores. F.cross_entropy of scores.flatten(0, 1) and "
+        "y.to(device).flatten(). Then zero_grad, backward, step, and loss.item().",
     },
     introduces=(),
     check=check_reader1,
@@ -1020,9 +1020,9 @@ READER2 = Exercise(
     hints={
         "signal_prompt": "\"Q: \" + QUESTIONS[asked] + a newline + \"A: \".",
         "question_rows": "answer_rows of [signal_prompt(question) for question in asked], answers and positions.",
-        "train_reader": "optimizer = stage_one(gpt, projector), then a loop of caption_batch(32, positions, generator) "
-        "and bridge_step. Then optimizer = stage_two(gpt, projector), and a loop of question_batch(32, generator), "
-        "question_rows, and bridge_step.",
+        "train_reader": "stage_one of gpt and projector gives the first optimizer, then a loop of caption_batch(32, "
+        "positions, generator) and bridge_step. stage_two gives the second optimizer, then a loop of "
+        "question_batch(32, generator), question_rows, and bridge_step.",
     },
     introduces=(),
     check=check_reader2,
@@ -1051,7 +1051,7 @@ READER3_LESSON = prose(
     |---|---|---|
     | `does it rise?` | 100% | 100% |
     | `how many waves?` | 70% to 86% | 100% |
-    | `where is the spike?` | 87% to 99% | 91% to 100% |
+    | `where is the spike?` | 87% to 99% | 88% to 99% |
 
     Both read the trend, and both find the spike, which stands out in either
     form. Its `z` towers over the letters around it, and one of the encoder's
