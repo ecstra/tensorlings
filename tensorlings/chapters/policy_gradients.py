@@ -293,7 +293,7 @@ TORCH = torch.tensor([19, 14, 17, 2, 7])
 
 
 def measure_policy_gradients() -> dict[str, object]:
-    """Every number of this chapter's lessons. About a minute on a laptop CPU. Not run by any check."""
+    """Every number of this chapter's lessons. A few seconds on a laptop CPU. Not run by any check."""
     seeds = range(5)
     results: dict[str, object] = {}
 
@@ -303,9 +303,12 @@ def measure_policy_gradients() -> dict[str, object]:
         ("[0, 0, 2, 0, 0]", torch.tensor([0.0, 0.0, 2.0, 0.0, 0.0]), 791),
         ("[0, 0, 6, 0, 0]", torch.tensor([0.0, 0.0, 6.0, 0.0, 0.0]), 792),
     ):
+        # play draws the same 1,000 episodes average_reward does, from a generator seeded the same.
+        actions, _ = REFERENCE["play"](preferences, ARM_MEANS, 1000, torch.Generator().manual_seed(seed))
         results[f"rl1 {name}"] = (
             REFERENCE["expected_reward"](preferences, ARM_MEANS).item(),
             REFERENCE["average_reward"](preferences, ARM_MEANS, 1000, torch.Generator().manual_seed(seed)),
+            REFERENCE["best_arm_share"](actions, ARM_MEANS),
         )
 
     for steps in (50, 200, 500):
@@ -323,11 +326,14 @@ def measure_policy_gradients() -> dict[str, object]:
                 samples.mean(dim=0).tolist(),
             )
 
-    for baseline in (False, True):
-        trained = [REFERENCE["train_bandit"](SHIFTED_MEANS, 100, 32, 0.1, baseline, torch.Generator().manual_seed(seed)) for seed in range(10)]
-        results[f"reinforce2 train shifted baseline {baseline}"] = [
-            REFERENCE["expected_reward"](preferences, ARM_MEANS).item() for preferences in trained
-        ]
+    # Ten times reinforce1's rate, on the shifted bandit and on the plain one, so the shift shows as the cause.
+    for name, means in (("plain", ARM_MEANS), ("shifted", SHIFTED_MEANS)):
+        for baseline in (False, True):
+            trained = [REFERENCE["train_bandit"](means, 100, 32, 1.0, baseline, torch.Generator().manual_seed(seed)) for seed in range(10)]
+            results[f"reinforce2 train {name} at 1.0 baseline {baseline}"] = (
+                [REFERENCE["expected_reward"](preferences, ARM_MEANS).item() for preferences in trained],
+                sum(int(preferences.argmax()) == 2 for preferences in trained),
+            )
 
     results["reinforce3 exact"] = REFERENCE["exact_gradient"](torch.zeros(5), ARM_MEANS).tolist()
 
@@ -378,15 +384,20 @@ RL1_LESSON = prose(
     policies, each with its exact expected reward and the average over 1,000
     played episodes.
 
-    | Preferences | Exact | Average over 1,000 episodes |
-    |---|---|---|
-    | all 0 | 0.200 | 0.154 |
-    | [0, 0, 2, 0, 0] | 0.649 | 0.672 |
-    | [0, 0, 6, 0, 0] | 0.990 | 1.002 |
+    | Preferences | Exact | Average over 1,000 episodes | Best arm played |
+    |---|---|---|---|
+    | all 0 | 0.200 | 0.154 | 19.8% |
+    | [0, 0, 2, 0, 0] | 0.649 | 0.672 | 67.8% |
+    | [0, 0, 6, 0, 0] | 0.990 | 1.002 | 98.6% |
 
     Each average misses by a few hundredths, either way, from the noise of
-    its own 1,000 draws. The best policy puts all its chance on arm 2, for an expected reward of
-    1.0. The next exercises learn the preferences from rewards alone.
+    its own 1,000 draws. The best policy puts all its chance on arm 2, for
+    an expected reward of 1.0.
+
+    The last column is `best_arm_share`, the share of played actions that
+    went to arm 2, the best arm. It tracks arm 2's chance, 0.2, 0.65 and
+    0.99. The next exercises learn the preferences from rewards alone, and
+    push this share toward 1.
     """,
 )
 
@@ -514,6 +525,8 @@ def check_rl1(checker: Checker) -> None:
         inputs=(
             (torch.tensor([2, 0, 2, 4, 2, 1, 2, 3]), ARM_MEANS),
             (torch.tensor([0, 1, 1, 0, 2]), torch.tensor([-1.0, 0.5, 0.2])),
+            # The arm played most is not the best one, so a share of the likeliest action shows.
+            (torch.tensor([0, 0, 0, 2, 2, 4]), ARM_MEANS),
         ),
         reference=REFERENCE["best_arm_share"],
         expect=expect_close,
@@ -793,7 +806,8 @@ REINFORCE2_LESSON = prose(
     A **baseline** fixes that. Subtract a number b from every reward before
     it weighs the log probabilities. The estimate still averages to the same
     gradient. The extra part, b times the gradient of log p, averages to b
-    times the gradient of the summed chances, which always sum to 1.
+    times the gradient of the summed chances. Those always sum to 1, so that
+    gradient is 0.
 
     The reward minus the baseline is the **advantage**, how much better an
     action did than usual. A common baseline is the average reward of the
@@ -813,17 +827,20 @@ REINFORCE2_LESSON = prose(
     the rewards already average near 0, so it changes little. Averaged over
     the 1,000 batches, every column gives about the same gradient.
 
-    Training shows the noise as luck. Here is reinforce1's training on the
-    shifted bandit for 100 steps, 10 seeds each. Its expected reward is taken
-    on `ARM_MEANS`, leaving out the shift of 10.
+    Less noise lets the rate go higher. Here is reinforce1's training on the
+    shifted bandit for 100 steps at a rate of 1.0, 10 times reinforce1's, on
+    10 seeds. Its expected reward is taken on `ARM_MEANS`, leaving out the
+    shift of 10.
 
-    | Weights | Lowest | Highest | Average |
-    |---|---|---|---|
-    | Rewards | 0.43 | 0.94 | 0.74 |
-    | Advantages | 0.74 | 0.79 | 0.76 |
+    | Weights | Lowest | Highest | Average | Seeds that favor arm 2 |
+    |---|---|---|---|---|
+    | Rewards | -0.50 | 1.00 | 0.70 | 7 of 10 |
+    | Advantages | 0.99 | 0.99 | 0.99 | 10 of 10 |
 
-    Both average about the same. Without the baseline, a run lands anywhere
-    from poor to great. With it, every run lands in the same place.
+    Without the baseline, 3 seeds end on a worse arm, one at -0.50. With it,
+    every seed finds arm 2. On `ARM_MEANS` itself both reach 0.99 at this
+    rate, so the shift is what breaks the plain version. The baseline lets
+    the rate go 10 times higher safely.
 
     `.clone().requires_grad_()` makes a fresh copy that records gradients,
     so each batch gets its own gradient in `.grad`.
@@ -1039,7 +1056,7 @@ REINFORCE3_LESSON = prose(
     A word's log probability is the sum of its letters' log probabilities.
     Indexing with `torch.arange(5)` and the words together picks each
     position's row and each word's letter there. The arange lines up with the
-    positions, the last dimension of the words, as the `rows` line in the
+    positions, the last dimension of the words, as the `picked` line in the
     file shows.
 
     Here is Adam at a learning rate of 0.1, 64 words a step, with the batch

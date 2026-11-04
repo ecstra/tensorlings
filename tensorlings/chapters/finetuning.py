@@ -691,9 +691,9 @@ FINETUNE2_LESSON = prose(
     specific ones in their last. Here too, the late block is the one to
     retrain.
 
-    Fewer training weights can take a larger rate. The last block alone at
-    0.001 reached 1.313 on Persuasion, near training everything, but its
-    Shakespeare loss rose to 2.014.
+    Fewer training weights can take a larger rate. At 0.001, training
+    everything reached 1.358 on Persuasion and 2.316 on Shakespeare. The last
+    block alone did better on both, 1.313 and 2.014.
 
     A frozen weight also costs less memory. It needs no gradient, and none of
     the two numbers AdamW keeps for each weight it trains. 77_lora makes that

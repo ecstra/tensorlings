@@ -377,7 +377,8 @@ SFT1_LESSON = prose(
     200 steps, and by 400 the two are within two points.
 
     Huerta-Enochian and Ko scaled the loss on the question between zero and
-    full. With short answers, a small scale, 0.01 to 0.5, did best. Shi and
+    full. Trained on short answers, their models did best on short answer
+    tests with a small scale, 0.01 to 0.5. Shi and
     colleagues found scoring the question helps when questions are long,
     answers brief and examples few.
     """,
@@ -605,8 +606,9 @@ SFT2_LESSON = prose(
 
     Here is the share of 200 held out words answered exactly, by steps of 32
     chats, for gpt3's GPT and for the same GPT untrained. Both ran at 0.0001,
-    0.0003 and 0.001, the untrained one at 0.003 too. Both did best at
-    0.0003, shown here as the average of 3 seeds.
+    0.0003 and 0.001, the untrained one at 0.003 too. For both, 0.0003 was
+    best or within half a point at every step. Here it is as the average of
+    3 seeds.
 
     | Steps | 0 | 100 | 200 | 300 | 400 |
     |---|---|---|---|---|---|

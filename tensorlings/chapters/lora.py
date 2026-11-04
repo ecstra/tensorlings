@@ -385,6 +385,29 @@ def check_first_gradients(found: type) -> None:
         raise Mismatch("On the first backward pass A's gradient should be all 0, since it comes back through B, which starts at 0.")
 
 
+def expect_only_training(
+    model: nn.Module,
+    wanted: list[str],
+    call: str,
+) -> None:
+    """Names the parameters that train but shouldn't, and the ones that should but don't, so the culprit shows."""
+    training = {name for name, parameter in model.named_parameters() if parameter.requires_grad}
+    extra = sorted(training - set(wanted))
+    missing = sorted(set(wanted) - training)
+
+    if extra:
+        raise Mismatch(
+            f"After {call}, only the new A and B should train, but {', '.join(extra[:4])} train too. Freeze the "
+            "whole model with model.requires_grad_(False) before wrapping, and wrap only the Linears the task names.",
+        )
+
+    if missing:
+        raise Mismatch(
+            f"After {call}, every new A and B should train, but {', '.join(missing[:4])} are frozen. Freeze the model "
+            "before wrapping, so A and B are made after the freeze.",
+        )
+
+
 def check_add_lora(found: object) -> None:
     for rank in (2, 3):
         model = small_gpt()
@@ -402,11 +425,11 @@ def check_add_lora(found: object) -> None:
             if type(block.attn.c_attn).__name__ != "LoRALinear":
                 raise Mismatch(f"After add_lora, block {index}'s attn.c_attn should be a LoRALinear.")
 
-        training = sorted(name for name, parameter in model.named_parameters() if parameter.requires_grad)
-        wanted = sorted(f"h.{index}.attn.c_attn.{name}" for index in range(len(model.h)) for name in ("A", "B"))
-
-        if training != wanted:
-            raise Mismatch(f"After add_lora, only every A and B should train, but these train: {', '.join(training[:4]) or 'nothing'}.")
+        expect_only_training(
+            model=model,
+            wanted=[f"h.{index}.attn.c_attn.{name}" for index in range(len(model.h)) for name in ("A", "B")],
+            call="add_lora",
+        )
 
         with torch.no_grad():
             actual = model(ids)
@@ -780,20 +803,17 @@ LORA_REFERENCE.update(namespace_of(GIVEN_PARTS + LORA_PART + EVERYWHERE_SOLUTION
 
 
 def measure_lora() -> None:
-    """The Persuasion numbers in lora3's tables, 1,000 steps on the best device from the trained gpt3 model. Each run
-    fine tunes 300 steps and then 700 more, a fresh AdamW for each, and scores after each. Takes about 15 minutes on
-    MPS."""
+    """The Persuasion numbers in lora3's tables, 1,000 steps on the best device from the trained gpt3 model, each rate
+    held fixed as finetune1 held it. Each run fine tunes 300 steps and then 700 more, a fresh AdamW for each, and
+    scores at the end. Takes 5 to 9 minutes on MPS."""
     device = best_device()
     texts = reference_texts()
     train_data = persuasion_training()
     before = LORA_REFERENCE["trained_gpt"]()
-    runs = [
-        ("everything at 0.0001", lambda: LORA_REFERENCE["trained_gpt"](), 1e-4),
-        ("LoRA on c_attn, rank 4", lambda: LORA_REFERENCE["add_lora"](LORA_REFERENCE["trained_gpt"](), 4, 4.0), 3e-3),
-    ]
+    runs = [("everything at 0.0001", lambda: LORA_REFERENCE["trained_gpt"](), 1e-4)]
     runs += [
         (f"LoRA on every Linear, rank {rank}", lambda rank=rank: LORA_REFERENCE["add_lora_everywhere"](LORA_REFERENCE["trained_gpt"](), rank, 4.0), 3e-3)
-        for rank in (1, 4, 16)
+        for rank in (4, 16)
     ]
 
     for label, make, lr in runs:
@@ -820,12 +840,14 @@ def measure_lora() -> None:
 def pig_latin_run(
     lora: bool,
     seed: int,
+    decay: bool = True,
     steps: int = 1000,
 ) -> tuple[float, list[list[float]]]:
     """Post training's job, from the trained gpt3 model: 83_post_training's pig latin, every demonstration right,
     batches of 64, AdamW with no decay, on the best device. LoRA is rank 4 on every Linear at 0.003, and fine tuning
-    everything runs at 0.0001. Gives the share of 200 held out words answered right, and for fine tuning everything,
-    each block's c_attn update energy at the top 1, 4 and 16 directions."""
+    everything runs at 0.0001. With decay the rate falls in a line to 0 over the run, and without it the rate stays
+    fixed. Gives the share of all 500 held out words answered right, and for fine tuning everything, each block's
+    c_attn update energy at the top 1, 4 and 16 directions."""
     from .post_training import POST_REFERENCE, task_setup
 
     device = best_device()
@@ -839,16 +861,20 @@ def pig_latin_run(
 
     model.to(device)
     trainable = [parameter for parameter in model.parameters() if parameter.requires_grad]
-    optimizer = torch.optim.AdamW(trainable, lr=3e-3 if lora else 1e-4, weight_decay=0.0)
+    lr = 3e-3 if lora else 1e-4
+    optimizer = torch.optim.AdamW(trainable, lr=lr, weight_decay=0.0)
     generator = torch.Generator().manual_seed(seed)
 
-    for _ in range(steps):
+    for step in range(steps):
+        if decay:
+            optimizer.param_groups[0]["lr"] = lr * (1 - step / steps)
+
         picked = [train_words[place] for place in torch.randint(0, len(train_words), (64,), generator=generator).tolist()]
         rows = [POST_REFERENCE["chat_example"](word, POST_REFERENCE["pig_latin"](word), positions) for word in picked]
         x, y = POST_REFERENCE["pad_examples"](rows, positions["\n"])
         POST_REFERENCE["sft_step"](model, optimizer, x, y, device)
 
-    right, _ = POST_REFERENCE["scores"](model, test_words[:200], positions, characters, device)
+    right, _ = POST_REFERENCE["scores"](model, test_words, positions, characters, device)
     energies = []
 
     if not lora:
@@ -862,20 +888,24 @@ def pig_latin_run(
 
 
 def measure_pig_latin(seeds: tuple[int, ...] = (0, 1, 2)) -> dict[str, list[float]]:
-    """lora3's first table, LoRA against fine tuning everything on post training's task, over seeds, and the update
-    energies of the fine tune everything made. Threads pinned to 4. About 3 minutes a run on MPS."""
+    """lora3's first table, LoRA against fine tuning everything on post training's task, over seeds, with the rate
+    falling to 0 and with it held fixed, and the update energies of the decayed fine tune of everything. Threads
+    pinned to 4. 12 runs of 2 to 4 minutes each on MPS, about 45 minutes on a busy laptop."""
     threads = torch.get_num_threads()
     torch.set_num_threads(4)
-    results: dict[str, list[float]] = {"everything": [], "LoRA": []}
+    results: dict[str, list[float]] = {}
 
     try:
         for seed in seeds:
-            right, energies = pig_latin_run(False, seed)
-            results["everything"].append(right)
-            print("everything", seed, right, [[round(share, 3) for share in block] for block in energies], flush=True)
-            right, _ = pig_latin_run(True, seed)
-            results["LoRA"].append(right)
-            print("LoRA", seed, right, flush=True)
+            for decay in (True, False):
+                schedule = "falling" if decay else "fixed"
+
+                for lora in (False, True):
+                    name = f"{'LoRA' if lora else 'everything'}, rate {schedule}"
+                    right, energies = pig_latin_run(lora, seed, decay)
+                    results.setdefault(name, []).append(right)
+                    shown = [[round(share, 3) for share in block] for block in energies]
+                    print(name, seed, right, shown if decay and not lora else "", flush=True)
     finally:
         torch.set_num_threads(threads)
 
@@ -884,23 +914,27 @@ def measure_pig_latin(seeds: tuple[int, ...] = (0, 1, 2)) -> dict[str, list[floa
 
 LORA3_LESSON = prose(
     """
-    lora2 counted what LoRA saves. Here is what it costs on the job it is made
-    for, post training. The job is 83_post_training's, writing a word in pig
-    latin, `string` as `ingstray`, from 64 right demonstrations a step. Each
-    run started from your gpt3 model and took 1,000 steps on MPS.
+    lora2 counted what LoRA saves. Here is what it costs on post training,
+    the job it is made for. Post training teaches a trained model a task or a
+    format from examples, called demonstrations. The task is
+    83_post_training's pig latin. A word that starts with a vowel adds `way`,
+    so `apple` becomes `appleway`. Any other moves its leading consonants to
+    the end and adds `ay`, so `string` becomes `ingstray`. Each run started
+    from your gpt3 model and took 1,000 steps of 64 right demonstrations on
+    MPS, the rate falling in a line to 0.
 
-    | Trained | Weights | Rate | Right of 200 held out words, 3 seeds |
+    | Trained | Weights | Rate | Right of 500 held out words, 3 seeds |
     |---|---|---|---|
-    | everything | 818,048 | 0.0001 | 99%, 98.5%, 99% |
-    | LoRA on every Linear, rank 4 | 32,768 | 0.003 | 98.5%, 97.5%, 96% |
+    | everything | 818,048 | 0.0001 | 97.8%, 98%, 97% |
+    | LoRA on every Linear, rank 4 | 32,768 | 0.003 | 98%, 99.2%, 99% |
 
-    With 4% of the weights, LoRA comes within one to three points of fine
-    tuning everything. Its best rate sits far above, as Schulman and Thinking
-    Machines found too. They saw LoRA match full fine tuning on small and
-    medium post training sets, with LoRA on every layer.
+    With 4% of the weights, LoRA matches fine tuning everything. Thinking
+    Machines saw the same on small and medium post training sets, with LoRA
+    on every layer. Its best rate was about 10 times higher, here 30. Held
+    fixed, that rate cost LoRA, 95% to 98% against everything's 98.2% to 99.2%.
 
-    Learning a whole new text is a different job. Here is Persuasion, from
-    finetune1, after 1,000 steps at the same rates.
+    Learning a whole new text is a different job. Here is Persuasion from
+    finetune1 after 1,000 steps at the same rates, held fixed as there.
 
     | Trained | Weights | Persuasion's loss |
     |---|---|---|
@@ -914,35 +948,34 @@ LORA3_LESSON = prose(
     its weights can hold what the data teaches. So use LoRA to teach a format
     or a skill, and fine tune everything to learn a large new text.
 
-    A matrix's **singular values** say how much it stretches along each of
-    its own directions, largest first. Their squares add up to the sum of
-    every entry squared. Keeping the top k gives the closest matrix of rank k.
-
-    The **singular value decomposition**, SVD, writes a matrix as
+    A matrix's **singular values** say how far it stretches along each of
+    its directions, largest first. Their squares add up to the sum of every
+    entry squared. Keeping the top k gives the closest matrix of rank k. The
+    **singular value decomposition**, SVD, writes a matrix as
     `u @ torch.diag(s) @ vh`. `s` holds the singular values, `u`'s columns
-    the directions the outputs take, and `vh`'s rows the input directions
-    that map onto them.
+    the output directions and `vh`'s rows the input ones.
 
     ```python
     torch.linalg.svdvals(torch.tensor([[3.0, 0.0], [0.0, 1.0]]))    # tensor([3.0000, 1.0000])
     ```
 
-    `update_energy` measures the share of an update its top k directions hold.
-    Here it is for each block's `c_attn` change, 384 by 128, from fine tuning
-    everything on each job, with a random matrix beside it.
+    `update_energy` gives the share of an update its top k directions hold.
+    Here it is for each block's 384 by 128 `c_attn` change from fine tuning
+    everything, beside a random matrix.
 
     | Matrix | Top 4, pig latin | Top 4, Persuasion | Top 16, pig latin | Top 16, Persuasion |
     |---|---|---|---|---|
-    | block 0's update | 50% | 31% | 83% to 84% | 73% |
-    | block 1's update | 52% to 56% | 53% | 86% to 88% | 84% |
-    | block 2's update | 47% to 51% | 28% | 82% to 85% | 69% |
-    | block 3's update | 42% to 44% | 17% | 77% | 48% |
+    | block 0's update | 50% to 51% | 31% | 84% to 85% | 73% |
+    | block 1's update | 51% to 56% | 53% | 86% to 88% | 84% |
+    | block 2's update | 48% to 52% | 28% | 83% to 85% | 69% |
+    | block 3's update | 43% to 45% | 17% | 77% to 78% | 48% |
     | random | 7% | 7% | 26% | 26% |
 
-    Both sit in far fewer directions than random ones, the low intrinsic rank
-    LoRA bets on. The post training update sits in fewer still, so a low rank
-    catches it. Biderman and colleagues measured full fine tuning's updates on
-    large sets at 10 to 100 times the rank of usual LoRA settings.
+    Both sit in far fewer directions than random ones. A change that few
+    directions hold has a low **intrinsic rank**, LoRA's bet. The post
+    training update sits in fewer still, so a low rank catches it. On large
+    sets, Biderman and colleagues found full fine tuning's rank 10 to 100
+    times LoRA's.
     """,
 )
 
@@ -1110,14 +1143,11 @@ def check_add_lora_everywhere(found: object) -> None:
                 )
                 scaled_draws.append(layer.A.detach().flatten() * math.sqrt(original.in_features))
 
-        training = sorted(name for name, parameter in model.named_parameters() if parameter.requires_grad)
-        wanted = sorted(f"h.{index}.{name}.{part}" for index in range(len(model.h)) for name in LINEAR_NAMES for part in ("A", "B"))
-
-        if training != wanted:
-            raise Mismatch(
-                f"After add_lora_everywhere, every A and B of the four Linears of each block should train and nothing "
-                f"else, but these train: {', '.join(training[:4]) or 'nothing'}.",
-            )
+        expect_only_training(
+            model=model,
+            wanted=[f"h.{index}.{name}.{part}" for index in range(len(model.h)) for name in LINEAR_NAMES for part in ("A", "B")],
+            call="add_lora_everywhere",
+        )
 
         # Each A times the square root of its inputs should look like plain normal draws, pooled over every layer.
         scaled = torch.cat(scaled_draws)

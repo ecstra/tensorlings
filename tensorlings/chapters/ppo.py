@@ -500,8 +500,8 @@ def lambda_bias_and_spread(
 
 
 def measure_ppo() -> dict[str, object]:
-    """Every number of this chapter's lessons, with 4 threads. About half an hour on a busy laptop CPU. Not run by
-    any check."""
+    """Every number of this chapter's lessons, with 4 threads. About 6 minutes on a busy laptop CPU. Not run by any
+    check."""
     threads = torch.get_num_threads()
     torch.set_num_threads(4)
 
@@ -760,7 +760,8 @@ PPO2_LESSON = prose(
     ```
 
     As a baseline, a value network V learns to guess a state's return from
-    the state alone. The TD error compares one real step against that guess.
+    the state alone. The TD error, short for temporal difference, compares
+    one real step against that guess.
 
     ```text
     delta_t = r_t + gamma * V(s_(t+1)) - V(s_t)
@@ -988,8 +989,10 @@ PPO3_LESSON = prose(
     fall, as ppo2 said. Eight carts run at once as the rows of one tensor,
     and a cart that falls starts over.
 
-    The settings are RL Baselines3 Zoo's, tuned for CartPole-v1, on Stable
-    Baselines3's defaults. One update of PPO has three parts.
+    Stable Baselines3 is a widely used PyTorch library of reinforcement
+    learning methods. RL Baselines3 Zoo keeps its settings tuned for each
+    task. These are the Zoo's for CartPole-v1, on the library's defaults. One
+    update of PPO has three parts.
 
     - Collect: run the carts for 32 steps under no_grad, keeping states, actions, log probabilities, values, rewards and done flags.
     - Advantages: GAE with gamma 0.98 and lambda 0.8. Advantage plus value is the return V learns to guess.
@@ -1200,6 +1203,42 @@ def minibatch_for_check(seed: int) -> tuple[Described, ...]:
     )
 
 
+# minibatch_loss with the guesses left at shape (rows, 1), so the likeliest slip there can be named.
+UNSQUEEZED_REFERENCE = reference_namespace(
+    PPO_LOSS_PART,
+    UPDATE_PART.replace("value(states).squeeze(1) - returns", "value(states) - returns"),
+)
+
+
+def check_minibatch_loss(found: object) -> None:
+    for seed, epsilon in ((843, 0.2), (844, 0.1)):
+        parts = minibatch_for_check(seed)
+        values = [part.value for part in parts]
+        call = f"minibatch_loss({', '.join(part.text for part in parts)}, {epsilon})"
+        actual = found(*values, epsilon)
+        expected = REFERENCE["minibatch_loss"](*values, epsilon).detach()
+        unsqueezed = UNSQUEEZED_REFERENCE["minibatch_loss"](*values, epsilon).detach()
+        guesses_unsqueezed = (
+            isinstance(actual, Tensor)
+            and actual.dim() == 0
+            and torch.allclose(actual.detach(), unsqueezed)
+            and not torch.allclose(actual.detach(), expected)
+        )
+
+        if guesses_unsqueezed:
+            raise Mismatch(
+                f"{call} is {actual.item():.4f}, which takes the value error between every guess and every return. "
+                "value(states) has shape (8, 1), so subtracting returns of shape (8,) makes an (8, 8) grid. Squeeze the "
+                "guesses to shape (8,) first.",
+            )
+
+        expect_loss_tensor(
+            call=call,
+            actual=actual,
+            expected=expected,
+        )
+
+
 def check_minibatch_gradient(found: object) -> None:
     policy, value, states, actions, old_log_probs, advantages, returns = [part.value for part in minibatch_for_check(834)]
     loss = found(policy, value, states, actions, old_log_probs, advantages, returns, 0.2)
@@ -1330,16 +1369,10 @@ def check_ppo3(checker: Checker) -> None:
         description="draws each cart's action and keeps its log probability",
         run=check_collect,
     )
-    check_on_inputs(
-        checker=checker,
+    checker.test(
         function="minibatch_loss",
         description="adds PPO's loss and half the value error",
-        inputs=(
-            (*minibatch_for_check(843), 0.2),
-            (*minibatch_for_check(844), 0.1),
-        ),
-        reference=REFERENCE["minibatch_loss"],
-        expect=expect_loss_tensor,
+        run=check_minibatch_loss,
     )
     checker.test(
         function="minibatch_loss",
@@ -1376,17 +1409,19 @@ PPO3 = Exercise(
     source=PPO3_SOURCE,
     solution=PPO3_SOLUTION,
     hints={
-        "collect": "log_chances = torch.log_softmax(policy(states), dim=1). Draw from log_chances.exp() and .squeeze(1) "
-        "the draws. Index log_chances with torch.arange(len(actions)) and actions.",
-        "minibatch_loss": "Index the policy's log softmax with torch.arange(len(actions)) and actions. "
-        "value(states).squeeze(1) are the guesses.",
-        "ppo_update": "rollout[\"states\"].flatten(0, 1), the others .flatten(). order = torch.randperm(len(states), "
-        "generator=generator), and batch = order[start : start + minibatch] for start in range(0, len(states), "
-        "minibatch). Zero the gradients before each backward, then nn.utils.clip_grad_norm_ on both networks' "
-        "parameters in one list before optimizer.step().",
-        "train_ppo": "for update in range(updates), left = 1 - update / updates. rollout = collect(policy, value, "
-        "carts, 32, generator). gae takes the rollout's rewards, values, next_values and dones. returns = advantages + "
-        "rollout[\"values\"].",
+        "collect": "Take the log softmax of the policy's scores over dim 1. torch.multinomial wants chances, so draw "
+        "from the exp of the log chances, one per row, and squeeze away the extra dimension. To keep each cart's own "
+        "log probability, index the rows with torch.arange and the columns with the actions.",
+        "minibatch_loss": "Scale the advantages first, minus their mean, over their spread plus 1e-8. Index the "
+        "policy's log softmax as collect did, rows with torch.arange and columns with the actions. The value network "
+        "gives shape (rows, 1), so squeeze that last dimension before comparing with the returns.",
+        "ppo_update": "Flatten the states over their first two dimensions, and the rest into one dimension. Each epoch, "
+        "draw a fresh order with torch.randperm and the generator, then walk it in slices of minibatch. For each slice, "
+        "zero the gradients, backpropagate minibatch_loss, clip both networks' gradients together with "
+        "nn.utils.clip_grad_norm_, then step.",
+        "train_ppo": "Each update, left is the share of updates not yet run, 1 at the first. Set the rate in the "
+        "optimizer's first param group, collect 32 steps, and pass the rollout's rewards, values, next values and dones "
+        "to gae. The returns are the advantages plus the rollout's values.",
         "balance_time": "Make CartPole(count, generator), a standing mask of ones as bools and a survived count of "
         "zeros. Each step, add standing to survived, then set standing to False where dones is True.",
     },
