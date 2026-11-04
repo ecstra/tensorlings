@@ -226,7 +226,7 @@ The project is the small image classifier of the section table, in the style of 
 | | adder2 | a GRU encoder and decoder that gets 95 percent of held out sums exactly right, with answers written units first, which beats the usual order by far |
 | | adder3 | longer numbers than training had, and where it breaks |
 
-The project follows Zaremba and Sutskever's learning to execute and the Keras addition RNN. It uses an encoder and decoder, gating and beam search at once.
+The project follows Zaremba and Sutskever's learning to execute and the Keras addition RNN. It uses an encoder and decoder with gating at once.
 
 ## Section 7 Attention and transformers
 
