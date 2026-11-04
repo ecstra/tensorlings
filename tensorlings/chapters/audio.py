@@ -457,7 +457,7 @@ def check_tone_channels(value: object) -> None:
         raise Mismatch(f"tone_channels is {value_text(value)}, but it should be a list of four channels.")
 
     if value != expected:
-        raise Mismatch(f"tone_channels is {value_text(value)}, but it should be {expected}. Check log_mel and loudest_channel.")
+        raise Mismatch(f"tone_channels is {value_text(value)}, but it should be {expected}. Check mel_filters, log_mel and loudest_channel.")
 
 
 def check_sound1(checker: Checker) -> None:

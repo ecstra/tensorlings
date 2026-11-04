@@ -1,5 +1,6 @@
 """95_time_series, a series read in patches: patches as tokens as in PatchTST, each window normalized on its own and
-restored after as in RevIN, and the patched transformer against a linear forecaster, on the CDC's weekly flu table."""
+restored after as in RevIN, and PatchTST's two choices, patches and columns apart, each tested against its other way,
+on the CDC's weekly flu table."""
 
 from __future__ import annotations
 
@@ -39,9 +40,9 @@ TIME_SERIES = Chapter(
         A time series is one reading after another at a steady pace. This
         chapter cuts a series into patches and reads each patch as a token,
         normalizes every window on its own and restores the forecast after,
-        and sets the patched transformer against a linear forecaster. The
-        data is the CDC's weekly count of doctor visits for flu-like illness
-        in the US, from 2002 to 2020.
+        and tests PatchTST's two choices, patches and columns kept apart,
+        each against its other way. The data is the CDC's weekly count of
+        doctor visits for flu-like illness in the US, from 2002 to 2020.
 
         ## Further reading
 
@@ -322,9 +323,9 @@ SERIES1_LESSON = prose(
     two years of history. Section 6 read sequences one step at a time. A
     transformer could take each week as a token, as gpt3 took characters.
 
-    One reading says little alone. A patch of readings holds a shape, a rise
-    or a peak, as a word holds letters. Nie and colleagues cut the series
-    into patches and make each patch a token, their **PatchTST**.
+    One reading says little alone. A patch of readings holds a shape, such
+    as a rise or a peak. Nie and colleagues cut the series into patches and
+    make each patch a token, their **PatchTST**.
 
     ```python
     torch.arange(6.0).unsqueeze(0).unfold(1, 3, 2)    # tensor([[[0., 1., 2.], [2., 3., 4.]]])
@@ -888,8 +889,11 @@ SERIES3_LESSON = prose(
     transformer blocks. The blocks' outputs are flattened into one long
     vector, and a Linear reads the forecast off it. Then the level goes back.
 
-    The settings are PatchTST's own for this table. Tokens have size 16 with
-    4 heads and dropout of 0.3, and Adam trains at a rate of 0.0025.
+    The sizes are PatchTST's own for this table. Tokens have size 16 with 4
+    heads, and Adam trains at a rate of 0.0025. Dropout is 0.3, which
+    `nn.TransformerEncoderLayer` also applies to the attention weights.
+    PatchTST leaves those alone, and normalizes with BatchNorm in place of
+    LayerNorm.
 
     Zeng and colleagues found a one layer linear model beating the time
     series transformers built before PatchTST. Nie and colleagues answered
@@ -911,9 +915,9 @@ SERIES3_LESSON = prose(
 
     Mixing the columns raises the error by 58% at 24 weeks, on all 5 seeds,
     and by 29% at 36 weeks. At 48 and 60 weeks the two land within 4% of
-    each other. The paper also finds mixing worse on this table, and traces
-    it to overfitting. A mixed model's test error starts rising after a few
-    epochs, while a model with its columns apart keeps improving.
+    each other. The paper also finds mixing worse on this table, and shows
+    why on its Weather table. There a mixed model's test error starts rising
+    after a few epochs, while a model with its columns apart keeps improving.
 
     Patches land within 3% of single weeks, with 42 tokens in place of 105.
     Attention compares every token with every other, so a head scores 1,764
@@ -1072,6 +1076,23 @@ def check_patch_forecaster(found: type) -> None:
             expected=expected,
         )
 
+        # Eval mode turns dropout off, so it can't see a dropout left out or moved. In training mode the same seed
+        # before each call gives the same dropout masks only when self.dropout sits where the reference has it.
+        module.train()
+        reference.train()
+
+        with torch.no_grad():
+            torch.manual_seed(seed)
+            actual = module(series)
+            torch.manual_seed(seed)
+            expected = reference(series)
+
+        if not torch.allclose(actual, expected, atol=1e-5):
+            raise Mismatch(
+                f"{call} matches in eval mode but not in training mode, with the same seed before each call. Apply "
+                "self.dropout to the patch tokens from self.embed, before self.blocks.",
+            )
+
 
 class ShiftModel(nn.Module):
     """A stand in model whose forecast is each series' last reading plus a learned step, repeated over the horizon."""
@@ -1143,7 +1164,7 @@ def check_series3(checker: Checker) -> None:
 SERIES3 = Exercise(
     name="series3",
     chapter=TIME_SERIES,
-    title="PatchTST against a Linear",
+    title="PatchTST's two choices",
     lesson=SERIES3_LESSON,
     source=SERIES3_SOURCE,
     solution=SERIES3_SOLUTION,

@@ -898,10 +898,11 @@ CLIP3_LESSON = prose(
     them sit closer, and a signal lands near the parts it shows.
 
     The temperature decides how sharp each row's softmax can get. A cosine
-    is at most 1. So at a temperature of 1, the right description out of 96
-    gets at most `e**2 / (e**2 + 95)`, about 0.072. That holds even when
-    every rival scores -1. `right_share` measures the share each right pair
-    really gets, on a batch of one signal for each seen description.
+    lies between -1 and 1. At a temperature of 1, the right description out
+    of 96 does best with a cosine of 1 while all 95 rivals score -1. Even
+    then it gets `math.exp(1) / (math.exp(1) + 95 * math.exp(-1))`, about
+    0.072. `right_share` measures the share each right pair really gets, on
+    a batch of one signal for each seen description.
 
     ```python
     torch.softmax(torch.eye(3) * 10, dim=1).diagonal()    # tensor([0.9999, 0.9999, 0.9999])
@@ -925,21 +926,22 @@ CLIP3_LESSON = prose(
     Learning it lands with the best fixed values, with no training run for
     each value tried.
 
-    The batch size decides how many rivals each pair meets per step. Here
-    every batch size trains for the same 120 steps.
+    The batch size decides how many rivals each pair meets per step. A
+    bigger batch also sees more pairs. To change only the rivals, each run
+    below takes the same 120 steps on the same batches of 256 pairs. Each
+    batch is cut into groups, and the loss compares a pair only with the
+    others in its group.
 
-    | Pairs per batch | Unseen named right after 120 steps |
+    | Pairs per group | Unseen named right after 120 steps |
     |---|---|
-    | 4 | 2.7% to 10.6% |
-    | 16 | 13.4% to 21.8% |
-    | 64 | 84.1% to 94.7% |
+    | 4 | 18.9% to 40.5% |
+    | 16 | 84.0% to 90.5% |
+    | 64 | 90.4% to 98.9% |
     | 256 | 92.7% to 99.4% |
 
-    With the steps fixed, a bigger batch also sees more pairs. Given the
-    same 30,720 pairs instead, a batch of 16 takes 1,920 steps and names
-    98.9% to 100%, against 92.7% to 99.4% for 256. A batch of 4 reaches
-    61.5% to 67.5%, since each pair meets only 3 rivals a step. CLIP's
-    batches held 32,768 pairs.
+    More rivals name more signals right, on every seed. Rivals matter most
+    early in training, as SimCLR's batch size figure shows. After 480 steps
+    all four land at 92.6% to 100%. CLIP's batches held 32,768 pairs.
     """,
 )
 
@@ -1193,21 +1195,54 @@ def measure_temperatures(seeds: range = range(3)) -> dict[str, list[float]]:
     return results
 
 
-def measure_batches(
+def train_rivals(
+    steps: int,
+    batch: int,
+    group: int,
+    seed: int,
+) -> tuple[nn.Module, nn.Module]:
+    """train_clip with a learned temperature, but with each batch cut into groups of `group` pairs and clip_loss taken
+    within each group, so a pair meets only the others in its group as rivals while the pairs and steps stay the same."""
+    torch.manual_seed(seed)
+    signal_encoder = REFERENCE["SignalEncoder"]()
+    text_encoder = REFERENCE["TextEncoder"]()
+    log_scale = nn.Parameter(torch.tensor(math.log(1 / 0.07)))
+    optimizer = torch.optim.Adam([*signal_encoder.parameters(), *text_encoder.parameters(), log_scale], lr=3e-3)
+    generator = torch.Generator().manual_seed(seed)
+    groups = batch // group
+    targets = torch.arange(group).repeat(groups)
+
+    for _ in range(steps):
+        signals, ids, _ = REFERENCE["make_pairs"](REFERENCE["SEEN"], batch, generator)
+        scale = log_scale.exp().clamp(max=100.0)
+        signal_features = F.normalize(signal_encoder(signals), dim=1).reshape(groups, group, -1)
+        text_features = F.normalize(text_encoder(ids), dim=1).reshape(groups, group, -1)
+        scores = scale * signal_features @ text_features.transpose(1, 2)
+        rows = F.cross_entropy(scores.reshape(-1, group), targets)
+        columns = F.cross_entropy(scores.transpose(1, 2).reshape(-1, group), targets)
+        loss = (rows + columns) / 2
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+    return signal_encoder, text_encoder
+
+
+def measure_rivals(
     steps: int = 120,
-    pairs: int = 0,
     seeds: range = range(3),
 ) -> dict[int, list[float]]:
-    """clip3's batch table: clip2's training at four batch sizes, naming UNSEEN. Each size takes the same number of
-    steps, or, when pairs is given, as many steps as it needs to see that many pairs."""
+    """clip3's rivals table: every run takes the same steps on the same batches of 256 pairs, with the loss taken
+    within groups of 4, 16, 64 and 256 pairs, naming UNSEEN. Group 256 is train_clip itself. steps=480 gives the
+    lesson's longer run."""
     results: dict[int, list[float]] = {}
 
     with pinned_threads():
-        for batch in (4, 16, 64, 256):
+        for group in (4, 16, 64, 256):
             for seed in seeds:
-                signal_encoder, text_encoder, _ = REFERENCE["train_clip"](pairs // batch if pairs else steps, batch, None, seed)
+                signal_encoder, text_encoder = train_rivals(steps, 256, group, seed)
                 generator = torch.Generator().manual_seed(500 + seed)
-                results.setdefault(batch, []).append(REFERENCE["naming_accuracy"](signal_encoder, text_encoder, REFERENCE["UNSEEN"], generator))
+                results.setdefault(group, []).append(REFERENCE["naming_accuracy"](signal_encoder, text_encoder, REFERENCE["UNSEEN"], generator))
 
     return results
 

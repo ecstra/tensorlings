@@ -561,6 +561,8 @@ def check_tokens1(checker: Checker) -> None:
         inputs=(
             (small_tensor(1104, 6, 3), small_tensor(1105, 2, 3), small_tensor(1106, 3, 3), 3),
             (small_tensor(1107, 8, 2), small_tensor(1108, 4, 2), small_tensor(1109, 2, 2), 2),
+            # Tables with more rows than the grid uses, as in the file, so the width must come from `width`.
+            (small_tensor(1112, 6, 3), small_tensor(1113, 4, 3), small_tensor(1114, 4, 3), 3),
         ),
         reference=REFERENCE["with_grid_positions"],
         expect=expect_tensor,

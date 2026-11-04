@@ -1083,6 +1083,9 @@ TABLE3_SOURCE = source_file(
     first = torch.tensor([[[1.0], [2.0]]])[:, 0]                  # tensor([[1.]]), the first token of each row
     holes = torch.tensor([[1.0, float("nan")]]).isnan()           # tensor([[False,  True]])
     zeroed = torch.tensor([[1.0, float("nan")]]).nan_to_num()     # tensor([[1., 0.]])
+    mask = torch.cat([torch.zeros(1, 1, dtype=torch.bool), holes], dim=1)      # tensor([[False, False,  True]])
+    layer = nn.TransformerEncoderLayer(4, 2, 8, batch_first=True)
+    shape = layer(torch.ones(1, 3, 4), src_key_padding_mask=mask).shape      # torch.Size([1, 3, 4])
 
 
     # TODO: Finish forward. A nan in numbers is a missing number. Note where
@@ -1176,6 +1179,9 @@ TABLE3_SOLUTION = source_file(
     first = torch.tensor([[[1.0], [2.0]]])[:, 0]
     holes = torch.tensor([[1.0, float("nan")]]).isnan()
     zeroed = torch.tensor([[1.0, float("nan")]]).nan_to_num()
+    mask = torch.cat([torch.zeros(1, 1, dtype=torch.bool), holes], dim=1)
+    layer = nn.TransformerEncoderLayer(4, 2, 8, batch_first=True)
+    shape = layer(torch.ones(1, 3, 4), src_key_padding_mask=mask).shape
 
 '''
     + indented(TRANSFORMER_INIT)
@@ -1217,6 +1223,15 @@ def check_column_transformer(found: type) -> None:
 
         if holes:
             call += f", with nan at (row, column) {', '.join(map(str, holes))}"
+
+        # With no nan in the numbers, a nan can only come from the mask. In eval mode PyTorch gives nan at a hidden
+        # token's own place, so a mask that hides the class token makes the head read nan.
+        if isinstance(actual, Tensor) and actual.isnan().any() and not holes:
+            raise Mismatch(
+                f"{call} gives nan with no number missing, so the mask must be hiding the class token, whose output "
+                "the head reads. It should be True only at the tokens of missing numbers, and False at the class and "
+                "place tokens.",
+            )
 
         if isinstance(actual, Tensor) and actual.isnan().any():
             raise Mismatch(
