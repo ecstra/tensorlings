@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import textwrap
 
 import torch
@@ -23,6 +24,7 @@ from ..engine import (
 from ..text import prose, source_file
 from .linear_layers import expect_module
 from .rnn import vote_sequences
+from .tensors import pinned_threads
 
 BPTT = Chapter(
     folder="40_bptt",
@@ -116,9 +118,10 @@ BPTT1_LESSON = prose(
     | 0.9 | 0.349 | 0.005 |
     | 1.1 | 2.59 | 117 |
 
-    A bigger `w` doesn't make a tanh RNN explode for long. Its states saturate
-    near -1 or 1, `1 - h ** 2` falls towards 0, and the factors shrink. Here
-    is `state_gradients` below on 50 random inputs, with `u` at 0.5.
+    With one number for a state, a bigger `w` doesn't explode for long. The
+    state saturates near -1 or 1, `1 - h ** 2` falls towards 0, and the
+    factors shrink. Here is `state_gradients` below on 50 random inputs, with
+    `u` at 0.5.
 
     | w | 1 step back | 10 steps back | 50 steps back |
     |---|---|---|---|
@@ -128,8 +131,9 @@ BPTT1_LESSON = prose(
     | 3 | 0.036 | 1e-14 | 0 |
 
     Only with inputs of 0, where every state stays at 0, does a `w` of 1.1
-    give the 2.59 and 117 of the first table. So a tanh RNN's usual trouble is
-    a gradient that fades, and the far past barely trains.
+    give the 2.59 and 117 of the first table. So this one number RNN's
+    gradient fades, and its far past barely trains. bptt3 shows a vector
+    state, where a large `W_hh` makes the gradient explode instead.
     """,
 )
 
@@ -372,8 +376,10 @@ BPTT2_LESSON = prose(
     Chunks of 2 never learn it, since no gradient ever spans the 3 steps it
     needs. Their error stays near 1, what always guessing 0 gives. Chunks of 4
     to 20 learn it well. The whole sequence learns it worst after chunks of 2,
-    with only 10 updates in all. So a chunk must be longer than the span to
-    learn, and short enough to give many updates.
+    with only 10 updates in all. Over five seeds, chunks of 4 to 20 stayed
+    below 0.0002, while chunks of 2 and the whole sequence stayed at 0.48 or
+    more. So a chunk must be longer than the span to learn, and short enough
+    to give many updates.
     """,
 )
 
@@ -651,26 +657,28 @@ BPTT3_LESSON = prose(
     """
     bptt1 multiplied factors on a one number state. A real RNN has a vector
     state and a matrix `W_hh`, and the same thing happens. Here is
-    `gradient_by_distance` below on an `nn.RNN` with a state of 32 and
+    `gradient_by_distance` below on a tanh `nn.RNN` with a state of 32 and
     `batch_first=True`, over 16 sequences of 60 random steps.
 
     | Steps back | 0 | 1 | 5 | 10 | 20 | 30 | 50 |
     |---|---|---|---|---|---|---|---|
-    | Gradient norm | 1.03 | 1.42 | 0.045 | 0.020 | 0.0001 | 8e-7 | 3e-11 |
+    | PyTorch's start | 1.04 | 1.41 | 0.046 | 0.021 | 0.0001 | 8e-7 | 3e-11 |
+    | `W_hh` times 5 | 0.80 | 1.44 | 4.5 | 24 | 377 | 5,650 | 559,000 |
 
-    This fading is the **vanishing gradient**. A step 50 back gets a gradient
-    30 billion times weaker than the last step's, so the model can't learn
-    that it matters. A bigger learning rate doesn't help, since the signal
-    never arrives. Gates, in 41_gated_rnns, are the fix.
+    From PyTorch's start the gradient fades, the **vanishing gradient**. A
+    step 50 back gets a gradient 30 billion times weaker than the last step's,
+    so the model can't learn that it matters. A bigger learning rate doesn't
+    help, since the signal never arrives. Gates, in 41_gated_rnns, are the fix.
 
-    The opposite is the **exploding gradient**. ReLU doesn't saturate, so a
-    ReLU RNN's factors above 1 multiply freely. Le, Jaitly and Hinton started
-    `W_hh` at the identity matrix, so the state is carried forward unchanged.
-    A little above the identity, the state and its gradient grow at every
-    step instead.
+    The second row is the opposite, the **exploding gradient**. With a vector
+    state, a large `W_hh` multiplies the gradient up faster than the tanh
+    shrinks it. A ReLU never shrinks it at all.
 
-    Here are such RNNs, with a state of 16, trained on votes of 51 steps. Each
-    ran 300 steps of plain SGD at a rate of 0.01.
+    Le, Jaitly and Hinton started a ReLU RNN's `W_hh` at the **identity
+    matrix**, 1 on the diagonal and 0 elsewhere. Then `h @ W_hh.T` is `h`, so
+    the state carries forward unchanged. A little above the identity, the
+    state and its gradient grow at every step. Here are such RNNs, with a
+    state of 16, trained on votes of 51 steps by 300 steps of SGD at 0.01.
 
     | Start | Clipping | Largest gradient norm | Accuracy |
     |---|---|---|---|
@@ -678,23 +686,30 @@ BPTT3_LESSON = prose(
     | the identity | at 1.0 | 94 | 81.6% |
     | 1.05 times the identity | none | 141 million | 50.6% |
     | 1.05 times the identity | at 1.0 | 590 | 79.5% |
-    | PyTorch's default, ReLU | at 1.0 | 0.3 | 48.8% |
-    | PyTorch's default, tanh | at 1.0 | 0.3 | 54.2% |
-
-    From PyTorch's default start the gradient fades, as in the first table,
-    and the reader stays near a coin flip. Over three seeds the clipped
-    identity start reached 80.3% to 84.8%, and the default starts 48.8% to
-    56.4%.
 
     Unclipped, one huge gradient throws the weights far off in a single step.
-    At 1.05 the norm reached 141 million, and the reader ended at 50.6%, a
-    coin flip. Clipped at 1.0, the gradients still spike, since the table's
-    norms are from before clipping. But no step moves the weights by more than
-    0.01 in all, and both clipped runs learn.
+    Clipped at 1.0, the norms before clipping still spike, but no step moves
+    the weights by more than 0.01 in all. Over five seeds the clipped runs
+    reached 79.0% to 84.9%, and the unclipped ones 49.5% to 61.8%.
 
     Clipping, from clipping1, caps the size of a step and keeps its direction.
-    Pascanu, Mikolov and Bengio proposed it for exactly this, RNNs whose
-    gradients explode. It does nothing for a gradient that fades.
+    Pascanu, Mikolov and Bengio proposed it for RNNs whose gradients explode,
+    and the RNNs in their paper were tanh and sigmoid ones. It does nothing
+    for a gradient that fades.
+
+    The identity start also carries a value across a long gap. Each step holds
+    a value from -1 to 1 and a mark. One of the first 5 steps is marked, and
+    the RNN gives back its value after 40 steps. Each start trained for 1,500
+    steps of Adam at 0.01, clipped at 1.0, on five seeds.
+
+    | Start | Mean squared error |
+    |---|---|
+    | PyTorch's, tanh | 0.333 to 0.340 |
+    | PyTorch's, ReLU | 0.333 to 0.334 |
+    | the identity, ReLU | 0.003 to 0.026 |
+
+    Guessing 0 scores 0.333, so from PyTorch's start no seed learns it. From
+    the identity, every seed does. lstm2 comes back to this task.
     """,
 )
 
@@ -751,6 +766,10 @@ BPTT3_SOURCE = source_file(
         x: Tensor,
     ) -> Tensor:
         ...
+
+
+    eye = torch.eye(3)    # tensor([[1., 0., 0.], [0., 1., 0.], [0., 0., 1.]]), the identity matrix
+    size = nn.RNN(1, 3).hidden_size    # 3, the size of its state
 
 
     # TODO: Set rnn's weight_hh_l0 to scale times the identity matrix, in place,
@@ -812,6 +831,10 @@ BPTT3_SOLUTION = source_file(
         last.sum().backward()
 
         return x.grad.norm(dim=(0, 2)).flip(0)
+
+
+    eye = torch.eye(3)
+    size = nn.RNN(1, 3).hidden_size
 
 
     def identity_start_(
@@ -943,11 +966,12 @@ def check_train_votes_steps(found: object) -> None:
         expected = reference_train_votes(reference, 5, max_norm)
         call = f"train_votes for 5 steps with max_norm {max_norm}"
 
+        # The norm is about 2,200, where float32 rounding alone moves the 7th digit between ways of computing it.
         expect_close(
             call=call,
             actual=largest,
             expected=expected,
-            tolerance=1e-4,
+            tolerance=1e-5 * expected,
         )
         expect_tensor(
             call=f"the output layer's weights after {call}",
@@ -1023,37 +1047,138 @@ BPTT3 = Exercise(
 # ---------------------------------------------------------------------------
 
 
-class ReferenceTanhReader(nn.Module):
-    """The ReLU reader with nn.RNN's default tanh, for bptt3's comparison."""
-
-    def __init__(self, hidden: int) -> None:
-        super().__init__()
-        self.rnn = nn.RNN(1, hidden, batch_first=True)
-        self.out = nn.Linear(hidden, 1)
-
-    def forward(self, x: Tensor) -> Tensor:
-        return self.out(self.rnn(x.unsqueeze(2))[1][0]).squeeze(1)
-
-
-def measure_starts(seeds: range = range(3)) -> dict[tuple[int, str], tuple[float, float]]:
-    """bptt3's start comparison, clipped at 1.0: for each seed and start, the largest gradient norm before
-    clipping and the accuracy on 2,000 new votes of 51. Seed 0 is the table's own run."""
-    threads = torch.get_num_threads()
-    torch.set_num_threads(4)
+def measure_state_gradients() -> dict[float, tuple[float, float, float]]:
+    """bptt1's second table: state_gradients on 50 inputs drawn with seed 0, u at 0.5, for each w, the gradient 1,
+    10 and 50 steps back."""
+    xs = scalar_inputs(0, 50)
     results = {}
 
-    try:
-        for seed in seeds:
-            for start in ("identity", "default ReLU", "default tanh"):
-                torch.manual_seed(seed)
-                model = ReferenceTanhReader(16) if start == "default tanh" else ReferenceReluReader(16)
-
-                if start == "identity":
-                    reference_identity_start_(model.rnn, 1.0)
-
-                largest = reference_train_votes(model, 300, 1.0)
-                results[(seed, start)] = (largest, votes_of_51_accuracy(model))
-    finally:
-        torch.set_num_threads(threads)
+    for w in (0.5, 0.9, 1.5, 3.0):
+        gradients = reference_state_gradients(xs, torch.tensor(w), torch.tensor(0.5))
+        results[w] = (gradients[0].item(), gradients[9].item(), gradients[49].item())
 
     return results
+
+
+def measure_chunks(seeds: range = range(5)) -> dict[tuple[int, int], float]:
+    """bptt2's table, keyed by seed and chunk length: the mean squared error after 10 passes of truncated backprop
+    with Adam at 0.003, an RNN of 32 and 32 sequences of 1,000 steps that give back each input 3 steps later. Seed
+    0 is the table's run. Each seed takes about 5 seconds."""
+    results = {}
+
+    with pinned_threads():
+        for seed in seeds:
+            x, y = delayed_sequences(32, 1000, 3, torch.Generator().manual_seed(seed + 1))
+
+            for length in (2, 4, 10, 20, 100, 1000):
+                torch.manual_seed(seed)
+                model = ReferencePredictor(32)
+                optimizer = torch.optim.Adam(model.parameters(), lr=0.003)
+
+                for _ in range(10):
+                    reference_train_truncated(model, optimizer, x, y, length)
+
+                results[(seed, length)] = delay_error(model, 3)
+
+    return results
+
+
+GRADIENT_DISTANCES = (0, 1, 5, 10, 20, 30, 50)
+
+
+def measure_gradient_distances() -> dict[str, list[float]]:
+    """bptt3's first table: gradient_by_distance on a tanh nn.RNN(1, 32) made after torch.manual_seed(0), over 16
+    sequences of 60 random steps, from PyTorch's start and with its W_hh times 5."""
+    torch.manual_seed(0)
+    rnn = nn.RNN(1, 32, batch_first=True)
+    x = torch.randn(16, 60, 1)
+    larger = copy.deepcopy(rnn)
+
+    with torch.no_grad():
+        larger.weight_hh_l0.mul_(5)
+
+    return {
+        name: [reference_gradient_by_distance(layer, x)[steps].item() for steps in GRADIENT_DISTANCES]
+        for name, layer in (("pytorch", rnn), ("times 5", larger))
+    }
+
+
+def measure_starts(seeds: range = range(5)) -> dict[tuple[int, float, float | None], tuple[float, float]]:
+    """bptt3's clipping table, keyed by seed, the scale of the identity start and the clipping cap: the largest
+    gradient norm before clipping and the accuracy on 2,000 new votes of 51, after 300 steps of SGD at 0.01. Seed 0
+    is the table's run."""
+    results = {}
+
+    with pinned_threads():
+        for seed in seeds:
+            for scale in (1.0, 1.05):
+                for max_norm in (None, 1.0):
+                    torch.manual_seed(seed)
+                    model = ReferenceReluReader(16)
+                    reference_identity_start_(model.rnn, scale)
+                    largest = reference_train_votes(model, 300, max_norm)
+                    results[(seed, scale, max_norm)] = (largest, votes_of_51_accuracy(model))
+
+    return results
+
+
+def marked_values(
+    count: int,
+    steps: int,
+    generator: torch.Generator,
+) -> tuple[Tensor, Tensor]:
+    """Each step holds a value from -1 to 1 and a mark, one of the first 5 steps is marked, and the answer is its
+    value. bptt3 and lstm2 train on it."""
+    values = 2 * torch.rand(count, steps, generator=generator) - 1
+    where = torch.randint(0, 5, (count,), generator=generator)
+    rows = torch.arange(count)
+    marks = torch.zeros(count, steps)
+    marks[rows, where] = 1.0
+
+    return torch.stack([values, marks], dim=2), values[rows, where]
+
+
+class MarkedReader(nn.Module):
+    """An RNN of 16 that reads (value, mark) steps and guesses the marked value from its last state."""
+
+    def __init__(self, start: str) -> None:
+        super().__init__()
+        self.rnn = nn.RNN(2, 16, batch_first=True, nonlinearity="tanh" if start == "tanh" else "relu")
+        self.head = nn.Linear(16, 1)
+
+        if start == "identity":
+            reference_identity_start_(self.rnn, 1.0)
+
+    def forward(self, x: Tensor) -> Tensor:
+        return self.head(self.rnn(x)[1][0]).squeeze(1)
+
+
+def marked_error(
+    start: str,
+    seed: int,
+) -> float:
+    """One run of bptt3's long gap: 1,500 steps of Adam at 0.01 on batches of 64 sequences of 40, clipped at 1.0,
+    then the mean squared error on 1,000 new sequences. About 4 seconds on 4 threads."""
+    torch.manual_seed(seed)
+    model = MarkedReader(start)
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
+    generator = torch.Generator().manual_seed(seed + 1)
+
+    for _ in range(1500):
+        x, y = marked_values(64, 40, generator)
+        loss = F.mse_loss(model(x), y)
+        optimizer.zero_grad()
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+        optimizer.step()
+
+    x, y = marked_values(1000, 40, torch.Generator().manual_seed(77))
+
+    with torch.no_grad():
+        return F.mse_loss(model(x), y).item()
+
+
+def measure_marked(seeds: range = range(5)) -> dict[tuple[str, int], float]:
+    """bptt3's long gap table, keyed by start, tanh or relu from PyTorch's start or the identity start, and seed."""
+    with pinned_threads():
+        return {(start, seed): marked_error(start, seed) for start in ("tanh", "relu", "identity") for seed in seeds}

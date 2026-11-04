@@ -20,6 +20,7 @@ from ..engine import (
 )
 from ..text import prose, source_file
 from .linear_layers import expect_module
+from .tensors import pinned_threads
 
 RNN = Chapter(
     folder="39_rnn",
@@ -31,7 +32,8 @@ RNN = Chapter(
         A recurrent network reads a sequence one step at a time and carries a
         summary of the past, its hidden state. This chapter builds one step by
         hand, matches `nn.RNN`, runs batches of sequences, and shows a task
-        where the hidden state beats any fixed window.
+        where the hidden state beats a fixed window once the sequence outgrows
+        it.
 
         ## Further reading
 
@@ -575,13 +577,21 @@ RNN3_LESSON = prose(
     | RNN with a hidden state of 16 | 98.9% |
 
     The window of 21 wins, but only because it was built for exactly 21 steps.
-    Given a vote of 41 it can still only read the last 21, and it scores
-    76.3%. To read 41 it needs a bigger model, trained again.
+    Given a longer vote it can still only read the last 21. To read more it
+    needs a bigger model, trained again.
 
-    The RNN has the same 321 parameters for any length. Trained on 21 steps, it
-    scored 93.0% on votes of 41 and 77.2% on votes of 101, lengths it never
-    saw. It learned to keep a running count in its hidden state, which carries
-    what matters forward whatever the length.
+    The RNN has the same 321 parameters for any length. Here are both, trained
+    on votes of 21, then given longer votes they never saw.
+
+    | Model | Votes of 21 | Votes of 41 | Votes of 101 |
+    |---|---|---|---|
+    | MLP on the last 21 steps | 100% | 76.3% | 65.2% |
+    | RNN with a hidden state of 16 | 98.9% | 93.0% | 77.2% |
+
+    The window's scores match the best any rule on the last 21 votes can
+    reach. The RNN beats them at every longer length, on each of five seeds.
+    It learned a running count in its hidden state, which reaches back past
+    the window's 21 steps.
 
     40_bptt shows what training through many steps does to the gradient, and
     41_gated_rnns how gates hold a value longer still.
@@ -713,10 +723,11 @@ def seeded_model(
 def train_on_votes(
     model: nn.Module,
     steps: int,
+    data_seed: int = 1,
 ) -> nn.Module:
     """The lesson's runs are 500 steps of this, and the check runs 300."""
     optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
-    generator = torch.Generator().manual_seed(1)
+    generator = torch.Generator().manual_seed(data_seed)
 
     for _ in range(steps):
         x, y = vote_sequences(64, 21, generator)
@@ -816,3 +827,33 @@ RNN3 = Exercise(
     time_limit=30,
     imports_first=OPTIMIZER_IMPORTS,
 )
+
+
+# ---------------------------------------------------------------------------
+# The runs behind the lessons
+# ---------------------------------------------------------------------------
+
+
+def measure_votes(seeds: range = range(5)) -> dict[tuple[str, int, int], float]:
+    """rnn3's two tables, keyed by model, vote length and seed: the accuracy on 2,000 new votes after 500 Adam
+    steps on votes of 21. Seed s starts the model with torch.manual_seed(s) and draws its training votes with seed
+    s + 1, so seed 0 is train_on_votes's own run and the tables' run. The windows are MLPs of 16 hidden units. All
+    seeds take about 20 seconds on 4 threads."""
+    results = {}
+
+    with pinned_threads():
+        for seed in seeds:
+            for window in (5, 11, 21):
+                torch.manual_seed(seed)
+                model = train_on_votes(ReferenceWindowModel(window, 16), 500, seed + 1)
+
+                for length in (21, 41, 101):
+                    results[(f"window {window}", length, seed)] = vote_accuracy(model, length)
+
+            torch.manual_seed(seed)
+            reader = train_on_votes(ReferenceReader(16), 500, seed + 1)
+
+            for length in (21, 41, 101):
+                results[("rnn", length, seed)] = vote_accuracy(reader, length)
+
+    return results

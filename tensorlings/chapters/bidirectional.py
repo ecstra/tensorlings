@@ -19,6 +19,7 @@ from ..engine import (
     small_tensor,
 )
 from ..text import prose, source_file
+from .tensors import pinned_threads
 
 BIDIRECTIONAL = Chapter(
     folder="42_bidirectional",
@@ -432,12 +433,14 @@ BIDIR2_LESSON = prose(
 
     Tagging nothing as a peak already gets 64.9%. Reading forward only, a
     step can't see whether the next number is smaller, so it guesses from its
-    own size.
+    own size. Over five seeds the two stayed at 86.2% to 86.5% and 98.2% to
+    98.5%.
 
     Generating writes a sequence one step at a time, each new step from the
     steps before it. The future doesn't exist yet, so a model that needs it
-    can't run. Worse, it looks better in training. Train each model to give
-    the next value of a noisy wave, the target being the input moved one step.
+    can't run. Worse, it looks better in training. Train each model for 500
+    steps to give the next value of a noisy wave, the target being the input
+    moved one step.
 
     ```python
     x = torch.tensor([[1.0, 2.0, 3.0, 4.0]])
@@ -452,7 +455,8 @@ BIDIR2_LESSON = prose(
     The backward RNN reads the very value it is asked to give, so its error
     in training is 8 times lower. When it writes its own steps that value
     isn't there yet, and it does worse than a flat line at 0, which scores
-    0.500.
+    0.500. Over five seeds it scored 0.526 to 0.591 on its own steps, against
+    0.034 to 0.052 for the forward reader.
 
     So read both ways when the whole input exists before any output is
     needed. Tagging is one case, and so is an encoder that reads a whole
@@ -624,6 +628,25 @@ def check_generate(found: object) -> None:
     )
 
 
+def expect_float_tags(
+    call: str,
+    actual: object,
+    expected: Tensor,
+) -> None:
+    """Tags are training targets, and binary_cross_entropy_with_logits takes floats, not True and False."""
+    if isinstance(actual, Tensor) and not actual.is_floating_point():
+        raise Mismatch(
+            f"{call} holds entries of type {actual.dtype}, but it should hold floats, 1.0 for a peak and 0.0 "
+            "elsewhere. .float() turns True and False into them.",
+        )
+
+    expect_tensor(
+        call=call,
+        actual=actual,
+        expected=expected,
+    )
+
+
 def check_bidir2(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
@@ -635,7 +658,7 @@ def check_bidir2(checker: Checker) -> None:
             (small_tensor(474, 3, 7) + torch.linspace(0.0, 0.1, 7),),
         ),
         reference=reference_peak_tags,
-        expect=expect_tensor,
+        expect=expect_float_tags,
     )
     checker.test_method(
         class_name="Tagger",
@@ -677,3 +700,43 @@ BIDIR2 = Exercise(
     time_limit=30,
     imports_first=OPTIMIZER_IMPORTS,
 )
+
+
+# ---------------------------------------------------------------------------
+# The runs behind the lessons
+# ---------------------------------------------------------------------------
+
+
+def measure_reading(seeds: range = range(5)) -> dict[tuple[str, bool, int], float | tuple[float, float]]:
+    """bidir2's two tables, keyed by table, whether the GRU of 16 reads both ways, and seed. Each model trains
+    from torch.manual_seed(seed) on data drawn with seed + 1. "tagging" holds the share of steps tagged right after
+    300 Adam steps, and "leak" the error on the next value in training and on 20 written steps, after 500. Seed 0
+    is the tables' run."""
+    results = {}
+
+    with pinned_threads():
+        for seed in seeds:
+            for bidirectional in (False, True):
+                results[("tagging", bidirectional, seed)] = tagging_accuracy(
+                    model=seeded_tagger(ReferenceTagger, 16, bidirectional, seed),
+                    seed=seed,
+                    train_steps=300,
+                )
+                results[("leak", bidirectional, seed)] = leak_errors(
+                    model=seeded_tagger(ReferenceTagger, 16, bidirectional, seed),
+                    seed=seed,
+                    train_steps=500,
+                )
+
+    return results
+
+
+def measure_baselines() -> dict[str, float]:
+    """bidir2's two baselines on its test data, tagging no step as a peak and writing a flat line at 0."""
+    x = torch.randn(1000, 20, generator=torch.Generator().manual_seed(77))
+    _, clean = noisy_waves(500, 40, torch.Generator().manual_seed(77))
+
+    return {
+        "tag nothing": (reference_peak_tags(x) == 0).float().mean().item(),
+        "flat line": F.mse_loss(torch.zeros_like(clean[:, 20:]), clean[:, 20:]).item(),
+    }
