@@ -251,12 +251,12 @@ The project follows Zaremba and Sutskever's learning to execute and the Keras ad
 | 52_positions | position1 | attention alone ignores order, shown by shuffling the input |
 | | position2 | learned and sinusoidal positions |
 | | rope1 | RoPE from its paper, pairs of features rotated by position |
-| | rope2 | why, RoPE scores that depend only on the distance between positions |
+| | rope2 | why, RoPE scores that depend only on the distance between positions, and a trained reader that works the same far past where it trained |
 | 53_transformer_block | block1 | the block, pre norm attention and a pre norm MLP, each with a residual, mixing across positions then within each |
 | | block2 | the GPT-2 block with LayerNorm and a GELU MLP four times as wide |
-| | block3 | why each part, removing one at a time on Shakespeare's characters at two rates |
+| | block3 | why each part, removing one at a time on Shakespeare's characters, and the norms measured with each stack at its best rate at 6 and 12 blocks |
 | | induction1 | why stacking, copying the token that followed an earlier match, which one attention layer can't do and a shift then attention can |
-| 54_model_types | encoder1 | encoder only, decoder only and encoder decoder models, and the masks that set them apart |
+| 54_model_types | encoder1 | encoder only, decoder only and encoder decoder models, the masks that set them apart, and a tagging task only the encoder's mask can solve |
 | | decoder1 | a decoder only language model with shifted targets, end to end |
 | 55_modern_llms | llama1 | GPT-2 to Llama, RMSNorm in place of LayerNorm and RoPE in place of learned positions |
 | | llama2 | the SwiGLU MLP from its paper, and why its width is two thirds of four times the model size |
