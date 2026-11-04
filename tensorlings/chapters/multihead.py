@@ -939,6 +939,9 @@ GQA1_LESSON = prose(
     | 64 key value heads, plain multi head | 2.5 MiB | 10 GiB |
     | 8 key value heads, as it shipped | 320 KiB | 1.25 GiB |
 
+    A KiB is 1,024 bytes, a MiB is 1,024 KiB, and a GiB is 1,024 MiB. So a
+    MiB, 1,048,576 bytes, is a little more than a MB, a million.
+
     Here is multihead3's harder test, four earlier tokens copied at once
     with an MLP after the attention. It runs with 4 query heads of 4, for
     1,000 steps over three seeds.

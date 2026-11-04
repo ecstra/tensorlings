@@ -1044,8 +1044,8 @@ FAST3_LESSON = prose(
     decimal. Memory is what quant3's `Int8Linear` saves. It turns every
     weight back into a float32 matrix before each multiply, which adds work.
 
-    quant3 said fast int8 libraries multiply the whole numbers themselves.
-    PyTorch has such a fused kernel for the CPU, `torch._weight_int8pack_mm`.
+    quant3 said fast kernels turn each whole number into a float inside the
+    multiply. PyTorch has such a fused kernel for the CPU, `torch._weight_int8pack_mm`.
     It scales each output inside the multiply, so no float32 weight is built.
     Here is one cached step of an untrained GPT, 12 blocks of size 1,024,
     after 64 tokens on 4 threads. The three took turns, over three runs.

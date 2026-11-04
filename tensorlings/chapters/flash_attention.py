@@ -621,6 +621,28 @@ def check_no_full_scores(found: object) -> None:
             )
 
 
+def check_far_apart_blocks(found: object) -> None:
+    """The first block of keys scores about 141 above the second. Measured from the second block's own largest,
+    the first block's total would have to grow by exp(141), which overflows, so only a raised largest gets through."""
+    q = torch.ones(1, 6, 2)
+    k = torch.cat([torch.full((1, 3, 2), 50.0), torch.full((1, 3, 2), -50.0)], dim=1)
+    v = torch.randn(1, 6, 2, generator=torch.Generator().manual_seed(878))
+    expected = F.scaled_dot_product_attention(q, k, v)
+    actual = found(q, k, v, 3)
+
+    if isinstance(actual, Tensor) and actual.shape == expected.shape and not torch.isfinite(actual).all():
+        raise Mismatch(
+            "tiled_attention gave nan when an early block of keys scored far above a later one. Raise largest to "
+            "torch.maximum of the old largest and the block's largest, so no exp overflows.",
+        )
+
+    expect_tensor(
+        call="tiled_attention of q of ones, with the first 3 keys scoring far above the last 3, in blocks of 3",
+        actual=actual,
+        expected=expected,
+    )
+
+
 def attention_inputs(
     seed: int,
     shape: tuple[int, ...],
@@ -652,6 +674,11 @@ def check_flash2(checker: Checker) -> None:
         ),
         reference=lambda q, k, v, block: F.scaled_dot_product_attention(q, k, v),
         expect=expect_tensor,
+    )
+    checker.test(
+        function="tiled_attention",
+        description="keeps the running largest, so scores far apart never overflow",
+        run=check_far_apart_blocks,
     )
     checker.test(
         function="tiled_attention",
@@ -826,7 +853,10 @@ def measure_attention_memory(
     kinds: tuple[str, ...] = ("written out", "1024", "128", "sdpa"),
 ) -> dict[tuple[int, str], int]:
     """The peak memory one call adds on the CPU, in bytes, for 4 heads of size 64. A kind is the softmax written
-    out, a block size for tiled_attention, or sdpa. Peak memory doesn't swing with the machine's load as time does."""
+    out, a block size for tiled_attention, or sdpa. Peak memory doesn't swing with the machine's load as time does,
+    but it needs a machine with memory to spare. ru_maxrss counts only resident pages, so under memory pressure macOS
+    compresses some of a big call's pages and the peak reads low. On a 16 GB Mac with another heavy session running,
+    the written out softmax at 8,192 steps read 1,249 to 1,941 MiB against its 2,048 MiB of scores and weights."""
     code = MEMORY_PROBE.replace("TILED_SOLUTION", TILED_SOLUTION)
     results = {}
 

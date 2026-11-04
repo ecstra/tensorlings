@@ -43,7 +43,7 @@ KV_CACHE = Chapter(
         ## Further reading
 
         - [Pope and colleagues, efficiently scaling transformer inference](https://arxiv.org/abs/2211.05102)
-        - [Karpathy, nanoGPT](https://github.com/karpathy/nanoGPT)
+        - [PyTorch, gpt-fast's KV cache, made once at full length](https://github.com/meta-pytorch/gpt-fast/blob/main/model.py)
         - [Kwon and colleagues, PagedAttention](https://arxiv.org/abs/2309.06180)
         """,
     ),
@@ -627,43 +627,38 @@ KVCACHE2_LESSON = prose(
     on 128.
 
     Here is the time to write one token after a text of each length, on this
-    Mac over three runs, with little else running. The bigger GPT is
-    untrained, 8 blocks of size 512 reading up to 1,024 tokens, since the
-    time doesn't depend on what the weights hold.
+    Mac on 4 threads over three runs. Another program kept the machine busy.
+    The bigger GPT is untrained, 8 blocks of size 512 reading up to
+    1,024 tokens, since the time doesn't depend on what the weights hold.
 
     | Model, device | Text | Without the cache | With it |
     |---|---|---|---|
-    | Course GPT, CPU | 16 | 0.50 ms | 0.25 ms |
-    | Course GPT, CPU | 128 | 1.04 ms | 0.28 ms |
-    | Bigger GPT, CPU | 128 | 9.7 ms | 2.1 ms |
-    | Bigger GPT, CPU | 1,024 | 72 to 73 ms | 3.4 to 3.6 ms |
-    | Bigger GPT, MPS | 128 | 4.0 to 4.7 ms | 2.2 ms |
-    | Bigger GPT, MPS | 1,024 | 30 to 35 ms | 3.1 ms |
+    | Course GPT, CPU | 16 | 2.9 to 4.7 ms | 1.2 to 2.1 ms |
+    | Course GPT, CPU | 128 | 5.2 to 9.4 ms | 1.1 to 2.8 ms |
+    | Bigger GPT, CPU | 128 | 52 to 93 ms | 7.1 to 12 ms |
+    | Bigger GPT, CPU | 1,024 | 268 to 434 ms | 14 to 29 ms |
+    | Bigger GPT, MPS | 1,024 | 53 to 60 ms | 8.5 to 12 ms |
 
-    The cache won on every row, by 2 to about 20 times, and its win grew
-    with the text. Without it, each step runs the model over every earlier
-    token again, so the step costs more as the text grows. With it, the step
-    over 1,024 tokens cost little more than the step over 128.
+    The cache won on every row in every run, by 1.7 to about 20 times, and
+    its win grew with the text. Without it, each step runs the model over
+    every earlier token again, so the step costs more as the text grows.
+    On the CPU, the bigger GPT's step over 1,024 tokens cost 3 to 6 times
+    its step over 128 without the cache. With it, 1.2 to 2.4 times.
 
-    The time with the cache still grew a little. Attention reads every cached
-    key, and `torch.cat` copies the whole cache each step. PyTorch's gpt-fast
+    The time with the cache still grew. Attention reads every cached key,
+    and `torch.cat` copies the whole cache each step. PyTorch's gpt-fast
     makes the cache once at its full length and writes each new key into its
     place, which saves that copy.
 
-    The cache costs memory. For the course's GPT at 128 tokens it holds 512
-    KiB, beside 3.1 MiB of weights. The bigger GPT's cache at 1,024 tokens is
-    32 MiB for one text, and a server writing for many people keeps one per
-    text. gqa1's shared key value heads shrink exactly this.
+    The cache costs memory. For the course's GPT at 128 tokens it holds 0.5
+    MiB, beside 3.1 MiB of weights, the 3.27 MB cost1 counted. The bigger
+    GPT's cache at 1,024 tokens is 32 MiB for one text, and a server writing
+    for many people keeps one per text. gqa1's shared key value heads shrink
+    exactly this.
 
     One catch hides in the prompt's cache. Its keys and values are views of
     `c_attn`'s whole output, queries included. So they keep 1.5 times the
     bytes `cache_bytes` counts alive, until the first `torch.cat` copies them.
-
-    `.element_size()` gives the bytes of one number of a tensor.
-
-    ```python
-    torch.zeros(3, dtype=torch.float16).element_size()    # 2
-    ```
     """,
 )
 
@@ -816,19 +811,26 @@ def step_milliseconds(
         )
 
 
-def measure_step_times() -> dict[tuple[str, str, int], tuple[float, float]]:
+def measure_step_times(threads: int = 4) -> dict[tuple[str, str, int], tuple[float, float]]:
     """The times behind kvcache2's table, in milliseconds: the course GPT on the CPU, and the bigger GPT on the
-    CPU and on MPS."""
+    CPU and on MPS. MPS runs only the long text. At 128 tokens its step is bound by launching kernels, and the
+    cached step launches more of them, 761 calls against 647, so on a busy machine the cache won by 0.9 to 1.5
+    times there."""
     results = {}
     runs = (
-        ("course", SMALL_SETTINGS, ("cpu",), (16, 128)),
-        ("bigger", BIG_SETTINGS, ("cpu", "mps"), (128, 1024)),
+        ("course", SMALL_SETTINGS, "cpu", (16, 128)),
+        ("bigger", BIG_SETTINGS, "cpu", (128, 1024)),
+        ("bigger", BIG_SETTINGS, "mps", (1024,)),
     )
+    previous = torch.get_num_threads()
+    torch.set_num_threads(threads)
 
-    for name, settings, devices, lengths in runs:
-        for device in devices:
+    try:
+        for name, settings, device, lengths in runs:
             for length in lengths:
                 results[(name, device, length)] = step_milliseconds(settings, length, torch.device(device))
+    finally:
+        torch.set_num_threads(previous)
 
     return results
 

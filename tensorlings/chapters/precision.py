@@ -302,12 +302,13 @@ PRECISION2_LESSON = prose(
     doubles again. That is `torch.amp.GradScaler`, which starts at 65,536
     and doubles after 2,000 good steps.
 
-    Training on many batches averages the loss over many more tokens than
-    one batch holds, so each batch's gradients come out that much smaller.
-    The table plays that part with gpt3's trained GPT on one batch of
-    Shakespeare, on the CPU, dividing its loss by 64 and by 1,024. The
-    gradients come from a backward pass under autocast to float16, unscaled
-    after, against float32's.
+    Large models average each step's loss over millions of tokens, GPT-3
+    over 3.2 million. So each token's gradients come out that much smaller.
+    The table plays that part with gpt3's trained GPT on one batch of 4,096
+    characters of Shakespeare, on the CPU. It divides the loss by 64 and by
+    1,024, as a batch 64 or 1,024 times bigger would. The gradients come from
+    a backward pass under autocast to float16, unscaled after, against
+    float32's.
 
     | Loss divided by | Scale | Lost to 0 at the blocks' outputs | Error in the weights' gradients |
     |---|---|---|---|
@@ -493,17 +494,17 @@ def seeded_classifier(seed: int) -> nn.Module:
 
 def model_with_gradients(
     seed: int,
-    poisoned: bool,
+    poison: float | None,
 ) -> nn.Module:
-    """A model whose gradients are set by hand, its last bias left with none, one entry an inf when poisoned."""
+    """A model whose gradients are set by hand, its last bias left with none, one entry set to poison when given."""
     model = seeded_classifier(seed)
     generator = torch.Generator().manual_seed(seed)
 
     for parameter in list(model.parameters())[:-1]:
         parameter.grad = torch.randn(parameter.shape, generator=generator) * 64
 
-    if poisoned:
-        model[0].weight.grad[2, 3] = float("inf")
+    if poison is not None:
+        model[0].weight.grad[2, 3] = poison
 
     return model
 
@@ -512,13 +513,14 @@ def check_unscale(
     found: Callable[..., object],
     seed: int,
     scale: float,
-    poisoned: bool,
+    poison: float | None,
 ) -> None:
-    model = model_with_gradients(seed, poisoned)
-    expected = model_with_gradients(seed, poisoned)
+    model = model_with_gradients(seed, poison)
+    expected = model_with_gradients(seed, poison)
     finite = SCALING_REFERENCE["unscale_"](expected, scale)
     actual = found(model, scale)
-    call = f"unscale_ of a model whose gradients {'hold an inf' if poisoned else 'are all finite'}, at a scale of {scale:g}"
+    held = "are all finite" if poison is None else f"hold {'a nan' if poison != poison else 'an inf'}"
+    call = f"unscale_ of a model whose gradients {held}, at a scale of {scale:g}"
 
     expect_value(
         call=call,
@@ -533,10 +535,16 @@ def check_unscale(
 
             continue
 
+        got, wanted_grad = parameter.grad, wanted.grad
+
+        # A nan stays a nan after the division and never equals itself, so matching nans compare as equal.
+        if isinstance(got, Tensor) and got.shape == wanted_grad.shape and torch.equal(got.isnan(), wanted_grad.isnan()):
+            got, wanted_grad = got.nan_to_num(nan=0.0), wanted_grad.nan_to_num(nan=0.0)
+
         expect_tensor(
             call=f"the gradient of {name} after {call}",
-            actual=parameter.grad,
-            expected=wanted.grad,
+            actual=got,
+            expected=wanted_grad,
         )
 
 
@@ -626,6 +634,37 @@ def check_autocast_device(found: Callable[..., object]) -> None:
         )
 
 
+def check_loss_in_autocast(found: Callable[..., object]) -> None:
+    """F.cross_entropy is swapped on its module, so F.cross_entropy, torch.nn.functional.cross_entropy and
+    nn.CrossEntropyLoss are all seen. Outside autocast it would run on the float16 scores in float16."""
+    inside: list[bool] = []
+    original = torch.nn.functional.cross_entropy
+
+    def recorded(
+        *arguments: object,
+        **keywords: object,
+    ) -> Tensor:
+        inside.append(torch.is_autocast_enabled("cpu"))
+
+        return original(*arguments, **keywords)
+
+    model = seeded_classifier(860)
+    optimizer = torch.optim.SGD(model.parameters(), lr=0.5)
+    x, y = classifier_batch(861)
+    torch.nn.functional.cross_entropy = recorded
+
+    try:
+        found(model, optimizer, x, y, 1024.0)
+    finally:
+        torch.nn.functional.cross_entropy = original
+
+    if inside and not all(inside):
+        raise Mismatch(
+            "mixed_step worked out F.cross_entropy outside the autocast block, where it runs on the float16 scores "
+            "in float16. Work it out inside the block, where autocast runs it in float32.",
+        )
+
+
 def check_precision2(checker: Checker) -> None:
     generator = torch.Generator().manual_seed(862)
     gradients = torch.randn(200, generator=generator) * torch.logspace(-10, -2, 200)
@@ -644,15 +683,15 @@ def check_precision2(checker: Checker) -> None:
         expect=expect_close,
     )
 
-    for seed, scale, poisoned in ((863, 64.0, False), (864, 1024.0, True), (865, 8.0, False)):
+    for seed, scale, poison in ((863, 64.0, None), (864, 1024.0, float("inf")), (866, 32.0, float("nan")), (865, 8.0, None)):
         checker.test(
             function="unscale_",
             description="divides every gradient by the scale and says whether all are finite",
-            run=lambda found, seed=seed, scale=scale, poisoned=poisoned: check_unscale(
+            run=lambda found, seed=seed, scale=scale, poison=poison: check_unscale(
                 found=found,
                 seed=seed,
                 scale=scale,
-                poisoned=poisoned,
+                poison=poison,
             ),
         )
 
@@ -685,6 +724,11 @@ def check_precision2(checker: Checker) -> None:
         function="mixed_step",
         description="runs autocast for x's own device type",
         run=check_autocast_device,
+    )
+    checker.test(
+        function="mixed_step",
+        description="works out the loss inside autocast",
+        run=check_loss_in_autocast,
     )
 
 

@@ -13,6 +13,7 @@ from ..course import OPTIMIZER_IMPORTS, Chapter, Exercise
 from ..engine import (
     Checker,
     Described,
+    Mismatch,
     check_on_inputs,
     expect_value,
 )
@@ -36,7 +37,7 @@ COST = Chapter(
         ## Further reading
 
         - [Kaplan and colleagues, scaling laws for neural language models](https://arxiv.org/abs/2001.08361)
-        - [PyTorch, hooks for saved tensors](https://docs.pytorch.org/docs/2.14/autograd.html#hooks-for-saved-tensors)
+        - [PyTorch, hooks for saved tensors](https://docs.pytorch.org/docs/2.14/notes/autograd.html#hooks-for-saved-tensors)
         """,
     ),
 )
@@ -69,6 +70,25 @@ def tied_pair() -> nn.Sequential:
     head.weight = table.weight
 
     return nn.Sequential(table, head)
+
+
+def expect_int(
+    call: str,
+    actual: object,
+    expected: int,
+) -> None:
+    """A count of FLOPs or bytes, which the TODOs ask for as a plain int."""
+    if isinstance(actual, float):
+        raise Mismatch(
+            f"{call} is {actual!r}, a float, but it should be the plain int {expected}. Multiply whole numbers only, "
+            "with no 2.0 or division, or turn the result into an int with int(...).",
+        )
+
+    expect_value(
+        call=call,
+        actual=actual,
+        expected=expected,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -151,8 +171,9 @@ COST1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the FLOPs of linear on a batch of rows rows, as a plain int,
-    #   with matmul_flops. Leave the bias out.
+    # TODO: Return the FLOPs of linear on a batch, as a plain int, with
+    #   matmul_flops. The batch holds as many rows as the number rows says.
+    #   Leave the bias out.
     def linear_flops(
         linear: nn.Linear,
         rows: int,
@@ -160,9 +181,9 @@ COST1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the FLOPs of attention's two products over tokens tokens of
-    #   width width, the scores and the weighted sum of the values, with
-    #   matmul_flops.
+    # TODO: Return the FLOPs of attention's two products, the scores and the
+    #   weighted sum of the values, as a plain int, with matmul_flops. The
+    #   sequence is tokens long, and each position holds width numbers.
     def attention_flops(
         tokens: int,
         width: int,
@@ -235,7 +256,7 @@ def check_cost1(checker: Checker) -> None:
             (128, 64, 10),
         ),
         reference=COST1_REFERENCE["matmul_flops"],
-        expect=expect_value,
+        expect=expect_int,
     )
     check_on_inputs(
         checker=checker,
@@ -246,7 +267,7 @@ def check_cost1(checker: Checker) -> None:
             (Described(nn.Linear(7, 5, bias=False), "nn.Linear(7, 5, bias=False)"), 2),
         ),
         reference=COST1_REFERENCE["linear_flops"],
-        expect=expect_value,
+        expect=expect_int,
     )
     check_on_inputs(
         checker=checker,
@@ -257,7 +278,7 @@ def check_cost1(checker: Checker) -> None:
             (5, 3),
         ),
         reference=COST1_REFERENCE["attention_flops"],
-        expect=expect_value,
+        expect=expect_int,
     )
     check_on_inputs(
         checker=checker,
@@ -269,7 +290,7 @@ def check_cost1(checker: Checker) -> None:
             (Described(tied_pair(), "an Embedding(10, 4) whose weight a Linear(4, 10) shares"),),
         ),
         reference=COST1_REFERENCE["parameter_bytes"],
-        expect=expect_value,
+        expect=expect_int,
     )
 
 
@@ -365,6 +386,10 @@ COST2_SOURCE = source_file(
     shared = grid.view(32).untyped_storage().data_ptr() == grid.untyped_storage().data_ptr()    # True, a view shares it
     flops = 6 * 1000 * 50                                # 300000, a model of 1,000 parameters on 50 tokens
 
+    with FlopCounterMode(display=False) as counter:      # display=False keeps its table off the screen
+        torch.ones(2, 3) @ torch.ones(3, 4)
+    counted = counter.get_total_flops()                  # 48, 2 * 2 * 3 * 4
+
 
     # TODO: Return the bytes autograd saves for backward while model runs on x,
     #   as a plain int. Inside torch.autograd.graph.saved_tensors_hooks, note
@@ -378,8 +403,9 @@ COST2_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the FLOPs of training a model of parameters parameters on
-    #   tokens tokens, as a plain int, by the rule of 6 per parameter per token.
+    # TODO: Return the FLOPs of training, as a plain int, by the rule of 6 per
+    #   parameter per token. parameters counts the model's parameters, and
+    #   tokens the tokens it trains on.
     def training_flops(
         parameters: int,
         tokens: int,
@@ -411,6 +437,10 @@ COST2_SOLUTION = source_file(
     storage_bytes = grid.untyped_storage().nbytes()
     shared = grid.view(32).untyped_storage().data_ptr() == grid.untyped_storage().data_ptr()
     flops = 6 * 1000 * 50
+
+    with FlopCounterMode(display=False) as counter:
+        torch.ones(2, 3) @ torch.ones(3, 4)
+    counted = counter.get_total_flops()
 
 
     def saved_bytes(
@@ -457,6 +487,27 @@ def needing_gradient(x: Tensor) -> Tensor:
     return x.requires_grad_()
 
 
+def expect_saved_bytes(
+    call: str,
+    actual: object,
+    expected: int,
+) -> None:
+    try:
+        expect_int(
+            call=call,
+            actual=actual,
+            expected=expected,
+        )
+    except Mismatch as mismatch:
+        if isinstance(actual, int) and actual < expected:
+            raise Mismatch(
+                f"{mismatch} Too few can mean the pack function gives nothing back. Autograd then lets go of each "
+                "tensor, its memory is used again, and a later storage starts at the same data_ptr().",
+            ) from None
+
+        raise
+
+
 def check_cost2(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
@@ -471,7 +522,7 @@ def check_cost2(checker: Checker) -> None:
             ),
         ),
         reference=COST2_REFERENCE["saved_bytes"],
-        expect=expect_value,
+        expect=expect_saved_bytes,
     )
     check_on_inputs(
         checker=checker,
@@ -482,7 +533,7 @@ def check_cost2(checker: Checker) -> None:
             (7, 3),
         ),
         reference=COST2_REFERENCE["training_flops"],
-        expect=expect_value,
+        expect=expect_int,
     )
     check_on_inputs(
         checker=checker,
@@ -499,7 +550,7 @@ def check_cost2(checker: Checker) -> None:
             ),
         ),
         reference=COST2_REFERENCE["counted_training_flops"],
-        expect=expect_value,
+        expect=expect_int,
     )
 
 

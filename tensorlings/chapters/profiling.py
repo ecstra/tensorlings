@@ -139,26 +139,34 @@ PROFILE1_LESSON = prose(
     off an odd slow one. `torch.utils.benchmark` reports the median too.
 
     `torch.profiler` breaks a run down by operation. Inside
-    `profile(activities=[ProfilerActivity.CPU])` it records each operation,
-    and `key_averages()` then gives one row per kind. Each row has the
-    operation's name as `key`, its calls as `count`, and its times. A key
-    that starts with `aten::` names one of PyTorch's own operations.
+    `profile(activities=[ProfilerActivity.CPU])` it records each operation.
 
-    Here is one forward pass of the GPT that gpt3 trains, on the CPU. The
-    shares are of the CPU's own time, over three runs.
+    ```python
+    with profile(activities=[ProfilerActivity.CPU]) as profiler:
+        torch.ones(4, 4) @ torch.ones(4, 4)
+    rows = profiler.key_averages()    # one row per kind, aten::mm among them
+    ```
+
+    Each row has the operation's name as `key`, its calls as `count`, and
+    its times. A key that starts with `aten::` names one of PyTorch's own
+    operations.
+
+    Here is a forward pass of the GPT that gpt3 trains, on the CPU on 4
+    threads, while another program kept the machine busy. The shares are of
+    the CPU's own time over 10 passes, in three runs.
 
     | Operation | Calls | Share of CPU time |
     |---|---|---|
-    | `aten::addmm`, the Linears of the blocks | 16 | 27% to 29% |
-    | `aten::gelu` | 4 | 27% to 33% |
-    | attention, one kernel for all its steps | 4 | 22% to 25% |
-    | `aten::copy_`, copies into new memory | 16 | 6% |
+    | `aten::addmm`, the Linears of the blocks | 16 | 21% to 29% |
+    | `aten::gelu` | 4 | 18% to 21% |
+    | `aten::copy_`, copies into new memory | 16 | 16% to 21% |
+    | attention, one kernel for all its steps | 4 | 13% to 19% |
 
-    The calls never change, and the shares move a few points from run to
-    run. The 4 GELUs, each a single elementwise step, take about as much
-    time as the 16 Linears, which do nearly all the arithmetic. `torch.profiler` has
-    no activity for a Mac's GPU, so on MPS its times would show only the CPU
-    queueing the work.
+    The calls never change. The 4 GELUs work on 2.1 million numbers, a few
+    FLOPs each, while the 16 Linears do 1.6 billion FLOPs. Yet the GELUs took
+    61% to 91% of the Linears' time. On 1 thread they took nearly half the
+    time, and on 10 a fifth. `torch.profiler` has no activity for a Mac's
+    GPU, so on MPS its times would show only the CPU queueing the work.
     """,
 )
 
@@ -501,10 +509,15 @@ def check_calls_of(
     if "read" not in events[leave + 1 :]:
         raise Mismatch(f"{call} should read key_averages() after the with block ends, once the profiler has stopped.")
 
+    expected = next((count for key, count in rows if key == name), 0)
+
+    if isinstance(actual, float):
+        raise Mismatch(f"{call} is {actual!r}, a float, but it should be the plain int {expected}, the row's count.")
+
     expect_value(
         call=call,
         actual=actual,
-        expected=next((count for key, count in rows if key == name), 0),
+        expected=expected,
     )
 
 
@@ -573,7 +586,7 @@ PROFILE2_LESSON = prose(
     """
     An operation can wait on two things, the chip's arithmetic or its
     memory. Every input comes in from memory and every output goes back,
-    and memory moves bytes at a fixed rate.
+    and memory moves bytes at a fixed rate, called its bandwidth.
 
     The arithmetic intensity of an operation is its FLOPs per byte moved.
     Doubling a float32 tensor does 1 FLOP per 8 bytes, 4 read and 4
@@ -800,6 +813,12 @@ def expect_pair_of_ints(
         raise Mismatch(f"{call} is {actual!r}, but it should be a tuple of two, like (flops, bytes).")
 
     for part, got, wanted in zip(("FLOPs", "bytes"), actual, expected):
+        if isinstance(got, float):
+            raise Mismatch(
+                f"The {part} of {call} is {got!r}, a float, but it should be the plain int {wanted}. Multiply whole "
+                "numbers only, or turn the result into an int with int(...).",
+            )
+
         expect_value(
             call=f"the {part} of {call}",
             actual=got,
@@ -911,23 +930,34 @@ def measure_first_call() -> dict[str, float]:
     }
 
 
-def measure_profile() -> list[tuple[str, int, float]]:
-    """profile1's rows, one forward pass of gpt3's GPT on the CPU, with each operation's share of the CPU's own
-    time, largest first. The lesson gives the range of three runs."""
+def measure_profile(
+    threads: int = 4,
+    passes: int = 10,
+) -> list[tuple[str, int, float]]:
+    """profile1's rows, a forward pass of gpt3's GPT on the CPU, with each operation's calls per pass and its share
+    of the CPU's own time over passes passes, largest first. The lesson gives the range of three runs on 4 threads.
+    The shares move a lot with the thread count, so it is pinned, and a single pass swung too much on a busy machine.
+    Unpinned, GELU took 45% to 49% on 1 thread and 20% to 22% on 10."""
     torch.manual_seed(0)
     model = MODEL_REFERENCE["GPT"](65, 128, 128, 4, 4)
     ids = torch.randint(0, 65, (8, 128), generator=torch.Generator().manual_seed(0))
+    previous = torch.get_num_threads()
+    torch.set_num_threads(threads)
 
-    with torch.no_grad():
-        model(ids)
-
-        with profile(activities=[ProfilerActivity.CPU]) as profiler:
+    try:
+        with torch.no_grad():
             model(ids)
+
+            with profile(activities=[ProfilerActivity.CPU]) as profiler:
+                for _ in range(passes):
+                    model(ids)
+    finally:
+        torch.set_num_threads(previous)
 
     rows = sorted(profiler.key_averages(), key=lambda row: row.self_cpu_time_total, reverse=True)
     total = sum(row.self_cpu_time_total for row in rows)
 
-    return [(row.key, row.count, row.self_cpu_time_total / total) for row in rows[:6]]
+    return [(row.key, row.count // passes, row.self_cpu_time_total / total) for row in rows[:6]]
 
 
 def measure_roofline() -> dict[str, object]:

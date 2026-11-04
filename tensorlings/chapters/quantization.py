@@ -435,14 +435,20 @@ QUANT2_LESSON = prose(
     own row suffers, and the other rows stay at 0.65%.
 
     Dettmers and colleagues found outliers in large language models, in the
-    hidden states that go into each Linear. From around 6.7B weights, a few
-    dimensions, at most 7, grow up to 20 times larger than the rest. Plain
-    int8 then rounds many small values to 0, and the models get worse.
+    hidden states that go into each Linear. Their LLM.int8() rounds those
+    hidden states to int8 too, so both sides of each multiply are whole
+    numbers. From around 6.7B weights, a few dimensions, at most 7, grow up
+    to 20 times larger than the rest. Plain int8 then rounds many small
+    hidden values to 0, and the models get worse.
 
-    Such a dimension is a column of the hidden states, so it runs through
-    nearly every row. A scale per row can't fence it in, and the paper found
-    row by row scales fall short there. So LLM.int8() keeps those columns in
-    16 bits and multiplies more than 99.9% of the values in 8 bits.
+    Such a dimension is a column of the hidden states, one row per token, so
+    it runs through nearly every row. A scale per row can't fence it in, and
+    the paper found row by row scales fall short there. So LLM.int8() keeps
+    those columns in 16 bits and multiplies more than 99.9% of the values in
+    8 bits.
+
+    Weights alone in int8, as quant3 stores them, leave the hidden states in
+    float, so these outliers never get rounded.
     """,
 )
 
@@ -604,8 +610,10 @@ QUANT3_LESSON = prose(
 
     Its forward turns the whole numbers back into a float weight and runs
     `F.linear`, the function behind every `nn.Linear`. That saves memory, not
-    time, since the multiply still runs in float. Fast int8 libraries multiply
-    the whole numbers themselves, with kernels this chapter leaves out.
+    time. Each call builds the whole float32 weight again, so it moves more
+    bytes than a float32 Linear does. Fast kernels such as gpt-fast's turn
+    each whole number into a float inside the multiply, so they read only the
+    int8 bytes. fast_gpt measures one.
 
     `module.named_children()` gives a module's direct children with their
     names, and `setattr(module, name, new)` swaps one. A function that calls
@@ -615,9 +623,6 @@ QUANT3_LESSON = prose(
     that table stays in float32 for both. `model.parameters()` lists a shared
     tensor once.
 
-    Here is the GPT from the run behind gpt3, on the 20 validation batches its
-    check used.
-
     At 4 bits two numbers share each byte, one in the low half and one in the
     high half.
 
@@ -625,6 +630,9 @@ QUANT3_LESSON = prose(
     byte = 3 | (12 << 4)    # 195, the numbers 3 and 12 in one byte
     byte & 15, byte >> 4    # (3, 12)
     ```
+
+    Here is the GPT from the run behind gpt3, on the 20 validation batches its
+    check used.
 
     | Blocks' weights | Bytes | Validation loss |
     |---|---|---|
@@ -637,9 +645,10 @@ QUANT3_LESSON = prose(
 
     int8 made the model 3.5 times smaller and moved its loss in the fourth
     decimal. Packed 4 bits take 6 times fewer bytes than float32. A scale per
-    group of 32 weights along each row costs a few bytes and brings the loss
-    from 1.5833 to 1.5658. GPTQ quantizes groups this way, and gpt-fast's 4 bit
-    models use groups of 32. At 2 bits even groups of 32 break the model.
+    group of 32 weights along each row adds 79,872 bytes, about 15% more, and
+    brings the loss from 1.5833 to 1.5658. GPTQ quantizes groups this way, and
+    gpt-fast's 4 bit models use groups of 32. At 2 bits even groups of 32
+    break the model.
     """,
 )
 
