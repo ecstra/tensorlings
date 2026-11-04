@@ -528,6 +528,22 @@ def switch_data(
     return x, control, torch.where(which.unsqueeze(1) == 0, x @ MAP_A.T, x @ MAP_B.T)
 
 
+# The second input's own map in combine2's sum task, where both inputs add to the answer.
+MAP_SECOND = torch.tensor([[1.0, -0.5], [0.5, 1.0]])
+
+
+def sum_data(
+    count: int,
+    generator: torch.Generator,
+    scale: float = 1.0,
+) -> tuple[Tensor, Tensor, Tensor]:
+    """Inputs of 4 numbers and a second input of 2, and the answer MAP_A gives the first plus MAP_SECOND the second."""
+    x = (torch.rand(count, 4, generator=generator) * 2 - 1) * scale
+    second = (torch.rand(count, 2, generator=generator) * 2 - 1) * scale
+
+    return x, second, x @ MAP_A.T + second @ MAP_SECOND.T
+
+
 class ReferenceGated(nn.Module):
     def __init__(self, hidden: int = 16) -> None:
         super().__init__()
@@ -621,6 +637,21 @@ COMBINE2_LESSON = prose(
 
     After training, the control for A wrote weights within 0.0000003 of A,
     and the control for B within 0.0000002 of B, on every seed.
+
+    Now flip the task. The answer is A of the input plus another fixed map of
+    a second input of 2 numbers. Both are evidence for the same answer, and
+    neither picks anything. The same three models, trained the same way.
+
+    | Model | Error | Error, inputs 4 times larger |
+    |---|---|---|
+    | added | 0.0000 | 0.0000 |
+    | added, hidden | 0.00002 to 0.0001 | 0.60 to 1.12 |
+    | gated | 0.0003 to 0.0004 | 1.18 to 1.29 |
+
+    Guessing the average scores 1.18 and 18.5. The plain sum is exact, below
+    0.000000000004, since the answer is a sum. The gate can only scale the
+    first input's units by numbers from 0 to 1. It fakes the sum in range and
+    misses once the inputs grow.
 
     So multiply when one signal should control another, with a gate, FiLM or
     attention's weights. Add when signals are evidence for the same answer,
@@ -882,8 +913,8 @@ class Base(nn.Module):
         return self.head(self.norm(h)).squeeze(1)
 
 
-def make_branch() -> nn.Sequential:
-    return nn.Sequential(nn.Linear(4, 64), nn.ReLU(), nn.Linear(64, WIDTH))
+def make_branch(hidden: int = 64) -> nn.Sequential:
+    return nn.Sequential(nn.Linear(4, hidden), nn.ReLU(), nn.Linear(hidden, WIDTH))
 
 
 def reference_zero_last_(branch: nn.Sequential) -> None:
@@ -953,21 +984,26 @@ COMBINE3_LESSON = prose(
     4 new numbers and added its output to the stream before the second block.
     The branch, starting from nothing, trained at 0.01, three seeds each.
 
-    - signal: the new numbers explain part of the answer, the branch trained on 4,000 examples, and the trained model trained too, at 0.001.
-    - no signal: the new numbers explain nothing, the branch had only 64 examples, and the trained model stayed frozen, as ControlNet locks its own.
+    - signal: the new numbers explain part of the answer, with 4,000 examples.
+    - no signal: the new numbers explain nothing, with only 64 examples.
+
+    With signal the branch is wide, 512 hidden units, as ControlNet's is a
+    full copy of its model. The trained model trained too, at 0.001. Without
+    signal the branch had 64 units, and the trained model stayed frozen, as
+    ControlNet locks its own.
 
     | Branch start | Signal, step 0 | Signal, step 1,500 | No signal, step 1,500 |
     |---|---|---|---|
-    | last layer zero | 0.252 | 0.0054 to 0.0059 | 0.00073 to 0.00075 |
-    | PyTorch's default | 0.24 to 0.28 | 0.0053 to 0.0070 | 0.0012 to 0.0017 |
-    | Kaiming | 0.29 to 0.44 | 0.0041 to 0.0048 | 0.063 to 0.081 |
+    | last layer zero | 0.252 | 0.0033 to 0.0037 | 0.00073 to 0.00075 |
+    | PyTorch's default | 0.23 to 0.28 | 0.0035 to 0.0048 | 0.0012 to 0.0017 |
+    | Kaiming | 0.33 to 0.37 | 0.0042 to 0.0049 | 0.063 to 0.081 |
 
     The trained model alone scored 0.252 with signal and 0.0005 without.
 
     The zero start began exactly at the trained model and never rose above it
     at any check. Every random start began somewhere else, the loud Kaiming
-    one up to 0.44. All of them learned the new input, ending 36 to 62 times
-    below the model alone.
+    one up to 0.37. All of them learned the new input, ending 52 to 76 times
+    below the model alone, and the zero start ended lowest on every seed.
 
     Without signal, every branch learned some noise from its 64 examples. The
     zero start kept that smallest, ending about 1.5 times the model alone, and
@@ -1295,9 +1331,11 @@ STEPS_ALONG = 8
 def neighbour_data(
     count: int,
     generator: torch.Generator,
+    length: int = STEPS_ALONG,
 ) -> tuple[Tensor, Tensor]:
-    """8 positions of 2 channels, and at each position how far its channel 0 is from the next one's channel 1."""
-    x = torch.rand(count, STEPS_ALONG, 2, generator=generator) * 2 - 1
+    """8 positions of 2 channels, or length, and at each position how far its channel 0 is from the next one's
+    channel 1."""
+    x = torch.rand(count, length, 2, generator=generator) * 2 - 1
 
     return x, (x[:, :, 0] - x.roll(-1, dims=1)[:, :, 1]).abs()
 
@@ -1331,6 +1369,42 @@ class ReferenceChannelMix(nn.Module):
         return x + self.mlp(self.norm(x))
 
 
+class AttentionMix(nn.Module):
+    """combine4's attention row: one head of attention across the positions in place of the token MLP, each place
+    given a learned position as it enters, with the same norm and skip."""
+
+    def __init__(
+        self,
+        width: int,
+        positions: int,
+        hidden: int,
+    ) -> None:
+        super().__init__()
+        self.norm = nn.LayerNorm(width)
+        self.place = nn.Embedding(positions, width)
+        self.qkv = nn.Linear(width, 3 * hidden)
+        self.proj = nn.Linear(hidden, width)
+
+    def forward(self, x: Tensor) -> Tensor:
+        h = self.norm(x) + self.place(torch.arange(x.shape[1]))
+        q, k, v = self.qkv(h).chunk(3, dim=-1)
+
+        return x + self.proj(F.scaled_dot_product_attention(q, k, v))
+
+
+class ConvMix(nn.Module):
+    """combine4's convolution row: each channel mixes its value with its two neighbours', wrapping around, with the
+    same norm and skip. It has no weight tied to a place, so it runs at any length."""
+
+    def __init__(self, width: int) -> None:
+        super().__init__()
+        self.norm = nn.LayerNorm(width)
+        self.conv = nn.Conv1d(width, width, 3, padding=1, padding_mode="circular", groups=width)
+
+    def forward(self, x: Tensor) -> Tensor:
+        return x + self.conv(self.norm(x).transpose(1, 2)).transpose(1, 2)
+
+
 class Mixer(nn.Module):
     """An embedding of 2 channels into width, a block per kind in order, and one answer per position."""
 
@@ -1338,8 +1412,8 @@ class Mixer(nn.Module):
         self,
         kinds: list[str],
         width: int = 16,
-        token_mix: type = ReferenceTokenMix,
-        channel_mix: type = ReferenceChannelMix,
+        token_mix: Callable[[int, int, int], nn.Module] = ReferenceTokenMix,
+        channel_mix: Callable[[int, int], nn.Module] = ReferenceChannelMix,
     ) -> None:
         super().__init__()
         self.embed = nn.Linear(2, width)
@@ -2420,6 +2494,25 @@ def measure_gating(seeds: range = range(3)) -> dict[str, list[tuple[float, ...]]
     return results
 
 
+def measure_summing(seeds: range = range(3)) -> dict[str, list[tuple[float, float]]]:
+    """combine2's second table: the same models on the sum task, error on new inputs and on inputs 4 times larger."""
+    x, second, y = sum_data(4000, torch.Generator().manual_seed(0))
+    test = sum_data(2000, torch.Generator().manual_seed(1))
+    larger = sum_data(2000, torch.Generator().manual_seed(2), 4.0)
+    results: dict[str, list[tuple[float, float]]] = {"guess": [(test[2].var(dim=0).mean().item(), larger[2].var(dim=0).mean().item())]}
+
+    with pinned_threads():
+        for name, make in (("added", AddedLinear), ("added, hidden", ReferenceAdded), ("gated", ReferenceGated)):
+            results[name] = []
+
+            for seed in seeds:
+                torch.manual_seed(seed)
+                model = train_conditioned(make(), (x, second), y, 1000, seed, 1e-2)
+                results[name].append((conditioned_error(model, test[:2], test[2]), conditioned_error(model, larger[:2], larger[2])))
+
+    return results
+
+
 def trained_base(useful: bool) -> tuple[nn.Module, float]:
     x, _, y = side_data(4000, torch.Generator().manual_seed(0), useful)
     test_x, _, test_y = side_data(2000, torch.Generator().manual_seed(1), useful)
@@ -2439,8 +2532,11 @@ def trained_base(useful: bool) -> tuple[nn.Module, float]:
         return base, F.mse_loss(base(test_x), test_y).item()
 
 
-def started_branch(start: str) -> nn.Module:
-    branch = make_branch()
+def started_branch(
+    start: str,
+    hidden: int,
+) -> nn.Module:
+    branch = make_branch(hidden)
 
     if start == "kaiming":
         for layer in (branch[0], branch[-1]):
@@ -2462,15 +2558,16 @@ TRAINED_RATE = 1e-3
 
 
 def measure_branch_starts(seeds: range = range(3)) -> dict[str, object]:
-    """combine3's table, with the branch at its own rate of 0.01. With signal the trained model trains too, at 0.001.
-    Without signal it stays frozen, as ControlNet locks its model, since fine tuning it on 64 examples would raise
-    its error with no branch at all. For each start, the error at step 0, the worst error checked every 50 steps,
-    how many of those checks sat above the trained model alone, and the error at step 1,500, with signal on 4,000
-    examples and without on 64."""
+    """combine3's table, with the branch at its own rate of 0.01. With signal the branch is wide, 512 hidden units, as
+    ControlNet's branch is a full copy of its model, and the trained model trains too, at 0.001. Without signal the
+    branch has 64 units, since 64 examples overfit a wide one from any start, and the trained model stays frozen, as
+    ControlNet locks its model, since fine tuning it on 64 examples would raise its error with no branch at all. For
+    each start, the error at step 0, the worst error checked every 50 steps, how many of those checks sat above the
+    trained model alone, and the error at step 1,500, with signal on 4,000 examples and without on 64."""
     results: dict[str, object] = {}
 
     with pinned_threads():
-        for useful, examples in ((True, 4000), (False, 64)):
+        for useful, examples, hidden in ((True, 4000, 512), (False, 64, 64)):
             x, side, y = side_data(4000, torch.Generator().manual_seed(0), useful)
             test_x, test_side, test_y = side_data(2000, torch.Generator().manual_seed(1), useful)
             base, base_error = trained_base(useful)
@@ -2481,7 +2578,7 @@ def measure_branch_starts(seeds: range = range(3)) -> dict[str, object]:
 
                 for seed in seeds:
                     torch.manual_seed(10 + seed)
-                    model = ReferenceWithBranch(copy.deepcopy(base), started_branch(start), 1)
+                    model = ReferenceWithBranch(copy.deepcopy(base), started_branch(start, hidden), 1)
                     groups = [{"params": model.branch.parameters(), "lr": BRANCH_RATE}]
 
                     if useful:
@@ -2540,6 +2637,50 @@ def measure_mixing(seeds: range = range(3)) -> dict[str, object]:
 
                 with torch.no_grad():
                     errors.append(F.mse_loss(model(test_x), test_y).item())
+
+            results[name] = (sum(parameter.numel() for parameter in model.parameters()), errors)
+
+    return results
+
+
+def measure_across(seeds: range = range(3)) -> dict[str, object]:
+    """combine4's second table: the across block swapped, each alternated with within blocks as across first is,
+    trained on 8 positions for 1,500 steps, and its error on 8 positions and on 16, or None where it can't run."""
+    x, y = neighbour_data(4000, torch.Generator().manual_seed(0))
+    test_x, test_y = neighbour_data(2000, torch.Generator().manual_seed(1))
+    long_x, long_y = neighbour_data(2000, torch.Generator().manual_seed(3), 16)
+    results: dict[str, object] = {"guess": (test_y.var().item(), long_y.var().item())}
+
+    with pinned_threads():
+        for name, token_mix in (
+            ("token MLP", ReferenceTokenMix),
+            ("attention", AttentionMix),
+            ("convolution", lambda width, positions, hidden: ConvMix(width)),
+        ):
+            errors = []
+
+            for seed in seeds:
+                torch.manual_seed(seed)
+                model = Mixer(["across", "within", "across", "within"], token_mix=token_mix)
+                optimizer = torch.optim.Adam(model.parameters(), lr=3e-3)
+                generator = torch.Generator().manual_seed(seed + 5)
+
+                for _ in range(1500):
+                    batch = torch.randint(0, 4000, (128,), generator=generator)
+                    loss = F.mse_loss(model(x[batch]), y[batch])
+                    optimizer.zero_grad()
+                    loss.backward()
+                    optimizer.step()
+
+                with torch.no_grad():
+                    error = F.mse_loss(model(test_x), test_y).item()
+
+                    try:
+                        long_error = F.mse_loss(model(long_x), long_y).item()
+                    except (RuntimeError, IndexError):
+                        long_error = None
+
+                errors.append((error, long_error))
 
             results[name] = (sum(parameter.numel() for parameter in model.parameters()), errors)
 
