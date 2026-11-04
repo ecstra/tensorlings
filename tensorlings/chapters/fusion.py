@@ -234,11 +234,11 @@ FUSE1_LESSON = prose(
     A model with two kinds of input must decide where they meet. Here one
     input is a series of 32 numbers and the other a question, one token.
 
-    - **late fusion**: each input is summed up on its own, and the two summaries are joined at the end.
+    - **late fusion**: each input is summarized on its own, and the two summaries are joined at the end.
     - **early fusion**: both become tokens in one sequence, so attention mixes them from the first layer.
 
-    Late fusion sums up the series before it knows the question. Early fusion
-    lets the question pick what to read. In the one sequence, tokens2's type
+    Late fusion summarizes the series before it knows the question. Early
+    fusion lets the question pick what to read. In the one sequence, tokens2's type
     embedding marks each token's kind.
 
     Two tasks, each model trained 1,500 steps on three seeds.
@@ -254,16 +254,23 @@ FUSE1_LESSON = prose(
     | guessing the mean | 0 | 0.33 | 0.44 |
 
     At 64 wide the summary has room for all 32 numbers, and late fusion still
-    does no better than the guess. The trouble is the head. It must pick the
-    asked number out of a summary made before the question. An MLP on the two
-    joined vectors hardly learns that pick. Early fusion's attention makes
-    it directly, since the question's query matches the asked position's key.
-    In the sum, each input brings its own piece of the answer, and the
-    summaries hold everything needed.
+    does no better than the guess. The head isn't the trouble. Given a summary
+    that keeps every number, the series times a fixed random matrix, the same
+    head learns the lookup to 0.0065 to 0.0095.
+
+    The trouble is the summary. It is made before the question, so it must
+    keep all 32 numbers apart, and an average of each position's features
+    blurs them. One linear map reads the numbers back from it with an error of
+    0.11 to 0.14, against 0.33 for guessing. Early fusion needs no such
+    summary, since the question's query matches the asked position's key. In
+    the sum, each input brings its own piece of the answer, and the summaries
+    hold everything needed.
 
     So fuse early when one input decides what to read in the other. Fuse late
     when each brings its own evidence, as CLIP's two encoders do. Late fusion
-    runs each encoder once per input, and its summaries can be stored.
+    runs each encoder once per input, and its summaries can be stored. To
+    answer 32 questions about one series, early fusion takes 8.8 million FLOPs
+    and late fusion 0.17 million, 52 times fewer.
     """,
 )
 
@@ -1037,7 +1044,7 @@ FUSE3_LESSON = prose(
 
     | Training | Both present | Series missing | Table missing |
     |---|---|---|---|
-    | always both | 0.0001 | 0.42 to 0.72 | 0.55 to 1.14 |
+    | always both | 0.00004 to 0.00008 | 0.42 to 0.72 | 0.55 to 1.14 |
     | inputs dropped at 0.15 | 0.002 to 0.003 | 0.38 to 0.39 | 0.45 to 0.46 |
     | the best any model can do | 0 | 0.38 to 0.39 | 0.45 to 0.46 |
 
@@ -1347,6 +1354,96 @@ def measure_fusion(seeds: range = range(3)) -> dict[str, object]:
             results[f"{name} {size} weights"] = sum(parameter.numel() for parameter in FUSE1_REFERENCE[name](LENGTH, size).parameters())
 
     return results
+
+
+class KeptSummary(nn.Module):
+    """fuse1's test of the head: LateFusion's question embedding and head, given a summary that keeps every number, the
+    series times a fixed random matrix with orthonormal rows."""
+
+    def __init__(
+        self,
+        length: int = 32,
+        size: int = 64,
+    ) -> None:
+        super().__init__()
+        self.register_buffer("mix", torch.linalg.qr(torch.randn(size, length))[0].T)
+        self.question = nn.Embedding(length, size)
+        self.head = nn.Sequential(nn.Linear(2 * size, 4 * size), nn.ReLU(), nn.Linear(4 * size, 1))
+
+    def forward(
+        self,
+        series: Tensor,
+        question: Tensor,
+    ) -> Tensor:
+        joined = torch.cat([series @ self.mix, self.question(question)], dim=-1)
+
+        return self.head(joined).squeeze(-1)
+
+
+def late_summary(
+    model: nn.Module,
+    series: Tensor,
+) -> Tensor:
+    return model.series_mlp(FUSE1_REFERENCE["series_tokens"](series, model.value, model.positions)).mean(dim=1)
+
+
+def read_back_error(
+    model: nn.Module,
+    seed: int,
+) -> float:
+    """The squared error of one linear map reading the 32 numbers back from a LateFusion's summary, fitted by least
+    squares on 8,000 series and scored on 2,000 others."""
+    generator = torch.Generator().manual_seed(seed + 5000)
+    fitted, _, _ = lookup_data(8000, generator)
+    scored, _, _ = lookup_data(2000, generator)
+
+    with torch.no_grad():
+        fitted_summary, scored_summary = (
+            torch.cat([late_summary(model, series), torch.ones(len(series), 1)], dim=1) for series in (fitted, scored)
+        )
+
+    weights = torch.linalg.lstsq(fitted_summary, fitted).solution
+
+    return F.mse_loss(scored_summary @ weights, scored).item()
+
+
+def measure_summaries(seeds: range = range(3)) -> dict[str, list[float]]:
+    """fuse1's reason: the lookup error of LateFusion's head given a summary that keeps every number, and how well a
+    linear map reads the numbers back from a trained 64 wide LateFusion's own summary."""
+    results: dict[str, list[float]] = {"kept summary": [], "read back": []}
+
+    with pinned_threads():
+        for seed in seeds:
+            late = seeded_model(FUSE1_REFERENCE["LateFusion"], seed, LENGTH, 64)
+            train_fusion(late, lookup_data, seed)
+            results["read back"].append(read_back_error(late, seed))
+            results["kept summary"].append(train_fusion(seeded_model(KeptSummary, seed, LENGTH, 64), lookup_data, seed))
+
+    return results
+
+
+def measure_fusion_cost(questions: int = LENGTH) -> dict[str, int]:
+    """fuse1's cost line: the FLOPs to answer every question about one series, early fusion running its block once per
+    question, late fusion summarizing the series once and running its head per question."""
+    # Imported here, since only this measurement needs it. The math kernel makes attention's matrix multiplies visible
+    # to the counter, which skips the fused kernel.
+    from torch.nn.attention import SDPBackend, sdpa_kernel
+    from torch.utils.flop_counter import FlopCounterMode
+
+    series = lookup_data(1, torch.Generator().manual_seed(0))[0]
+    asked = torch.arange(questions)
+    early = FUSE1_REFERENCE["EarlyFusion"](LENGTH, 16)
+    late = FUSE1_REFERENCE["LateFusion"](LENGTH, 16)
+
+    with torch.no_grad(), sdpa_kernel(SDPBackend.MATH):
+        with FlopCounterMode(display=False) as early_count:
+            early(series.expand(questions, -1), asked)
+
+        with FlopCounterMode(display=False) as late_count:
+            summary = late_summary(late, series)
+            late.head(torch.cat([summary.expand(questions, -1), late.question(asked)], dim=-1))
+
+    return {"early": early_count.get_total_flops(), "late": late_count.get_total_flops()}
 
 
 class OpenCrossAttention(nn.Module):

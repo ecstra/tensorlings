@@ -29,6 +29,7 @@ from ..engine import (
     value_text,
 )
 from ..text import prose, source_file
+from .fusion import FUSE2_REFERENCE
 from .linear_layers import expect_module
 from .vqvae import QUANTIZE_PART
 
@@ -41,9 +42,9 @@ OUTPUTS = Chapter(
 
         A model's last layer decides what it can say. One class, several tags,
         a number, a choice between two right answers, a valid JSON object, a
-        robot's next move, a signal: each needs its own head, or its own way
-        of writing tokens. This chapter builds them and measures what the wrong
-        head gets wrong.
+        robot's next move and a signal each need their own head, or their own
+        way of writing tokens. This chapter builds them and measures what the
+        wrong head gets wrong.
 
         ## Further reading
 
@@ -518,8 +519,9 @@ OUT2_SOURCE = source_file(
 
     # TODO: Return the average negative log likelihood of y under each row's
     #   mixture, as a tensor. The log density of a normal at y is minus half
-    #   the squared gap over the spread, minus the log spread, minus half of
-    #   log 2 pi. Add each normal's log softmax weight and logsumexp them.
+    #   the square of (the gap divided by the spread), minus the log spread,
+    #   minus half of log 2 pi. Add each normal's log softmax weight and
+    #   logsumexp them.
     def mixture_nll(
         weights: Tensor,
         means: Tensor,
@@ -802,7 +804,8 @@ OUT3_LESSON = prose(
     This is **constrained decoding**. The given `allowed` and `step` follow
     one fixed shape. Willard and Louf's Outlines library builds the same
     allowed sets from a regular expression or a grammar. It runs them as a
-    finite state machine, at little cost per token. RT-2 restricts its output
+    finite state machine, with a stack added for a grammar, at little cost
+    per token. RT-2 restricts its output
     the same way, to its action tokens.
 
     Here a small GRU learned the shape from examples like
@@ -1661,11 +1664,10 @@ QUIZ16_LESSON = prose(
     | `row_tokens` | each number times its column's weight plus its bias, then each category looked up in its column's table | table1 |
     | `normalized_patches` | each series against its own mean and spread, padded at the end, then cut into patches | series1, series2 |
     | `residual_ids` | each codebook's nearest entry to what the levels before it left over | sound2 |
-    | `clip_loss` | cosine scores over a temperature, each row's partner as the right class, both ways | clip1 |
-    | `gated_cross` | cross attention from the tokens to the memory, through a tanh gate that starts closed | fuse2 |
+    | `clip_loss` | CLIP's loss both ways, and the share of rows whose own partner scores highest | clip1, clip2 |
+    | `gated_cross` | cross attention through a tanh gate that starts closed, skipped where the memory is missing | fuse2, fuse3 |
     | `prefix_inputs` | the projected features in front of the text's embeddings, then positions over the whole row | bridge1 |
-    | `to_tokens` | each value's bin from a range cut into equal parts, moved onto the ids the bins use | out4 |
-    | `from_tokens` | each id's bin turned back into the value at its middle | out4 |
+    | `action_values` | scores masked to the action ids, the likeliest taken, then read back as its bin's middle | out3, out4 |
     """,
 )
 
@@ -1696,8 +1698,8 @@ QUIZ16_SOURCE = source_file(
         ...
 
 
-    # TODO: Normalize each row of series, less its own mean, over its std plus
-    #   1e-5. Pad the row's end with `stride` copies of its last value, then
+    # TODO: Normalize each row of series, less its own mean, over its `.std()`
+    #   plus 1e-5. Pad the row's end with `stride` copies of its last value, then
     #   cut it into patches of `length` steps, a new one every `stride` steps.
     #   Return the patches, of shape (rows, patches, length).
     def normalized_patches(
@@ -1720,25 +1722,28 @@ QUIZ16_SOURCE = source_file(
 
 
     # TODO: Return CLIP's loss for a batch of pairs, where row i of a goes with
-    #   row i of b. Score every row of a against every row of b by cosine
-    #   similarity over temperature. Average the cross entropy that picks each
-    #   row's partner from a to b and from b to a.
+    #   row i of b, and the share of rows of a whose best scoring row of b is
+    #   their own partner, as a plain number. Score every row of a against
+    #   every row of b by cosine similarity over temperature. The loss averages
+    #   the cross entropy that picks each row's partner from a to b and from b
+    #   to a.
     def clip_loss(
         a: Tensor,
         b: Tensor,
         temperature: float,
-    ) -> Tensor:
+    ) -> tuple[Tensor, float]:
         ...
 
 
-    # TODO: Return x after cross attention that starts closed. cross is an
-    #   nn.MultiheadAttention with batch_first=True. x gives the queries, and
-    #   memory gives the keys and the values. Scale the attention's output by
-    #   the tanh of gate and add it to x.
+    # TODO: Return x after gated cross attention, skipping the rows with no
+    #   memory. cross is fuse2's MemoryAttention, called as cross(x, memory).
+    #   Scale its output by the tanh of gate. Add that to x in the rows where
+    #   has_memory is True, and leave x as it is where it is False.
     def gated_cross(
         x: Tensor,
         memory: Tensor,
-        cross: nn.MultiheadAttention,
+        has_memory: Tensor,
+        cross: nn.Module,
         gate: Tensor,
     ) -> Tensor:
         ...
@@ -1758,24 +1763,13 @@ QUIZ16_SOURCE = source_file(
         ...
 
 
-    # TODO: Cut the range from low to high into `bins` equal bins, and return
-    #   each value's bin as a token id, where bin 0 is id `first`. A value
-    #   below low takes the first bin, and high or above takes the last.
-    #   Return whole numbers.
-    def to_tokens(
-        values: Tensor,
-        low: float,
-        high: float,
-        bins: int,
-        first: int,
-    ) -> Tensor:
-        ...
-
-
-    # TODO: Return the value at the middle of the bin each id stands for, the
-    #   way back from to_tokens.
-    def from_tokens(
-        ids: Tensor,
+    # TODO: Return the value a model's scores pick, one per row, as RT-2 reads
+    #   an action. Only ids `first` to `first + bins - 1` stand for actions, so
+    #   set every other id's score to minus infinity. Take each row's likeliest
+    #   id, and return the middle of its bin, with the range from low to high
+    #   cut into `bins` equal bins and id `first` the lowest bin.
+    def action_values(
+        scores: Tensor,
         low: float,
         high: float,
         bins: int,
@@ -1831,22 +1825,24 @@ def clip_loss(
     a: Tensor,
     b: Tensor,
     temperature: float,
-) -> Tensor:
+) -> tuple[Tensor, float]:
     scores = F.normalize(a, dim=1) @ F.normalize(b, dim=1).T / temperature
     targets = torch.arange(len(scores))
+    loss = (F.cross_entropy(scores, targets) + F.cross_entropy(scores.T, targets)) / 2
 
-    return (F.cross_entropy(scores, targets) + F.cross_entropy(scores.T, targets)) / 2
+    return loss, (scores.argmax(dim=1) == targets).float().mean().item()
 
 
 def gated_cross(
     x: Tensor,
     memory: Tensor,
-    cross: nn.MultiheadAttention,
+    has_memory: Tensor,
+    cross: nn.Module,
     gate: Tensor,
 ) -> Tensor:
-    attended, _ = cross(x, memory, memory)
+    attended = torch.tanh(gate) * cross(x, memory)
 
-    return x + torch.tanh(gate) * attended
+    return x + torch.where(has_memory.view(-1, 1, 1), attended, torch.zeros_like(attended))
 
 
 def prefix_inputs(
@@ -1861,26 +1857,18 @@ def prefix_inputs(
     return joined + wpe(torch.arange(joined.shape[1]))
 
 
-def to_tokens(
-    values: Tensor,
+def action_values(
+    scores: Tensor,
     low: float,
     high: float,
     bins: int,
     first: int,
 ) -> Tensor:
-    places = ((values - low) / (high - low) * bins).floor().long()
+    is_action = torch.zeros(scores.shape[-1], dtype=torch.bool)
+    is_action[first : first + bins] = True
+    picked = scores.masked_fill(~is_action, float("-inf")).argmax(dim=-1)
 
-    return first + places.clamp(0, bins - 1)
-
-
-def from_tokens(
-    ids: Tensor,
-    low: float,
-    high: float,
-    bins: int,
-    first: int,
-) -> Tensor:
-    return low + (ids - first + 0.5) * (high - low) / bins
+    return low + (picked - first + 0.5) * (high - low) / bins
 '''
 
 QUIZ16_SOLUTION = source_file(
@@ -1952,6 +1940,59 @@ def expect_token_ids(
     )
 
 
+def partner_pair(
+    seed: int,
+    rows: int,
+    size: int,
+) -> tuple[Described, Described]:
+    """Rows of b near their partners in a, so some partners score highest and some don't."""
+    generator = torch.Generator().manual_seed(seed)
+    a = torch.randn(rows, size, generator=generator)
+    b = a + torch.randn(rows, size, generator=generator)
+
+    return Described(a, f"a random tensor of shape {(rows, size)}"), Described(b, f"a plus noise, of shape {(rows, size)}")
+
+
+def expect_loss_and_share(
+    call: str,
+    actual: object,
+    expected: tuple[Tensor, float],
+) -> None:
+    reject_missing_return(
+        call=call,
+        actual=actual,
+    )
+
+    if not isinstance(actual, tuple) or len(actual) != 2:
+        raise Mismatch(f"{call} is {value_text(actual)}, but it should be a pair, the loss and the share of rows whose partner scores highest.")
+
+    expect_tensor(
+        call=f"the loss from {call}",
+        actual=actual[0],
+        expected=expected[0],
+    )
+    expect_close(
+        call=f"the share from {call}",
+        actual=actual[1],
+        expected=expected[1],
+    )
+
+
+def action_scores(
+    seed: int,
+    rows: int,
+    vocabulary: int,
+    planted: dict[int, int],
+) -> Described:
+    """Random scores with the highest of some rows planted outside the action ids, so a pick with no mask goes wrong."""
+    scores = torch.randn(rows, vocabulary, generator=torch.Generator().manual_seed(seed))
+
+    for row, place in planted.items():
+        scores[row, place] = 6.0
+
+    return Described(scores, f"scores of shape {(rows, vocabulary)}, some rows highest outside the action ids")
+
+
 def check_quiz16(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
@@ -1987,22 +2028,24 @@ def check_quiz16(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="clip_loss",
-        description="averages the cross entropy from a to b and from b to a",
+        description="averages the cross entropy both ways, and finds each row's partner",
         inputs=(
-            (random_input(1630, 4, 3), random_input(1631, 4, 3), 0.07),
-            (random_input(1632, 3, 5), random_input(1633, 3, 5), 0.5),
+            (*partner_pair(1630, 6, 3), 0.07),
+            (*partner_pair(1632, 8, 5), 0.5),
         ),
         reference=QUIZ16_REFERENCE["clip_loss"],
+        expect=expect_loss_and_share,
     )
     check_on_inputs(
         checker=checker,
         function="gated_cross",
-        description="adds the gated cross attention to x",
+        description="adds the gated cross attention to x where the memory is there",
         inputs=tuple(
             (
-                random_input(seed, 2, 3, 8),
-                random_input(seed + 1, 2, 5, 8),
-                seeded_input(seed + 2, lambda: nn.MultiheadAttention(8, 2, batch_first=True), "nn.MultiheadAttention(8, 2, batch_first=True)"),
+                random_input(seed, 3, 3, 8),
+                random_input(seed + 1, 3, 5, 6),
+                torch.tensor([True, False, True]),
+                seeded_input(seed + 2, lambda: FUSE2_REFERENCE["MemoryAttention"](8, 6, 2), "fuse2's MemoryAttention(8, 6, 2)"),
                 torch.tensor([gate]),
             )
             for seed, gate in ((1640, 0.0), (1643, 0.9), (1646, -0.4))
@@ -2033,24 +2076,13 @@ def check_quiz16(checker: Checker) -> None:
     )
     check_on_inputs(
         checker=checker,
-        function="to_tokens",
-        description="floors each value into its bin and moves the bin onto the ids",
+        function="action_values",
+        description="masks the scores to the action ids, takes the likeliest and reads its bin's middle",
         inputs=(
-            (torch.tensor([-1.0, -0.99, -0.4, 0.0, 0.2, 0.999, 1.0, 1.7, -3.0]), -1.0, 1.0, 8, 100),
-            (torch.tensor([[0.0, 2.5], [9.99, 5.0]]), 0.0, 10.0, 4, 0),
+            (action_scores(1660, 5, 12, {0: 0, 1: 10, 2: 3, 3: 11}), -1.0, 1.0, 6, 4),
+            (action_scores(1661, 3, 9, {0: 4, 1: 8}), 0.0, 10.0, 4, 0),
         ),
-        reference=QUIZ16_REFERENCE["to_tokens"],
-        expect=expect_token_ids,
-    )
-    check_on_inputs(
-        checker=checker,
-        function="from_tokens",
-        description="turns each id back into the middle of its bin",
-        inputs=(
-            (torch.tensor([100, 103, 107]), -1.0, 1.0, 8, 100),
-            (torch.tensor([[0, 3], [1, 2]]), 0.0, 10.0, 4, 0),
-        ),
-        reference=QUIZ16_REFERENCE["from_tokens"],
+        reference=QUIZ16_REFERENCE["action_values"],
     )
 
 
@@ -2069,15 +2101,15 @@ QUIZ16 = Exercise(
         "residual_ids": "Keep what is left of z, starting with z. For each codebook, compare it with every entry "
         "through unsqueeze, take the argmin of the summed squares, and take the chosen entries off.",
         "clip_loss": "F.normalize with dim=1 makes every row length 1, so a matrix multiply gives the cosines. Row "
-        "i's right class is i, from torch.arange. The other direction scores the transpose.",
-        "gated_cross": "cross(query, key, value) gives the output and the attention weights. torch.tanh(gate) is 0 "
-        "at the start, so the whole thing begins as x itself.",
+        "i's right class is i, from torch.arange. The other direction scores the transpose. For the share, compare "
+        "each row's argmax with those classes, as floats, and take the mean with .item().",
+        "gated_cross": "cross(x, memory) gives an output shaped like x. torch.where lines up with x once has_memory has "
+        "shape (rows, 1, 1), and torch.zeros_like gives the rows that add nothing.",
         "prefix_inputs": "torch.cat on dim 1 joins the prefix and the text. The positions run over the joined length, "
         "so look up torch.arange of that length in wpe.",
-        "to_tokens": "Take low off, divide by the range and times bins to get each value's place. Floor it, make it "
-        "whole with .long(), clamp it to the bins, and add first.",
-        "from_tokens": "Take first off each id to get its bin. A bin's middle sits half a bin past its start, and "
-        "each bin is (high - low) / bins wide.",
+        "action_values": "A mask of False over the scores' last dimension, True from first up to first + bins, marks "
+        "the action ids. masked_fill the rest with float(\"-inf\") and take argmax over the last dimension. Take "
+        "first off for the bin, then read its middle, each bin (high - low) / bins wide.",
     },
     introduces=(),
     check=check_quiz16,

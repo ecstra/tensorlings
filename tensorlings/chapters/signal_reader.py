@@ -882,6 +882,8 @@ def check_train_reader(found: object) -> None:
     namespace = found.__globals__
     calls: list[tuple[str, object]] = []
     optimizers = {"one": object(), "two": object()}
+    handed = torch.Generator()
+    strays: list[str] = []
 
     def scripted_stage_one(
         gpt: nn.Module,
@@ -906,6 +908,9 @@ def check_train_reader(found: object) -> None:
     ) -> tuple[Tensor, Tensor, Tensor]:
         calls.append(("caption_batch", count))
 
+        if generator is not handed:
+            strays.append("caption_batch")
+
         return torch.zeros(count, 64), torch.full((count, 4), 1), torch.full((count, 4), 2)
 
     def scripted_questions(
@@ -913,6 +918,9 @@ def check_train_reader(found: object) -> None:
         generator: torch.Generator,
     ) -> tuple[Tensor, list[int], list[str]]:
         calls.append(("question_batch", count))
+
+        if generator is not handed:
+            strays.append("question_batch")
 
         return torch.ones(count, 64), [0] * count, ["yes"] * count
 
@@ -953,7 +961,7 @@ def check_train_reader(found: object) -> None:
     namespace.update(stand_ins)
 
     try:
-        found(nn.Linear(1, 1), nn.Linear(1, 1), nn.Linear(1, 1), 3, 2, SMALL_POSITIONS.value, torch.Generator(), torch.device("meta"))
+        found(nn.Linear(1, 1), nn.Linear(1, 1), nn.Linear(1, 1), 3, 2, SMALL_POSITIONS.value, handed, torch.device("meta"))
     finally:
         namespace.update(kept)
 
@@ -976,6 +984,12 @@ def check_train_reader(found: object) -> None:
 
     if sizes != {32}:
         raise Mismatch(f"{call} drew batches of {sorted(sizes)} signals, but each should hold 32.")
+
+    if strays:
+        raise Mismatch(
+            f"{call} called {' and '.join(sorted(set(strays)))} with another generator than the one it was handed. Draw "
+            "every batch from generator, so each step gets new signals.",
+        )
 
 
 def check_reader2(checker: Checker) -> None:

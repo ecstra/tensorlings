@@ -773,8 +773,9 @@ BRIDGE2_LESSON = prose(
     The gated layers leave the GPT exactly as it was. The signal takes none
     of its positions, where the prefix takes 8. They trained 694,792 weights
     to the prefix's 86,272. Idefics2's authors measured the same trade at
-    scale. With the backbones frozen, cross attention scored 66.7 against
-    the prefix's 60.3. With them trained through LoRA, the prefix won, 69.5
+    scale. With the image encoder and the language model frozen, cross
+    attention scored 66.7 against the prefix's 60.3. With both trained
+    through LoRA, the prefix won, 69.5
     against 67.3. So reach for gated cross attention when the language model
     must stay as it is, or a long input would crowd its positions. Reach for
     the prefix when LoRA may change the model, for the simpler bridge and the
@@ -1254,22 +1255,28 @@ BRIDGE3_LESSON = prose(
     write vectors outside its vocabulary that the GPT still responds to.
 
     `probe_accuracy` fits a linear probe, as masked2 described one, and scores
-    it on 500 signals it never saw. The letters are the signal as text, each
-    step one of 26 letters by its level, read as one hot rows. Here are
-    probes trained on sets of each size.
+    it on 500 signals it never saw. Here are probes trained on sets of each
+    size, reading three things. The projected tokens come from a projector
+    that stage one trained on captions naming these very facts. The frozen
+    encoder's own tokens saw no labels at all. The letters are the signal as
+    text, each step one of 26 letters by its level, read as one hot rows.
 
     | Read from, fact | 100 signals | 300 | 1,000 | 10,000 |
     |---|---|---|---|---|
     | 8 projected tokens, waves | 100% | 100% | 100% | 100% |
+    | 8 encoder tokens, waves | 100% | 100% | 100% | 100% |
     | 64 letters, waves | 87% to 90% | 97% to 98% | 99.4% to 99.8% | 100% |
     | 8 projected tokens, spike's third | 85% to 97% | 99% to 100% | 100% | 100% |
+    | 8 encoder tokens, spike's third | 77% to 81% | 92% to 98% | 99% to 100% | 100% |
     | 64 letters, spike's third | 59% to 67% | 68% to 71% | 75% to 79% | 99% to 99.6% |
 
-    Both read the trend at 99.8% or more from 100 signals on. Given 10,000
-    signals, the letters hold every fact for one linear map too. But a probe
-    on the letters needs thousands of examples to find the spike's third.
-    The projected tokens lay it out so that 300 are enough, in an eighth of
-    the positions.
+    All three read the trend at 99.8% or more from 100 signals on. Given
+    10,000 signals, the letters hold every fact for one linear map too. But a
+    probe on the letters needs thousands of examples to find the spike's
+    third. The encoder lays out the waves and most of the spike with no
+    labels, the way LLaVA leans on CLIP's trained features. Stage one's
+    captions sharpen the spike further, so 300 examples are enough, in an
+    eighth of the positions.
     """,
 )
 
@@ -1565,7 +1572,8 @@ def measure_tokens(
 ) -> dict[str, list[float]]:
     """bridge3's tables, after 300 steps of stage one on the CPU: how near each projected token sits to its nearest
     character and how long it is, the same for the characters themselves, and linear probes for each fact from the
-    projected tokens and from the letters, trained on each size of set and scored on the same 500 other signals."""
+    projected tokens, from the frozen encoder's own tokens and from the letters, trained on each size of set and scored
+    on the same 500 other signals."""
     characters, _ = shakespeare_positions()
     results: dict[str, list[float]] = {}
 
@@ -1593,6 +1601,7 @@ def measure_tokens(
             with torch.no_grad():
                 readings = {
                     "tokens": (BRIDGE_REFERENCE["projected_tokens"](encoder, projector, pool).flatten(1), tokens[1000:].flatten(1)),
+                    "encoder": (encoder(pool).flatten(1), encoder(signals[1000:]).flatten(1)),
                     "letters": (letter_features(pool), letter_features(signals[1000:])),
                 }
 
