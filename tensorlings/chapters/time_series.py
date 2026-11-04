@@ -870,8 +870,8 @@ SERIES2 = Exercise(
         "normalized": "series.mean(dim=1, keepdim=True), and the same with .std plus 1e-5, this file's form rather than "
         "RevIN's square root of the variance. Return (series - mean) / spread, mean and spread.",
         "restored": "Multiply by spread, then add mean. Both have one column, so they broadcast over the forecasts.",
-        "NormalizedLinear.forward": "scaled, mean, spread = normalized(series). Run self.linear on scaled, then pass "
-        "that, mean and spread to restored.",
+        "NormalizedLinear.forward": "normalized(series) gives three things, the scaled series, its mean and its spread. "
+        "Run self.linear on the scaled series, then pass that, the mean and the spread to restored.",
     },
     introduces=("RevIN",),
     check=check_series2,
@@ -914,15 +914,16 @@ SERIES3_LESSON = prose(
     | Columns mixed | 3.29 | 2.51 | 1.87 | 1.93 |
 
     Mixing the columns raises the error by 58% at 24 weeks, on all 5 seeds,
-    and by 29% at 36 weeks. At 48 and 60 weeks the two land within 4% of
-    each other. The paper also finds mixing worse on this table, and shows
-    why on its Weather table. There a mixed model's test error starts rising
-    after a few epochs, while a model with its columns apart keeps improving.
+    and by 29% at 36 weeks. At 48 and 60 weeks mixing scores lower here, by
+    1% and 3%. The paper finds mixing worse at every horizon of this table,
+    and shows why on its Weather table. There a mixed model's test error
+    starts rising after a few epochs, while a model with its columns apart
+    keeps improving.
 
-    Patches land within 3% of single weeks, with 42 tokens in place of 105.
+    Patches score 3% higher than single weeks at 24 weeks, 1% to 2% higher
+    at 36 and 48, and 1% lower at 60. They use 42 tokens in place of 105.
     Attention compares every token with every other, so a head scores 1,764
-    pairs in place of 11,025. That is about 6 times less work for the same
-    error.
+    pairs in place of 11,025, about 6 times less work.
 
     `forecast_error` takes a window's columns apart, as the model reads them,
     and scores in eval mode without recording for autograd.
@@ -1169,8 +1170,9 @@ SERIES3 = Exercise(
     source=SERIES3_SOURCE,
     solution=SERIES3_SOLUTION,
     hints={
-        "PatchForecaster.forward": "scaled, mean, spread = normalized(series). Run self.embed, then self.dropout, then "
-        "self.blocks. .flatten(1) the result, run self.head, and pass that, mean and spread to restored.",
+        "PatchForecaster.forward": "normalized(series) gives the scaled series, its mean and its spread. Run self.embed "
+        "on the scaled series, then self.dropout, then self.blocks. .flatten(1) the result, run self.head, and pass "
+        "that, the mean and the spread to restored.",
         "forecast_error": "Call model.eval(). Inside torch.no_grad(), take F.mse_loss of model(channels_apart(past)) "
         "and channels_apart(future), then .item(). Call model.train() before returning.",
     },
@@ -1335,27 +1337,41 @@ def measure_series(
     return results
 
 
+@contextlib.contextmanager
+def looking_back(weeks: int) -> Iterator[None]:
+    """windows reads LOOKBACK from the files' given part, so a run at a longer lookback sets it there for the run."""
+    before = REFERENCE["LOOKBACK"]
+    REFERENCE["LOOKBACK"] = weeks
+
+    try:
+        yield
+    finally:
+        REFERENCE["LOOKBACK"] = before
+
+
 def measure_choices(
     seeds: range = range(5),
     epochs: int = 60,
     device: str = "mps",
     batch: int = 128,
+    lookback: int = 104,
     names: tuple[str, ...] = ("PatchTST", "every week a token", "columns mixed"),
 ) -> dict[str, list[float]]:
     """series3's table: PatchTST as series3 builds it, the same model reading every week as its own token (patches of
     1 every 1), and the same model with its columns mixed. Each one's test error at each horizon on 5 seeds, on the
     Mac's GPU for 60 epochs on batches of 128 series, as series2's table was. The mixed model reads whole windows, so
-    its batches hold 128 // 7 = 18 windows: the same 126 series and the same steps per epoch as the others."""
+    its batches hold 128 // 7 = 18 windows: the same 126 series and the same steps per epoch as the others. lookback
+    sets how many weeks every model reads, 148 making 64 patches."""
     series = flu_series()
     columns = series.shape[1]
     makers: dict[str, Callable[[int], nn.Module]] = {
-        "PatchTST": lambda horizon: REFERENCE["PatchForecaster"](REFERENCE["LOOKBACK"], horizon),
-        "every week a token": lambda horizon: REFERENCE["PatchForecaster"](REFERENCE["LOOKBACK"], horizon, 1, 1),
-        "columns mixed": lambda horizon: MixedPatchForecaster(REFERENCE["LOOKBACK"], horizon, columns),
+        "PatchTST": lambda horizon: REFERENCE["PatchForecaster"](lookback, horizon),
+        "every week a token": lambda horizon: REFERENCE["PatchForecaster"](lookback, horizon, 1, 1),
+        "columns mixed": lambda horizon: MixedPatchForecaster(lookback, horizon, columns),
     }
     results: dict[str, list[float]] = {}
 
-    with pinned_threads():
+    with pinned_threads(), looking_back(lookback):
         for horizon in HORIZONS:
             for name in names:
                 errors = []
