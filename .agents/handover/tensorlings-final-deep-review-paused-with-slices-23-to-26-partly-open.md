@@ -12,22 +12,30 @@ The branch is feat/tensorlings-phase-6, with 370 exercises in 14 sections. Every
 
 The final deep review, TODO-020, ran one fresh reviewer per slice of chapters with a shared brief, then had the same agent fix its own findings. Each slice was committed only after its dev check and wrong answers passed on a staged copy of the tree.
 
-- Slices 1 to 22 are reviewed, fixed and committed.
-- Slices 23 to 26 are reviewed and committed with their quick fixes. Each has research redesigns or reworks still open (below).
-- The check on quiz1 to quiz8 is done and its rework is open.
-- Every agent from this session can be resumed by message with its context and scratch work intact, as this morning's were. The slice 23 to 26 reviewers and the quiz check agent hold the detail behind items 1 to 7.
+- Slices 1 to 26 are reviewed, fixed and committed, apart from the open items below.
+- In the evening's run:
+  - Every quiz from quiz1 to quiz17 now combines earlier moves.
+  - A lint rule now flags any hint that quotes a solution line, and every flagged hint was rewritten, so the lint finds none across the course.
+  - bridge2 now shows stage one keeping more of the GPT's Shakespeare on every seed, at LLaVA-1.5's rate.
+  - physics3 decays its rate, so no seed stalls.
+  - quiz17's train_step combines micro batches with clipping.
+  - combine2 gains a case where adding wins.
+  - combine3's zero start wins with a wide branch.
+  - scaling3's rate was tuned per point.
+- Every agent from this session can be resumed by message with its context and scratch work intact. The slice 23 to 25 agents hold the detail behind the open items.
 
 ## Open, in the order to take them
 
-1. **bridge2**. Stage one never pays off on the caption task: stage two alone scores as well, and both runs lose most of the GPT's Shakespeare. Try LLaVA's ablation setting first, with plentiful captions for stage one and a small fixed set of question examples for stage two, where an aligned projector should raise the final score. Failing that, mix Shakespeare batches into stage two as LLaVA-1.5 mixed ShareGPT text, and measure what that keeps. Also move stage one's rate to 1e-3 as LLaVA-1.5 did for its MLP projector, then rerun bridge2, bridge3 and reader2.
-2. **series3**. Patches lose to one token a week by about 3% at three horizons, and mixing the columns beats keeping them apart at 48 and 60 weeks. The best lead is PatchTST/64's own flu setting, a lookback of 148 weeks in 64 patches, which scored 1.87 to 1.98 at 24 weeks on 3 seeds against 2.02 for week tokens. It needs the other horizons and seed matched week token runs. The lesson still says patches give "the same error".
-3. **table3**. Attention over the column tokens loses to the MLP on complete rows, and the missing column win holds only against an MLP that never trained with holes. Untested levers from the FT-Transformer paper are the quantile transform on every input, d 192 with ReGLU and no norm before the first block, and lr 1e-4 with early stopping at patience 16.
-4. **scaling3**. The IsoFLOP sweep's best size grows as compute to 0.61, not Chinchilla's 0.5, and tokens per parameter fall from 263 to 115. A peak rate of 1e-2 helped every width up to 24 on the first three budgets. A proper retune needs 6e-3 and the two top budgets, about 25 to 40 minutes a sweep. The lesson already ties its numbers to scaling2's 20 and gives Porian and colleagues' causes.
-5. **quiz17 and physics3**. quiz17's train_step repeats gpt's train_step, so combine it with ddp2's micro batch accumulation. physics3's RelativeForces stalls at 66% on seed 1 while absolute pairs reach 78% to 88%. Try lr 1e-3 for all four modules and remeasure both tables.
-6. **quiz1 to quiz8**. 13 of their 32 parts repeat one earlier TODO: quiz2's partials_of_exp_product, quiz3's standardize_both, quiz4's batchnorm_mlp and eval_accuracy, quiz6's adamw_for, set_rate and start_and_baseline, quiz7's image_size_through and conv_bn_relu, and all four of quiz8's parts. Rework each to combine two or three earlier moves, as quiz9 to quiz17 were. Fix the quiz tables that cite the wrong exercise too (quiz2's partials, quiz6's set_rate and clipped_step). quiz10's rms_pre_norm_block also repeats quiz5's rms_pre_norm.
-7. **Slice 25's research items**, from combining and papers. combine3's signal column shows Kaiming ending lowest (0.0041 to 0.0048 against the zero start's 0.0054 to 0.0059), and no setup tried made the zero start win there, though ControlNet's ablation claims it at scale. combine5, the chapter's capstone, never asks for a combine1 to combine4 piece: add a problem that needs conditioning, such as counting the bumps of the kind a query names. combine4 never says how to choose the across piece: add a row with attention as the across block. combine2's "add when signals are evidence for the same answer" has no case that shows it. paper2 runs on the GPU, which doesn't repeat exactly, so a CPU run would make its tables repeat at about twice the time.
-8. **The course wide passes**, steps 28 and 29 of TODO-020. profile1, kvcache2 and fast3's three sizes were remeasured on a quiet machine at the end of the day, which moved fast3's claim to fused int8 winning on both bigger models. Still to remeasure quietly with threads pinned are profile1's 1 and 10 thread sentence, lstm3, adder2, gpt3, bpe3, topics1 and word2vec2. fast3's lesson sits right at the length limit and could use a trim. Add a lint rule that flags a hint quoting a solution line word for word, then rewrite every hint it finds (about 71 exercises).
-9. **The close-out**, TODO-017 step 8. Run the full dev check and every wrong answer on a quiet machine, run the screen driver, and set up the owner's folder from nothing. The owner's exercises/ folder holds stale files for several changed exercises, so remove exercises/, solutions/ and .tensorlings-state.json before `run.py init`. Then close TODO-017, TODO-018, TODO-019 and TODO-020.
+1. **series3**. Its text now states the measured numbers plainly, but neither of PatchTST's two choices clearly wins at the 104 week lookback. The lead is a longer history for fewer tokens: 64 patches over 148 weeks beat 105 week tokens over 104 weeks on all 3 seeds at 24 weeks, and on 2 of 3 at 36. Run 48 and 60 weeks, finish the seed matched week token runs, then rebuild the table through `measure_choices(seeds=range(3), lookback=148)`. 148 weeks is the course's choice, not the paper's, so don't credit it to PatchTST.
+2. **table3**. Attention over the column tokens loses to the MLP on complete rows. An agent was trying the FT-Transformer paper's levers at the stop (the quantile transform, d 192 with ReGLU, lr 1e-4 with early stopping), so read its report first.
+3. **combine4 and combine5**. combine4's attention and convolution across blocks are in the file with `measure_across`. Its run writes across.json in the slice 25 scratch folder, so add the row and a paragraph from it. combine5's fourth problem, counting the bumps of the kind a query names, needs conditioning, but joining the query on works as well as FiLM or a gate. Make its check accept all three, and steady the gate's training first, since it failed one seed in three.
+4. **Small follow ups**.
+   - bridge2's Shakespeare mixing run is coded but not run. Stage one raising the question scores is still not shown, and stage two at LLaVA-1.5's LoRA rate is the untested idea.
+   - scaling3's tuned exponent is 0.62, so a grid reaching 4e-2 for the narrowest widths would rule out the grid's edge.
+   - scaling3's solution can pass its 120 second limit on its first sweep line under heavy load, so consider a longer limit.
+   - paper2 runs on the GPU, which doesn't repeat exactly. A CPU run would make its tables repeat, at about twice the time.
+5. **The quiet timing pass**, step 28 of TODO-020. Still to remeasure quietly with threads pinned are profile1's 1 and 10 thread sentence, lstm3, adder2, gpt3, bpe3, topics1, word2vec2 and reader2's "about 2 minutes". fast3's lesson sits right at the length limit.
+6. **The close-out**, TODO-017 step 8. Run the full dev check and every wrong answer on a quiet machine, run the screen driver, and set up the owner's folder from nothing. The owner's exercises/ folder holds stale files for several changed exercises, so remove exercises/, solutions/ and .tensorlings-state.json before `run.py init`. Then close TODO-017, TODO-018, TODO-019 and TODO-020.
 
 ## Traps
 
