@@ -1091,7 +1091,7 @@ DESIGN2_SOURCE = source_file(
 
     # TODO: Train model with torch.optim.AdamW at lr=1e-3 for steps steps. Each
     #   step takes a batch from next_batch() and the cross entropy over every
-    #   place. Every every steps, counting from 1, after that step's update,
+    #   place. Every `every` steps, counting from 1, after that step's update,
     #   add (step, query_accuracy of the scores it just trained on,
     #   query_accuracy on held) to the curve, the held out one inside
     #   torch.no_grad(). Return the curve.
@@ -1972,7 +1972,8 @@ DESIGN5_LESSON = prose(
     The test caught the break, and the diagnosis is its learned positions.
     Training sequences fill places 0 to 23, so the positions past them never
     trained. The fix starts each batch's positions at a random place among all
-    96, as Kiyono and colleagues' SHAPE shifts them, so every position trains.
+    96, so every position trains. It is a cousin of Kiyono and colleagues'
+    SHAPE, which shifts each sequence's positions by its own random offset.
     Test at the lengths the module will meet, not only the ones it learned.
     """,
 )

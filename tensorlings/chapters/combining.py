@@ -951,17 +951,16 @@ COMBINE3_LESSON = prose(
 
     Here a residual model of 4 blocks was trained first. Then a branch read
     4 new numbers and added its output to the stream before the second block.
-    The branch, starting from nothing, trained at 0.01, and the trained model
-    at 0.001, three seeds each.
+    The branch, starting from nothing, trained at 0.01, three seeds each.
 
-    - signal: the new numbers explain part of the answer, and the branch trained on 4,000 examples.
-    - no signal: the new numbers explain nothing, and the branch had only 64 examples.
+    - signal: the new numbers explain part of the answer, the branch trained on 4,000 examples, and the trained model trained too, at 0.001.
+    - no signal: the new numbers explain nothing, the branch had only 64 examples, and the trained model stayed frozen, as ControlNet locks its own.
 
     | Branch start | Signal, step 0 | Signal, step 1,500 | No signal, step 1,500 |
     |---|---|---|---|
-    | last layer zero | 0.252 | 0.0054 to 0.0059 | 0.0070 to 0.0090 |
-    | PyTorch's default | 0.24 to 0.28 | 0.0053 to 0.0070 | 0.012 to 0.013 |
-    | Kaiming | 0.29 to 0.44 | 0.0041 to 0.0048 | 0.057 to 0.068 |
+    | last layer zero | 0.252 | 0.0054 to 0.0059 | 0.00073 to 0.00075 |
+    | PyTorch's default | 0.24 to 0.28 | 0.0053 to 0.0070 | 0.0012 to 0.0017 |
+    | Kaiming | 0.29 to 0.44 | 0.0041 to 0.0048 | 0.063 to 0.081 |
 
     The trained model alone scored 0.252 with signal and 0.0005 without.
 
@@ -971,7 +970,9 @@ COMBINE3_LESSON = prose(
     below the model alone.
 
     Without signal, every branch learned some noise from its 64 examples. The
-    zero start kept that smallest, and Kaiming ended about 8 times worse. With
+    zero start kept that smallest, ending about 1.5 times the model alone, and
+    no check passed 0.0011. PyTorch's default began at 0.017 to 0.030 and
+    ended 2.4 to 3.3 times the model alone, and Kaiming 124 to 160 times. With
     every layer at zero, the signal run ended at 0.29 to 0.30, worse than the
     model alone. That branch could never read its input.
 
@@ -1031,7 +1032,8 @@ COMBINE3_SOURCE = source_file(
 
     # TODO: Finish forward. Run the base model on x, of shape (batch, 8), as
     #   Base.forward does, but add branch of side, of shape (batch, 4), to the
-    #   stream just before block number at. Return one answer per input.
+    #   stream just before self.base.blocks[at] runs, so at=1 adds it before
+    #   the second block. Return one answer per input.
     class WithBranch(nn.Module):
         def __init__(
             self,
@@ -1927,7 +1929,7 @@ COMBINE5_LESSON = prose(
     | Attention | items are found by content, at any distance | attention6 |
     | RNN, LSTM or state space | one state of fixed size, carried in order | lstm1, ssm1 |
     | Gate or FiLM | one signal controls another | gating1, combine1, combine2 |
-    | Residual and norm | the model is deep | residual2 |
+    | Residual and norm | the model is deep | residual2, residual3 |
     | Equivariant layer | a symmetry, like a turn, a move or a mirror | equivariance2 |
     | Router to experts | each input needs a few of many skills | moe1 |
     | Message passing | the answer follows a graph's edges | message1 |
@@ -2140,6 +2142,7 @@ def twin_or_rule(
     measure: Callable[[nn.Module, bool], float],
     passes: Callable[[float], bool],
     twin_task: str,
+    cause: str = "a fixed rule is doing the work. Build it from layers that learn the rule.",
 ) -> None:
     """The same model trained on the problem's twin, where the answer follows another rule. Learned pieces fit
     both, and a hand written formula with a learned scale fits only one."""
@@ -2147,10 +2150,7 @@ def twin_or_rule(
     score = tested_or_crash(lambda model: measure(model, True), trained, name, "the twin task")
 
     if not passes(score):
-        raise Mismatch(
-            f"{name} learns the task but not its twin, where {twin_task}. Pieces that learn fit both, so a fixed rule "
-            "is doing the work. Build it from layers that learn the rule.",
-        )
+        raise Mismatch(f"{name} learns the task but not its twin, where {twin_task}. Pieces that learn fit both, so {cause}")
 
 
 def kept_promise(
@@ -2234,7 +2234,16 @@ def check_key_lookup(found: type) -> None:
         )
 
     kept_promise(lookup_shuffle_gap(trained), LOOKUP_SHUFFLE_BAR, "KeyLookup", "the pairs come in a new order", "{:.1%} of its answers")
-    twin_or_rule(found, "KeyLookup", train_lookups, lookup_share, lambda score: score >= LOOKUP_BAR, "the query is one more than its key")
+    twin_or_rule(
+        found,
+        "KeyLookup",
+        train_lookups,
+        lookup_share,
+        lambda score: score >= LOOKUP_BAR,
+        "the query is one more than its key",
+        "either a fixed rule is doing the work, or the query and the keys share one table, which can only match a "
+        "query to its own id. Give the query a table or a projection of its own.",
+    )
 
 
 PROMISE_REASONS = {
@@ -2453,9 +2462,11 @@ TRAINED_RATE = 1e-3
 
 
 def measure_branch_starts(seeds: range = range(3)) -> dict[str, object]:
-    """combine3's table, with the branch at its own rate of 0.01 and the trained model at 0.001. For each start,
-    the error at step 0, the worst error checked every 50 steps, how many of those checks sat above the trained
-    model alone, and the error at step 1,500, with signal on 4,000 examples and without on 64."""
+    """combine3's table, with the branch at its own rate of 0.01. With signal the trained model trains too, at 0.001.
+    Without signal it stays frozen, as ControlNet locks its model, since fine tuning it on 64 examples would raise
+    its error with no branch at all. For each start, the error at step 0, the worst error checked every 50 steps,
+    how many of those checks sat above the trained model alone, and the error at step 1,500, with signal on 4,000
+    examples and without on 64."""
     results: dict[str, object] = {}
 
     with pinned_threads():
@@ -2471,12 +2482,12 @@ def measure_branch_starts(seeds: range = range(3)) -> dict[str, object]:
                 for seed in seeds:
                     torch.manual_seed(10 + seed)
                     model = ReferenceWithBranch(copy.deepcopy(base), started_branch(start), 1)
-                    optimizer = torch.optim.Adam(
-                        [
-                            {"params": model.branch.parameters(), "lr": BRANCH_RATE},
-                            {"params": model.base.parameters(), "lr": TRAINED_RATE},
-                        ],
-                    )
+                    groups = [{"params": model.branch.parameters(), "lr": BRANCH_RATE}]
+
+                    if useful:
+                        groups.append({"params": model.base.parameters(), "lr": TRAINED_RATE})
+
+                    optimizer = torch.optim.Adam(groups)
                     generator = torch.Generator().manual_seed(20 + seed)
                     marks = []
 

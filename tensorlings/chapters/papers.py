@@ -254,8 +254,10 @@ PAPER1_LESSON = prose(
     - Lines: turn each sentence of the setup into one line of code.
     - Counts: count the parameters, and check the count against the paper's.
 
-    Power and colleagues' grokking paper shows the moves. Its data are the
-    tables of an operation, such as a + b mod 97. Every number is a token of
+    Power and colleagues' grokking paper shows the moves. Grokking is their
+    name for a model that gets every training example right early and the
+    held out ones only much later. Its data are the tables of an operation,
+    such as a + b mod 97. Every number is a token of
     its own, so the model never sees digits. It learns what each number means
     only from how the numbers combine.
 
@@ -267,14 +269,18 @@ PAPER1_LESSON = prose(
     - Batches: 512 equations, or half the training set when that is smaller.
 
     gpt2's GPT at 2 layers, width 128 and 4 heads is nearly that model. Weight
-    decay 1 is ten times gpt3's 0.1, and paper2 shows why the paper wanted so
-    much.
+    decay 1 is ten times gpt3's 0.1, and paper2 shows what that much buys.
 
     The paper never says how its weights start, or whether its head shares
-    `wte`'s table. The given `PaperGPT` follows Nanda and colleagues' grokking
-    model, whose head has a weight of its own. It also keeps PyTorch's own
-    start for every layer, larger than gpt2's 0.02. paper2 shows what gpt2's
-    two choices would change.
+    `wte`'s table. Its released code gives the head a weight of its own and
+    keeps PyTorch's own start for every layer. The given `PaperGPT` does
+    the same, as does Nanda and colleagues' grokking model. PyTorch's start is
+    larger than gpt2's 0.02. paper2 shows what gpt2's two choices would
+    change.
+
+    The warmup needs a scheduler schedule1 didn't show.
+    `LambdaLR(optimizer, f)` sets the rate to the starting rate times `f(n)`,
+    where n counts the calls to `scheduler.step()` so far, from 0.
 
     The count leaves out the token and position tables and the head. It
     covers the blocks and the last LayerNorm, the part that grows with the
@@ -299,6 +305,8 @@ PAPER1_SOURCE = source_file(
     shuffled = torch.randperm(5, generator=torch.Generator().manual_seed(0))    # tensor([4, 0, 1, 3, 2])
     last = torch.zeros(2, 4, 99)[:, -1].shape           # torch.Size([2, 99]), the scores at the last token
     warmup = [min(1.0, (step + 1) / 10) for step in (0, 1, 9, 20)]    # [0.1, 0.2, 1.0, 1.0]
+    sgd = torch.optim.SGD([torch.zeros(1, requires_grad=True)], lr=0.1)
+    halved = torch.optim.lr_scheduler.LambdaLR(sgd, lambda step: 0.5)    # sgd's rate is now 0.1 * 0.5 = 0.05
 
 
     # SelfAttention, GPT2MLP and GPT2Block from block2, and init_weights,
@@ -387,6 +395,8 @@ PAPER1_SOLUTION = source_file(
     shuffled = torch.randperm(5, generator=torch.Generator().manual_seed(0))
     last = torch.zeros(2, 4, 99)[:, -1].shape
     warmup = [min(1.0, (step + 1) / 10) for step in (0, 1, 9, 20)]
+    sgd = torch.optim.SGD([torch.zeros(1, requires_grad=True)], lr=0.1)
+    halved = torch.optim.lr_scheduler.LambdaLR(sgd, lambda step: 0.5)
 
 
 ''' + indented(MODEL_PARTS) + '''
@@ -722,29 +732,31 @@ PAPER2_LESSON = prose(
     | Validation | 4,600 | 3,600 | 3,200 | 3,700 | 4,900 |
 
     `mean_and_spread` sums them up. Validation passes at 4,000 on average,
-    with a spread of 718, 13 times as late as training.
+    with a spread of 718, 13 times as late as training. A GPU run doesn't
+    repeat exactly. Seed 0 has passed 99% at 4,400, 4,600 and 4,800 in three
+    runs, so yours may land a few hundred updates away.
 
     Then what moves the jump, the update where validation first passed 99%.
 
     | Run | Seeds | Validation passes 99% at |
     |---|---|---|
     | 30% of the table, as above | 5 | 3,200 to 4,900 |
-    | 50% | 5 | 1,300 to 1,400 |
+    | 50% | 5 | 1,300 to 1,500 |
     | 70% | 3 | 700 to 1,200 |
-    | 30%, gpt3's weight decay of 0.1 | 3 | not in 6,000 updates, at 6% to 14% |
+    | 30%, gpt3's weight decay of 0.1 | 3 | not in 6,000 updates, at 3% to 14% |
     | 30%, no weight decay | 3 | not in 6,000 updates, at 3% to 9% |
-    | 30%, gpt2's 0.02 start, own head | 5 | 2,700 to 3,400 |
-    | 30%, gpt2's 0.02 start, tied head | 5 | 1,200 to 2,600 |
+    | 30%, gpt2's 0.02 start, own head | 5 | 2,500 to 3,400 |
+    | 30%, gpt2's 0.02 start, tied head | 5 | 1,200 to 2,700 |
     | 50%, gpt2's 0.02 start, tied head | 3 | 300, with training |
 
-    All three claims hold. At gpt3's 0.1 the jump never comes, which is why
-    the paper turned weight decay up to 1.
-
-    The last three rows add a fourth. Liu and colleagues' Omnigrok traced
-    grokking to weights that start large. gpt2's 0.02 start alone brings
-    every seed's jump earlier, by 500 to 1,500 updates. Tying the head to
-    `wte` as well brings every seed's closer still, and at 50% it removes
-    the wait.
+    All three claims hold. At gpt3's 0.1 the jump doesn't come within 6,000
+    updates. In the paper's first figure, with no weight decay at all, it came
+    after close to a million. The last three rows add a fourth. Liu and colleagues' Omnigrok traced
+    grokking to a weight norm too large for the solution that generalizes.
+    Weight decay shrinks it, and a smaller start begins closer to it. gpt2's
+    0.02 start alone brings every seed's jump earlier, by 500 to 1,600
+    updates. Tying the head to `wte` as well brings every seed's closer
+    still, and at 50% it removes the wait.
 
     `run.py train paper2` runs main. The check reads your model back and asks
     for nearly every held out equation.
