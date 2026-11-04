@@ -42,4 +42,5 @@ The final deep review, TODO-020, ran one fresh reviewer per slice of chapters wi
 - Another session on this Mac often pushes the load average to 30 to 100, so seed runs crawl and timings swing. Commit timing tables only from pinned runs on a quiet machine.
 - Several agents edit dev/wrong_answers.py and shared files at once. Commit each slice's wrong answers alone by filtering the diff to its exercise names and applying the result to the index, and split shared files such as engine.py by hunk.
 - The staged copy of the tree needs links to the repo's data and checkpoints folders before its dev check can load datasets and checkpoints.
+- A wait loop written as `until ! pgrep -f "name"` never ends, because pgrep matches the loop's own command line. On 2026-11-04 eight of them sat in the background for 12 hours. Wait on a process id, or write the pattern so it can't match itself, such as `"[n]ame"`.
 - quiz13_module builds its module before it seeds, so the quiz's modules aren't really seeded. The checks stay consistent, since the learner and the reference get the same module.
