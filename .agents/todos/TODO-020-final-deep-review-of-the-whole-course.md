@@ -35,7 +35,7 @@ The owner asked for one last deep review with research before they start, "so I 
 | 15 | Review and fix 60_word2vec to 64_paper_topics, with quiz11 | | owner | done |
 | 16 | Review and fix 65_sampling to 68_flows | | owner | done |
 | 17 | Review and fix 69_diffusion to 71_digit_diffusion, with quiz12 | | owner | done |
-| 18 | Review and fix 72_sets to 75_shortest_paths, with quiz13 | | owner | pending |
+| 18 | Review and fix 72_sets to 75_shortest_paths, with quiz13 | | owner | done |
 | 19 | Review and fix 76_finetuning to 80_ppo | | owner | pending |
 | 20 | Review and fix 81_reward_models to 83_post_training, with quiz14 | | owner | pending |
 | 21 | Review and fix 84_cost to 89_quantization | | owner | pending |

@@ -336,7 +336,7 @@ The project is diffusion, the method most image generators use, on the MNIST dat
 |---|---|---|
 | 72_sets | sets1 | Deep Sets, features per element pooled by a sum, unchanged by shuffling |
 | | sets2 | why, an MLP on a fixed order that fails on shuffled sets |
-| | sets3 | equivariant layers, and attention with no positions as a set layer |
+| | sets3 | equivariant layers, and attention with no positions as a set layer, measured on a task each element answers with the help of its set |
 | 73_graphs | graph1 | a graph as an adjacency matrix and as an edge list |
 | | message1 | message passing from Gilmer and colleagues, with `index_add_` |
 | | message2 | the GCN's normalization from its paper, and oversmoothing as depth grows |
@@ -347,8 +347,8 @@ The project is diffusion, the method most image generators use, on the MNIST dat
 | | equivariance4 | the structure chosen from the data's symmetries, the Geometric Deep Learning blueprint |
 | quizzes | quiz13 | Section 10 together |
 | 75_shortest_paths | paths1 | the project starts, random graphs and their shortest path distances |
-| | paths2 | a message passing network against an MLP on the adjacency matrix |
-| | paths3 | both on bigger graphs than training had |
+| | paths2 | a message passing network against an MLP on the adjacency matrix, trained on graphs of mixed sparsity and on only 8 graphs |
+| | paths3 | all three on bigger graphs whose shortest paths run longer than any in training, the generic network both at its training rounds and at one round per node |
 
 The project follows Xu and colleagues' algorithmic alignment. It shows structure chosen from the problem beating a bigger generic model.
 
