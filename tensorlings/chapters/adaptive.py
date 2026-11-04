@@ -5,7 +5,7 @@ from __future__ import annotations
 import contextlib
 import math
 import textwrap
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 
 import torch
 import torch.nn as nn
@@ -26,7 +26,7 @@ from ..engine import (
 )
 from ..text import prose, source_file
 from .initialization import expect_numbers, relative
-from .names import CHARACTERS, ReferenceNamesMLP, context_sets, name_splits, names_model, reference_contexts, reference_validation_loss
+from .names import context_sets, names_model, reference_validation_loss
 from .sgd import check_optimizer_class
 
 ADAPTIVE = Chapter(
@@ -118,6 +118,11 @@ RMSPROP1_LESSON = prose(
     gradients get divided by their large average, so the bounce shrinks while
     the gentle direction speeds up.
 
+    On that valley, RMSProp at a rate of 0.1 stayed below a loss of 0.001 from
+    step 125 on. Plain SGD at its best rate needed 301 steps, and momentum
+    needed 109. Above 0.1, RMSProp kept bouncing back out, since its steps
+    stay about the rate's size near the bottom.
+
     `alpha` is 0.99 in PyTorch, an average over about the last 100 steps. The
     `eps` of `1e-8` keeps an average of 0 from dividing by 0. The averages
     start at 0, one per parameter, and `torch.optim.RMSprop(params, lr=0.01)`
@@ -152,8 +157,8 @@ RMSPROP1_SOURCE = source_file(
 
     # TODO: Finish the two lines with ... in step, so each parameter's average
     #   is updated with square_average_update, and the parameter moves against
-    #   its gradient divided by the root of the average plus self.eps, scaled
-    #   by self.lr.
+    #   its gradient divided by sqrt(average) + self.eps, with eps added after
+    #   the root, scaled by self.lr.
     class MyRMSprop:
         def __init__(
             self,
@@ -256,12 +261,13 @@ RMSPROP1_SOLUTION = source_file(
 
 
 def check_my_rmsprop(found: type) -> None:
-    for alpha in (0.99, 0.9):
+    # An eps of 1e-8 can't tell sqrt(average) + eps from sqrt(average + eps), so the last round uses 0.1.
+    for alpha, eps in ((0.99, 1e-8), (0.9, 1e-8), (0.99, 0.1)):
         check_optimizer_class(
             found=found,
-            arguments={"lr": 0.01, "alpha": alpha},
+            arguments={"lr": 0.01, "alpha": alpha, "eps": eps},
             reference=torch.optim.RMSprop,
-            reference_arguments={"lr": 0.01, "alpha": alpha},
+            reference_arguments={"lr": 0.01, "alpha": alpha, "eps": eps},
             name="MyRMSprop",
         )
 
@@ -307,7 +313,8 @@ RMSPROP1 = Exercise(
     hints={
         "square_average_update": "alpha times square_average, plus (1 - alpha) times grad ** 2.",
         "MyRMSprop.step": "The average is square_average_update of the old one, parameter.grad and self.alpha. The "
-        "parameter moves by self.lr times its grad, divided by the root of the new average plus self.eps.",
+        "parameter moves by self.lr times its grad, divided by the new average's .sqrt() with self.eps added after "
+        "the root.",
         "first_step": "The first average is (1 - alpha) * grad ** 2. Divide lr times the size of grad, "
         "grad.abs(), by its root plus eps.",
     },
@@ -432,12 +439,13 @@ ADAM1_SOLUTION = source_file(
 
 
 def check_my_adam(found: type) -> None:
-    for betas in ((0.9, 0.999), (0.8, 0.99)):
+    # An eps of 1e-8 can't tell sqrt(v_hat) + eps from sqrt(v_hat + eps), so the last round uses 0.1.
+    for betas, eps in (((0.9, 0.999), 1e-8), ((0.8, 0.99), 1e-8), ((0.9, 0.999), 0.1)):
         check_optimizer_class(
             found=found,
-            arguments={"lr": 0.01, "betas": betas},
+            arguments={"lr": 0.01, "betas": betas, "eps": eps},
             reference=torch.optim.Adam,
-            reference_arguments={"lr": 0.01, "betas": betas},
+            reference_arguments={"lr": 0.01, "betas": betas, "eps": eps},
             name="MyAdam",
         )
 
@@ -498,18 +506,32 @@ ADAM2_LESSON = prose(
     the hats, Adam's early steps are several times too big, right when the
     weights are random and the gradients large.
 
-    Here the names model of Section 3 trained with Adam, with and without the
-    hats, starting from a validation loss of 3.29.
+    Here the names model of Section 3 trained with Adam for 10 steps, with
+    and without the hats, on three seeds. It started from a validation loss
+    near 3.29.
 
-    | Learning rate | 10 steps, with | 10 steps, without | 2000 steps, with | 2000 steps, without |
-    |---|---|---|---|---|
-    | 0.003 | 2.89 | 3.24 | 2.330 | 2.332 |
-    | 0.01 | 2.85 | 4.37 | 2.347 | 2.354 |
-    | 0.03 | 3.77 | 5.96 | 2.437 | 2.461 |
+    | Learning rate | With the hats | Without the hats |
+    |---|---|---|
+    | 0.003 | 2.89 to 3.00 | 3.14 to 3.36 |
+    | 0.01 | 2.85 to 3.02 | 4.17 to 4.37 |
+    | 0.03 | 3.44 to 3.93 | 5.28 to 6.89 |
 
-    Without the hats, the loss at 0.01 and 0.03 jumped above where it started
-    before it recovered. The paper warns of the same, steps much larger at
-    first. The fix costs two divisions.
+    Without the hats, the loss at 0.01 and 0.03 jumped above where it
+    started. At 0.03 it rose with the hats too, so 0.03 is too high for this
+    model either way.
+
+    The harm can last. A deeper names model has 16 post norm blocks like
+    residual4's. It trained with Adam at 0.001 for 1500 steps at batch 64,
+    the rate easing down to 0 by the end, on three seeds.
+
+    | Adam | Validation loss |
+    |---|---|
+    | with the hats | 2.219 to 2.229 |
+    | without the hats | 2.820 to 2.821 |
+
+    Without the hats, it stuck at 2.82 on every seed, worse than the bigram.
+    The paper warns of the same, much larger first steps and often
+    divergence. The fix costs two divisions.
     """,
 )
 
@@ -774,14 +796,24 @@ ADAMW1_LESSON = prose(
     torch.optim.AdamW(params, lr=0.001, weight_decay=0.01)    # decay on the weight, decoupled
     ```
 
-    Their paper found that decoupling the decay improved Adam's
-    generalization enough to compete with SGD and momentum on image
-    classification. adamw2 shows it on the names model. Their own version
-    leaves Adam's
-    learning rate out of the shrink, so the best decay stays put when the
-    rate changes. With PyTorch's, the product `lr * weight_decay` is what
-    matters, so a new rate can call for a new decay. AdamW is the default for
-    language models.
+    Here two weights start at 1 and get only noise for a gradient, of size 1
+    and of size 0.001. Each ran 1000 steps at a rate of 0.001, averaged over
+    20 seeds.
+
+    | Gradient size | Adam, L2 0.01 | Adam, L2 0.1 | AdamW, decay 1.0 |
+    |---|---|---|---|
+    | 1 | 0.992 | 0.908 | 0.369 |
+    | 0.001 | 0.262 | 0.258 | 0.370 |
+
+    With L2, the weight with small gradients fell to a quarter while the
+    other barely moved. AdamW shrank both by the same fraction. Loshchilov
+    and Hutter tested the fix on ResNets with BatchNorm, where it let Adam
+    compete with SGD and momentum on image classification.
+
+    Their own version leaves Adam's learning rate out of the shrink. In
+    PyTorch's, the product `lr * weight_decay` sets the shrink, so a new rate
+    needs a new `weight_decay` to keep the same shrink. AdamW is the default
+    for language models.
 
     A class can build on another with `class MyAdamW(MyAdam):`, and
     `super().step()` runs the step of the class it builds on.
@@ -906,6 +938,16 @@ def check_my_adamw(found: type) -> None:
             name="MyAdamW",
         )
 
+    # A parameter left out of the loss has no gradient, and torch.optim.AdamW neither shrinks nor steps it.
+    unused = nn.Parameter(torch.ones(2))
+    used = nn.Parameter(torch.ones(2))
+    optimizer = found([used, unused], lr=0.1, weight_decay=0.5)
+    (used * 2).sum().backward()
+    optimizer.step()
+
+    if not torch.equal(unused.detach(), torch.ones(2)):
+        raise Mismatch("MyAdamW.step shrank a parameter whose .grad is None. Shrink only the parameters that have a gradient.")
+
 
 def check_adamw1(checker: Checker) -> None:
     check_on_inputs(
@@ -978,22 +1020,10 @@ ADAMW2_LESSON = prose(
     about the rate itself, whatever the gradient, so its rate is a distance in
     the weights' own units.
 
-    Momentum matched plain SGD at these batches of 32. Zhang and others found
-    the same in 2019: momentum gives no benefit at small batch sizes, and it
-    speeds training up at large ones.
-
-    Weight decay needs a model with room to memorize. So here a wider names
-    model, with embeddings of 24 and 1000 hidden units, trained on the first
-    2,000 names alone. It ran at 0.001 for 5000 steps on three seeds.
-
-    | Optimizer | Training loss | Validation loss |
-    |---|---|---|
-    | Adam | 1.975 to 1.990 | 2.383 to 2.412 |
-    | AdamW, decay 0.1 | 2.004 to 2.018 | 2.367 to 2.394 |
-    | AdamW, decay 0.3 | 2.052 to 2.073 | 2.343 to 2.372 |
-
-    On every seed, more decay gave up training loss and won more back on new
-    names, as Loshchilov and Hutter found.
+    Momentum matched plain SGD at these batches of 32, as momentum2's noisy
+    valley predicts. A batch of 32 gives noisy gradients, and the noise takes
+    away most of momentum's lead. Zhang and others found the same on real
+    models in 2019, where momentum paid off only at large batches.
 
     - AdamW: the default for language models and most new work, at rates from 0.0001 to 0.001 and weight decay from 0.01 to 0.1.
     - SGD with momentum 0.9: image models like ResNet, at a rate of 0.1 that a schedule lowers, with weight decay near 0.0001.
@@ -1275,44 +1305,173 @@ def measure_best_rates(seeds: tuple[int, ...] = (0, 1)) -> dict[tuple[str, float
     return results
 
 
-# Few enough names that a wide model overfits them, so weight decay has work to do.
-DECAY_NAMES = 2000
-
-
-def measure_decay(seeds: tuple[int, ...] = (0, 1, 2)) -> dict[str, list[tuple[float, float]]]:
-    """adamw2's second table: a names model with embeddings of 24 and 1000 hidden units on the first 2,000 training
-    names, for 5000 steps at batch 32 and a rate of 0.001. Adam against AdamW, the training then the validation loss
-    per seed."""
-    names = list(name_splits()["train"])[:DECAY_NAMES]
-    X, Y = reference_contexts(names, CHARACTERS, 3)
-    validation_x, validation_y = context_sets()["validation"]
-    results: dict[str, list[tuple[float, float]]] = {}
+def measure_decay_by_gradient(seeds: tuple[int, ...] = tuple(range(20))) -> dict[tuple[str, float], list[float]]:
+    """adamw1's two weight table: two weights start at 1.0 and get only noise for a gradient, of size 1 and
+    of size 0.001, for 1000 steps at a rate of 0.001. Where each weight ends, averaged over the seeds, under Adam with
+    L2 and under AdamW."""
+    results: dict[tuple[str, float], list[float]] = {}
 
     with pinned_threads():
-        for label, decay in (("Adam", 0.0), ("AdamW, decay 0.1", 0.1), ("AdamW, decay 0.3", 0.3)):
+        for name, strength in (("Adam", 0.0), ("Adam with L2", 0.01), ("Adam with L2", 0.1), ("AdamW", 1.0)):
+            finals = []
+
+            for seed in seeds:
+                generator = torch.Generator().manual_seed(seed)
+                weights = nn.Parameter(torch.ones(2))
+                sizes = torch.tensor([1.0, 0.001])
+                optimizer = (
+                    torch.optim.AdamW([weights], lr=0.001, weight_decay=strength)
+                    if name == "AdamW"
+                    else torch.optim.Adam([weights], lr=0.001, weight_decay=strength)
+                )
+
+                for _ in range(1000):
+                    optimizer.zero_grad()
+                    weights.grad = sizes * torch.randn(2, generator=generator)
+                    optimizer.step()
+
+                finals.append(weights.detach().clone())
+
+            results[(name, strength)] = torch.stack(finals).mean(dim=0).tolist()
+
+    return results
+
+
+class HatsAdam:
+    """Adam from Algorithm 1 with the hats switched on or off, for adam2's runs. It reads its rate from param_groups,
+    so a schedule can set it."""
+
+    def __init__(
+        self,
+        parameters: Iterator[nn.Parameter],
+        lr: float,
+        corrected: bool,
+    ) -> None:
+        self.parameters = list(parameters)
+        self.param_groups = [{"lr": lr}]
+        self.corrected = corrected
+        self.beta1, self.beta2, self.eps = 0.9, 0.999, 1e-8
+        self.t = 0
+        self.m = [torch.zeros_like(parameter) for parameter in self.parameters]
+        self.v = [torch.zeros_like(parameter) for parameter in self.parameters]
+
+    def step(self) -> None:
+        self.t += 1
+        lr = self.param_groups[0]["lr"]
+
+        with torch.no_grad():
+            for position, parameter in enumerate(self.parameters):
+                if parameter.grad is None:
+                    continue
+
+                grad = parameter.grad
+                self.m[position] = self.beta1 * self.m[position] + (1 - self.beta1) * grad
+                self.v[position] = self.beta2 * self.v[position] + (1 - self.beta2) * grad ** 2
+                m_hat, v_hat = self.m[position], self.v[position]
+
+                if self.corrected:
+                    m_hat = m_hat / (1 - self.beta1 ** self.t)
+                    v_hat = v_hat / (1 - self.beta2 ** self.t)
+
+                parameter -= lr * m_hat / (v_hat.sqrt() + self.eps)
+
+    def zero_grad(self) -> None:
+        for parameter in self.parameters:
+            parameter.grad = None
+
+
+def measure_bias_correction(seeds: tuple[int, ...] = (0, 1, 2)) -> dict[tuple[float, bool], list[float]]:
+    """adam2's first table: the names model after 10 steps of Adam at batch 32, with and without the hats, at each
+    rate. The validation loss per seed, from a start near log(27)."""
+    X, Y = context_sets()["train"]
+    validation_x, validation_y = context_sets()["validation"]
+    results: dict[tuple[float, bool], list[float]] = {}
+
+    with pinned_threads():
+        for rate in (0.003, 0.01, 0.03):
+            for corrected in (True, False):
+                for seed in seeds:
+                    model = names_model(seed)
+                    train_names_rows(
+                        model=model,
+                        optimizer=HatsAdam(model.parameters(), rate, corrected),
+                        X=X,
+                        Y=Y,
+                        steps=10,
+                        generator=torch.Generator().manual_seed(seed + 1),
+                    )
+                    results.setdefault((rate, corrected), []).append(reference_validation_loss(model, validation_x, validation_y))
+
+    return results
+
+
+def measure_deep_bias_correction(seeds: tuple[int, ...] = (0, 1, 2)) -> dict[bool, list[float]]:
+    """adam2's second table: names2's model with 16 post norm blocks, trained with Adam at 0.001 for 1500 steps at
+    batch 64, the rate falling along a cosine to 0, with and without the hats. The validation loss per seed."""
+    # The deep model and its schedule live with warmup1, which imports this module, so they load here.
+    from .schedules import WARMUP_STEPS, DeepNamesModel, names_validation, reference_cosine_rate, train_names_on_schedule
+
+    results: dict[bool, list[float]] = {}
+
+    with pinned_threads():
+        for corrected in (True, False):
             for seed in seeds:
                 torch.manual_seed(seed)
-                model = ReferenceNamesMLP(27, 24, 3, 1000)
-                decayed = [parameter for parameter in model.parameters() if parameter.dim() >= 2]
-                kept = [parameter for parameter in model.parameters() if parameter.dim() < 2]
-                optimizer = (
-                    torch.optim.Adam(model.parameters(), lr=0.001)
-                    if decay == 0.0
-                    else torch.optim.AdamW([{"params": decayed, "weight_decay": decay}, {"params": kept, "weight_decay": 0.0}], lr=0.001)
-                )
-                train_names_rows(
+                model = DeepNamesModel(16)
+                train_names_on_schedule(
                     model=model,
-                    optimizer=optimizer,
-                    X=X,
-                    Y=Y,
-                    steps=5000,
+                    optimizer=HatsAdam(model.parameters(), 0.001, corrected),
+                    rate_at=lambda step: reference_cosine_rate(0.001, step, WARMUP_STEPS, 0.0),
+                    steps=WARMUP_STEPS,
+                    batch=64,
                     generator=torch.Generator().manual_seed(seed + 1),
                 )
-                results.setdefault(label, []).append(
-                    (
-                        reference_validation_loss(model, X, Y),
-                        reference_validation_loss(model, validation_x, validation_y),
-                    ),
-                )
+                results.setdefault(corrected, []).append(names_validation(model))
+
+    return results
+
+
+def steps_to_settle(
+    make: Callable[[list[Tensor], float], torch.optim.Optimizer],
+    lr: float,
+    limit: int = 3000,
+) -> int | None:
+    """Steps on momentum2's valley from (-10, 1) until the loss stays below 0.001 for the rest of limit, or None."""
+    point = torch.tensor([-10.0, 1.0], requires_grad=True)
+    optimizer = make([point], lr)
+    last_above = -1
+
+    for step in range(limit):
+        loss = point[0] ** 2 + 100 * point[1] ** 2
+
+        if not math.isfinite(loss.item()):
+            return None
+
+        if loss.item() >= 0.001:
+            last_above = step
+
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+    return last_above + 1 if last_above + 1 < limit else None
+
+
+def measure_valley_settling() -> dict[str, tuple[int, float]]:
+    """rmsprop1's numbers: on momentum2's valley, each optimizer's fewest steps to settle below 0.001 over a grid of
+    rates, and the rate that gave them."""
+    even = [round(0.0005 * k, 4) for k in range(1, 21)]
+    spread = [round(10 ** (-3 + 3 * k / 30), 5) for k in range(31)]
+    makers: dict[str, tuple[Callable[[list[Tensor], float], torch.optim.Optimizer], list[float]]] = {
+        "SGD": (lambda parameters, lr: torch.optim.SGD(parameters, lr=lr), even),
+        "SGD, momentum 0.9": (lambda parameters, lr: torch.optim.SGD(parameters, lr=lr, momentum=0.9), even),
+        "RMSprop": (lambda parameters, lr: torch.optim.RMSprop(parameters, lr=lr), spread),
+    }
+    results: dict[str, tuple[int, float]] = {}
+
+    with pinned_threads():
+        for name, (make, rates) in makers.items():
+            settled = [(steps, rate) for rate in rates if (steps := steps_to_settle(make, rate)) is not None]
+            results[name] = min(settled)
 
     return results

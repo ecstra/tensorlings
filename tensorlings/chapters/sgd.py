@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import random
+import statistics
+
 import torch
 import torch.nn as nn
 from torch import Tensor
@@ -36,6 +39,7 @@ SGD = Chapter(
 
         - [PyTorch, torch.optim](https://docs.pytorch.org/docs/2.14/optim.html)
         - [Goh, why momentum really works](https://distill.pub/2017/momentum/)
+        - [Zhang and others, which algorithmic choices matter at which batch sizes](https://arxiv.org/abs/1907.04164)
         - [CS231n, parameter updates](https://cs231n.github.io/neural-networks-3/#update)
         """,
     ),
@@ -98,7 +102,11 @@ def check_optimizer_class(
     mse_steps(mine, found(mine.parameters(), **arguments), x, y, 5)
 
     if all(torch.equal(old, new.detach()) for old, new in zip(before, mine.parameters())):
-        raise Mismatch(f"After {call} the weights did not move, which usually means {name}.step is {NOT_STARTED}.")
+        raise Mismatch(
+            f"After {call} the weights did not move. Either {name}.step is {NOT_STARTED}, or it sets parameter = ..., "
+            "which only points the loop name at a new tensor. Change the parameter in place with -= or *= inside "
+            "torch.no_grad().",
+        )
 
     mse_steps(theirs, reference(theirs.parameters(), **reference_arguments), x, y, 5)
     expect_same_parameters(call, mine, theirs)
@@ -336,8 +344,7 @@ MOMENTUM1_LESSON = prose(
     Gradients that keep pointing the same way pile up. With a momentum of 0.9
     the steps along them grow to ten times the gradient, since
     `1 + 0.9 + 0.81 + ...` adds up to `1 / (1 - 0.9)`. Gradients that keep
-    flipping sign cancel out. Picture a ball rolling downhill, gathering speed
-    along a valley floor while its bounce between the walls dies down.
+    flipping sign cancel out.
 
     `torch.optim.SGD(params, lr=0.1, momentum=0.9)` does this, with every
     velocity starting at zero.
@@ -581,10 +588,27 @@ MOMENTUM2_LESSON = prose(
     the velocity remembers too much, and overshoots the bottom again and
     again.
 
-    The gap grows with the valley. At 1000 times steeper, with the rates tried
-    more finely, SGD took 3110 steps and momentum 0.9 took 95. Real losses
-    have such valleys in many directions, so SGD with momentum 0.9 is the
-    usual plain optimizer.
+    The gap grows with the valley. At 1000 times steeper, with 40 rates from
+    0.00005 to 0.002, SGD took 3027 steps and momentum 0.9 took 97.
+
+    These gradients were exact. A minibatch gives a noisy gradient, and a
+    smaller batch gives more noise. Here random noise of a set spread joined
+    every gradient of the same valley, run until the loss fell below 0.1.
+    Each count is the median over 20 seeds, at each optimizer's best rate.
+
+    | Noise spread | SGD | Momentum 0.9 |
+    |---|---|---|
+    | 0 | 181 | 36 |
+    | 10 | 204 | 44 |
+    | 30 | 225.5 | 96 |
+    | 100 | 359.5 | 290.5 |
+    | 300 | 777 | 585.5 |
+
+    With exact gradients, momentum needed a fifth of SGD's steps. With heavy
+    noise it saved only a quarter or less. So momentum pays most with large
+    batches, as Zhang and others found in 2019. Real losses have such valleys
+    in many directions, so SGD with momentum 0.9 is still the usual plain
+    optimizer.
     """,
 )
 
@@ -747,6 +771,8 @@ def check_momentum2(checker: Checker) -> None:
         inputs=(
             ([0.002, 0.005, 0.0095], 0.0, 0.001, 2000),
             ([0.001, 0.006, 0.02], 0.9, 0.001, 2000),
+            # Both rates stop at the limit of 50, so the first one has to win the tie.
+            ([0.001, 0.002], 0.0, 0.001, 50),
         ),
         reference=lambda rates, momentum, target, limit: min(rates, key=lambda rate: reference_steps_to_reach(rate, momentum, target, limit)),
         expect=expect_value,
@@ -772,3 +798,101 @@ MOMENTUM2 = Exercise(
     time_limit=20,
     imports_first=OPTIMIZER_IMPORTS,
 )
+
+
+# ---------------------------------------------------------------------------
+# The runs behind the lessons
+# ---------------------------------------------------------------------------
+
+
+def valley_steps(
+    lr: float,
+    momentum: float,
+    steepness: int,
+    limit: int,
+) -> int:
+    """steps_to_reach on a valley steepness times steeper across than along, down to a loss of 0.001."""
+    point = torch.tensor([-10.0, 1.0], requires_grad=True)
+    optimizer = torch.optim.SGD([point], lr=lr, momentum=momentum)
+
+    for step in range(limit):
+        loss = point[0] ** 2 + steepness * point[1] ** 2
+
+        if loss.item() < 0.001:
+            return step
+
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+    return limit
+
+
+def measure_valley(
+    steepness: int = 100,
+    rates: tuple[float, ...] = tuple(round(0.0005 * k, 4) for k in range(1, 21)),
+    momenta: tuple[float, ...] = (0.0, 0.9, 0.99),
+    limit: int = 20000,
+) -> dict[float, tuple[float, int]]:
+    """momentum2's first table, each momentum's best rate on the valley and the steps it took. Its 1000 times valley
+    is steepness=1000 with the 40 rates round(0.00005 * k, 5) and momenta of 0.0 and 0.9."""
+    results: dict[float, tuple[float, int]] = {}
+
+    for momentum in momenta:
+        steps = [valley_steps(rate, momentum, steepness, limit) for rate in rates]
+        results[momentum] = (rates[steps.index(min(steps))], min(steps))
+
+    return results
+
+
+def noisy_valley_steps(
+    lr: float,
+    momentum: float,
+    noise: float,
+    seed: int,
+    limit: int = 20000,
+) -> int:
+    """Steps on momentum2's valley until the loss falls below 0.1, with Gaussian noise of size noise added to each
+    gradient, as a smaller batch adds. Plain Python numbers, since a run takes thousands of tiny steps."""
+    draws = random.Random(seed)
+    x, y, x_velocity, y_velocity = -10.0, 1.0, 0.0, 0.0
+
+    for step in range(limit):
+        if x * x + 100 * y * y < 0.1:
+            return step
+
+        x_gradient = 2 * x + noise * draws.gauss(0, 1)
+        y_gradient = 200 * y + noise * draws.gauss(0, 1)
+        x_velocity = momentum * x_velocity + x_gradient
+        y_velocity = momentum * y_velocity + y_gradient
+        x -= lr * x_velocity
+        y -= lr * y_velocity
+
+        if abs(x) > 1e6 or abs(y) > 1e6:
+            return limit
+
+    return limit
+
+
+def measure_noisy_valley(
+    noises: tuple[float, ...] = (0.0, 10.0, 30.0, 100.0, 300.0),
+    seeds: tuple[int, ...] = tuple(range(20)),
+) -> dict[tuple[float, float], tuple[float, float]]:
+    """momentum2's second table: for each size of gradient noise, plain SGD's and momentum 0.9's best rate of a grid,
+    as (median steps over the seeds to bring the loss below 0.1, rate)."""
+    rates = [rate / scale for rate in (round(0.0005 * k, 4) for k in range(1, 21)) for scale in (1, 10)]
+    results: dict[tuple[float, float], tuple[float, float]] = {}
+
+    for noise in noises:
+        for momentum in (0.0, 0.9):
+            best: tuple[float, float] | None = None
+
+            for rate in rates:
+                median = statistics.median(noisy_valley_steps(rate, momentum, noise, seed) for seed in seeds)
+
+                if best is None or median < best[0]:
+                    best = (median, rate)
+
+            results[(noise, momentum)] = best
+
+    return results

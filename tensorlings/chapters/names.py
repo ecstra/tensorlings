@@ -315,6 +315,21 @@ def reference_bigram_loss(
     return -probabilities[xs, ys].log().mean().item()
 
 
+def expect_float_counts(
+    call: str,
+    actual: object,
+    expected: Tensor,
+) -> None:
+    if isinstance(actual, Tensor) and not actual.is_floating_point():
+        raise Mismatch(f"{call} holds whole numbers of type {actual.dtype}, but it should be a float tensor. Add .float() at the end.")
+
+    expect_tensor(
+        call=call,
+        actual=actual,
+        expected=expected,
+    )
+
+
 def check_names1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
@@ -347,7 +362,7 @@ def check_names1(checker: Checker) -> None:
             (torch.tensor([3, 0, 3, 3, 1]), torch.tensor([3, 2, 3, 0, 1]), 4),
         ),
         reference=lambda xs, ys, size: torch.bincount(xs * size + ys, minlength=size * size).reshape(size, size).float(),
-        expect=expect_tensor,
+        expect=expect_float_counts,
     )
     check_on_inputs(
         checker=checker,
@@ -567,6 +582,12 @@ def check_names_forward(found: type) -> None:
         torch.manual_seed(460 + context)
         model = expect_module(call, found(vocabulary, size, context, hidden))
         x = torch.randint(0, vocabulary, (4, context), generator=torch.Generator().manual_seed(462 + context))
+        generator = torch.Generator().manual_seed(464 + context)
+
+        # A fresh LayerNorm scales by 1 and shifts by 0, so forward could skip self.norm's own weights unnoticed.
+        with torch.no_grad():
+            model.norm.weight.copy_(torch.rand(hidden, generator=generator) + 0.5)
+            model.norm.bias.copy_(torch.randn(hidden, generator=generator) * 0.5)
 
         with torch.no_grad():
             vectors = model.embedding(x).reshape(len(x), -1)
@@ -940,12 +961,28 @@ def check_validation_loss(found: object) -> None:
     validation_x, validation_y = context_sets()["validation"]
     model = trained_names_model(480)
     model.train()
+    modes: list[tuple[bool, bool]] = []
+    forward = model.forward
+
+    def recording_forward(x: Tensor) -> Tensor:
+        modes.append((model.training, torch.is_grad_enabled()))
+
+        return forward(x)
+
+    # This model has no dropout or BatchNorm, so its numbers can't show eval mode, and the check watches each call.
+    model.forward = recording_forward
     expect_close(
         call="validation_loss on a names model trained for 300 steps and the validation contexts",
         actual=found(model, validation_x, validation_y),
         expected=reference_validation_loss(trained_names_model(480), validation_x, validation_y),
         tolerance=1e-5,
     )
+
+    if any(training for training, _ in modes):
+        raise Mismatch("validation_loss ran the model in training mode. Call model.eval() before the forward pass, so layers like dropout switch off.")
+
+    if any(recording for _, recording in modes):
+        raise Mismatch("validation_loss ran the model while autograd was recording. Put the forward pass inside a with torch.no_grad() block.")
 
 
 def check_sample_name(found: object) -> None:
@@ -1022,3 +1059,61 @@ NAMES3 = Exercise(
     check=check_names3,
     time_limit=120,
 )
+
+
+# ---------------------------------------------------------------------------
+# The runs behind the lessons
+# ---------------------------------------------------------------------------
+
+
+def measure_names(seed: int = 0) -> dict[str, object]:
+    """names1 and names3's numbers: the smoothed bigram's training and validation loss, the names model's validation
+    loss after 5,000, 10,000 and 20,000 steps of train_names, and 12 names from the 20,000 step model and 12 from the
+    bigram, each drawn with a generator seeded with 2."""
+    splits = name_splits()
+    train_x, train_y = reference_pairs(list(splits["train"]), CHARACTERS)
+    validation_x, validation_y = reference_pairs(list(splits["validation"]), CHARACTERS)
+    counts = torch.bincount(train_x * 27 + train_y, minlength=27 * 27).reshape(27, 27).float()
+    X, Y = context_sets()["train"]
+    contexts_x, contexts_y = context_sets()["validation"]
+    results: dict[str, object] = {
+        "bigram train": reference_bigram_loss(counts, train_x, train_y),
+        "bigram validation": reference_bigram_loss(counts, validation_x, validation_y),
+    }
+
+    # CPU results move in the third decimal with the thread count, so this runs on 4 like the other measurements.
+    before = torch.get_num_threads()
+    torch.set_num_threads(4)
+
+    try:
+        for steps in (5000, 10000, 20000):
+            model = names_model(seed)
+            reference_train_names(model, X, Y, steps, torch.Generator().manual_seed(seed + 1))
+            results[f"mlp {steps}"] = reference_validation_loss(model, contexts_x, contexts_y)
+    finally:
+        torch.set_num_threads(before)
+
+    generator = torch.Generator().manual_seed(2)
+    results["mlp names"] = [reference_sample(model, CHARACTERS, 3, generator) for _ in range(12)]
+
+    smoothed = counts + 1
+    probabilities = smoothed / smoothed.sum(dim=1, keepdim=True)
+    generator = torch.Generator().manual_seed(2)
+    bigram_names = []
+
+    for _ in range(12):
+        current, made = 0, ""
+
+        while True:
+            current = torch.multinomial(probabilities[current], 1, generator=generator).item()
+
+            if current == 0:
+                break
+
+            made += CHARACTERS[current]
+
+        bigram_names.append(made)
+
+    results["bigram names"] = bigram_names
+
+    return results

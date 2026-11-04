@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import warnings
 from collections.abc import Callable
 
 import torch
@@ -42,6 +43,8 @@ SCHEDULES = Chapter(
         - [Loshchilov and Hutter, SGDR, cosine decay](https://arxiv.org/abs/1608.03983)
         - [Hägele and others, a constant rate with a cooldown against cosine](https://arxiv.org/abs/2405.18392)
         - [Goyal and others, large minibatch SGD, warmup](https://arxiv.org/abs/1706.02677)
+        - [Xiong and others, layer normalization in the transformer, warmup for post norm](https://arxiv.org/abs/2002.04745)
+        - [Kalra and Barkeshli, why warmup the learning rate](https://arxiv.org/abs/2406.09405)
         - [Smith, cyclical learning rates, the range test](https://arxiv.org/abs/1506.01186)
         - [PyTorch, how to adjust the learning rate](https://docs.pytorch.org/docs/2.14/optim.html#how-to-adjust-learning-rate)
         """,
@@ -120,8 +123,9 @@ SCHEDULE1_LESSON = prose(
     with a cooldown at the end scales the way cosine does.
 
     A scheduler from `torch.optim.lr_scheduler` changes the optimizer's rate
-    each time its `.step()` runs, once per training step after
-    `optimizer.step()`. The rate the next step uses is in
+    each time its `.step()` runs, after `optimizer.step()`. PyTorch's
+    examples call it once per epoch, and this course calls it once per
+    training step. The rate the next step uses is in
     `optimizer.param_groups[0]["lr"]`.
 
     ```python
@@ -240,7 +244,15 @@ def check_scheduler_rates(found: object) -> None:
 
     for name, make, closed_form in cases:
         optimizer = one_parameter_optimizer(0.1)
-        actual = found(optimizer, make(optimizer), 9)
+
+        # The rates read come out the same in either order, so the order shows only in PyTorch's warning.
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            actual = found(optimizer, make(optimizer), 9)
+
+        if any("before `optimizer.step()`" in str(warning.message) for warning in caught):
+            raise Mismatch(f"scheduler_rates for {name} calls scheduler.step() before optimizer.step(). Step the optimizer first, then the scheduler.")
+
         expected = [closed_form(step) for step in range(9)]
         expect_numbers(
             call=f"scheduler_rates for 9 steps of {name}",
@@ -321,21 +333,29 @@ WARMUP1_LESSON = prose(
     raises the rate from near 0 to its base over the first few hundred steps,
     and then the schedule takes over.
 
-    Here a deeper names model, sixteen post norm blocks like residual4's,
-    trained with Adam for 1500 steps at batch 64. The rate fell along a
-    cosine to 0, and every row ran on two seeds.
+    Here a deeper names model, 32 post norm blocks like residual4's, trained
+    with Adam for 1500 steps at batch 64. The rate fell along a cosine to 0,
+    and every row ran on three seeds.
 
-    | Rate | Warmup | Validation loss |
-    |---|---|---|
-    | 0.001 | none | 2.217 to 2.226 |
-    | 0.003 | none | 2.820 to 2.821 |
-    | 0.001 | 500 steps | 2.220 to 2.222 |
-    | 0.003 | 500 steps | 2.233 to 2.235 |
+    | Blocks | Rate | Warmup | Validation loss |
+    |---|---|---|---|
+    | post norm | 0.0003 | none | 2.255 to 2.265 |
+    | post norm | 0.0005 | none | 2.258 to 2.300 |
+    | post norm | 0.0007 | none | 2.738 to 2.788 |
+    | post norm | 0.0007 | 500 steps | 2.249 to 2.255 |
+    | post norm | 0.001 | none | 2.820 to 2.821 |
+    | post norm | 0.001 | 150 steps | 2.820 to 2.821 |
+    | pre norm | 0.001 | none | 2.294 to 2.311 |
 
-    Without warmup, 0.003 ended at 2.82 on both seeds, worse than the
-    bigram's 2.465. With 500 steps of warmup the same rate trained to 2.23,
-    beside 0.001's loss. So warmup makes a three times larger rate safe, and
-    post norm models need it most, as Xiong and others found.
+    Without warmup, 0.0007 got stuck near 2.75, worse than the bigram's
+    2.465. With 500 steps of warmup it trained, and on every seed it ended
+    lower than 0.0003, the best rate without warmup. That is what warmup
+    buys, as Kalra and Barkeshli found in 2024. A larger rate trains, and
+    the larger rate ends lower.
+
+    Warmup has to be long enough, since 150 steps left 0.001 as stuck as no
+    warmup at all. The pre norm stack trained at 0.001 with no warmup. Post
+    norm models need warmup most, as Xiong and others found.
 
     Large batches call for large rates, so they need warmup too. Goyal and
     others warmed up for 5 epochs to train ResNet with huge batches.
@@ -537,6 +557,7 @@ def check_warmup1(checker: Checker) -> None:
             (0.1, 0, 4),
             (0.1, 2, 4),
             (0.1, 3, 4),
+            (0.1, 4, 4),
             (0.003, 500, 200),
         ),
         reference=reference_warmup_rate,
@@ -940,15 +961,35 @@ class PostNormBlock(nn.Module):
         return self.norm(x + self.down(torch.relu(self.up(x))))
 
 
-class DeepNamesModel(nn.Module):
-    """names2's model with post norm blocks between its hidden layer and its head."""
+class PreNormBlock(nn.Module):
+    """residual3's pre norm block, x plus an MLP of the norm of x."""
 
-    def __init__(self, blocks: int) -> None:
+    def __init__(self, width: int) -> None:
+        super().__init__()
+        self.up = nn.Linear(width, width)
+        self.down = nn.Linear(width, width)
+        self.norm = nn.LayerNorm(width)
+
+    def forward(self, x: Tensor) -> Tensor:
+        return x + self.down(torch.relu(self.up(self.norm(x))))
+
+
+class DeepNamesModel(nn.Module):
+    """names2's model with post norm blocks, or pre norm blocks and a last norm as GPT-2 has, between its hidden
+    layer and its head."""
+
+    def __init__(
+        self,
+        blocks: int,
+        pre_norm: bool = False,
+    ) -> None:
         super().__init__()
         self.embedding = nn.Embedding(27, 10)
         self.hidden = nn.Linear(30, 200)
         self.norm = nn.LayerNorm(200)
-        self.blocks = nn.ModuleList([PostNormBlock(200) for _ in range(blocks)])
+        block = PreNormBlock if pre_norm else PostNormBlock
+        self.blocks = nn.ModuleList([block(200) for _ in range(blocks)])
+        self.last_norm = nn.LayerNorm(200) if pre_norm else nn.Identity()
         self.head = nn.Linear(200, 27)
 
         with torch.no_grad():
@@ -961,26 +1002,36 @@ class DeepNamesModel(nn.Module):
         for block in self.blocks:
             hidden = block(hidden)
 
-        return self.head(hidden)
+        return self.head(self.last_norm(hidden))
 
 
-WARMUP_BLOCKS = 16
+WARMUP_BLOCKS = 32
 WARMUP_STEPS = 1500
 
 
 def measure_warmup(
-    runs: tuple[tuple[float, int], ...] = ((0.001, 0), (0.003, 0), (0.001, 500), (0.003, 500)),
-    seeds: tuple[int, ...] = (0, 1),
-) -> dict[tuple[float, int], list[float]]:
-    """warmup1's table: 16 post norm blocks trained with Adam for 1500 steps at batch 64, the rate falling along a
-    cosine to 0, with and without a warmup. Each run is a (rate, warmup steps) pair. The validation loss per seed."""
-    results: dict[tuple[float, int], list[float]] = {}
+    runs: tuple[tuple[str, float, int], ...] = (
+        ("post", 0.0003, 0),
+        ("post", 0.0005, 0),
+        ("post", 0.0007, 0),
+        ("post", 0.0007, 500),
+        ("post", 0.001, 0),
+        ("post", 0.001, 150),
+        ("pre", 0.001, 0),
+    ),
+    seeds: tuple[int, ...] = (0, 1, 2),
+    blocks: int = WARMUP_BLOCKS,
+) -> dict[tuple[str, float, int], list[float]]:
+    """warmup1's table: a stack of post norm blocks, or pre norm blocks, trained with Adam for 1500 steps at batch 64,
+    the rate falling along a cosine to 0, with and without a warmup. Each run is a (norm, rate, warmup steps) triple.
+    The validation loss per seed."""
+    results: dict[tuple[str, float, int], list[float]] = {}
 
     with pinned_threads():
-        for base, warmup in runs:
+        for norm, base, warmup in runs:
             for seed in seeds:
                 torch.manual_seed(seed)
-                model = DeepNamesModel(WARMUP_BLOCKS)
+                model = DeepNamesModel(blocks, pre_norm=norm == "pre")
                 train_names_on_schedule(
                     model=model,
                     optimizer=torch.optim.Adam(model.parameters(), lr=base),
@@ -989,7 +1040,7 @@ def measure_warmup(
                     batch=64,
                     generator=torch.Generator().manual_seed(seed + 1),
                 )
-                results.setdefault((base, warmup), []).append(names_validation(model))
+                results.setdefault((norm, base, warmup), []).append(names_validation(model))
 
     return results
 

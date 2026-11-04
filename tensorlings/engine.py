@@ -151,6 +151,11 @@ PLAIN_ERRORS: tuple[tuple[str, str], ...] = (
         "Something here is None, so it has no .{0}. A tensor's .grad stays None until .backward() runs on a result "
         "made from it, and a function with no return line gives None.",
     ),
+    (
+        r"invalid data type 'str'",
+        "torch.tensor takes numbers, but this list holds text, like a character. Look each one up in a dict of ids "
+        "first, so the list holds numbers.",
+    ),
 )
 
 
