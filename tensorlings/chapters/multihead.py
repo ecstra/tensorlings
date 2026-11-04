@@ -21,7 +21,10 @@ from ..engine import (
     small_tensor,
 )
 from ..text import prose, source_file
+from .attention import calls_to_attention
+from .bidirectional import expect_nothing_recorded
 from .linear_layers import expect_module
+from .tensors import pinned_threads
 
 MULTIHEAD = Chapter(
     folder="50_multihead",
@@ -580,9 +583,10 @@ MULTIHEAD3_LESSON = prose(
     Heads earn their keep on a task that needs two places at once.
 
     Here every position copies two earlier tokens at once, the one right
-    before it and the one 3 back, out of 16 kinds. The model is one attention layer
-    of size 16 with a Linear readout. 1 head of 16 and 2 heads of 8 have the
-    same weights. 600 steps each give this, on 2,000 new sequences.
+    before it and the one 3 back, out of 16 kinds. The model is one attention
+    layer of size 16, then a Linear that turns each position into scores for
+    the two tokens. 1 head of 16 and 2 heads of 8 have the same weights. 600
+    steps each give this, on 2,000 new sequences.
 
     | Heads | Average of the two | Token right before | Token 3 back |
     |---|---|---|---|
@@ -643,7 +647,9 @@ MULTIHEAD3_SOURCE = source_file(
 
     # TODO: Return what each position from max(offsets) on should copy, of shape
     #   (batch, positions, len(offsets)). Entry [b, i, j] is the token offsets[j]
-    #   back from position max(offsets) + i of sequence b.
+    #   back from position max(offsets) + i of sequence b. For the x above,
+    #   lookup_targets(x, (1, 3)) is tensor([[[7, 5], [1, 2]]]), since position
+    #   3 copies 7 and 5, and position 4 copies 1 and 2.
     def lookup_targets(
         x: Tensor,
         offsets: tuple[int, ...],
@@ -868,6 +874,16 @@ def check_multihead3(checker: Checker) -> None:
         reference=reference_lookup_accuracy,
         expect=expect_close,
     )
+    watched = seeded_lookup(ReferenceLookupModel, 2)
+    checker.test(
+        function="lookup_accuracy",
+        description="records nothing for autograd",
+        run=lambda found: expect_nothing_recorded(
+            function="lookup_accuracy",
+            modules=[watched],
+            run=lambda: found(watched, lookup_sequences(10, torch.Generator().manual_seed(519)), LOOKUP_OFFSETS),
+        ),
+    )
     checker.test_method(
         class_name="LookupModel",
         method="forward",
@@ -884,8 +900,9 @@ MULTIHEAD3 = Exercise(
     source=MULTIHEAD3_SOURCE,
     solution=MULTIHEAD3_SOLUTION,
     hints={
-        "lookup_targets": "With first = max(offsets), x[:, first - offset : steps - offset] holds the token offset back "
-        "for every position from first on. torch.stack one per offset with dim=2.",
+        "lookup_targets": "Take first = max(offsets), and steps the length of each sequence, x.shape[1]. Then "
+        "x[:, first - offset : steps - offset] holds the token offset back for every position from first on. "
+        "torch.stack one per offset with dim=2.",
         "LookupModel.forward": "Split q, k and v into self.heads heads, pass them to F.scaled_dot_product_attention "
         "with is_causal=True, and merge_heads the result.",
         "lookup_accuracy": "Inside torch.no_grad(), take model(x)[:, max(offsets):].argmax(dim=-1), compare it with "
@@ -912,14 +929,31 @@ GQA1_LESSON = prose(
 
     Grouped query attention shrinks it. It keeps every query head but gives
     the keys and values fewer heads, each shared by a group of query heads.
-    Llama 2 70B has 80 layers and heads of size 128. It has 64 query heads and
-    8 key value heads, so each key value head serves 8 query heads. Multi
-    query attention is the extreme, one key value head for all.
+    Meta's Llama 2 70B, a language model of 70 billion weights, has 80 layers
+    and heads of size 128. It has 64 query heads and 8 key value heads, so
+    each key value head serves 8 query heads. Multi query attention is the
+    extreme, one key value head for all.
 
     | Llama 2 70B, 16 bit numbers | KV cache per token | For 4,096 tokens |
     |---|---|---|
     | 64 key value heads, plain multi head | 2.5 MiB | 10 GiB |
     | 8 key value heads, as it shipped | 320 KiB | 1.25 GiB |
+
+    Here is multihead3's harder test, four earlier tokens copied at once
+    with an MLP after the attention. It runs with 4 query heads of 4, for
+    1,000 steps over three seeds.
+
+    | Key value heads | Cache per position | Average of the four |
+    |---|---|---|
+    | 4, plain multi head | 32 numbers | 100% on every seed |
+    | 2, grouped | 16 numbers | 100% on every seed |
+    | 1, multi query | 8 numbers | 100% on every seed |
+
+    The cache shrinks four times and every token is still copied right. The
+    GQA paper converted T5 XXL, a language model by Google, to fewer key
+    value heads and trained it a little more. With one, it averaged 46.6 over
+    seven tasks, against 47.2 for plain multi head. With 8 it got 47.1, at
+    0.28 seconds a sample against 0.24 for one and 1.51 for plain multi head.
 
     Query head `i` uses key value head `i // groups`. `repeat_interleave`
     copies each key value head `groups` times in a row, which lines them up
@@ -931,9 +965,8 @@ GQA1_LESSON = prose(
     ```
 
     `F.scaled_dot_product_attention` shares them itself with
-    `enable_gqa=True`, without making the copies. The GQA paper found quality
-    close to plain multi head attention at a speed close to multi query
-    attention.
+    `enable_gqa=True`. Its CPU kernel and FlashAttention on a GPU skip the
+    copies.
     """,
 )
 
@@ -1020,6 +1053,17 @@ GQA1_SOLUTION = source_file(
 )
 
 
+def check_grouped_with_repeat(found: object) -> None:
+    q, k, v = small_tensor(521, 2, 8, 4, 4) / 2, small_tensor(522, 2, 2, 4, 4) / 2, small_tensor(523, 2, 2, 4, 4) / 2
+    calls = calls_to_attention(lambda: found(q, k, v))
+
+    if any(call.get("enable_gqa") for call in calls):
+        raise Mismatch(
+            "grouped_attention passed enable_gqa=True, which shares the heads for you. Copy k and v with repeat_kv "
+            "here, so you build the sharing yourself.",
+        )
+
+
 def check_gqa1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
@@ -1042,6 +1086,11 @@ def check_gqa1(checker: Checker) -> None:
         ),
         reference=lambda q, k, v: F.scaled_dot_product_attention(q, k, v, is_causal=True, enable_gqa=True),
         expect=expect_tensor,
+    )
+    checker.test(
+        function="grouped_attention",
+        description="lines the heads up itself, without enable_gqa",
+        run=check_grouped_with_repeat,
     )
     check_on_inputs(
         checker=checker,
@@ -1153,5 +1202,64 @@ def measure_heads(
                 results[(seed, heads)] = reference_lookup_accuracy(model, x, offsets)
     finally:
         torch.set_num_threads(threads)
+
+    return results
+
+
+class GroupedLookupModel(nn.Module):
+    """MlpLookupModel with 4 query heads of 4 and kv_heads key value heads, each shared by a group of query heads."""
+
+    def __init__(
+        self,
+        kv_heads: int,
+        offsets: tuple[int, ...],
+        heads: int = 4,
+        size: int = LOOKUP_SIZE,
+    ) -> None:
+        super().__init__()
+        self.heads = heads
+        self.kv_heads = kv_heads
+        self.offsets = offsets
+        self.tokens = nn.Embedding(LOOKUP_VOCABULARY, size)
+        self.positions = nn.Embedding(LOOKUP_STEPS, size)
+        self.q = nn.Linear(size, size)
+        self.kv = nn.Linear(size, 2 * kv_heads * (size // heads))
+        self.out = nn.Linear(size, size)
+        self.mlp = nn.Sequential(nn.Linear(size, 4 * size), nn.ReLU(), nn.Linear(4 * size, size))
+        self.read = nn.Linear(size, len(offsets) * LOOKUP_VOCABULARY)
+
+    def forward(self, x: Tensor) -> Tensor:
+        batch, steps = x.shape
+        h = self.tokens(x) + self.positions(torch.arange(steps))
+        q = reference_split_heads(self.q(h), self.heads)
+        k, v = (reference_split_heads(part, self.kv_heads) for part in self.kv(h).chunk(2, dim=-1))
+        groups = self.heads // self.kv_heads
+        mixed = F.scaled_dot_product_attention(
+            q,
+            k.repeat_interleave(groups, dim=1),
+            v.repeat_interleave(groups, dim=1),
+            is_causal=True,
+        )
+        z = self.out(reference_merge_heads(mixed))
+        z = z + self.mlp(z)
+
+        return self.read(z).view(batch, steps, len(self.offsets), LOOKUP_VOCABULARY)
+
+
+def measure_kv_heads(seeds: range = range(3)) -> dict[tuple[int, int], tuple[float, int]]:
+    """gqa1's table: by seed and number of key value heads, the share copied right on 2,000 new sequences after
+    1,000 steps of multihead3's four place test, then the numbers each position keeps in the KV cache."""
+    offsets = (1, 2, 3, 4)
+    x = lookup_sequences(2000, torch.Generator().manual_seed(99))
+    results = {}
+
+    with pinned_threads():
+        for seed in seeds:
+            for kv_heads in (4, 2, 1):
+                torch.manual_seed(seed)
+                model = GroupedLookupModel(kv_heads, offsets)
+                train_lookup_seeded(model, offsets, 1000, seed)
+                cache = 2 * kv_heads * (LOOKUP_SIZE // model.heads)
+                results[(seed, kv_heads)] = (reference_lookup_accuracy(model, x, offsets), cache)
 
     return results

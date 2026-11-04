@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import textwrap
+from collections.abc import Callable
 
 import torch
 import torch.nn as nn
@@ -22,6 +23,7 @@ from ..engine import (
 )
 from ..text import prose, source_file
 from .linear_layers import expect_module
+from .tensors import fastest_seconds, pinned_threads
 
 ATTENTION = Chapter(
     folder="47_attention",
@@ -569,13 +571,22 @@ def check_score_head(found: type) -> None:
         head = expect_module(call, seeded_module(found, features, size))
         layers = [getattr(head, name, None) for name in ("query", "key")]
 
-        if not all(isinstance(layer, nn.Linear) and layer.bias is None for layer in layers):
-            raise Mismatch(f"{call} should hold self.query and self.key, each an nn.Linear with bias=False.")
+        if not all(
+            isinstance(layer, nn.Linear) and layer.bias is None and tuple(layer.weight.shape) == (size, features)
+            for layer in layers
+        ):
+            raise Mismatch(f"{call} should hold self.query and self.key, each an nn.Linear from {features} to {size} with bias=False.")
+
+        reference = seeded_module(ReferenceScoreHead, features, size)
+
+        # The check seeds the weights before __init__ runs, so layers made in another order start from other numbers.
+        if not (torch.equal(head.query.weight, reference.query.weight) and torch.equal(head.key.weight, reference.key.weight)):
+            raise Mismatch(f"{call} starts from other weights than expected. Make self.query first, then self.key, since the check seeds the weights in that order.")
 
         x = small_tensor(480 + size, 2, 5, features) / 2
 
         with torch.no_grad():
-            expected = seeded_module(ReferenceScoreHead, features, size)(x)
+            expected = reference(x)
 
         expect_tensor(
             call=f"{call} on a batch of shape (2, 5, {features})",
@@ -664,6 +675,20 @@ ATTENTION4_LESSON = prose(
     nothing from the others. Queries and keys from their own Linears can make
     any position match any other.
 
+    Training shows the difference. Here a model copies the token right before
+    each position, out of 16 kinds, in sequences of 12. It adds a learned row
+    per position to each token, so it can tell positions apart. One version
+    compares x with itself and averages x, and the other is SingleHead. Each
+    trained for 600 steps, over three seeds.
+
+    | Attention | Previous token right |
+    |---|---|
+    | x with itself | 57.3% to 83.0% |
+    | SingleHead | 100% on every seed |
+
+    Without the Linears a position keeps finding itself. 19.0% to 44.5% of
+    its answers were its own token, against 6.3% by chance.
+
     The features that make a good match are often not the ones worth passing
     on. A name is found by "this is a name", and passes on which name it is.
     Separate keys and values let a position be found by one thing and pass
@@ -676,7 +701,8 @@ ATTENTION4_LESSON = prose(
     batch.
 
     ```python
-    torch.eye(3).expand(2, 3, 3).diagonal(dim1=-2, dim2=-1)    # tensor([[1., 1., 1.], [1., 1., 1.]])
+    pair = torch.tensor([[[1.0, 2.0], [3.0, 4.0]], [[5.0, 6.0], [7.0, 8.0]]])
+    pair.diagonal(dim1=-2, dim2=-1)    # tensor([[1., 4.], [5., 8.]])
     ```
     """,
 )
@@ -691,7 +717,8 @@ ATTENTION4_SOURCE = source_file(
     import torch.nn as nn
     from torch import Tensor
 
-    diagonals = torch.eye(3).expand(2, 3, 3).diagonal(dim1=-2, dim2=-1)    # two rows of 1s
+    pair = torch.tensor([[[1.0, 2.0], [3.0, 4.0]], [[5.0, 6.0], [7.0, 8.0]]])
+    diagonals = pair.diagonal(dim1=-2, dim2=-1)    # tensor([[1., 4.], [5., 8.]])
 
 
     # masked_weights from attention2.
@@ -718,8 +745,8 @@ ATTENTION4_SOURCE = source_file(
 
     # TODO: Finish SingleHead. __init__ adds self.value, an nn.Linear from
     #   features to size with no bias, then self.out, an nn.Linear from size
-    #   back to features. forward averages the values with the masked weights
-    #   from the queries and keys, then runs self.out.
+    #   back to features with its bias. forward averages the values with the
+    #   masked weights from the queries and keys, then runs self.out.
     class SingleHead(nn.Module):
         def __init__(
             self,
@@ -747,7 +774,8 @@ ATTENTION4_SOLUTION = source_file(
     import torch.nn as nn
     from torch import Tensor
 
-    diagonals = torch.eye(3).expand(2, 3, 3).diagonal(dim1=-2, dim2=-1)
+    pair = torch.tensor([[[1.0, 2.0], [3.0, 4.0]], [[5.0, 6.0], [7.0, 8.0]]])
+    diagonals = pair.diagonal(dim1=-2, dim2=-1)
 
 
     def masked_weights(scores: Tensor) -> Tensor:
@@ -823,10 +851,19 @@ def check_single_head(found: type) -> None:
         if not isinstance(out, nn.Linear) or tuple(out.weight.shape) != (features, size):
             raise Mismatch(f"{call} should hold self.out, an nn.Linear from {size} back to {features}.")
 
+        if out.bias is None:
+            raise Mismatch(f"{call} should keep the bias of self.out. Only the query, key and value Linears leave theirs out.")
+
+        reference = seeded_module(ReferenceSingleHead, features, size)
+
+        # The check seeds the weights before __init__ runs, so layers made in another order start from other numbers.
+        if not (torch.equal(value.weight, reference.value.weight) and torch.equal(out.weight, reference.out.weight)):
+            raise Mismatch(f"{call} starts from other weights than expected. Make self.value, then self.out, after the given layers, since the check seeds the weights in that order.")
+
         x = small_tensor(490 + size, 2, 5, features) / 2
 
         with torch.no_grad():
-            expected = seeded_module(ReferenceSingleHead, features, size)(x)
+            expected = reference(x)
 
         expect_tensor(
             call=f"{call} on a batch of shape (2, 5, {features})",
@@ -897,10 +934,14 @@ ATTENTION5_LESSON = prose(
 
     PyTorch has the whole computation as one call,
     `F.scaled_dot_product_attention(q, k, v)`, which masks the future when
-    given `is_causal=True`. On a GPU it runs a fused kernel, like FlashAttention, that never stores
-    the full weight matrix. That matrix is large. At 2,048 steps and 4 heads it
-    holds 16,777,216 numbers, 64 MB in float32, for one sequence. Even on this
-    CPU the call was faster, 5 milliseconds against 19 by hand at that size.
+    given `is_causal=True`. It runs a fused kernel, one piece of code that
+    does every step in a single pass. FlashAttention is the best known one.
+    It never stores the full weight matrix, which is large. At 2,048 steps and
+    4 heads it holds 16,777,216 numbers, 67 MB in float32, for one sequence.
+
+    PyTorch has such a kernel for this CPU too. Here it ran at that size with
+    the causal mask and heads of 64. Over three runs the call took 3.6 to 4.2
+    milliseconds, and the same work by hand 14 to 17.
     """,
 )
 
@@ -999,6 +1040,44 @@ ATTENTION5_SOLUTION = source_file(
 )
 
 
+def calls_to_attention(run: Callable[[], object]) -> list[dict[str, object]]:
+    """Runs run while F.scaled_dot_product_attention notes the keyword arguments of each call, so a check can tell
+    PyTorch's call from attention worked out by hand. The module's own name is swapped, which the learner's F reads."""
+    original = F.scaled_dot_product_attention
+    calls: list[dict[str, object]] = []
+
+    def recording(*arguments: object, **keywords: object) -> Tensor:
+        calls.append(keywords)
+
+        return original(*arguments, **keywords)
+
+    F.scaled_dot_product_attention = recording
+
+    try:
+        run()
+    finally:
+        F.scaled_dot_product_attention = original
+
+    return calls
+
+
+def check_attention_by_hand(found: object) -> None:
+    q, k, v = small_tensor(509, 2, 4, 3) / 2, small_tensor(510, 2, 4, 3) / 2, small_tensor(511, 2, 4, 2)
+
+    if calls_to_attention(lambda: found(q, k, v, True)):
+        raise Mismatch(
+            "attention called F.scaled_dot_product_attention. Work it out by hand here, with the scores, the mask and "
+            "the softmax, and leave the call to fast_attention.",
+        )
+
+
+def check_fast_attention_calls(found: object) -> None:
+    q, k, v = small_tensor(509, 2, 4, 3) / 2, small_tensor(510, 2, 4, 3) / 2, small_tensor(511, 2, 4, 2)
+
+    if not calls_to_attention(lambda: found(q, k, v, True)):
+        raise Mismatch("fast_attention never called F.scaled_dot_product_attention. Pass it q, k and v, with causal as its is_causal.")
+
+
 def check_attention5(checker: Checker) -> None:
     attention_inputs = (
         (small_tensor(500, 4, 3) / 2, small_tensor(501, 4, 3) / 2, small_tensor(502, 4, 2), True),
@@ -1013,6 +1092,11 @@ def check_attention5(checker: Checker) -> None:
         reference=lambda q, k, v, causal: F.scaled_dot_product_attention(q, k, v, is_causal=causal),
         expect=expect_tensor,
     )
+    checker.test(
+        function="attention",
+        description="works it out by hand",
+        run=check_attention_by_hand,
+    )
     check_on_inputs(
         checker=checker,
         function="fast_attention",
@@ -1020,6 +1104,11 @@ def check_attention5(checker: Checker) -> None:
         inputs=attention_inputs,
         reference=lambda q, k, v, causal: F.scaled_dot_product_attention(q, k, v, is_causal=causal),
         expect=expect_tensor,
+    )
+    checker.test(
+        function="fast_attention",
+        description="calls F.scaled_dot_product_attention",
+        run=check_fast_attention_calls,
     )
     check_on_inputs(
         checker=checker,
@@ -1079,46 +1168,50 @@ ATTENTION6_LESSON = prose(
     and a value, both one of 16 ids. Then comes a query, one of the keys, and
     the answer is the value stored with it.
 
-    An RNN reads the pairs one at a time. It has to keep every pair in its
-    fixed hidden state, before it knows which one the query will ask for.
-    Attention keeps every pair and compares the query with each key when the
-    query comes, as derive2 did.
+    An RNN reads the pairs one at a time, then the query. It has to keep
+    every pair in its fixed hidden state, before it knows which one the query
+    will ask for. Attention keeps every pair and compares the query with each
+    key when the query comes, as derive2 did.
 
-    `GRURecaller` in the file is the RNN, with a hidden state of 64 numbers.
-    `Recaller` is the attention, with queries, keys and values of 16. Here is
-    each trained for 400 steps, then tested on new sequences.
+    `GRURecaller` in the file is the RNN, and its `hidden` sets how many
+    numbers its state holds. `Recaller` is the attention, with queries, keys
+    and values of 16. Each GRU trained for 3,000 steps and the attention for
+    400. Here is the share of new sequences each got right, over three seeds.
 
-    | Pairs | GRU | Attention |
-    |---|---|---|
-    | 2 | 0.534 | 1.000 |
-    | 4 | 0.313 | 1.000 |
-    | 8 | 0.214 | 1.000 |
-    | 16 | 0.164 | 1.000 |
+    | Pairs | GRU of 64 | GRU of 256 | Attention |
+    |---|---|---|---|
+    | 2 | 0.878 to 0.965 | 0.994 to 0.999 | 1.000 |
+    | 4 | 0.296 to 0.345 | 0.823 to 0.854 | 1.000 |
+    | 8 | 0.244 to 0.275 | 0.225 to 0.274 | 1.000 |
+    | 16 | 0.163 to 0.169 | 0.164 to 0.169 | 1.000 |
 
-    Guessing would get 1 in 16 right, 0.0625. Trained ten times longer, the GRU
-    still got 0.331 at 4 pairs and 0.161 at 16.
+    Guessing would get 1 in 16 right, 0.0625.
 
-    The GRU's 64 numbers must hold every pair at once, and the more pairs, the
-    less room each one gets. Attention's memory grows with the sequence, one
-    key and one value per pair, so no pair is squeezed out. The price is that
-    the query is compared with every key, so the work grows with the sequence
-    too. 48_linear_attention looks at that trade.
+    A state of 64 numbers holds 2 pairs, and one of 256 holds 4. Neither
+    holds 8. Every pair is squeezed into the same fixed state, so a bigger
+    state holds more pairs, but any fixed size runs out. Attention's memory
+    grows with the sequence, one key and one value per pair, so no pair is
+    squeezed out. The price is that the query is compared with every key, so
+    the work grows with the sequence too. 48_linear_attention looks at that
+    trade.
     """,
 )
 
 GRU_RECALLER = '''
-# The RNN to compare with, given. It reads each pair's key and value, then the query's key next to its last state.
+# The RNN to compare with, given. It reads each pair's key and value, then the query's key as one more step,
+# and answers from its last state. hidden is the size of that state.
 class GRURecaller(nn.Module):
     def __init__(
         self,
         ids: int,
         size: int,
+        hidden: int = 64,
     ) -> None:
         super().__init__()
         self.keys = nn.Embedding(ids, size)
         self.values = nn.Embedding(ids, size)
-        self.gru = nn.GRU(2 * size, 64, batch_first=True)
-        self.out = nn.Linear(64 + size, ids)
+        self.gru = nn.GRU(2 * size, hidden, batch_first=True)
+        self.out = nn.Linear(hidden, ids)
 
     def forward(
         self,
@@ -1126,9 +1219,12 @@ class GRURecaller(nn.Module):
         values: Tensor,
         query: Tensor,
     ) -> Tensor:
-        _, last = self.gru(torch.cat([self.keys(keys), self.values(values)], dim=2))
+        pairs = torch.cat([self.keys(keys), self.values(values)], dim=2)
+        asked = self.keys(query).unsqueeze(1)
+        last_step = torch.cat([asked, torch.zeros_like(asked)], dim=2)
+        _, last = self.gru(torch.cat([pairs, last_step], dim=1))
 
-        return self.out(torch.cat([last[0], self.keys(query)], dim=1))
+        return self.out(last[0])
 '''
 
 ATTENTION6_SOURCE = source_file(
@@ -1245,10 +1341,11 @@ def train_recaller(
     pairs: int,
     steps: int,
     lr: float,
+    seed: int = 0,
 ) -> nn.Module:
-    """The runs the lesson's table comes from, Adam on batches of 64 new sequences."""
+    """The runs the lesson's table comes from, Adam on batches of 64 new sequences drawn from seed + 1."""
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
-    generator = torch.Generator().manual_seed(1)
+    generator = torch.Generator().manual_seed(seed + 1)
 
     for _ in range(steps):
         keys, values, query, answer = recall_sequences(64, pairs, generator)
@@ -1324,3 +1421,120 @@ ATTENTION6 = Exercise(
     time_limit=30,
     imports_first=OPTIMIZER_IMPORTS,
 )
+
+
+# ---------------------------------------------------------------------------
+# The runs behind the lessons
+# ---------------------------------------------------------------------------
+
+COPY_IDS = 16
+COPY_STEPS = 12
+COPY_SIZE = 16
+
+
+class CopyPreviousModel(nn.Module):
+    """attention4's comparison: copy the token right before each position, with SingleHead's layers or with x
+    compared with itself and averaged."""
+
+    def __init__(self, project: bool) -> None:
+        super().__init__()
+        self.project = project
+        self.tokens = nn.Embedding(COPY_IDS, COPY_SIZE)
+        self.positions = nn.Embedding(COPY_STEPS, COPY_SIZE)
+
+        if project:
+            self.head = ReferenceSingleHead(COPY_SIZE, COPY_SIZE)
+
+        self.read = nn.Linear(COPY_SIZE, COPY_IDS)
+
+    def forward(self, x: Tensor) -> Tensor:
+        h = self.tokens(x) + self.positions(torch.arange(x.shape[1]))
+
+        if self.project:
+            return self.read(self.head(h))
+
+        return self.read(reference_masked_weights(reference_scores(h, h)) @ h)
+
+
+def measure_projection(seeds: range = range(3)) -> dict[tuple[int, bool], tuple[float, float]]:
+    """attention4's table: by seed and whether the model has SingleHead's layers, the share of positions after the
+    first that give the previous token, then the share that give their own, on 2,000 new sequences after 600 steps."""
+    test = torch.randint(0, COPY_IDS, (2000, COPY_STEPS), generator=torch.Generator().manual_seed(99))
+    results = {}
+
+    with pinned_threads():
+        for seed in seeds:
+            for project in (False, True):
+                torch.manual_seed(seed)
+                model = CopyPreviousModel(project)
+                optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
+                generator = torch.Generator().manual_seed(seed + 1)
+
+                for _ in range(600):
+                    x = torch.randint(0, COPY_IDS, (64, COPY_STEPS), generator=generator)
+                    loss = F.cross_entropy(model(x)[:, 1:].reshape(-1, COPY_IDS), x[:, :-1].reshape(-1))
+                    optimizer.zero_grad()
+                    loss.backward()
+                    optimizer.step()
+
+                with torch.no_grad():
+                    guesses = model(test)[:, 1:].argmax(dim=-1)
+
+                results[(seed, project)] = (
+                    (guesses == test[:, :-1]).float().mean().item(),
+                    (guesses == test[:, 1:]).float().mean().item(),
+                )
+
+    return results
+
+
+def measure_attention_time(repeats: int = 10) -> tuple[float, float]:
+    """attention5's timing: causal attention over one sequence of 2,048 steps in 4 heads of 64, by hand against
+    F.scaled_dot_product_attention, the fastest of repeats runs of each in milliseconds."""
+    generator = torch.Generator().manual_seed(0)
+    q, k, v = (torch.randn(1, 4, 2048, 64, generator=generator) for _ in range(3))
+
+    def by_hand() -> Tensor:
+        scores = q @ k.transpose(-2, -1) / math.sqrt(q.shape[-1])
+        future = torch.triu(torch.ones(scores.shape[-2], scores.shape[-1]), diagonal=1).bool()
+
+        return torch.softmax(scores.masked_fill(future, float("-inf")), dim=-1) @ v
+
+    with pinned_threads(), torch.no_grad():
+        hand = fastest_seconds(by_hand, repeats)
+        call = fastest_seconds(lambda: F.scaled_dot_product_attention(q, k, v, is_causal=True), repeats)
+
+    return 1000 * hand, 1000 * call
+
+
+def given_class(
+    code: str,
+    name: str,
+) -> type:
+    """A class the learner's file is given, built from the same code, so a measurement runs what the file holds."""
+    namespace: dict[str, object] = {"torch": torch, "nn": nn, "Tensor": Tensor}
+    exec(code, namespace)
+
+    return namespace[name]
+
+
+def measure_recall(seeds: range = range(3)) -> dict[tuple[str, int, int], float]:
+    """attention6's table: the share of 1,000 new sequences recalled right, by model, seed and number of pairs.
+    Each GRU trains for 3,000 steps at a rate of 0.003, and Recaller for 400 steps at 0.05."""
+    gru = given_class(GRU_RECALLER, "GRURecaller")
+    models: tuple[tuple[str, Callable[[], nn.Module], int, float], ...] = (
+        ("GRU of 64", lambda: gru(RECALL_IDS, 16, 64), 3000, 0.003),
+        ("GRU of 256", lambda: gru(RECALL_IDS, 16, 256), 3000, 0.003),
+        ("Attention", lambda: ReferenceRecaller(RECALL_IDS, 16), 400, 0.05),
+    )
+    results = {}
+
+    with pinned_threads():
+        for seed in seeds:
+            for pairs in (2, 4, 8, 16):
+                for name, make, steps, lr in models:
+                    torch.manual_seed(seed)
+                    model = train_recaller(make(), pairs, steps, lr, seed)
+                    results[(name, seed, pairs)] = recall_accuracy(model, pairs)
+
+    return results

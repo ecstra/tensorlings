@@ -81,7 +81,8 @@ LINATTN1_LESSON = prose(
     ```
 
     The two forms give the same outputs, up to rounding. On 2 sequences of 50
-    random steps with a size of 8, they differed by at most 0.00001.
+    random steps with a size of 8, they differed by at most 0.00002 over
+    three seeds.
 
     Dropping the softmax has a cost. Weights can go negative, and they no
     longer sum to 1. Katharopoulos and colleagues fix both. They pass queries
@@ -586,3 +587,31 @@ def measure_step_cost() -> dict[int, tuple[float, float, int, int]]:
         cached: (*step_milliseconds(cached), batch * cached * size * 2 * 4, state_bytes)
         for cached in (256, 1024, 4096, 16384)
     }
+
+
+def reference_recurrent(
+    q: Tensor,
+    k: Tensor,
+    v: Tensor,
+) -> Tensor:
+    state = torch.zeros(*q.shape[:-2], q.shape[-1], v.shape[-1])
+    outputs = []
+
+    for t in range(q.shape[-2]):
+        state = state + k[..., t, :].unsqueeze(-1) @ v[..., t, :].unsqueeze(-2)
+        outputs.append((q[..., t, :].unsqueeze(-2) @ state).squeeze(-2))
+
+    return torch.stack(outputs, dim=-2)
+
+
+def measure_forms_gap(seeds: range = range(3)) -> dict[int, float]:
+    """linattn1's claim: by seed, the largest gap between the parallel and the recurrent form on 2 sequences of 50
+    random steps with a size of 8."""
+    gaps = {}
+
+    for seed in seeds:
+        generator = torch.Generator().manual_seed(seed)
+        q, k, v = (torch.randn(2, 50, 8, generator=generator) for _ in range(3))
+        gaps[seed] = (reference_parallel(q, k, v) - reference_recurrent(q, k, v)).abs().max().item()
+
+    return gaps

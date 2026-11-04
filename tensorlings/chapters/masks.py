@@ -20,6 +20,8 @@ from ..engine import (
     small_tensor,
 )
 from ..text import prose, source_file
+from .attention import calls_to_attention
+from .bidirectional import expect_nothing_recorded
 from .linear_layers import expect_module
 
 MASKS = Chapter(
@@ -80,9 +82,10 @@ MASK1_LESSON = prose(
 
     PyTorch's `F.scaled_dot_product_attention` reads a True in a boolean
     `attn_mask` the other way round, as a pair that takes part. `~` flips
-    every entry of a mask, so pass it `~blocked`. `nn.MultiheadAttention`
-    reads True as blocked, like the masks here. Read the documentation for
-    every new function that takes a mask.
+    every entry of a mask, so pass it `~blocked`. PyTorch's attention layer,
+    `nn.MultiheadAttention`, which 50_multihead builds, reads True as
+    blocked, like the masks here. Read the documentation for every new
+    function that takes a mask.
 
     A row with every key blocked takes a softmax over minus infinity alone,
     which is NaN. Padding at the start, which some generation code does,
@@ -288,6 +291,24 @@ def check_mask1(checker: Checker) -> None:
         reference=reference_masked_attention,
         expect=expect_tensor,
     )
+    checker.test(
+        function="torch_attention",
+        description="calls PyTorch's function",
+        run=lambda found: check_torch_attention_calls(found, blocked),
+    )
+
+
+def check_torch_attention_calls(
+    found: object,
+    blocked: Tensor,
+) -> None:
+    q, k, v = attention_inputs(496, 2, 4, 3)
+
+    if not calls_to_attention(lambda: found(q, k, v, blocked)):
+        raise Mismatch(
+            "torch_attention never called F.scaled_dot_product_attention. Pass it q, k and v, with blocked "
+            "turned into its attn_mask.",
+        )
 
 
 MASK1 = Exercise(
@@ -675,6 +696,15 @@ def check_mask2(checker: Checker) -> None:
         ),
         reference=reference_generate,
         expect=expect_tensor,
+    )
+    checker.test(
+        function="generate",
+        description="records nothing for autograd",
+        run=lambda found: expect_nothing_recorded(
+            function="generate",
+            modules=[model],
+            run=lambda: found(model, prompts.clone(), 3),
+        ),
     )
     checker.test(
         function="copies_right",
