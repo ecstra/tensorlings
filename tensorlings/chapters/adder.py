@@ -21,8 +21,9 @@ from ..engine import (
     seeded,
 )
 from ..text import prose, source_file
-from ..training import MissingCheckpoint, load_checkpoint
+from ..training import MissingCheckpoint, best_device, load_checkpoint
 from .linear_layers import expect_module
+from .tensors import pinned_threads
 
 
 def indented_part(part: str) -> str:
@@ -46,6 +47,7 @@ ADDER = Chapter(
         - [Zaremba and Sutskever, learning to execute](https://arxiv.org/abs/1410.4615)
         - [Sutskever, Vinyals and Le, sequence to sequence learning](https://arxiv.org/abs/1409.3215)
         - [Keras, sequence to sequence learning for performing number addition](https://keras.io/examples/nlp/addition_rnn/)
+        - [Kaiser and Sutskever, neural GPUs learn algorithms](https://arxiv.org/abs/1511.08228)
         """,
     ),
 )
@@ -75,13 +77,14 @@ def reference_random_sums(
     digits: int,
     generator: torch.Generator,
     held_out: bool,
+    rule: Callable[[int, int], bool] = is_held_out,
 ) -> list[tuple[str, str]]:
     pairs: list[tuple[str, str]] = []
 
     while len(pairs) < count:
         a, b = torch.randint(0, 10**digits, (2,), generator=generator).tolist()
 
-        if is_held_out(a, b) == held_out:
+        if rule(a, b) == held_out:
             pairs.append((f"{a}+{b}", str(a + b)))
 
     return pairs
@@ -140,8 +143,9 @@ ADDER1_LESSON = prose(
     memory.
 
     The rule has to mix every digit. A first try held out sums by their last
-    digits alone, so last digits like 3 and 9 never met in training. The
-    model then got only about half of the held out sums right, which tested a
+    digits alone, so sums whose last digits matched, like 3 and 3, never
+    appeared in training. The model then got under 10 percent of the held out
+    sums right, and every new sum of the kinds it trained on. That tested a
     different skill from adding.
     """,
 )
@@ -549,15 +553,15 @@ ADDER2_LESSON = prose(
 
     | Steps | 1,000 | 2,000 | 3,000 | 4,000 |
     |---|---|---|---|---|
-    | Units first | 88.8% | 99.7% | 100.0% | 100.0% |
-    | Usual order | 4.7% | 9.9% | 21.8% | 29.8% |
+    | Units first | 88.9% | 99.8% | 99.9% | 99.95% |
+    | Usual order | 5.7% | 9.4% | 21.9% | 30.3% |
 
     In the usual order the first digit written depends on every carry below
     it, before any of them is written. Even after 20,000 steps, five times as
-    long, the usual order gets 69.8% right. Choosing the order of the output
+    long, the usual order gets 68.8% right. Choosing the order of the output
     is a design decision, and here it beat a lot of training.
 
-    The run took about a minute here on MPS.
+    The run took 1.5 to 3 minutes here on the Mac's GPU.
     """,
 )
 
@@ -938,19 +942,22 @@ ADDER3_LESSON = prose(
     | Sums | Exactly right | Longest answer written |
     |---|---|---|
     | up to 3 digits, as in training | 100% | 4 digits |
+    | the same sums with one more `_` in front | 0.15% | 4 digits |
     | the same sums with two more `_` in front | 0.15% | 4 digits |
     | up to 4 digits | 0% | 4 digits |
     | up to 5 digits | 0% | 4 digits |
 
-    Two more padding tokens are enough to break it. The model never saw a
-    question of 9 tokens, so its encoder ends in a state the decoder never
+    One more padding token is enough to break it. The model never saw a
+    question of 8 tokens, so its encoder ends in a state the decoder never
     learned to read. With 4 digit numbers it still writes at most 4 digits,
     the longest answer it ever wrote, so `5674+6652` comes out as `1236`.
 
     The model learned the sums it was shown, and not the method of adding. A
     person who adds 3 digit numbers adds 30 digit numbers the same way.
-    Zaremba and Sutskever taught their models longer sums with a curriculum
-    that grew the lengths step by step.
+    Zaremba and Sutskever reached 99 percent on 9 digit sums by mixing easy
+    and hard sums in training. Their tests had the same lengths as training.
+    Kaiser and Sutskever's Neural GPU, built from convolutions, trained on
+    binary sums of up to 20 bits. It then made no mistakes on far longer ones.
     """,
 )
 
@@ -1309,22 +1316,133 @@ ADDER3 = Exercise(
 # ---------------------------------------------------------------------------
 
 
+def written_answers(
+    model: nn.Module,
+    questions: Tensor,
+    digits: int,
+) -> list[str]:
+    """The answers greedy decoding writes for questions, read back in the usual order."""
+    model.eval()
+
+    with torch.no_grad():
+        written = ADDER_REFERENCE["greedy"](model, questions, digits + 2)
+
+    return [reference_decode(ids)[::-1] for ids in written.tolist()]
+
+
 def measure_lengths() -> dict[str, tuple[float, int]]:
     """adder3's table, on the trained model in checkpoints/adder2.pt: for 2,000 held out sums of each kind,
-    the share answered exactly right and the longest answer written."""
-    threads = torch.get_num_threads()
-    torch.set_num_threads(4)
+    the share answered exactly right and the longest answer written, both from the questions as they were
+    padded."""
+    results: dict[str, tuple[float, int]] = {}
 
-    try:
+    with pinned_threads():
         model = seeded_adder(ADDER_REFERENCE["Adder"], 128)
         load_checkpoint(model, "adder2")
-        results = {}
+        kinds = (
+            ("3 digits", 3, 0),
+            ("3 digits, 1 more _", 3, 1),
+            ("3 digits, 2 more _", 3, 2),
+            ("4 digits", 4, 0),
+            ("5 digits", 5, 0),
+        )
 
-        for name, digits, extra in (("3 digits", 3, 0), ("3 digits, 2 more _", 3, 2), ("4 digits", 4, 0), ("5 digits", 5, 0)):
+        for name, digits, extra in kinds:
             pairs = reference_random_sums(2000, digits, torch.Generator().manual_seed(1), True)
-            right = LENGTH_REFERENCE["padded_exact_match"](model, pairs, digits, extra)
-            results[name] = (right, LENGTH_REFERENCE["longest_answer"](model, pairs, digits))
+            questions = LENGTH_REFERENCE["padded_questions"](pairs, digits, extra)
+            answers = written_answers(model, questions, digits)
+            right = sum(answer == truth for answer, (_, truth) in zip(answers, pairs)) / len(pairs)
+            results[name] = (right, max(len(answer) for answer in answers))
 
-        return results
-    finally:
-        torch.set_num_threads(threads)
+    return results
+
+
+def usual_order_tensors(
+    pairs: list[tuple[str, str]],
+    digits: int,
+) -> tuple[Tensor, Tensor]:
+    """adder1's to_tensors with each answer left in the usual order, highest digit first."""
+    questions, _ = reference_to_tensors(pairs, digits)
+    answers = torch.tensor([reference_encode(("^" + answer + "$").ljust(digits + 3, "_")) for _, answer in pairs])
+
+    return questions, answers
+
+
+def train_adder(
+    seed: int,
+    steps: int,
+    units_first: bool,
+    rule: Callable[[int, int], bool],
+    measured_at: tuple[int, ...],
+) -> tuple[nn.Module, list[float]]:
+    """adder2's main on the best device, with the seed, the order of the answers and the held out rule left
+    open. Gives the trained model on the CPU and its share of 2,000 held out sums answered exactly right after
+    each count of steps in measured_at. On MPS two runs of the same seed differ by a few points, since MPS
+    doesn't add numbers up in a fixed order."""
+    device = best_device()
+    torch.manual_seed(seed)
+    model = ADDER_REFERENCE["Adder"]().to(device)
+    optimizer = torch.optim.Adam(model.parameters(), lr=3e-3)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=steps)
+    generator = torch.Generator().manual_seed(seed)
+    held_out = reference_random_sums(2000, 3, torch.Generator().manual_seed(1), True, rule)
+    held_out_questions, _ = reference_to_tensors(held_out, 3)
+    encoded = reference_to_tensors if units_first else usual_order_tensors
+    shares: list[float] = []
+
+    for step in range(steps):
+        questions, answers = encoded(reference_random_sums(256, 3, generator, False, rule), 3)
+        loss = ADDER_REFERENCE["answer_loss"](model, questions.to(device), answers.to(device))
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+        scheduler.step()
+
+        if step + 1 in measured_at:
+            answers_written = written_answers(model.cpu(), held_out_questions, 3)
+            model.train().to(device)
+
+            if not units_first:
+                answers_written = [answer[::-1] for answer in answers_written]
+
+            shares.append(sum(answer == truth for answer, (_, truth) in zip(answers_written, held_out)) / len(held_out))
+
+    return model.cpu(), shares
+
+
+def measure_answer_order(long_steps: int = 20000) -> dict[str, list[float]]:
+    """adder2's table: the share of 2,000 held out sums answered exactly right after 1,000 to 4,000 steps, with
+    answers written units first and in the usual order, then the usual order trained for long_steps."""
+    with pinned_threads():
+        _, units_first = train_adder(0, 4000, True, is_held_out, (1000, 2000, 3000, 4000))
+        _, usual = train_adder(0, 4000, False, is_held_out, (1000, 2000, 3000, 4000))
+        _, usual_long = train_adder(0, long_steps, False, is_held_out, (long_steps,))
+
+    return {
+        "units first": units_first,
+        "usual order": usual,
+        f"usual order, {long_steps} steps": usual_long,
+    }
+
+
+def first_held_out_rule(
+    a: int,
+    b: int,
+) -> bool:
+    """The rule adder1's lesson says came first. 7a + 13b ends in 0 exactly when a and b end in the same digit."""
+    return (a * 7 + b * 13) % 10 == 0
+
+
+def measure_first_rule() -> dict[str, float]:
+    """adder1's last paragraph: adder2's run with sums held out by first_held_out_rule, then the share of 2,000
+    held out sums and of 2,000 new sums from the training side that it answers exactly right."""
+    with pinned_threads():
+        model, (held_out_share,) = train_adder(0, 4000, True, first_held_out_rule, (4000,))
+        seen_kind = reference_random_sums(2000, 3, torch.Generator().manual_seed(2), False, first_held_out_rule)
+        questions, _ = reference_to_tensors(seen_kind, 3)
+        answers = written_answers(model, questions, 3)
+
+    return {
+        "held out": held_out_share,
+        "new sums from the training side": sum(answer == truth for answer, (_, truth) in zip(answers, seen_kind)) / 2000,
+    }

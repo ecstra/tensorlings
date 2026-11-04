@@ -156,6 +156,12 @@ PLAIN_ERRORS: tuple[tuple[str, str], ...] = (
         "torch.tensor takes numbers, but this list holds text, like a character. Look each one up in a dict of ids "
         "first, so the list holds numbers.",
     ),
+    (
+        r"For (?:un)?batched (\d)-D input, hx should also be \d-D but got (\d)-D tensor",
+        "An RNN's input and its starting state must agree on the batch. Input of shape (batch, steps, features) "
+        "needs a state of shape (layers, batch, hidden). Here the input has {0} dimensions and the state {1}, so one "
+        "of them is missing its batch dimension. .unsqueeze(0) makes a single sequence a batch of one.",
+    ),
 )
 
 

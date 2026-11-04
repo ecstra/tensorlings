@@ -20,7 +20,9 @@ from ..engine import (
     small_tensor,
 )
 from ..text import prose, source_file
+from .causal_conv import median_seconds
 from .linear_layers import expect_module
+from .tensors import pinned_threads
 
 STATE_SPACE = Chapter(
     folder="45_state_space",
@@ -150,6 +152,10 @@ SSM1_LESSON = prose(
     the unrolling. For 64 sequences of 2,000 steps, the two ways here agreed
     to within 0.00001.
 
+    On the CPU, the loop run on all 64 at once took 21 ms, and `F.conv1d`
+    with the 2,000 entry kernel took 38 ms. The same convolution through the
+    FFT, as fft1 did it, took 1.5 ms, 14 times quicker than the loop.
+
     To get the convolution from `F.conv1d`, flip the kernel, as fft1 did. Then
     put `len(x) - 1` zeros in front of `x`, so the first output sees `x[0]`
     alone.
@@ -188,8 +194,8 @@ SSM1_SOURCE = source_file(
 
 
     # TODO: Return the first length entries of the kernel, C @ A^j @ B for
-    #   j = 0 up to length - 1, without computing a matrix power from scratch
-    #   each time.
+    #   j = 0 up to length - 1. Each A^j @ B is A @ the one before it, so
+    #   keep it from one entry to the next.
     def ssm_kernel(
         A: Tensor,
         B: Tensor,
@@ -277,6 +283,38 @@ SSM_INPUTS = (
 )
 
 
+def check_convolve_without_loop(found: object) -> None:
+    """The file's ssm_loop is swapped for one that notes it was called, since an ssm_convolve that just runs the
+    loop matches it without convolving at all."""
+    namespace = found.__globals__
+    original = namespace.get("ssm_loop")
+    calls: list[int] = []
+
+    def noted_loop(
+        x: Tensor,
+        A: Tensor,
+        B: Tensor,
+        C: Tensor,
+    ) -> Tensor:
+        calls.append(len(x))
+
+        return reference_ssm_loop(x, A, B, C)
+
+    namespace["ssm_loop"] = noted_loop
+
+    try:
+        x, A, B, C = SSM_INPUTS[0]
+        found(x.clone(), A.clone(), B.clone(), C.clone())
+    finally:
+        namespace["ssm_loop"] = original
+
+    if calls:
+        raise Mismatch(
+            "ssm_convolve called ssm_loop. Build its outputs from ssm_kernel with F.conv1d instead, so the two ways "
+            "are computed apart and can be compared.",
+        )
+
+
 def check_ssm1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
@@ -304,6 +342,11 @@ def check_ssm1(checker: Checker) -> None:
         inputs=SSM_INPUTS,
         reference=reference_ssm_loop,
         expect=expect_tensor_near,
+    )
+    checker.test(
+        function="ssm_convolve",
+        description="convolves, without running the loop",
+        run=check_convolve_without_loop,
     )
 
 
@@ -353,8 +396,9 @@ SSM2_LESSON = prose(
 
     These models don't hope training keeps every `a` below 1. They build it
     in. Each state entry has a rate of decay through time, `rate = -exp(log_rate)`
-    for a learned `log_rate`, so the rate is always negative. Turning that
-    rate into a step of size `step` is called discretization.
+    for a learned `log_rate`, so the rate is always negative. Decaying at that
+    rate for a time `step` multiplies the state by `exp(step * rate)`. Turning
+    the rate into a step like this is called discretization.
 
     ```text
     a     = exp(step * rate)
@@ -364,6 +408,18 @@ SSM2_LESSON = prose(
     The `b_bar` formula assumes the input holds still through the step, which
     S4D calls the zero order hold. With the rate below 0 and the step above 0,
     `a` lands between 0 and 1 whatever training does. Stable by construction.
+
+    A state of 4 learns a running sum here, which an `a` of exactly 1 keeps,
+    so training pushes every `a` toward 1. Each kind trains 400 steps on
+    sequences of 1,000, then runs 20,000.
+
+    | `a` learned | Largest `a`, seeds 0, 1, 2 | Loss after training | Largest output |
+    |---|---|---|---|
+    | as it is | 1.032, 0.752, 1.037 | 3.6e25, 0.24, 9.8e28 | inf, 0.92, inf |
+    | as `exp(rate)`, a step of 1 | 0.9998, 0.9995, 0.9997 | 0.0014, 0.0002, 0.0016 | 3.3, 2.9, 3.3 |
+
+    Two plain runs passed 1 and blew up, and one stalled. The built in form
+    neared 1 every time.
 
     The step sets the memory. Here is a rate of -1.
 
@@ -393,8 +449,8 @@ SSM2_SOURCE = source_file(
 
 
     # TODO: Return the first length entries of the kernel of a diagonal state,
-    #   entry j being the sum over i of c[i] * b[i] * a[i] ** j, without a loop.
-    #   a, b and c have shape (n,).
+    #   entry j being the sum over i of c[i] * b[i] * a[i] ** j. a, b and c
+    #   have shape (n,). The powers line above gives every a[i] ** j at once.
     def diagonal_kernel(
         a: Tensor,
         b: Tensor,
@@ -1171,3 +1227,142 @@ QUIZ8 = Exercise(
     introduces=(),
     check=check_quiz8,
 )
+
+
+# ---------------------------------------------------------------------------
+# The runs behind the lessons
+# ---------------------------------------------------------------------------
+
+
+def measure_two_ways(repeats: int = 5) -> dict[str, float]:
+    """ssm1's numbers: 64 sequences of 2,000 steps through a state of 4. The largest gap between ssm1's loop,
+    one sequence at a time, and the convolution, then the median seconds of the loop run on all 64 sequences at
+    once, of F.conv1d, and of the same convolution through the FFT as fft1 did it."""
+    generator = torch.Generator().manual_seed(0)
+    A = stable_matrix(7, 4)
+    B = torch.randn(4, generator=generator)
+    C = torch.randn(4, generator=generator)
+    xs = torch.randn(64, 2000, generator=generator)
+    kernel = reference_ssm_kernel(A, B, C, 2000)
+    size = 2 ** (2 * 2000 - 2).bit_length()
+
+    def loop_all() -> Tensor:
+        h = torch.zeros(64, 4)
+        outputs: list[Tensor] = []
+
+        for t in range(xs.shape[1]):
+            h = h @ A.T + B * xs[:, t : t + 1]
+            outputs.append(h @ C)
+
+        return torch.stack(outputs, dim=1)
+
+    def conv_all() -> Tensor:
+        return F.conv1d(F.pad(xs.unsqueeze(1), (1999, 0)), kernel.flip(0).view(1, 1, -1)).squeeze(1)
+
+    def fft_all() -> Tensor:
+        spectrum = torch.fft.rfft(xs, n=size) * torch.fft.rfft(kernel, n=size)
+
+        return torch.fft.irfft(spectrum, n=size)[:, :2000]
+
+    with pinned_threads():
+        one_at_a_time = torch.stack([reference_ssm_loop(x, A, B, C) for x in xs])
+
+        return {
+            "largest gap to F.conv1d": (one_at_a_time - conv_all()).abs().max().item(),
+            "largest gap to the FFT": (one_at_a_time - fft_all()).abs().max().item(),
+            "loop seconds": median_seconds(loop_all, repeats),
+            "F.conv1d seconds": median_seconds(conv_all, repeats),
+            "FFT seconds": median_seconds(fft_all, repeats),
+        }
+
+
+def running_sum_outputs(
+    a: Tensor,
+    b: Tensor,
+    c: Tensor,
+    x: Tensor,
+) -> Tensor:
+    """A diagonal state run over x as a convolution through the FFT, with the kernel of ssm2."""
+    steps = x.shape[1]
+    kernel = (c * b * a ** torch.arange(steps, dtype=x.dtype).unsqueeze(1)).sum(dim=1)
+    size = 2 ** (2 * steps - 1).bit_length()
+
+    return torch.fft.irfft(torch.fft.rfft(x, n=size) * torch.fft.rfft(kernel, n=size), n=size)[:, :steps]
+
+
+def measure_stability(
+    seeds: range = range(3),
+    lr: float = 0.05,
+) -> dict[tuple[str, int], tuple[float, float, float]]:
+    """ssm2's second table: a diagonal state of 4 learns 0.03 times the running sum of its input, which an a of
+    exactly 1 keeps, so training pushes every a toward 1. Each a starts between 0.90 and 0.99 and is learned
+    either as it is or as exp(step * rate) with a step of 1, for 400 Adam steps on 16 sequences of 1,000. Then
+    the trained state runs one step at a time for 20,000 steps. Per kind and seed, the loss after training, the
+    largest a, and the largest output it wrote."""
+    results: dict[tuple[str, int], tuple[float, float, float]] = {}
+
+    with pinned_threads():
+        for kind in ("as it is", "built in"):
+            for seed in seeds:
+                torch.manual_seed(seed)
+                start = 0.9 + 0.09 * torch.rand(4)
+                learned = nn.Parameter(start.clone() if kind == "as it is" else torch.log(-torch.log(start)))
+                b = nn.Parameter(torch.randn(4) / 2)
+                c = nn.Parameter(torch.randn(4) / 2)
+                optimizer = torch.optim.Adam([learned, b, c], lr=lr)
+                generator = torch.Generator().manual_seed(seed + 1)
+
+                def current_a() -> Tensor:
+                    return learned if kind == "as it is" else torch.exp(-torch.exp(learned))
+
+                for _ in range(400):
+                    x = torch.randn(16, 1000, generator=generator)
+                    loss = F.mse_loss(running_sum_outputs(current_a(), b, c, x), 0.03 * x.cumsum(dim=1))
+                    optimizer.zero_grad()
+                    loss.backward()
+                    optimizer.step()
+
+                with torch.no_grad():
+                    a = current_a()
+                    h = torch.zeros(4)
+                    largest = 0.0
+
+                    for value in torch.randn(20000, generator=generator).tolist():
+                        h = a * h + b * value
+                        largest = max(largest, abs((c * h).sum().item()))
+
+                        if not math.isfinite(largest):
+                            break
+
+                results[(kind, seed)] = (loss.item(), a.max().item(), largest)
+
+    return results
+
+
+def measure_selective(seeds: range = range(5)) -> dict[int, dict[str, float]]:
+    """ssm3's table, seed 0 in the lesson: each model trained for 200 Adam steps at 0.05 on batches of 64
+    sequences of 16, then its mean squared error on 1,000 new sequences, next to always guessing 0."""
+    x, y = marked_sequences(1000, 16, torch.Generator().manual_seed(99))
+    results: dict[int, dict[str, float]] = {}
+
+    with pinned_threads():
+        for seed in seeds:
+            results[seed] = {"always 0": F.mse_loss(torch.zeros_like(y), y).item()}
+
+            for name, make in (("fixed", FixedSSM), ("selective", ReferenceSelectiveSSM)):
+                torch.manual_seed(seed)
+                model = make(4)
+                optimizer = torch.optim.Adam(model.parameters(), lr=0.05)
+                generator = torch.Generator().manual_seed(seed + 1)
+
+                for _ in range(200):
+                    batch, targets = marked_sequences(64, 16, generator)
+                    loss = F.mse_loss(model(batch), targets)
+                    optimizer.zero_grad()
+                    loss.backward()
+                    optimizer.step()
+
+                with torch.no_grad():
+                    results[seed][name] = F.mse_loss(model(x), y).item()
+
+    return results

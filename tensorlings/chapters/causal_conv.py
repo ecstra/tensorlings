@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import statistics
 import textwrap
+import time
 from collections.abc import Callable
 
 import torch
@@ -24,6 +26,7 @@ from ..engine import (
 from ..text import prose, source_file
 from .bidirectional import expect_nothing_recorded
 from .linear_layers import expect_module
+from .tensors import pinned_threads
 
 CAUSAL_CONV = Chapter(
     folder="44_causal_conv",
@@ -342,6 +345,10 @@ DILATED1_LESSON = prose(
     the residual of Section 3, so the signal and its gradient pass through a
     deep stack.
 
+    WaveNet's own layer uses gating1's gate in place of the ReLU, the tanh of
+    one convolution times the sigmoid of another. Its paper found that this
+    worked better than a ReLU for audio.
+
     `nn.ModuleList` holds a list of layers, so their weights count as the
     model's own and `.parameters()` finds them. Loop over it in `forward`.
     """,
@@ -625,6 +632,19 @@ WAVENET1_LESSON = prose(
     is done. Over 1,000 steps that is 1,000 small steps one after another,
     forward and again backward. A dilated stack that sees 1,024 steps has 10
     layers, and each one handles every position in a single call.
+
+    Here is one forward and backward pass on 16 signals, on the CPU. The
+    stack is a `Shifter` with dilations 1 up to 512, and the GRU has the same
+    width of 8. Each time is the median of 5 runs.
+
+    | Samples | Dilated stack | GRU | GRU's time over the stack's |
+    |---|---|---|---|
+    | 1,024 | 59 ms | 74 ms | 1.3 |
+    | 4,096 | 152 ms | 321 ms | 2.1 |
+    | 16,384 | 501 ms | 1,667 ms | 3.3 |
+
+    The gap grows with length, since each GRU step waits for the one before,
+    and each layer of the stack covers every position at once.
 
     So causal convolutions suit long signals, like audio at 16,000 samples a
     second, which is what WaveNet generated.
@@ -1012,17 +1032,20 @@ STFT1_LESSON = prose(
     A wave cut off sharply at a window's edges smears over many frequencies.
     So each window is first multiplied by a Hann window, which rises from 0
     to 1 and falls back. `torch.hann_window(n)` gives one of n samples. Take a
-    wave of 10.5 cycles in 64 samples. Its four nearest frequencies hold 90.2
+    wave of 10.5 cycles in 64 samples. Its four nearest frequencies hold 90.1
     percent of its energy without the Hann window, and 99.9 percent with it.
 
     The taper costs something. It shrinks each window's edges to near 0, so
     windows that only touched would all but drop the samples at every cut.
     Windows of 64 that start every 32 overlap by half. Their Hann windows add
-    up to exactly 1 at every sample, so every sample counts the same.
+    up to exactly 1 at every sample except the first and last 32, which only
+    one window covers. So the samples in between all count the same.
 
     `torch.stft` does all of this and gives one column per window. A window
     of 64 has frequencies 0 to 32, so a period of 8 is frequency 8 and a
-    period of 4 is frequency 16.
+    period of 4 is frequency 16. With `center=False` the first window starts
+    at sample 0. The default, `center=True`, first pads both ends, so each
+    window is centred on a multiple of the hop.
 
     | Signal | Loudest frequency of each window |
     |---|---|
@@ -1237,3 +1260,112 @@ STFT1 = Exercise(
     introduces=(),
     check=check_stft1,
 )
+
+
+# ---------------------------------------------------------------------------
+# The runs behind the lessons
+# ---------------------------------------------------------------------------
+
+
+def measure_shifters(seeds: range = range(5)) -> dict[int, dict[str, float]]:
+    """wavenet1's first table, seed 0 in the lesson: each stack of 4 layers trained for 150 steps to shift
+    noise by 10, then its error from position 10 on over 256 new signals, next to always guessing 0."""
+    test = torch.randn(256, 32, generator=torch.Generator().manual_seed(99))
+    results: dict[int, dict[str, float]] = {}
+
+    with pinned_threads():
+        for seed in seeds:
+            results[seed] = {"always 0": reference_delayed(test, 10)[:, 10:].pow(2).mean().item()}
+
+            for name, dilations in (("dilated", [1, 2, 4, 8]), ("plain", [1, 1, 1, 1])):
+                torch.manual_seed(seed)
+                model = ReferenceShifter(dilations)
+                reference_train_shifter(model, 10, 150, torch.Generator().manual_seed(seed + 1))
+                results[seed][name] = reference_shift_error(model, test, 10)
+
+    return results
+
+
+def median_seconds(
+    run: Callable[[], object],
+    repeats: int,
+) -> float:
+    """The median of several timed runs after one to warm up, so one slow run from other work on the machine
+    moves nothing."""
+    run()
+    times: list[float] = []
+
+    for _ in range(repeats):
+        start = time.perf_counter()
+        run()
+        times.append(time.perf_counter() - start)
+
+    return statistics.median(times)
+
+
+def measure_parallel_time(
+    lengths: tuple[int, ...] = (1024, 4096, 16384),
+    repeats: int = 5,
+) -> dict[int, tuple[float, float]]:
+    """wavenet1's second table: the median seconds of one forward and backward pass on 16 signals of each
+    length, on the CPU, for the Shifter with dilations 1 up to 512 and for a GRU of the same width of 8."""
+    results: dict[int, tuple[float, float]] = {}
+
+    with pinned_threads():
+        for length in lengths:
+            x = torch.randn(16, length, generator=torch.Generator().manual_seed(length))
+            torch.manual_seed(0)
+            stack = ReferenceShifter([2**index for index in range(10)])
+            gru = nn.GRU(1, 8, batch_first=True)
+            head = nn.Linear(8, 1)
+
+            def stack_pass() -> None:
+                stack.zero_grad()
+                F.mse_loss(stack(x), x).backward()
+
+            def gru_pass() -> None:
+                gru.zero_grad()
+                head.zero_grad()
+                outputs, _ = gru(x.unsqueeze(2))
+                F.mse_loss(head(outputs).squeeze(2), x).backward()
+
+            results[length] = (median_seconds(stack_pass, repeats), median_seconds(gru_pass, repeats))
+
+    return results
+
+
+def measure_stft() -> dict[str, object]:
+    """stft1's numbers: the two orders of notes and their whole spectra, the energy a wave of 10.5 cycles in 64
+    samples keeps in its four nearest frequencies with and without a Hann window, what overlapping Hann
+    windows add up to, and the loudest frequency of each window of torch.stft."""
+    low_high = two_notes(8, 4, 512)
+    high_low = two_notes(4, 8, 512)
+    whole_low_high = torch.fft.rfft(low_high).abs()
+    whole_high_low = torch.fft.rfft(high_low).abs()
+
+    t = torch.arange(64, dtype=torch.float64)
+    wave = torch.sin(2 * torch.pi * 10.5 * t / 64)
+    near_shares = {}
+
+    for name, window in (("no window", torch.ones(64, dtype=torch.float64)), ("Hann", torch.hann_window(64, dtype=torch.float64))):
+        energy = torch.fft.rfft(wave * window).abs() ** 2
+        near_shares[name] = (energy[9:13].sum() / energy.sum()).item()
+
+    overlap = torch.zeros(1024, dtype=torch.float64)
+
+    for start in range(0, 1024 - 64 + 1, 32):
+        overlap[start : start + 64] += torch.hann_window(64, dtype=torch.float64)
+
+    loudest = {
+        name: reference_stft(signal, 64, 32).abs().argmax(dim=0).tolist()
+        for name, signal in (("low then high", low_high), ("high then low", high_low))
+    }
+
+    return {
+        "largest gap between the two whole spectra": (whole_low_high - whole_high_low).abs().max().item(),
+        "two loudest frequencies": sorted(whole_low_high.topk(2).indices.tolist()),
+        "share in the four nearest frequencies": near_shares,
+        "Hann sum away from the ends": (overlap[32:-32].min().item(), overlap[32:-32].max().item()),
+        "Hann sum at the first sample": overlap[0].item(),
+        "loudest frequency of each window": loudest,
+    }

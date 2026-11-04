@@ -24,6 +24,7 @@ from ..engine import (
 from ..text import prose, source_file
 from .bidirectional import expect_nothing_recorded
 from .linear_layers import expect_module
+from .tensors import pinned_threads
 
 SEQ2SEQ = Chapter(
     folder="43_seq2seq",
@@ -46,6 +47,7 @@ SEQ2SEQ = Chapter(
         - [Dive into Deep Learning, sequence to sequence learning](https://d2l.ai/chapter_recurrent-modern/seq2seq.html)
         - [Dive into Deep Learning, beam search](https://d2l.ai/chapter_recurrent-modern/beam-search.html)
         - [Wu and colleagues, Google's neural machine translation system](https://arxiv.org/abs/1609.08144)
+        - [Koehn and Knowles, six challenges for neural machine translation](https://arxiv.org/abs/1706.03872)
         """,
     ),
 )
@@ -547,7 +549,7 @@ ENCDEC2_LESSON = prose(
 
     At 5 digits it copies almost every row. At 20 it gets under half the
     digits and no whole row. At 40 it gets the first digit right 0.48 of the
-    time, and the last ones about 0.15, near the 0.1 a guess gets.
+    time, and the last one 0.13, near the 0.1 a guess gets.
 
     More room helps. With a hidden size of 128, rows of 20 come back with
     0.909 of their digits right, against 0.494. Whole rows still mostly fail,
@@ -691,12 +693,20 @@ def check_train_copier(found: object) -> None:
         runs.append((loss, decoder.out.weight.detach().clone()))
 
     (loss, weight), (expected_loss, expected_weight) = runs
-    expect_close(
-        call="train_copier for 5 steps on rows of 4",
-        actual=loss,
-        expected=expected_loss,
-        tolerance=1e-5,
-    )
+
+    try:
+        expect_close(
+            call="train_copier for 5 steps on rows of 4",
+            actual=loss,
+            expected=expected_loss,
+            tolerance=1e-5,
+        )
+    except Mismatch as mismatch:
+        raise Mismatch(
+            f"{mismatch} Each step should draw one batch with torch.randint(0, 10, (64, length), "
+            "generator=generator), whose high end of 10 is left out, and use it as both source and target.",
+        ) from None
+
     expect_tensor(
         call="the decoder's output weights after train_copier for 5 steps",
         actual=weight,
@@ -956,7 +966,9 @@ class ScriptedEncoder(nn.Module):
 
 class ScriptedDecoder(nn.Module):
     """Writes the symbols of script in turn, whatever it reads, counting the steps in its state. A trained
-    decoder rarely writes on after END, so this one does it on purpose, to show whether greedy decoding stops."""
+    decoder rarely writes on after END, so this one does it on purpose, to show whether greedy decoding stops.
+    Its last step counts the symbols read before it in this call too, so a greedy_decode that rereads the
+    whole prefix from the encoder's state each time gets the same script as one that carries the state."""
 
     def __init__(self, script: list[int]) -> None:
         super().__init__()
@@ -967,7 +979,7 @@ class ScriptedDecoder(nn.Module):
         symbols: Tensor,
         state: Tensor,
     ) -> tuple[Tensor, Tensor]:
-        step = min(int(state.flatten()[0].item()), len(self.script) - 1)
+        step = min(int(state.flatten()[0].item()) + symbols.shape[1] - 1, len(self.script) - 1)
         scores = torch.zeros(len(symbols), symbols.shape[1], VOCABULARY)
         scores[:, -1, self.script[step]] = 1.0
 
@@ -981,6 +993,12 @@ def expect_symbols(
 ) -> None:
     if isinstance(actual, Tensor):
         raise Mismatch(f"{call} is a tensor. Return a list of ints, which .tolist() or .item() on each symbol gives.")
+
+    if isinstance(actual, list) and any(isinstance(symbol, Tensor) for symbol in actual):
+        raise Mismatch(
+            f"{call} is a list that holds tensors. Return a list of plain ints, which .item() on each symbol or "
+            ".tolist() on a tensor of them gives.",
+        )
 
     expect_value(
         call=call,
@@ -1138,18 +1156,20 @@ BEAM1_LESSON = prose(
     Beam search rescues some rows where an early digit was a close call.
 
     Length matters once outputs of different lengths compete. Here a copier
-    of size 48 trained on rows of 1 to 12 digits. It copies 300 new rows of 6
-    to 12, and the table gives the share it ends too early.
+    of size 96 trained for 3,000 steps on rows of 1 to 12 digits. It copies
+    300 new rows of 6 to 12. Each cell gives seeds 0, 1 and 2.
 
-    | Seed | Greedy | Width 10, `alpha` 0 | Width 10, `alpha` 1 |
+    | Decoding | Ends too early | Rows exactly right | Digits right |
     |---|---|---|---|
-    | 0 | 15.3% | 17.3% | 11.0% |
-    | 1 | 60.3% | 62.7% | 55.0% |
-    | 2 | 7.3% | 9.3% | 4.3% |
+    | greedy | 20.3%, 29.0%, 29.7% | 51.3%, 32.0%, 44.0% | 0.814, 0.699, 0.767 |
+    | width 10, `alpha` 0 | 19.7%, 31.7%, 29.0% | 52.3%, 33.7%, 47.7% | 0.822, 0.710, 0.788 |
+    | width 10, `alpha` 1 | 18.7%, 27.3%, 26.3% | 52.7%, 34.7%, 48.0% | 0.824, 0.719, 0.794 |
 
-    Ranked by raw totals, the wider beam finds more short outputs. Divided by
-    their length, fewer end early than greedy's. Koehn and Knowles found the
-    same in translation, where wider beams gave shorter, worse translations.
+    Divided by their length, the beam ends early least and gets the most right
+    on every seed. Its edge over raw totals is small, 1 to 3 more rows of the
+    300. Most of its 4 to 12 rows over greedy come from the beam itself.
+    Koehn and Knowles found in translation that wider beams gave shorter,
+    worse translations, and that dividing by length eased it.
     """,
 )
 
@@ -1484,40 +1504,105 @@ def train_mixed_copier(
     return encoder.eval(), decoder.eval()
 
 
+def measure_one_vector() -> dict[tuple[int, int], dict[str, float]]:
+    """encdec2's table and the numbers after it: for each length and hidden size, a copier trained for 1,500
+    steps, measured on 500 new rows reading the true digits. The share of digits right, of rows all right, and
+    of the first and the last digit right."""
+    results: dict[tuple[int, int], dict[str, float]] = {}
+
+    with pinned_threads():
+        for length, hidden in ((5, 32), (10, 32), (20, 32), (40, 32), (20, 128)):
+            encoder, decoder = trained_copier(length, hidden, 1500)
+            rows = digit_rows(2, 500, length)
+            by_position = reference_position_accuracy(encoder, decoder, rows)
+            results[(length, hidden)] = {
+                "digits": by_position.mean().item(),
+                "rows": reference_exact_match(encoder, decoder, rows),
+                "first": by_position[0].item(),
+                "last": by_position[-1].item(),
+            }
+
+    return results
+
+
+def measure_greedy_gap() -> dict[int, dict[str, float]]:
+    """greedy1's table: encdec2's copiers of rows of 10 and 20, on the same 500 rows. The share of digits right
+    reading the true digits and greedily, the rows greedy decoding writes at the wrong length, and the share of
+    rows all right both ways."""
+    results: dict[int, dict[str, float]] = {}
+
+    with pinned_threads():
+        for length in (10, 20):
+            encoder, decoder = trained_copier(length, 32, 1500)
+            rows = digit_rows(2, 500, length)
+            written = [reference_greedy(encoder, decoder, row, length + 5) for row in rows]
+            results[length] = {
+                "digits read true": reference_position_accuracy(encoder, decoder, rows).mean().item(),
+                "digits greedy": reference_greedy_digits(encoder, decoder, rows),
+                "wrong length": sum(len(symbols) != length for symbols in written),
+                "rows read true": reference_exact_match(encoder, decoder, rows),
+                "rows greedy": sum(symbols == row.tolist() for symbols, row in zip(written, rows)) / len(rows),
+            }
+
+    return results
+
+
+def measure_beam_widths(widths: tuple[int, ...] = (1, 3, 5)) -> dict[int, float]:
+    """beam1's first table: encdec2's copier of rows of 10, the share of the same 500 rows each width of beam
+    search copies exactly, with an alpha of 0."""
+    with pinned_threads():
+        encoder, decoder = trained_copier(10, 32, 1500)
+        rows = digit_rows(2, 500, 10)
+        step = reference_decoder_step(decoder)
+        results: dict[int, float] = {}
+
+        for width in widths:
+            right = 0
+
+            for row in rows:
+                with torch.no_grad():
+                    state = encoder(row.unsqueeze(0))
+
+                right += BEAM_REFERENCE["beam_search"](step, state, width, 15, 0.0) == row.tolist()
+
+            results[width] = right / len(rows)
+
+    return results
+
+
 def measure_length_penalty(
     seeds: range = range(3),
-    widths: tuple[int, ...] = (1, 3, 10),
-) -> dict[tuple[int, int, float], tuple[float, float]]:
+    widths: tuple[int, ...] = (1, 10),
+) -> dict[tuple[int, int, float], tuple[float, float, float]]:
     """beam1's second table: for each seed, width and alpha, the share of 300 rows of 6 to 12 digits that the
-    copier of size 48 ends too early, and the share it copies exactly."""
-    threads = torch.get_num_threads()
-    torch.set_num_threads(4)
+    copier of size 96, trained for 3,000 steps, ends too early, the share it copies exactly, and the share of
+    digits it writes back in place."""
     generator = torch.Generator().manual_seed(77)
     rows = [
         torch.randint(0, 10, (int(torch.randint(6, 13, (1,), generator=generator)),), generator=generator)
         for _ in range(300)
     ]
-    results = {}
+    digit_count = sum(len(row) for row in rows)
+    results: dict[tuple[int, int, float], tuple[float, float, float]] = {}
 
-    try:
+    with pinned_threads():
         for seed in seeds:
-            encoder, decoder = train_mixed_copier(48, 1500, seed)
+            encoder, decoder = train_mixed_copier(96, 3000, seed)
             step = reference_decoder_step(decoder)
+
+            with torch.no_grad():
+                states = [encoder(row.unsqueeze(0)) for row in rows]
 
             for width in widths:
                 for alpha in (0.0, 1.0):
-                    short = right = 0
+                    short = right = digits = 0
 
-                    for row in rows:
-                        with torch.no_grad():
-                            state = encoder(row.unsqueeze(0))
-
+                    for row, state in zip(rows, states):
                         written = BEAM_REFERENCE["beam_search"](step, state, width, len(row) + 5, alpha)
                         short += len(written) < len(row)
                         right += written == row.tolist()
+                        digits += sum(guess == digit for guess, digit in zip(written, row.tolist()))
 
-                    results[(seed, width, alpha)] = (short / len(rows), right / len(rows))
-    finally:
-        torch.set_num_threads(threads)
+                    results[(seed, width, alpha)] = (short / len(rows), right / len(rows), digits / digit_count)
 
     return results
