@@ -783,30 +783,60 @@ def sweep_tokens(
     return SWEEP_REFERENCE["steps_for_budget"](budget, flops) * SWEEP_REFERENCE["BLOCK"] * SWEEP_REFERENCE["BATCH"]
 
 
-def measure_isoflops(
-    peak: float = 3e-3,
-    budgets: int = len(SWEEPS),
-) -> list[dict[str, object]]:
-    """scaling3's table, every sweep on the CPU, where the same seeds give the same numbers. Not run by any check.
-    The best size's tokens come from a line through log tokens against log size, since that size sits between
-    widths. The same losses are fitted once more against the non embedding count, Kaplan's N.
-
-    peak swaps the learning rate every width trains at, for the lesson's line on Porian and colleagues' tuning.
-    The lesson's 1e-2 numbers ran the first three budgets, about 11 minutes on a shared laptop CPU."""
-    _, train_data, validation_data = SWEEP_REFERENCE["shakespeare_splits"]()
-    rows = []
+def sweep_point(
+    width: int,
+    budget: float,
+    peak: float,
+    seed: int,
+    train_data: Tensor,
+    validation_data: Tensor,
+) -> tuple[int, float]:
+    """isoflop_point trained at the peak learning rate given, with its model and batch seeds both set to seed. At a
+    peak of 3e-3 and seed 0 it is isoflop_point itself."""
     usual = SWEEP_REFERENCE["PEAK"]
     SWEEP_REFERENCE["PEAK"] = peak
 
     try:
-        sweeps = [
-            (budget, widths, [SWEEP_REFERENCE["isoflop_point"](width, budget, train_data, validation_data) for width in widths])
-            for budget, widths in SWEEPS[:budgets]
-        ]
+        torch.manual_seed(seed)
+        model = SWEEP_REFERENCE["GPT"](65, 64, width, 2, max(1, width // 16))
+        parameters = sum(parameter.numel() for parameter in model.parameters())
+        flops = SWEEP_REFERENCE["flops_per_token"](SWEEP_REFERENCE["non_embedding_parameters"](model), width)
+        steps = SWEEP_REFERENCE["steps_for_budget"](budget, flops)
+        SWEEP_REFERENCE["train"](model, steps, train_data, torch.Generator().manual_seed(seed))
+
+        return parameters, SWEEP_REFERENCE["validation_score"](model, validation_data)
     finally:
         SWEEP_REFERENCE["PEAK"] = usual
 
-    for budget, widths, points in sweeps:
+
+def measure_isoflops(
+    peak: float = 3e-3,
+    budgets: int = len(SWEEPS),
+    seed: int = 0,
+) -> list[dict[str, object]]:
+    """scaling3's sweep with every width at one peak learning rate, on the CPU, where the same seeds give the same
+    numbers. The lesson's table is seed 0, and its second seed's exponent of 0.65 is seed 1. Not run by any check."""
+    _, train_data, validation_data = SWEEP_REFERENCE["shakespeare_splits"]()
+    points = {
+        (budget, width): sweep_point(width, budget, peak, seed, train_data, validation_data)
+        for budget, widths in SWEEPS[:budgets]
+        for width in widths
+    }
+
+    return isoflop_rows(points, SWEEPS[:budgets])
+
+
+def isoflop_rows(
+    found: dict[tuple[float, int], tuple[int, float]],
+    sweeps: tuple[tuple[float, tuple[int, ...]], ...] = SWEEPS,
+) -> list[dict[str, object]]:
+    """Each budget's row from its points, keyed by budget and width. The best size's tokens come from a line through
+    log tokens against log size, since that size sits between widths. The same losses are fitted once more against
+    the non embedding count, Kaplan's N."""
+    rows = []
+
+    for budget, widths in sweeps:
+        points = [found[(budget, width)] for width in widths]
         best = SWEEP_REFERENCE["fit_parabola"](points)
         lowest = min(range(len(points)), key=lambda position: points[position][1])
 
@@ -831,6 +861,37 @@ def measure_isoflops(
                 "fitted best non embedding": SWEEP_REFERENCE["fit_parabola"](non_embedding),
             },
         )
+
+    return rows
+
+
+# The peak learning rates the tuned sweep tries. Every width tries the first three, and the narrow ones, whose best
+# rate sat at the top of those, try 2e-2 too.
+TUNING_PEAKS = (3e-3, 6e-3, 1e-2)
+NARROW_PEAK = 2e-2
+NARROW = 24
+
+
+def measure_tuned_isoflops(seed: int = 0) -> list[dict[str, object]]:
+    """scaling3's sweep with the learning rate tuned for each point, as Porian and colleagues tuned each size. Every
+    width trains at each of its peak rates and keeps its lowest loss. Each row also gives the rate each width kept.
+    The lesson's tuned numbers, the lowest losses, the exponent of 0.62 and tokens per parameter of 192 down to 106,
+    come from seed 0. Not run by any check, and it trains 86 models, nearly four of measure_isoflops' sweeps."""
+    _, train_data, validation_data = SWEEP_REFERENCE["shakespeare_splits"]()
+    found: dict[tuple[float, int], tuple[int, float]] = {}
+    kept: dict[tuple[float, int], float] = {}
+
+    for budget, widths in SWEEPS:
+        for width in widths:
+            peaks = TUNING_PEAKS + ((NARROW_PEAK,) if width <= NARROW else ())
+            tried = {peak: sweep_point(width, budget, peak, seed, train_data, validation_data) for peak in peaks}
+            kept[(budget, width)] = min(tried, key=lambda peak: tried[peak][1])
+            found[(budget, width)] = tried[kept[(budget, width)]]
+
+    rows = isoflop_rows(found)
+
+    for row, (budget, widths) in zip(rows, SWEEPS):
+        row["peaks"] = [kept[(budget, width)] for width in widths]
 
     return rows
 
@@ -895,7 +956,8 @@ SCALING3_LESSON = prose(
     | 3e12 | 24 to 96 | 1.747 at 48 | 61,000 | 115 |
 
     The best size grows with the budget, as scaling2 said. scaling1's power
-    law fitted to the five grows N as C to the 0.61. Chinchilla's fits put it
+    law fitted to the five grows N as C to the 0.61, and a second seed gives
+    0.65. Chinchilla's fits put it
     near 0.5, which holds tokens per parameter near 20 at every budget. Here
     they fall from 263 to 115.
 
@@ -903,8 +965,10 @@ SCALING3_LESSON = prose(
     above 0.5. They are leaving the head's FLOPs out, a warmup too long for
     small models, and one optimizer setting for every size. This sweep
     charges the head and warms up for a twentieth of each run. Every width
-    trains at one peak rate, 3e-3. At 1e-2 every width up to 24 did better on
-    the first three budgets, 2.530 against 2.645 at 3e10. Width 48 did worse.
+    above trains at one peak rate, 3e-3. Tuned instead, each point tried
+    peaks from 3e-3 to 1e-2, and 2e-2 up to width 24, and kept its best. Every
+    budget's lowest loss fell, 2.645 to 2.488 at 3e10. The exponent stayed at
+    0.62, and tokens per parameter still fell, from 192 to 106.
 
     Kaplan and colleagues left the embeddings out of N and found 0.73. Fitted
     with that N, this sweep's best size grows as C to the 0.68. Pearce and
