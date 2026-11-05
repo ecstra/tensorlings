@@ -421,7 +421,7 @@ Part A takes each kind of input on its own, the structure it has and the layer t
 |---|---|---|
 | 94_tables | table1 | numbers and categories as tokens, each column with its own embedding, as in FT-Transformer |
 | | table2 | number embeddings, periodic features that let a network see fine steps in a value, against a plain MLP |
-| | table3 | attention over the column tokens against a like for like MLP, and a hole left out of attention with a padding mask where the MLP needs a median |
+| | table3 | attention over the column tokens beating a like for like MLP with FT-Transformer's own recipe, and a hole left out of attention with a padding mask, which pays off when columns go missing |
 | 95_time_series | series1 | a series cut into patches as tokens, as in PatchTST |
 | | series2 | each series normalized on its own and restored after, as in RevIN |
 | | series3 | PatchTST's two choices tested on real data, patches buying a longer history for fewer tokens, and columns kept apart against mixed |

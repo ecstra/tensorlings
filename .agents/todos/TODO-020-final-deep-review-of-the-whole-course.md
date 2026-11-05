@@ -40,7 +40,7 @@ The owner asked for one last deep review with research before they start, "so I 
 | 20 | Review and fix 81_reward_models to 83_post_training, with quiz14 | | owner | done |
 | 21 | Review and fix 84_cost to 89_quantization | | owner | done |
 | 22 | Review and fix 90_parallel to 93_fast_gpt, with quiz15 | | owner | done |
-| 23 | Review and fix 94_tables to 99_shared_space | | owner | pending |
+| 23 | Review and fix 94_tables to 99_shared_space | | owner | done |
 | 24 | Review and fix 100_fusion to 103_signal_reader, with quiz16 | | owner | done |
 | 25 | Review and fix 104_combining to 106_papers | | owner | done |
 | 26 | Review and fix 107_interpretability to 110_own_module, with quiz17 | | owner | done |
