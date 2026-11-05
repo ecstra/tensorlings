@@ -424,7 +424,7 @@ Part A takes each kind of input on its own, the structure it has and the layer t
 | | table3 | attention over the column tokens against a like for like MLP, and a hole left out of attention with a padding mask where the MLP needs a median |
 | 95_time_series | series1 | a series cut into patches as tokens, as in PatchTST |
 | | series2 | each series normalized on its own and restored after, as in RevIN |
-| | series3 | PatchTST's two choices tested on real data, patches against one token a week and columns apart against mixed |
+| | series3 | PatchTST's two choices tested on real data, patches buying a longer history for fewer tokens, and columns kept apart against mixed |
 | 96_audio | sound1 | a waveform turned into mel frames, the tokens speech models read |
 | | sound2 | a neural codec's residual quantizer, sound as a few streams of codebook ids |
 | 97_video | video1 | frames over time as tubelet tokens, as in ViViT |
