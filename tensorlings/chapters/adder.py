@@ -40,7 +40,7 @@ ADDER = Chapter(
         Section 6's project. A model reads a sum written as text, like
         `123+456`, and writes the answer one character at a time. It brings
         together an encoder and a decoder, gated RNNs, and greedy decoding,
-        and it shows where a model that learned from examples stops working. The training runs for minutes outside the app.
+        and it shows where a model that learned from examples stops working. The training runs outside the app, in under a minute.
 
         ## Further reading
 
@@ -522,8 +522,8 @@ INDENTED_ANSWER_LOSS = textwrap.indent(ANSWER_LOSS_SOLUTION.strip("\n"), "    ")
 
 ADDER2_LESSON = prose(
     """
-    This step trains for minutes outside the app, as dna2 did. Once the
-    checks above the last one pass, train from the project folder with
+    This step trains for about half a minute outside the app, as dna2 did.
+    Once the checks above the last one pass, train from the project folder with
     `.venv/bin/python run.py train adder2`.
 
     The model is encdec1's encoder and decoder, with a GRU for each. One
@@ -561,7 +561,7 @@ ADDER2_LESSON = prose(
     long, the usual order gets 68.8% right. Choosing the order of the output
     is a design decision, and here it beat a lot of training.
 
-    The run took 1.5 to 3 minutes here on the Mac's GPU.
+    The run took 23 to 27 seconds here on the Mac's GPU, an Apple M5.
     """,
 )
 

@@ -921,7 +921,8 @@ INDENTED_TRAIN_PARTS = textwrap.indent(TRAIN_PARTS.strip("\n"), "    ")
 
 GPT3_LESSON = prose(
     """
-    This step trains for minutes outside the app, as dna2 and adder2 did.
+    This step trains outside the app, as dna2 and adder2 did, and takes a few
+    minutes.
     Once the checks above the last one pass, train from the project folder
     with `.venv/bin/python run.py train gpt3`.
 
@@ -948,10 +949,9 @@ GPT3_LESSON = prose(
     |---|---|---|---|---|---|
     | Validation loss | 4.16 to 4.20 | 1.98 to 2.01 | 1.71 to 1.74 | 1.56 to 1.58 | 1.52 to 1.55 |
 
-    Each run took 8 to 14 minutes on this Mac's GPU through MPS, slower when
-    other work shared the machine. The check asks for a validation loss
-    below 1.7. nanoGPT's own Shakespeare model, 6 blocks of size 384,
-    reaches about 1.47 on a GPU.
+    A run took 3.8 to 6.4 minutes on this Mac's GPU, an Apple M5, through
+    MPS. The check asks for a validation loss below 1.7. nanoGPT's own
+    Shakespeare model, 6 blocks of size 384, reaches about 1.47 on a GPU.
     """,
 )
 
@@ -1425,7 +1425,7 @@ GPT4_LESSON = prose(
     the rare picks, which lifts the worst seed at 1.0 from 83.3% to 88.7%.
     So pick the temperature for the trade you want, and keep a top k.
 
-    In 8 to 14 minutes and 818,048 weights the model learned spelling, line
+    In 3.8 to 6.4 minutes and 818,048 weights the model learned spelling, line
     breaks and the look of a speaker's name. GPT-2's largest model is the
     same kind of stack with about 1,900 times as many weights, trained on 40
     GB of web text.

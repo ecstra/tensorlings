@@ -164,9 +164,9 @@ PROFILE1_LESSON = prose(
 
     The calls never change. The 4 GELUs work on 2.1 million numbers, a few
     FLOPs each, while the 16 Linears do 1.6 billion FLOPs. Yet the GELUs took
-    98% to 107% of the Linears' time. On 1 thread they took nearly half the
-    time, and on 10 a fifth. `torch.profiler` has no activity for a Mac's
-    GPU, so on MPS its times would show only the CPU queueing the work.
+    98% to 107% of the Linears' time. On 1 thread they took 47% of the
+    time, and on 10 threads 27% to 28%. `torch.profiler` has no activity for
+    a Mac's GPU, so on MPS its times would show only the CPU queueing the work.
     """,
 )
 
@@ -938,7 +938,7 @@ def measure_profile(
     """profile1's rows, a forward pass of gpt3's GPT on the CPU, with each operation's calls per pass and its share
     of the CPU's own time over passes passes, largest first. The lesson gives the range of three runs on 4 threads.
     The shares move a lot with the thread count, so it is pinned, and a single pass swung too much on a busy machine.
-    Unpinned, GELU took 45% to 49% on 1 thread and 20% to 22% on 10."""
+    Unpinned, GELU took 47% on 1 thread and 27% to 28% on 10."""
     torch.manual_seed(0)
     model = MODEL_REFERENCE["GPT"](65, 128, 128, 4, 4)
     ids = torch.randint(0, 65, (8, 128), generator=torch.Generator().manual_seed(0))

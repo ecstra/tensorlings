@@ -1105,9 +1105,9 @@ LSTM3_LESSON = prose(
     | LSTM, 15 units, forget bias 3 | 1,140 | 3 of 3 | 3 of 3 |
 
     More units don't save the RNN. Its trouble is the squash at every step,
-    not its size. Speed goes the other way. On this laptop's CPU a training
-    step at length 40 took about 5 ms for the RNN. The gated ones took 14 to
-    15 ms, nearly three times as long.
+    not its size. Speed goes the other way. On 4 threads of this Mac's CPU,
+    an Apple M5, a training step at length 40 took 0.94 to 0.96 ms for the RNN.
+    The gated ones took 2.0 to 2.1 ms, over twice as long.
 
     - A plain RNN suits short gaps, and answers that build up over the whole sequence. It is the smallest and the fastest.
     - A GRU or an LSTM reaches long gaps once the gate that keeps its state starts open. `make_recurrent` below starts it at 3.

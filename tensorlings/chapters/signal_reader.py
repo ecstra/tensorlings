@@ -515,8 +515,8 @@ READER1_LESSON = prose(
     main puts rank 8 LoRA on every Linear, as lora3 did, and trains 1,500
     steps of 32 questions.
 
-    Once every check passes, train from the project folder. It took about 2.5
-    minutes on an Apple M5's GPU, and about 6.5 on 4 CPU threads.
+    Once every check passes, train from the project folder. It took 43 to 97
+    seconds on an Apple M5's GPU, and 1.1 to 3.8 minutes on 4 CPU threads.
 
     ```text
     .venv/bin/python run.py train reader1
@@ -758,8 +758,8 @@ READER2_LESSON = prose(
     main saves the encoder with the rest, since the projector learned to read
     that encoder's tokens and no other.
 
-    Once every check passes, train from the project folder. It took about 2
-    minutes on an Apple M5's GPU, and about 4 on 4 CPU threads. Its rows are
+    Once every check passes, train from the project folder. It took 27 to 69
+    seconds on an Apple M5's GPU, and 46 to 90 on 4 CPU threads. Its rows are
     far shorter than reader1's, 8 tokens and a question in place of 64
     letters.
 

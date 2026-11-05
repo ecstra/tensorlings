@@ -42,8 +42,8 @@ PAPER_TOPICS = Chapter(
         random walks along the citations, with word2vec's skip gram and no
         topic in sight. Then a linear probe finds each paper's topic from 140
         labelled papers, and you measure what the citations bought against the
-        papers' own words. The training runs outside the app, in about a
-        minute.
+        papers' own words. The training runs outside the app, in about 10
+        seconds.
 
         ## Further reading
 
@@ -276,10 +276,10 @@ TOPICS1_LESSON = prose(
     With a window of 10, as DeepWalk's paper used, that gives 18.7 million
     pairs. Then it trains 2,000 steps of 4,096 pairs.
 
-    The three runs behind this project took 41 to 52 seconds each on MPS, on
-    a laptop busy with other work. One on its CPU took 77 seconds. The loss
-    fell from 4.16, word2vec2's 6 log 2, to about 1.0 within 500 steps, and
-    held there.
+    The three runs behind this project took 9 to 10 seconds each on an Apple
+    M5's GPU. Two on 4 of its CPU threads were faster, at 5.6 to 5.8 seconds.
+    The loss fell from 4.16, word2vec2's 6 log 2, to about 1.0 within 500
+    steps, and held there.
     """,
 )
 

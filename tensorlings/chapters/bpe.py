@@ -503,9 +503,9 @@ BPE3_LESSON = prose(
     bytes underneath make it hold even for text unlike the training text.
 
     This `train` is plain Python, so it is slow on big texts. 768 merges on
-    100,000 characters of tiny Shakespeare took 16 to 33 seconds on this
-    Mac's CPU, slower when other work shared the machine. tiktoken, the
-    tokenizer OpenAI's models use, encodes far faster.
+    100,000 characters of tiny Shakespeare took 4.35 to 4.45 seconds on this
+    Mac's CPU, an Apple M5. tiktoken, the tokenizer OpenAI's models use,
+    encodes far faster.
     """,
 )
 
@@ -688,8 +688,8 @@ BPE3 = Exercise(
     source=BPE3_SOURCE,
     solution=BPE3_SOLUTION,
     hints={
-        "train": "ids = list(text.encode(\"utf-8\")). For each new_id in range(256, vocab_size), break if len(ids) < 2, "
-        "then take most_common_pair, merge it into ids and record new_id under that pair in merges.",
+        "train": "ids = list(text.encode(\"utf-8\")). Loop new_id over range(256, vocab_size), and break once "
+        "len(ids) < 2. Otherwise take most_common_pair, merge it into ids and record new_id under that pair in merges.",
         "vocabulary": "Start from {index: bytes([index]) for index in range(256)}. Then for each (first, second), "
         "new_id in merges.items(), join the bytes of first and second.",
         "encode": "min over pair_counts(ids), with key=lambda pair: merges.get(pair, float(\"inf\")).",

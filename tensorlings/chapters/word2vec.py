@@ -411,8 +411,8 @@ WORD2VEC2_LESSON = prose(
 
     At the start the neighbour table is all zeros, so every score is 0. With 5
     made up words the loss is then 6 log 2, about 4.16. Training 3,000 steps of
-    1,024 pairs brings it to about 2.29. On a laptop's CPU, with 4 threads
-    and other work running, that took 40 to 51 seconds.
+    1,024 pairs brings it to about 2.29. On 4 threads of this Mac's CPU, an
+    Apple M5, that took 3.1 to 3.6 seconds.
 
     After training, the center table holds the word vectors. word2vec3 looks
     inside them.
