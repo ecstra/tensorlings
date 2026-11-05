@@ -45,7 +45,7 @@ The owner asked for one last deep review with research before they start, "so I 
 | 25 | Review and fix 104_combining to 106_papers | | owner | done |
 | 26 | Review and fix 107_interpretability to 110_own_module, with quiz17 | | owner | done |
 | 27 | Check quiz1 to quiz8 combine two or three earlier moves per part, since quiz9 to quiz11 repeated earlier TODOs word for word | | agent | done |
-| 28 | Remeasure the timing tables on a quiet machine with threads pinned, profile1 and kvcache2 first, and drop their busy machine notes | | agent | pending |
+| 28 | Remeasure the timing tables on a quiet machine with threads pinned, profile1 and kvcache2 first, and drop their busy machine notes | | agent | done |
 | 29 | Add a lint rule that flags a hint quoting a solution line word for word, and rewrite every hint it finds across the course | | agent | done |
 
 ## Done when
