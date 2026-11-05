@@ -1474,6 +1474,24 @@ COMBINE4_LESSON = prose(
     in straight lines, and its layer norms only center and rescale them. So it
     got part of the way. Alternating gets both, in either order.
 
+    The across block needn't be the token MLP. Here it is one head of
+    attention with a learned position per place, or a convolution of width 3
+    that wraps around. Each ran in the across, within order, three seeds.
+
+    | Across block | Weights | Error, 8 positions | Error, 16 positions |
+    |---|---|---|---|
+    | token MLP | 3,473 | 0.0002 to 0.0005 | can't run |
+    | attention | 6,945 | 0.0005 to 0.0016 | can't run |
+    | convolution | 2,497 | 0.0002 to 0.0003 | 0.0002 to 0.0003 |
+
+    The token MLP has a weight for every pair of places, so it takes exactly 8.
+    That suits MLP-Mixer, whose images always cut into the same patches.
+    Attention finds items by content at any distance, as in attention6. Here
+    it needs a learned position to tell the next place apart, and that table
+    holds 8. The convolution assumes a local pattern that means the same
+    anywhere, as this one does, so it runs at any length with the fewest
+    weights. Pick the across block by what links the positions.
+
     A position's **reach** is the set of input positions that can change its
     output. A gradient finds it, since an input with a nonzero gradient
     changes the output when it moves.
@@ -1990,6 +2008,161 @@ def lookup_shuffle_gap(model: nn.Module) -> float:
         return (before != after).float().mean().item()
 
 
+def kind_signals(
+    count: int,
+    length: int,
+    most: int,
+    generator: torch.Generator,
+    twin: bool = False,
+) -> tuple[Tensor, Tensor, Tensor]:
+    """Noisy signals with up to most bumps of 0.5, 1, 0.5, at most one in each 4 places, each pointing up or down, a
+    one hot query naming a kind, [1, 0] for up and [0, 1] for down, and how many bumps of that kind each holds. The
+    twin task counts the kind the query doesn't name."""
+    slots = length // 4
+    totals = torch.randint(0, most + 1, (count,), generator=generator)
+    chosen = torch.rand(count, slots, generator=generator).argsort(dim=1) < totals.unsqueeze(1)
+    shifts = torch.randint(0, 2, (count, slots), generator=generator)
+    kinds = torch.randint(0, 2, (count, slots), generator=generator)
+    signs = chosen.float() * (1 - 2 * kinds.float())
+    centers = torch.zeros(count, length).scatter(1, torch.arange(slots) * 4 + 1 + shifts, signs)
+    bumps = F.conv1d(centers.unsqueeze(1), BUMP.view(1, 1, 3), padding=1).squeeze(1)
+    noise = torch.randn(count, length, generator=generator) * 0.05
+    asked = torch.randint(0, 2, (count,), generator=generator)
+    wanted = 1 - asked if twin else asked
+    counts = (chosen & (kinds == wanted.unsqueeze(1))).sum(dim=1).float()
+
+    return bumps + noise, F.one_hot(asked, 2).float(), counts
+
+
+class ReferenceKindCounter(nn.Module):
+    """FiLM on the detector's channels, so the query scales and shifts each channel before the ReLU and the sum."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.detect = nn.Conv1d(1, 8, 3, padding=1)
+        self.to_scale = nn.Linear(2, 8)
+        self.to_shift = nn.Linear(2, 8)
+        self.score = nn.Conv1d(8, 1, 1)
+
+    def forward(
+        self,
+        signals: Tensor,
+        query: Tensor,
+    ) -> Tensor:
+        h = self.detect(signals.unsqueeze(1))
+        found = torch.relu(self.to_scale(query).unsqueeze(-1) * h + self.to_shift(query).unsqueeze(-1))
+
+        return self.score(found).squeeze(1).sum(dim=1)
+
+
+class GatedKindCounter(nn.Module):
+    """combine2's gate from the query on the detector's channels."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.detect = nn.Conv1d(1, 8, 3, padding=1)
+        self.gate = nn.Linear(2, 8)
+        self.score = nn.Conv1d(8, 1, 1)
+
+    def forward(
+        self,
+        signals: Tensor,
+        query: Tensor,
+    ) -> Tensor:
+        found = torch.relu(self.detect(signals.unsqueeze(1))) * torch.sigmoid(self.gate(query)).unsqueeze(-1)
+
+        return self.score(found).squeeze(1).sum(dim=1)
+
+
+class JoinedKindCounter(nn.Module):
+    """The query joined onto every place as two more input channels, as combine1's joined model."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.detect = nn.Conv1d(3, 8, 3, padding=1)
+        self.score = nn.Conv1d(8, 1, 1)
+
+    def forward(
+        self,
+        signals: Tensor,
+        query: Tensor,
+    ) -> Tensor:
+        joined = torch.cat([signals.unsqueeze(1), query.unsqueeze(-1).expand(-1, -1, signals.shape[1])], dim=1)
+
+        return self.score(torch.relu(self.detect(joined))).squeeze(1).sum(dim=1)
+
+
+class BlindKindCounter(ReferenceBumpCounter):
+    """BumpCounter, which never reads the query."""
+
+    def forward(
+        self,
+        signals: Tensor,
+        query: Tensor,
+    ) -> Tensor:
+        return super().forward(signals)
+
+
+class LateKindCounter(nn.Module):
+    """The query read only after the sum, by an MLP on 4 counted channels and the query."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.detect = nn.Conv1d(1, 8, 3, padding=1)
+        self.score = nn.Conv1d(8, 4, 1)
+        self.head = nn.Sequential(nn.Linear(6, 32), nn.ReLU(), nn.Linear(32, 1))
+
+    def forward(
+        self,
+        signals: Tensor,
+        query: Tensor,
+    ) -> Tensor:
+        totals = self.score(torch.relu(self.detect(signals.unsqueeze(1)))).sum(dim=2)
+
+        return self.head(torch.cat([totals, query], dim=1)).squeeze(1)
+
+
+def train_kinds(
+    model: nn.Module,
+    seed: int,
+    twin: bool = False,
+    steps: int = 3000,
+) -> nn.Module:
+    """Signals of 16, 32 and 48 in turn, as train_bumps, at a rate of 0.003. A gate stalled near 2 bumps missed on
+    some starts after 1,000 steps and recovered by 3,000, so every form gets 3,000."""
+    optimizer = torch.optim.Adam(model.parameters(), lr=3e-3)
+    generator = torch.Generator().manual_seed(seed)
+
+    for step in range(steps):
+        length = (16, 32, 48)[step % 3]
+        signals, query, counts = kind_signals(64, length, length // 8 - 1 if length > 16 else 2, generator, twin)
+        loss = F.mse_loss(model(signals, query), counts)
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+    return model
+
+
+def kind_miss(
+    model: nn.Module,
+    twin: bool = False,
+) -> float:
+    """The average miss in bumps on 1,000 signals of 96, with up to 18 bumps each."""
+    signals, query, counts = kind_signals(1000, 96, 18, torch.Generator().manual_seed(101), twin)
+
+    with torch.no_grad():
+        return (model(signals, query) - counts).abs().mean().item()
+
+
+def kind_shift_gap(model: nn.Module) -> float:
+    """How far the counts move, on average, when the signals of 96 roll along by 4 places."""
+    signals, query, _ = kind_signals(1000, 96, 18, torch.Generator().manual_seed(101))
+
+    with torch.no_grad():
+        return (model(torch.roll(signals, 4, dims=1), query) - model(signals, query)).abs().mean().item()
+
+
 COMBINE5_LESSON = prose(
     """
     Each structure the course built assumes something about the problem.
@@ -2011,29 +2184,37 @@ COMBINE5_LESSON = prose(
 
     The right structure matters most where the test differs from training.
     conv4's MLP missed a moved pattern, and attention6's GRU lost pairs as
-    their number grew.
-
-    Here are three problems you haven't seen. Build a model for each. The
-    check trains it on small inputs, then tests it on bigger ones it never saw.
+    their number grew. Here are four problems you haven't seen. Build a model
+    for each. The check trains it on small inputs, then tests it on bigger
+    ones it never saw.
 
     - bumps: count the bumps in a noisy signal on a level of its own. Training signals are 16 to 48 long, and test signals 96.
     - baskets: each item has a price and a count, and the answer is the basket's total. Training baskets hold 5 items, and test baskets 12.
     - lookups: pairs of a key and a value, then a query, and the answer is the query's value. Training uses 4 pairs, and testing 12.
+    - kinds: bumps point up or down, and a query names the kind to count. Test signals of 96 hold up to 18.
 
     Ask of each problem what stays true as the input grows. Does the answer
     grow with it? Does the order matter? Does one item need to find another?
-
     Each structure also makes a promise, a change its output ignores. Name in
     `PROMISES` the change each problem's true answer ignores. The check makes
     that change to the test inputs, and your trained model must barely move.
-    A GRU reading the lookup pairs in order changed over half its answers when
-    the pairs were shuffled.
 
     A model made of the right pieces needs no hand written answer. The check
     also trains it on a twin of each problem with another rule. The bumps point
     down, each item adds its count over its price, and the query is one more
-    than its key. Learned pieces fit both, and a formula written by hand fits
-    one.
+    than its key. In kinds the query names the kind to leave out. Learned
+    pieces fit both, and a formula written by hand fits one.
+
+    In kinds the query has to reach the count, in any form. Here is each form's miss, three seeds.
+
+    | Query | none | MLP after the sum | joined on | gate | FiLM |
+    |---|---|---|---|---|---|
+    | Bumps missed | 1.17 to 1.19 | 0.26 to 0.55 | 0.12 to 0.23 | 0.13 to 0.16 | 0.13 to 0.17 |
+    | On the twin | 1.15 to 1.18 | 0.29 to 0.50 | 0.15 to 0.28 | 0.11 to 0.30 | 0.15 to 0.17 |
+
+    Joined on, gated or FiLM, the query reaches the detector and only has to
+    switch whole channels on or off. After the sum, the MLP had seen at most 5
+    bumps of a kind. The check takes any form under 0.6.
     """,
 )
 
@@ -2053,6 +2234,7 @@ COMBINE5_SOURCE = source_file(
     keys = torch.zeros(2, 12, dtype=torch.long)       # lookups: ids from 0 to 15, values the same shape
     query = torch.zeros(2, dtype=torch.long)          # one query per row, the answer is one of 16 ids
     moved = torch.roll(torch.tensor([[1.0, 2.0, 3.0, 4.0, 5.0]]), 4, dims=1)    # tensor([[2., 3., 4., 5., 1.]])
+    asked = torch.tensor([[1.0, 0.0], [0.0, 1.0]])    # kinds: one query per signal, [1, 0] asks for the up bumps
 
 
     # TODO: For each problem, name the change its true answer ignores, "shift"
@@ -2107,6 +2289,24 @@ COMBINE5_SOURCE = source_file(
             query: Tensor,
         ) -> Tensor:
             ...
+
+
+    # TODO: Build a model that counts the bumps of one kind in signals of
+    #   shape (batch, length), for any length. Each bump points up or down.
+    #   query has shape (batch, 2), [1, 0] asking for the up bumps and [0, 1]
+    #   for the down ones. forward gives one count per signal, of shape
+    #   (batch,). The check trains it on lengths 16 to 48 and tests it on 96.
+    class KindCounter(nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            ...
+
+        def forward(
+            self,
+            signals: Tensor,
+            query: Tensor,
+        ) -> Tensor:
+            ...
     ''',
 )
 
@@ -2126,6 +2326,7 @@ COMBINE5_SOLUTION = source_file(
     keys = torch.zeros(2, 12, dtype=torch.long)
     query = torch.zeros(2, dtype=torch.long)
     moved = torch.roll(torch.tensor([[1.0, 2.0, 3.0, 4.0, 5.0]]), 4, dims=1)
+    asked = torch.tensor([[1.0, 0.0], [0.0, 1.0]])
 
 
     PROMISES = {
@@ -2175,6 +2376,27 @@ COMBINE5_SOLUTION = source_file(
             weights = torch.softmax((q * k).sum(dim=-1) / math.sqrt(k.shape[-1]), dim=-1)
 
             return self.head((weights.unsqueeze(-1) * self.value_table(values)).sum(dim=1))
+
+
+    class KindCounter(nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.detect = nn.Conv1d(1, 8, 3, padding=1)
+            self.to_scale = nn.Linear(2, 8)
+            self.to_shift = nn.Linear(2, 8)
+            self.score = nn.Conv1d(8, 1, 1)
+
+        def forward(
+            self,
+            signals: Tensor,
+            query: Tensor,
+        ) -> Tensor:
+            channels = self.detect(signals.unsqueeze(1))
+            scale = self.to_scale(query).unsqueeze(-1)
+            shift = self.to_shift(query).unsqueeze(-1)
+            wanted = torch.relu(scale * channels + shift)
+
+            return self.score(wanted).squeeze(1).sum(dim=1)
     ''',
 )
 
@@ -2184,10 +2406,14 @@ BUMP_BAR = 1.0
 BASKET_BAR = 0.05
 LOOKUP_BAR = 0.9
 
+# See measure_kinds for FiLM, a gate and the joined query against no query and a query read after the sum.
+KIND_BAR = 0.6
+
 # How far a trained model's answers may move under the change its problem ignores.
 BUMP_SHIFT_BAR = 0.25
 BASKET_SHUFFLE_BAR = 0.01
 LOOKUP_SHUFFLE_BAR = 0.02
+KIND_SHIFT_BAR = 0.25
 
 
 def trained_or_crash(
@@ -2320,6 +2546,25 @@ def check_key_lookup(found: type) -> None:
     )
 
 
+def check_kind_counter(found: type) -> None:
+    untrained, trained = trained_or_crash(found, "KindCounter", train_kinds)
+    miss = tested_or_crash(kind_miss, trained, "KindCounter", "signals of 96")
+    untrained_miss = tested_or_crash(kind_miss, untrained, "KindCounter", "signals of 96")
+
+    if untrained_miss <= KIND_BAR:
+        raise Mismatch(f"Untrained, KindCounter already misses only {untrained_miss:.2f} bumps. It should learn the count, not compute it by a fixed rule.")
+
+    if miss > KIND_BAR:
+        raise Mismatch(
+            f"Trained on signals of 16 to 48, KindCounter misses {miss:.2f} bumps on average on signals of 96. It "
+            f"should miss fewer than {KIND_BAR}. Ask whether the query reaches the detector, so a bump of the other "
+            "kind never counts.",
+        )
+
+    kept_promise(kind_shift_gap(trained), KIND_SHIFT_BAR, "KindCounter", "the signals move along by 4 places", "{:.2f} bumps")
+    twin_or_rule(found, "KindCounter", train_kinds, kind_miss, lambda score: score <= KIND_BAR, "the query names the kind not to count")
+
+
 PROMISE_REASONS = {
     ("bumps", "shuffle"): "Shuffling a signal's places breaks its bumps apart, so the count changes. Which change keeps every bump whole?",
     ("baskets", "shift"): "A basket's items have no order at all, so any new order keeps its total, not only a shift.",
@@ -2365,6 +2610,12 @@ def check_combine5(checker: Checker) -> None:
         description="trained on 4 pairs, answers lookups among 12",
         run=check_key_lookup,
     )
+    checker.test_method(
+        class_name="KindCounter",
+        method="forward",
+        description="trained on short signals, counts the bumps of the kind the query names in long ones",
+        run=check_kind_counter,
+    )
 
 
 COMBINE5 = Exercise(
@@ -2383,10 +2634,13 @@ COMBINE5 = Exercise(
         "then pool. A total grows with the basket, so the pool is a sum.",
         "KeyLookup.forward": "The query has to find its key, as in attention6. Score each key against the query with "
         "two embeddings, softmax the scores, and take the weighted sum of the values' embeddings, then a head.",
+        "KindCounter.forward": "Start from BumpCounter. The query decides which bumps count, so it has to change the "
+        "detector's channels before the sum. Join it on as extra input channels, gate each channel as combine2 did, "
+        "or scale and shift each one with FiLM as combine1 did.",
     },
     introduces=(),
     check=check_combine5,
-    time_limit=120,
+    time_limit=300,
     imports_first=OPTIMIZER_IMPORTS,
 )
 
@@ -2762,5 +3016,34 @@ def measure_problems(seeds: range = range(3)) -> dict[str, list[tuple[float, flo
                 torch.manual_seed(seed)
                 twin = train(make(), seed, True)
                 results[name].append((measure(model), measure(twin, True), None if gap is None else gap(model)))
+
+    return results
+
+
+KIND_FORMS = {
+    "no query": BlindKindCounter,
+    "query read after the sum": LateKindCounter,
+    "query joined on as channels": JoinedKindCounter,
+    "gate": GatedKindCounter,
+    "FiLM": ReferenceKindCounter,
+}
+
+
+def measure_kinds(seeds: range = range(3)) -> dict[str, list[tuple[float, float, float]]]:
+    """combine5's kinds table: each form of the query, scored as check_kind_counter scores it, on the bigger signals,
+    on the twin task and under a shift. The last entry of each list is the check's own run, the model started from
+    seed 0 and trained on seed 7."""
+    results: dict[str, list[tuple[float, float, float]]] = {}
+
+    with pinned_threads():
+        for name, make in KIND_FORMS.items():
+            results[name] = []
+
+            for init, seed in [(seed, seed) for seed in seeds] + [(0, 7)]:
+                torch.manual_seed(init)
+                model = train_kinds(make(), seed)
+                torch.manual_seed(init)
+                twin = train_kinds(make(), seed, True)
+                results[name].append((kind_miss(model), kind_miss(twin, True), kind_shift_gap(model)))
 
     return results
