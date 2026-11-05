@@ -44,3 +44,7 @@ solutions/
 # train for minutes save their checkpoints here. Both are rebuilt, never shipped.
 data/
 checkpoints/
+
+# The maintainer's trained models for the project checks, kept out of
+# checkpoints/ so the learner trains their own. Copy one back to run its check.
+dev/reference_checkpoints/
