@@ -2,12 +2,13 @@
 name: TODO-019-phase-7-section-13-modalities
 kind: todo
 description: each kind of input on its own, tables, time series, audio and video, then kinds joined in one transformer and in the GPT, with the signal reader project
-updated: 2026-11-03
+updated: 2026-11-05
 links: []
-status: open
+status: done
 by: owner
 area: course
 born: 2026-10-30
+done: 2026-11-05
 ---
 
 ## What
@@ -25,7 +26,7 @@ Phase 7 of the plan build-tensorlings, the Modalities section the owner asked fo
 | 5 | Write 101_reading_a_new_modality and build the signal reader project, 103_signal_reader | | owner | done |
 | 6 | Write quiz16, Section 13 together | | owner | done |
 | 7 | Get beginner reader reviews and fix what they find | | owner | done |
-| 8 | Run the full dev check, every wrong answer and the screen driver, then write the handover | | owner | pending |
+| 8 | Run the full dev check, every wrong answer and the screen driver, then write the handover | | owner | done |
 
 ## Done when
 

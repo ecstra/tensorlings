@@ -1,8 +1,8 @@
 ---
-name: the-owner-s-exercise-files-can-be-reset-freely
+name: the-owner-s-exercise-files-are-theirs-now
 kind: memory
-description: while the course is being built the owner only tests it, so their exercise files and progress can be reset without keeping a copy
-updated: 2026-10-30
+description: the course is handed over, so the owner's exercise files, solutions and progress are their own work and are reset only on their word
+updated: 2026-11-05
 links: []
 type: feedback
 ---
@@ -15,4 +15,6 @@ On 2026-10-29 the owner added that they will work through all the sections only 
 
 On 2026-10-30 the owner asked for the course to start clean, phase 1a included, since they had done those exercises back then: "make sure to reset it and properly do phase-1 as well". `run.py init` only adds missing files, so their phase 1a answers, progress and unlocked solutions had survived every phase. They were cleared that day.
 
-**How to apply:** when a rewrite makes the owner's files stale, replace them and tell the owner it was done. When the course is handed over, set the folder up from nothing, with `exercises/`, `solutions/` and `.tensorlings-state.json` gone before `run.py init`, so no old answer or progress survives. Revisit this once the whole course is built and the owner starts it for real.
+On 2026-11-05 the whole course was built and reviewed, and the folder was set up from nothing for the owner to start for real. From then on their exercise files, unlocked solutions and `.tensorlings-state.json` hold their own work.
+
+**How to apply:** now that the owner is working through the course, never reset, overwrite or delete their exercise files, solutions or progress without asking first. When a change makes one of their files stale, say which file, and let them choose between `run.py reset <name>` and keeping their answer. `run.py init` stays safe, since it only adds missing files.

@@ -2,12 +2,13 @@
 name: TODO-018-make-every-demonstration-show-its-method-working
 kind: todo
 description: audit every lesson for a method that underdelivers behind a caveat, then research and redesign each setup until the method works
-updated: 2026-11-03
+updated: 2026-11-05
 links: []
-status: open
+status: done
 by: owner
 area: course
 born: 2026-10-30
+done: 2026-11-05
 ---
 
 ## What
@@ -26,7 +27,7 @@ Known cases from the build reports include SimCLR losing to supervised training 
 | 4 | Audit Sections 11 and 12 | | owner | done |
 | 5 | Audit Section 13 once it is built | | owner | done |
 | 6 | Research and redesign each finding, rerun it across seeds, and rewrite its lesson without the caveat | | owner | done |
-| 7 | Recheck every changed exercise, its wrong answers and any checkpoint it trains | | owner | pending |
+| 7 | Recheck every changed exercise, its wrong answers and any checkpoint it trains | | owner | done |
 
 ## Done when
 

@@ -2,11 +2,12 @@
 name: build-tensorlings
 kind: plan
 description: a rustlings style course from tensors to designing new modules, built in phases the owner reviews
-updated: 2026-10-30
+updated: 2026-11-05
 links: []
-status: open
+status: done
 by: owner
 born: 2026-10-27
+done: 2026-11-05
 ---
 
 ## Why
@@ -31,9 +32,9 @@ The curriculum, the app and the writing rules are in [the course design](../docs
 | 6 | Phase 3, parts 5 to 7, with the GPT project | | owner | done |
 | 7 | Phase 4, parts 8 to 10 | | owner | done |
 | 8 | Phase 5, parts 11 and 12 | | owner | done |
-| 9 | Phase 6, part 13, with the echo canceller, quant and own module projects | | owner | pending |
-| 10 | A final deep review of the whole course, every lesson fact checked against its sources and every number rerun, fixed before the owner starts | | agent | pending |
-| 11 | Phase 7, Section 13 Modalities, added at the owner's word, with the signal reader project | | agent | pending |
+| 9 | Phase 6, part 13, with the echo canceller, quant and own module projects | | owner | done |
+| 10 | A final deep review of the whole course, every lesson fact checked against its sources and every number rerun, fixed before the owner starts | | agent | done |
+| 11 | Phase 7, Section 13 Modalities, added at the owner's word, with the signal reader project | | agent | done |
 
 ## Done when
 

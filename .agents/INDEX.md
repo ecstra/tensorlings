@@ -36,8 +36,8 @@ rather than this one.
 
 ## The trackers
 
-- [plans/INDEX.md](plans/INDEX.md), the plans: 1 open
-- [todos/INDEX.md](todos/INDEX.md), the work tracker: 16 done, 4 open
+- [plans/INDEX.md](plans/INDEX.md), the plans: 1 done
+- [todos/INDEX.md](todos/INDEX.md), the work tracker: 20 done
 - [bugs/INDEX.md](bugs/INDEX.md), the defect tracker: 0 open, 1 fixed
 - [decisions/INDEX.md](decisions/INDEX.md), the decision record: 16 standing, 6 superseded
 - [reviews/INDEX.md](reviews/INDEX.md), code review ledgers: empty

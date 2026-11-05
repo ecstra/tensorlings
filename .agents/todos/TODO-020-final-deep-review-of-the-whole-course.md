@@ -4,10 +4,11 @@ kind: todo
 description: every lesson fact checked against its sources, every number rerun, every check tried with wrong and right answers, fixed before the owner starts
 updated: 2026-11-05
 links: []
-status: open
+status: done
 by: owner
 area: course
 born: 2026-11-03
+done: 2026-11-05
 ---
 
 ## What
