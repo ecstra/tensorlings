@@ -815,8 +815,8 @@ RESNET1 = Exercise(
     solution=RESNET1_SOLUTION,
     hints={
         "BasicBlock.__init__": "An if on stride == 1 and in_channels == out_channels. The other case is an "
-        "nn.Sequential of a 1 by 1 nn.Conv2d from in_channels to out_channels, with the block's stride and no bias, "
-        "then an nn.BatchNorm2d.",
+        "nn.Sequential. It holds a 1 by 1 nn.Conv2d from in_channels to out_channels, with the block's stride and no "
+        "bias, then an nn.BatchNorm2d.",
         "BasicBlock.forward": "Work out the branch in two lines, conv1, bn1 and a ReLU, then conv2 and bn2. Return the "
         "ReLU of that plus self.shortcut(x).",
     },
