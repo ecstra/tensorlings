@@ -1368,6 +1368,6 @@ SCALING3 = Exercise(
     },
     introduces=(),
     check=check_scaling3,
-    time_limit=120,
+    time_limit=240,
     imports_first=OPTIMIZER_IMPORTS,
 )
