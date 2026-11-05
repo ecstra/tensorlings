@@ -456,7 +456,7 @@ Part A takes each kind of input on its own, the structure it has and the layer t
 | 104_combining | combine1 | FiLM from its paper, a side input that scales and shifts features, its scale and shift computed from that input |
 | | combine2 | gating against adding, when one signal should control another, and the effective weights the input writes on every pass |
 | | combine3 | a new branch that starts as "do nothing" against one that starts random |
-| | combine4 | mixing across positions alternated with mixing within each, against either alone |
+| | combine4 | mixing across positions alternated with mixing within each, against either alone, and which across block fits which links |
 | | combine5 | picking the combination for problems you haven't seen |
 | 105_design_method | design1 | a toy task that isolates one skill, associative recall as in Zoology |
 | | design2 | the simplest baseline and the diagnosis, failed to fit or failed to generalize |

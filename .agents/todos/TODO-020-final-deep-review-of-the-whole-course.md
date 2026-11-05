@@ -2,7 +2,7 @@
 name: TODO-020-final-deep-review-of-the-whole-course
 kind: todo
 description: every lesson fact checked against its sources, every number rerun, every check tried with wrong and right answers, fixed before the owner starts
-updated: 2026-11-04
+updated: 2026-11-05
 links: []
 status: open
 by: owner
@@ -42,7 +42,7 @@ The owner asked for one last deep review with research before they start, "so I 
 | 22 | Review and fix 90_parallel to 93_fast_gpt, with quiz15 | | owner | done |
 | 23 | Review and fix 94_tables to 99_shared_space | | owner | pending |
 | 24 | Review and fix 100_fusion to 103_signal_reader, with quiz16 | | owner | done |
-| 25 | Review and fix 104_combining to 106_papers | | owner | pending |
+| 25 | Review and fix 104_combining to 106_papers | | owner | done |
 | 26 | Review and fix 107_interpretability to 110_own_module, with quiz17 | | owner | done |
 | 27 | Check quiz1 to quiz8 combine two or three earlier moves per part, since quiz9 to quiz11 repeated earlier TODOs word for word | | agent | done |
 | 28 | Remeasure the timing tables on a quiet machine with threads pinned, profile1 and kvcache2 first, and drop their busy machine notes | | agent | pending |
