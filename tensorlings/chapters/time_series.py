@@ -885,7 +885,7 @@ SERIES2 = Exercise(
 SERIES3_LESSON = prose(
     """
     series1's patches and series2's RevIN make PatchTST. A window is
-    normalized, cut into 42 patches, turned into tokens, and read by 3
+    normalized, cut into patches, turned into tokens, and read by 3
     transformer blocks. The blocks' outputs are flattened into one long
     vector, and a Linear reads the forecast off it. Then the level goes back.
 
@@ -899,31 +899,39 @@ SERIES3_LESSON = prose(
     series transformers built before PatchTST. Nie and colleagues answered
     with two choices. Here each one is tested against its other way.
 
-    - **Patches**: a token is 24 weeks, and a new one starts every 2 weeks. The other way makes every week a token, `PatchForecaster(104, horizon, 1, 1)`.
+    - **Patches**: a token is 24 weeks, and a new one starts every 2 weeks. The other way makes every week a token, `PatchForecaster(lookback, horizon, 1, 1)`.
     - **Columns apart**: each column is its own series, as in series2. Mixing them instead puts a patch of all 7 columns in one token.
 
-    Each model trained for 60 epochs on 5 seeds, on batches of 128 series.
-    The mixed model reads whole windows, so its batches held 18 windows,
-    which is 126 series. Each number is the mean squared error over the test
-    weeks, averaged over the seeds.
+    The paper argues that patches let a model read further back for fewer
+    tokens. So PatchTST here reads 148 weeks, nearly three years, in 64
+    patches. One token a week reads this file's 104 weeks in 105 tokens, or
+    the same 148 weeks in 149.
+
+    Each model trained for 60 epochs on 3 seeds, on batches of 128 series.
+    The mixed model's batches held 18 windows, which is 126 series. Each
+    number is the mean squared error over the test weeks, averaged over the
+    seeds.
 
     | Weeks ahead | 24 | 36 | 48 | 60 |
     |---|---|---|---|---|
-    | PatchTST | 2.08 | 1.95 | 1.89 | 1.99 |
-    | Every week a token | 2.02 | 1.92 | 1.87 | 2.01 |
-    | Columns mixed | 3.29 | 2.51 | 1.87 | 1.93 |
+    | PatchTST, 148 weeks in 64 patches | 1.89 | 1.87 | 1.83 | 1.86 |
+    | A token a week, 104 weeks | 1.99 | 1.93 | 1.92 | 2.01 |
+    | A token a week, 148 weeks | 1.85 | 1.93 | 1.97 | 2.13 |
+    | Columns mixed, 148 weeks | 2.52 | 2.04 | 2.04 | 2.55 |
 
-    Mixing the columns raises the error by 58% at 24 weeks, on all 5 seeds,
-    and by 29% at 36 weeks. At 48 and 60 weeks mixing scores lower here, by
-    1% and 3%. The paper finds mixing worse at every horizon of this table,
-    and shows why on its Weather table. There a mixed model's test error
-    starts rising after a few epochs, while a model with its columns apart
-    keeps improving.
+    With 64 tokens in place of 105, PatchTST cuts the error of single weeks
+    over 104 weeks by 3% to 7% at every horizon. It scores lower on 10 of
+    the 12 seed matched runs. Single weeks over the same 148 weeks need 149
+    tokens, so a head scores 22,201 pairs in place of 4,096. They score
+    lower than the patches at 24 weeks, and higher at 36, 48 and 60, by up
+    to 14%.
 
-    Patches score 3% higher than single weeks at 24 weeks, 1% to 2% higher
-    at 36 and 48, and 1% lower at 60. They use 42 tokens in place of 105.
-    Attention compares every token with every other, so a head scores 1,764
-    pairs in place of 11,025, about 6 times less work.
+    Mixing the columns raises the error at every horizon, by 33% at 24
+    weeks, 9% at 36, 11% at 48 and 37% at 60. It loses on every seed at 24
+    and 60 weeks, while at 36 and 48 one seed of it scores lower. The paper
+    finds mixing worse at every horizon of this table too, and shows why on
+    its Weather table. There a mixed model's test error starts rising after
+    a few epochs, while a model with its columns apart keeps improving.
 
     `forecast_error` takes a window's columns apart, as the model reads them,
     and scores in eval mode without recording for autograd.
@@ -1350,46 +1358,53 @@ def looking_back(weeks: int) -> Iterator[None]:
 
 
 def measure_choices(
-    seeds: range = range(5),
+    seeds: range = range(3),
     epochs: int = 60,
     device: str = "mps",
     batch: int = 128,
-    lookback: int = 104,
-    names: tuple[str, ...] = ("PatchTST", "every week a token", "columns mixed"),
+    lookback: int = 148,
+    horizons: tuple[int, ...] = HORIZONS,
+    names: tuple[str, ...] = ("PatchTST", "every week a token, 104 weeks", "every week a token", "columns mixed"),
 ) -> dict[str, list[float]]:
-    """series3's table: PatchTST as series3 builds it, the same model reading every week as its own token (patches of
-    1 every 1), and the same model with its columns mixed. Each one's test error at each horizon on 5 seeds, on the
-    Mac's GPU for 60 epochs on batches of 128 series, as series2's table was. The mixed model reads whole windows, so
-    its batches hold 128 // 7 = 18 windows: the same 126 series and the same steps per epoch as the others. lookback
-    sets how many weeks every model reads, 148 making 64 patches."""
+    """series3's table: PatchTST as series3 builds it reading `lookback` weeks, 148 making 64 patches, the same model
+    reading every week as its own token (patches of 1 every 1) over series3's own 104 weeks and over the same
+    `lookback` weeks, and PatchTST with its columns mixed over `lookback` weeks. Each one's test error at each horizon
+    on 3 seeds, on the Mac's GPU for 60 epochs on batches of 128 series, as series2's table was. Every lookback scores
+    the same test windows. The mixed model reads whole windows, so its batches hold 128 // 7 = 18 windows: the same 126
+    series and the same steps per epoch as the others."""
     series = flu_series()
     columns = series.shape[1]
-    makers: dict[str, Callable[[int], nn.Module]] = {
-        "PatchTST": lambda horizon: REFERENCE["PatchForecaster"](lookback, horizon),
-        "every week a token": lambda horizon: REFERENCE["PatchForecaster"](lookback, horizon, 1, 1),
-        "columns mixed": lambda horizon: MixedPatchForecaster(lookback, horizon, columns),
+    given = REFERENCE["LOOKBACK"]
+    rows: dict[str, tuple[int, Callable[[int], nn.Module]]] = {
+        "PatchTST": (lookback, lambda horizon: REFERENCE["PatchForecaster"](lookback, horizon)),
+        "every week a token, 104 weeks": (given, lambda horizon: REFERENCE["PatchForecaster"](given, horizon, 1, 1)),
+        "every week a token": (lookback, lambda horizon: REFERENCE["PatchForecaster"](lookback, horizon, 1, 1)),
+        "columns mixed": (lookback, lambda horizon: MixedPatchForecaster(lookback, horizon, columns)),
     }
     results: dict[str, list[float]] = {}
 
-    with pinned_threads(), looking_back(lookback):
-        for horizon in HORIZONS:
+    with pinned_threads():
+        for horizon in horizons:
             for name in names:
+                weeks, make = rows[name]
                 errors = []
 
                 for seed in seeds:
                     torch.manual_seed(seed)
-                    errors.append(
-                        train_forecaster(
-                            makers[name](horizon),
-                            series,
-                            horizon,
-                            epochs,
-                            seed,
-                            torch.device(device),
-                            batch if name != "columns mixed" else batch // columns,
-                            columns_apart=name != "columns mixed",
-                        ),
-                    )
+
+                    with looking_back(weeks):
+                        errors.append(
+                            train_forecaster(
+                                make(horizon),
+                                series,
+                                horizon,
+                                epochs,
+                                seed,
+                                torch.device(device),
+                                batch if name != "columns mixed" else batch // columns,
+                                columns_apart=name != "columns mixed",
+                            ),
+                        )
 
                 results[f"{name}, {horizon}"] = errors
 
