@@ -1408,14 +1408,14 @@ class Copying(ProjectCase):
         commit_all(self.kit_root)
         clone = Path(self.tmp.name) / "clone"
         git_clone(source=str(self.kit_root), target=clone)
-        subprocess.run(["git", "-C", str(self.kit_root), "remote", "add", "origin", "https://forge.example/aikyat/agent-setup"], check=True)
+        subprocess.run(["git", "-C", str(self.kit_root), "remote", "add", "origin", "https://forge.example/example-org/agent-setup"], check=True)
         origins = (
             str(self.kit_root),
             f"file://{self.kit_root}",
             str(self.kit_root / ".git"),
-            "git@forge.example:aikyat/agent-setup.git",
-            "ssh://git@forge.example:2222/aikyat/agent-setup/",
-            "HTTPS://Forge.example/Aikyat/Agent-Setup.git",
+            "git@forge.example:example-org/agent-setup.git",
+            "ssh://git@forge.example:2222/example-org/agent-setup/",
+            "HTTPS://Forge.example/Example-Org/Agent-Setup.git",
         )
         for origin in origins:
             with self.subTest(origin=origin):
@@ -1427,7 +1427,7 @@ class Copying(ProjectCase):
                 self.assertEqual(str(caught.exception), "the project is a worktree or a clone of the kit, there is nothing to install")
 
         self.assertNotIn("permissions", json.loads((clone / ".claude" / "settings.json").read_text(encoding="utf-8")))
-        subprocess.run(["git", "-C", str(clone), "remote", "set-url", "origin", "https://forge.example/aikyat/agent-setup-fork"], check=True)
+        subprocess.run(["git", "-C", str(clone), "remote", "set-url", "origin", "https://forge.example/example-org/agent-setup-fork"], check=True)
         self.assertIsNone(upgrade.is_the_kit(kit=self.kit, project=upgrade.Project(root=clone)))
 
         spelled = self.kit_root.parent / self.kit_root.name.upper()
@@ -1449,11 +1449,11 @@ class Copying(ProjectCase):
         template.start()
         self.addCleanup(template.stop)
         commit_all(self.kit_root)
-        subprocess.run(["git", "-C", str(self.kit_root), "remote", "add", "origin", "https://forge.example/aikyat/agent-setup"], check=True)
+        subprocess.run(["git", "-C", str(self.kit_root), "remote", "add", "origin", "https://forge.example/example-org/agent-setup"], check=True)
         git_clone(source=str(self.kit_root), target=places / "clone")
         git_clone(source=str(places / "clone"), target=places / "clone2")
         git_clone(source=str(self.kit_root), target=places / "kit2")
-        subprocess.run(["git", "-C", str(places / "kit2"), "remote", "set-url", "origin", "git@forge.example:aikyat/agent-setup.git"], check=True)
+        subprocess.run(["git", "-C", str(places / "kit2"), "remote", "set-url", "origin", "git@forge.example:example-org/agent-setup.git"], check=True)
         subprocess.run(["git", "-C", str(self.kit_root), "worktree", "add", "-q", "--detach", str(places / "kitwt")], check=True)
 
         for kit, project in ((self.kit_root, places / "clone2"), (places / "kit2", places / "clone"), (places / "kitwt", places / "clone")):
@@ -1563,7 +1563,7 @@ class Copying(ProjectCase):
         inner = self.kit_root / "sandbox"
         fixtures.write(path=inner / "README.md", text="# Sandbox\n")
         commit_all(self.kit_root)
-        subprocess.run(["git", "-C", str(self.kit_root), "remote", "add", "origin", "https://forge.example/aikyat/agent-setup"], check=True)
+        subprocess.run(["git", "-C", str(self.kit_root), "remote", "add", "origin", "https://forge.example/example-org/agent-setup"], check=True)
         project = upgrade.Project(root=inner)
 
         upgrade.port(kit=self.kit, project=project)
