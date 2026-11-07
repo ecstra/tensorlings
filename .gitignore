@@ -26,6 +26,22 @@
 __pycache__/
 *.pyc
 
+# Tool caches and build leftovers are rebuilt on each machine.
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+*.egg-info/
+build/
+dist/
+
+# The operating system and editors leave their own files behind.
+.DS_Store
+Thumbs.db
+*.swp
+*~
+.idea/
+
 # Claude Code keeps one person's own settings here. The shared ones are
 # in .claude/settings.json, which does ship.
 .claude/settings.local.json
