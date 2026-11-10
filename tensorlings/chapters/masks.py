@@ -32,10 +32,11 @@ MASKS = Chapter(
         # Masks
 
         A mask decides which positions each position may look at. This
-        chapter joins the causal mask, which hides the future, with the
-        padding mask, which hides the filler at the end of short sequences.
-        Then it shows what a model does without the causal mask, which looks
-        perfect in training and falls apart when it writes.
+        chapter combines the causal mask, which hides future positions, with
+        the padding mask, which hides the filler added to the end of short
+        sequences. Then it shows what a model does without the causal mask.
+        Such a model looks perfect in training and fails when it generates
+        text.
 
         ## Further reading
 
@@ -53,12 +54,15 @@ MASKS = Chapter(
 
 MASK1_LESSON = prose(
     """
-    A batch needs every sequence at the same length, so the short ones are
-    filled out at the end with a padding token. Attention must never read
-    that filler. It isn't part of the sequence, and its values would leak
-    into every average.
+    In a batch, every sequence must have the same length. So the shorter
+    sequences are filled out at the end with a padding token. Attention must
+    never read these padding positions. They are not part of the real
+    sequence, and their values would get mixed into every average that
+    attention computes.
 
-    A padding mask marks it, True at every position past a sequence's length.
+    A **padding mask** marks the padding. It is True at every position whose
+    index is at least the sequence's length, and False at the real positions.
+    Here are two sequences of lengths 3 and 1, padded to 4 steps.
 
     ```python
     lengths = torch.tensor([3, 1])
@@ -66,31 +70,41 @@ MASK1_LESSON = prose(
     # tensor([[False, False, False,  True], [False,  True,  True,  True]])
     ```
 
-    It blocks keys, the columns of the scores. `.unsqueeze(1)` turns each
-    sequence's mask into one row of shape `(1, steps)`, which broadcasts down
-    every query's row. attention2's causal mask has shape `(steps, steps)`
-    and is the same for every sequence. `|` joins the two, True where either
-    one blocks, and broadcasting gives one `(steps, steps)` mask per sequence.
+    The padding mask blocks keys. In the scores, each row is a query and each
+    column is a key, so padding blocks whole columns. Calling `.unsqueeze(1)`
+    on a padding mask of shape `(batch, steps)` gives shape
+    `(batch, 1, steps)`. Each sequence's mask is then a single row, and
+    broadcasting copies that row down to every query.
+
+    The causal mask from attention2 has shape `(steps, steps)` and is the
+    same for every sequence. The `|` operator combines two masks into one
+    that is True wherever either mask is True. With broadcasting, the result
+    holds one `(steps, steps)` mask per sequence. Here a row of shape
+    `(1, 2)` and a column of shape `(2, 1)` combine into shape `(2, 2)`.
 
     ```python
     torch.tensor([[True, False]]) | torch.tensor([[False], [True]])
     # tensor([[ True, False], [ True,  True]])
     ```
 
-    A padded position still gets an output, from the real positions before
-    it. That output is thrown away, and the loss leaves it out too.
+    A padding position is still a query, so it still gets an output,
+    computed from the real positions before it. That output is never used,
+    and the loss leaves it out too.
 
-    PyTorch's `F.scaled_dot_product_attention` reads a True in a boolean
-    `attn_mask` the other way round, as a pair that takes part. `~` flips
-    every entry of a mask, so pass it `~blocked`. PyTorch's attention layer,
-    `nn.MultiheadAttention`, which 50_multihead builds, reads True as
-    blocked, like the masks here. Read the documentation for every new
-    function that takes a mask.
+    PyTorch's `F.scaled_dot_product_attention` computes attention in one
+    call. In its boolean `attn_mask`, True has the opposite meaning. True
+    means the query may look at that key. The `~` operator flips every entry
+    of a boolean tensor, so you pass it `~blocked`. PyTorch's attention layer
+    `nn.MultiheadAttention`, which 50_multihead builds, uses True for blocked,
+    like the masks here. So read the documentation of every new function
+    that takes a mask.
 
-    A row with every key blocked takes a softmax over minus infinity alone,
-    which is NaN. Padding at the start, which some generation code does,
-    makes such rows. PyTorch's function gives zeros for them, and your own
-    attention gives NaN, which spreads through every later step.
+    If every key in a row is blocked, every score in that row is minus
+    infinity, and the softmax of the row is NaN. This happens when the
+    padding is at the start of a sequence, which some generation code does.
+    The first query then sees only padding. PyTorch's function returns zeros
+    for such rows. Your own attention returns NaN, and NaN spreads into every
+    number computed from it in later steps.
     """,
 )
 
@@ -109,8 +123,11 @@ MASK1_SOURCE = source_file(
     flipped = ~torch.tensor([True, False])                            # tensor([False,  True])
 
 
-    # TODO: Return the padding mask of a batch, of shape (batch, steps), True
-    #   at every position at or past each sequence's length.
+    # TODO: Return the padding mask of a batch, of shape (batch, steps). lengths
+    #   has shape (batch,) and holds each sequence's real length. The mask is
+    #   True at every position whose index is at least that sequence's length.
+    #   Example: padding_mask(torch.tensor([3, 1]), 4) returns
+    #   tensor([[False, False, False,  True], [False,  True,  True,  True]]).
     def padding_mask(
         lengths: Tensor,
         steps: int,
@@ -118,9 +135,12 @@ MASK1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the mask of shape (batch, steps, steps) that is True where a
-    #   query may not look at a key, because the key is in its future or is
-    #   padding.
+    # TODO: Return a mask of shape (batch, steps, steps). Entry [b, i, j] is True
+    #   when query i of sequence b may not look at key j, either because j is
+    #   after i or because position j is padding in sequence b.
+    #   Example: blocked_keys(torch.tensor([2]), 3) returns
+    #   tensor([[[False,  True,  True], [False, False,  True],
+    #   [False, False,  True]]]).
     def blocked_keys(
         lengths: Tensor,
         steps: int,
@@ -128,9 +148,11 @@ MASK1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return attention of q, k and v, each of shape (batch, steps, size),
-    #   with scores scaled by the square root of size, and minus infinity
-    #   wherever blocked is True before the softmax.
+    # TODO: Return the attention output for q, k and v, each of shape
+    #   (batch, steps, size). Compute the scores of every query with every key
+    #   and divide them by the square root of size. Set the scores to minus
+    #   infinity wherever blocked, of shape (batch, steps, steps), is True.
+    #   Then take the softmax over the keys and multiply the weights by v.
     def masked_attention(
         q: Tensor,
         k: Tensor,
@@ -140,8 +162,9 @@ MASK1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the same attention from F.scaled_dot_product_attention, with
-    #   blocked turned into the mask it expects.
+    # TODO: Return the same result as masked_attention, computed with
+    #   F.scaled_dot_product_attention instead. Pass blocked as its attn_mask,
+    #   converted to the meaning of True that this function expects.
     def torch_attention(
         q: Tensor,
         k: Tensor,
@@ -194,7 +217,7 @@ MASK1_SOLUTION = source_file(
         return torch.softmax(scores.masked_fill(blocked, float("-inf")), dim=-1) @ v
 
 
-    # This function reads True as a pair that takes part, so the mask is flipped.
+    # This function reads True as "the query may look at this key", so the mask is flipped.
     def torch_attention(
         q: Tensor,
         k: Tensor,
@@ -250,7 +273,7 @@ def check_mask1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="padding_mask",
-        description="marks every position past each length",
+        description="is True at every position at or past each length",
         inputs=(
             (torch.tensor([3, 1]), 4),
             (torch.tensor([5, 2, 4]), 5),
@@ -261,7 +284,7 @@ def check_mask1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="blocked_keys",
-        description="blocks the future and the padding together",
+        description="blocks both future keys and padding keys",
         inputs=(
             (torch.tensor([3, 1]), 4),
             (torch.tensor([2, 5, 4]), 5),
@@ -284,7 +307,7 @@ def check_mask1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="torch_attention",
-        description="matches masked_attention through PyTorch's function",
+        description="gives the same result as masked_attention using PyTorch's function",
         inputs=(
             (*attention_inputs(496, 2, 4, 3), Described(blocked, "the blocked keys of lengths 4 and 2")),
         ),
@@ -319,14 +342,15 @@ MASK1 = Exercise(
     source=MASK1_SOURCE,
     solution=MASK1_SOLUTION,
     hints={
-        "padding_mask": "Compare torch.arange(steps) with lengths.unsqueeze(1) using >=, so every row gets its "
-        "own length.",
-        "blocked_keys": "Build the future mask with torch.triu as attention2 does, then | it with "
-        "padding_mask(lengths, steps).unsqueeze(1).",
-        "masked_attention": "Scores are q @ k.transpose(-2, -1) over math.sqrt(q.shape[-1]). masked_fill them with "
-        "float(\"-inf\") where blocked is True, softmax over the last dimension, then @ v.",
-        "torch_attention": "F.scaled_dot_product_attention(q, k, v, attn_mask=...) with ~blocked, since True means "
-        "takes part there.",
+        "padding_mask": "Compare torch.arange(steps) with lengths.unsqueeze(1) using >=. Broadcasting then "
+        "compares every position with each sequence's own length.",
+        "blocked_keys": "Build the causal mask with torch.triu as attention2 does. Then combine it with "
+        "padding_mask(lengths, steps).unsqueeze(1) using the | operator.",
+        "masked_attention": "The scores are q @ k.transpose(-2, -1) divided by math.sqrt(q.shape[-1]). Call "
+        "masked_fill on them with float(\"-inf\") where blocked is True. Then take the softmax over the last "
+        "dimension and multiply the result by v with @.",
+        "torch_attention": "Call F.scaled_dot_product_attention(q, k, v, attn_mask=...) with ~blocked as the mask. "
+        "In that function True means the query may look at the key.",
     },
     introduces=(),
     check=check_mask1,
@@ -342,34 +366,40 @@ VOCABULARY = 16
 
 MASK2_LESSON = prose(
     """
-    This trains the same tiny model twice, with the causal mask and without
-    it. Each training sequence holds 8 random tokens, then the same 8 again.
-    The model predicts every next token, as a language model does. Here are
-    300 steps each, measured on 1,000 new sequences.
+    This exercise trains the same tiny model twice, once with the causal mask
+    and once without it. Each training sequence has 8 random tokens followed
+    by the same 8 tokens again. At every position the model predicts the next
+    token, as a language model does. Each model trains for 300 steps, and the
+    table measures both on 1,000 new sequences.
 
     | | Causal mask | No mask |
     |---|---|---|
     | Loss | 1.580 | 0.000 |
-    | Next tokens right, first half | 6.3% | 100% |
-    | Next tokens right, second half | 100% | 100% |
+    | Next token right, first half | 6.3% | 100% |
+    | Next token right, second half | 100% | 100% |
     | Tokens right when it writes the copy | 100% | 81.7% |
     | Whole copies right when it writes | 100% | 5.5% |
 
-    The first 8 tokens are random draws from 16, so nothing can predict them
-    better than 1 time in 16, 6.3%. The unmasked model gets all of them right.
-    During training the next token sits in its own input, and it learned to
-    read it from there. A loss below what the data allows is the sign of a
-    leak.
+    Each of the first 8 tokens is drawn at random from 16 possible tokens. So
+    no model can predict them correctly more than 1 time in 16, which is
+    6.3%. Yet the unmasked model gets all of them right. Without the mask,
+    each position can see the whole input, and the next token is part of
+    that input. So the model learned to copy the next token from its input.
+    A loss lower than the data allows is a sign of a leak, meaning the answer
+    reaches the model through its input.
 
-    Writing takes that away. A model writes one token at a time from what it
-    has so far, and the next token doesn't exist yet. Given the first 8
-    tokens and asked to write the copy, the unmasked model gets only 5.5% of
-    whole copies right. The masked one learned to read the token 8 places
-    before the one it writes, which still works while it writes.
+    When the model writes text on its own, which is called generating, it
+    can no longer copy the answer. It writes one token at a time from the tokens so far, and the
+    next token does not exist yet. Given the first 8 tokens and asked to
+    write the copy, the unmasked model writes only 5.5% of copies fully
+    right. The masked model learned to read the token 8 positions before the
+    one it predicts. That token is always there while it writes, so the
+    masked model writes every copy correctly.
 
-    The model adds a learned row per position to each token, so it can tell
-    positions apart. 52_positions explains why it needs that. Writing here is
-    greedy, the most likely token at every step.
+    The model adds a learned embedding for each position to each token's
+    embedding, so it can tell positions apart. 52_positions explains why it
+    needs that. The writing here is greedy, which means it picks the most
+    likely token at every step.
     """,
 )
 
@@ -409,9 +439,9 @@ MASK2_SOURCE = source_file(
         return torch.triu(torch.ones(steps, steps), diagonal=1).bool()
 
 
-    # TODO: Finish the line that sets scores in forward. With self.causal True
-    #   the future gets minus infinity, and with it False the scores stay as
-    #   they are.
+    # TODO: Finish the second line that sets scores in forward. When self.causal
+    #   is True, set the scores of future keys to minus infinity, using
+    #   future_mask. When self.causal is False, leave the scores unchanged.
     class TinyModel(nn.Module):''' + TINY_MODEL_INIT + '''
         def forward(self, x: Tensor) -> Tensor:
             steps = x.shape[1]
@@ -423,9 +453,10 @@ MASK2_SOURCE = source_file(
             return self.head(torch.softmax(scores, dim=-1) @ v)
 
 
-    # TODO: Return prompt, of shape (batch, length), with steps more tokens
-    #   written after it. Each new token is model's most likely next token at
-    #   the last position, given everything so far. Record nothing for autograd.
+    # TODO: Return prompt, of shape (batch, length), with steps new tokens added
+    #   to its end, so the result has shape (batch, length + steps). To pick
+    #   each new token, run model on all the tokens so far and take the most
+    #   likely token at the last position. Make sure autograd records nothing.
     def generate(
         model: nn.Module,
         prompt: Tensor,
@@ -434,8 +465,10 @@ MASK2_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the share of sequences, each of 2 * half tokens, whose second
-    #   half generate writes exactly right from the first half.
+    # TODO: sequences has shape (batch, 2 * half). Give generate the first half
+    #   of each sequence and let it write half more tokens. Return the fraction
+    #   of sequences whose written second half matches the true second half
+    #   exactly, as a float.
     def copies_right(
         model: nn.Module,
         sequences: Tensor,
@@ -667,14 +700,14 @@ def check_cheats(found: type) -> None:
         )
 
     if first_half_right(unmasked, test) < 0.9:
-        raise Mismatch("Without the mask, the trained TinyModel should read the next token in training and get the random first half right.")
+        raise Mismatch("Without the mask, the trained TinyModel should copy the next token from its input and so predict the random first half right.")
 
     unmasked_copies = reference_copies_right(unmasked, test, HALF)
 
     if unmasked_copies > 0.3:
         raise Mismatch(
-            f"Without the mask, the trained TinyModel writes {unmasked_copies:.1%} of copies right, but cut off "
-            "from the future it should fall below 30%.",
+            f"Without the mask, the trained TinyModel writes {unmasked_copies:.1%} of copies right, but without "
+            "the future tokens to copy from it should score below 30%.",
         )
 
 
@@ -690,7 +723,7 @@ def check_mask2(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="generate",
-        description="writes one most likely token at a time",
+        description="adds the most likely next token, one token at a time",
         inputs=(
             (Described(model, "an untrained TinyModel(True)"), prompts, 5),
         ),
@@ -714,7 +747,7 @@ def check_mask2(checker: Checker) -> None:
     checker.test_method(
         class_name="TinyModel",
         method="forward",
-        description="trained, copies with the mask and cheats without it",
+        description="after training, copies with the mask and cheats without it",
         run=check_cheats,
     )
 
@@ -727,12 +760,15 @@ MASK2 = Exercise(
     source=MASK2_SOURCE,
     solution=MASK2_SOLUTION,
     hints={
-        "TinyModel.forward": "scores.masked_fill(future_mask(steps), float(\"-inf\")) when self.causal is True, and "
-        "scores itself when it is False. A conditional expression fits on one line.",
-        "generate": "Inside torch.no_grad(), loop steps times. Take model(prompt)[:, -1].argmax(dim=-1, "
-        "keepdim=True) and torch.cat it onto prompt along dim=1.",
-        "copies_right": "Generate half tokens from sequences[:, :half]. Compare the written second half with the "
-        "true one, .all(dim=1) per sequence, then the mean as floats.",
+        "TinyModel.forward": "Use scores.masked_fill(future_mask(steps), float(\"-inf\")) when self.causal is "
+        "True, and the unchanged scores when it is False. A conditional expression, a if condition else b, fits "
+        "this on one line.",
+        "generate": "Inside torch.no_grad(), loop steps times. Each time, model(prompt)[:, -1].argmax(dim=-1, "
+        "keepdim=True) gives the most likely next token of each sequence. Add it to the end of prompt with "
+        "torch.cat along dim=1.",
+        "copies_right": "Call generate on sequences[:, :half] for half steps. Compare the written second half with "
+        "the true second half, and use .all(dim=1) to get one True or False per sequence. Then take the mean of "
+        "those values as floats.",
     },
     introduces=(),
     check=check_mask2,

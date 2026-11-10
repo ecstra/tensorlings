@@ -30,10 +30,11 @@ CROSS_ATTENTION = Chapter(
         # Cross attention
 
         Cross attention takes its queries from one sequence and its keys and
-        values from another. A decoder uses it to read the encoder's outputs
-        at every step it writes, instead of one vector that has to hold the
-        whole input. This chapter builds it and puts it to work copying long
-        rows of digits, where one vector fails.
+        values from another. A decoder uses it to read all of the encoder's
+        outputs at every step it writes. Without it, the decoder gets the
+        whole input packed into one vector. This chapter builds cross
+        attention and uses it to copy long rows of digits, a task where a
+        single vector fails.
 
         ## Further reading
 
@@ -92,31 +93,33 @@ class ReferenceCrossAttention(nn.Module):
 
 CROSS1_LESSON = prose(
     """
-    Attention so far took its queries, keys and values from one sequence.
-    Cross attention takes the queries from one sequence and the keys and
-    values from another. A decoder writing an answer asks its questions of the
-    encoder's outputs, so at each step it reads the part of the input it
+    So far, attention took its queries, keys and values from the same
+    sequence. **Cross attention** takes the queries from one sequence and the
+    keys and values from another. In an encoder and decoder model, the
+    decoder's queries are compared with keys made from the encoder's outputs.
+    So at each step of writing, the decoder can read the part of the input it
     needs.
 
-    The weights have one row per query position and one column per key
-    position, so they need not be square.
+    The attention weights have one row per query position and one column per
+    key position. The two sequences can have different lengths, so the
+    weights need not be square.
 
     ```python
-    writing = torch.zeros(2, 3, 8)    # 3 positions writing
-    reading = torch.zeros(2, 5, 8)    # 5 positions read
+    writing = torch.zeros(2, 3, 8)    # 3 query positions, in the sequence being written
+    reading = torch.zeros(2, 5, 8)    # 5 key positions, in the sequence being read
     (writing @ reading.transpose(1, 2)).shape    # torch.Size([2, 3, 5])
     ```
 
-    There is no causal mask here. The whole input is known before the decoder
-    starts, so every query may read every key. The padding mask still applies,
-    since short inputs are padded, as in mask1. A padding mask of shape
-    `(batch, keys)` becomes `(batch, 1, keys)` with `.unsqueeze(1)`, which
-    broadcasts it over every query.
+    Cross attention needs no causal mask. The whole input is known before the
+    decoder starts, so every query may read every key. The padding mask still
+    applies, because short inputs are padded, as in mask1. Calling
+    `.unsqueeze(1)` turns a padding mask of shape `(batch, keys)` into shape
+    `(batch, 1, keys)`. Broadcasting then applies it to every query.
 
-    Bahdanau, Cho and Bengio added this to the RNN encoder and decoder in
-    2014, so a translating decoder could look back at the source words. The
-    encoder and decoder models of 54_model_types put it in every block of the
-    decoder.
+    Bahdanau, Cho and Bengio added cross attention to the RNN encoder and
+    decoder in 2014. With it, a decoder translating a sentence could look back
+    at the words of the source sentence. The encoder and decoder models of
+    54_model_types put cross attention in every block of the decoder.
     """,
 )
 
@@ -139,9 +142,10 @@ CROSS1_SOURCE = source_file(
     spread = blocked.unsqueeze(1)                          # shape (1, 1, 3), one row for every query
 
 
-    # TODO: Return the scores of every query against every key, divided by the
-    #   square root of their size. queries has shape (batch, writing, size) and
-    #   keys (batch, reading, size).
+    # TODO: queries has shape (batch, writing, size) and keys has shape
+    #   (batch, reading, size). Return the dot product of every query with
+    #   every key, divided by the square root of size. The result has shape
+    #   (batch, writing, reading).
     def cross_scores(
         queries: Tensor,
         keys: Tensor,
@@ -149,8 +153,11 @@ CROSS1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the values mixed by the softmax of cross_scores, with the
-    #   keys where blocked, of shape (batch, reading), is True left out.
+    # TODO: Return the attention output. Take the softmax of cross_scores over
+    #   the keys, and use the weights to average values, of shape
+    #   (batch, reading, size). Leave out every key where blocked, of shape
+    #   (batch, reading), is True, by setting its scores to minus infinity
+    #   before the softmax.
     def cross_attention(
         queries: Tensor,
         keys: Tensor,
@@ -160,9 +167,10 @@ CROSS1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the same as cross_attention, from
-    #   F.scaled_dot_product_attention. Its attn_mask is True where a key takes
-    #   part, the opposite of blocked.
+    # TODO: Return the same result as cross_attention, computed with
+    #   F.scaled_dot_product_attention. Its attn_mask is True where the query
+    #   may look at the key, the opposite of blocked. The mask must broadcast
+    #   to shape (batch, writing, reading).
     def with_torch(
         queries: Tensor,
         keys: Tensor,
@@ -172,8 +180,10 @@ CROSS1_SOURCE = source_file(
         ...
 
 
-    # TODO: Finish forward. The queries come from x, the keys and values from
-    #   memory, and the mixed values go through self.out.
+    # TODO: Finish forward. Make the queries from x with self.query, and the
+    #   keys and values from memory with self.key and self.value. Run
+    #   cross_attention on them with blocked, and return the result passed
+    #   through self.out.
     class CrossAttention(nn.Module):
         def __init__(
             self,
@@ -332,7 +342,7 @@ def check_cross1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="with_torch",
-        description="matches cross_attention through PyTorch",
+        description="gives the same result as cross_attention using PyTorch",
         inputs=(
             (*attention_triple(513, 2, 3, 4, 4), Described(BLOCKED_A, "the last key blocked in one row, three in the other")),
         ),
@@ -355,13 +365,14 @@ CROSS1 = Exercise(
     source=CROSS1_SOURCE,
     solution=CROSS1_SOLUTION,
     hints={
-        "cross_scores": "queries @ keys.transpose(1, 2), divided by math.sqrt of the size, queries.shape[-1].",
-        "cross_attention": "Fill the scores with float(\"-inf\") where blocked.unsqueeze(1) is True, take the "
-        "softmax over the last dimension, then @ values.",
-        "with_torch": "Pass the queries, keys and values to F.scaled_dot_product_attention, with attn_mask set to "
-        "~ of blocked, given its query dimension with .unsqueeze(1) as in cross_attention.",
-        "CrossAttention.forward": "cross_attention(self.query(x), self.key(memory), self.value(memory), blocked), "
-        "then self.out.",
+        "cross_scores": "Compute queries @ keys.transpose(1, 2) and divide it by math.sqrt of the size, which is "
+        "queries.shape[-1].",
+        "cross_attention": "Use masked_fill to set the scores to float(\"-inf\") where blocked.unsqueeze(1) is "
+        "True. Take the softmax over the last dimension, then multiply by values with @.",
+        "with_torch": "Pass the queries, keys and values to F.scaled_dot_product_attention. Set attn_mask to the "
+        "flipped mask, ~blocked, after adding the query dimension with .unsqueeze(1) as in cross_attention.",
+        "CrossAttention.forward": "Call cross_attention(self.query(x), self.key(memory), self.value(memory), "
+        "blocked), then pass the result through self.out.",
     },
     introduces=(),
     check=check_cross1,
@@ -483,40 +494,44 @@ def indented_part(part: str) -> str:
 
 CROSS2_LESSON = prose(
     """
-    encdec2 showed one vector failing to copy long rows of digits. The
-    encoder squeezes the whole row into its last state, and the decoder has
-    to unpack it from there. Cross attention lets the decoder read the
-    encoder's output at every position instead, so step 7 of the copy can
-    look straight at position 7.
+    encdec2 showed that a single vector fails to copy long rows of digits.
+    The encoder has to pack the whole row into its last state, and the
+    decoder has to recover every digit from that one state. Cross attention
+    instead lets the decoder read the encoder's output at every position. So
+    step 7 of the copy can look directly at position 7 of the input.
 
-    The model here keeps encdec1's GRUs. At each step the decoder's output
-    queries every encoder output with cross1's `CrossAttention`. The head
-    reads the decoder's output and what it found, side by side.
+    The model here keeps the GRU encoder and decoder from encdec1. At each
+    step, the decoder's output is the query, and cross1's `CrossAttention`
+    compares it with every encoder output. The head then reads two vectors
+    joined side by side, the decoder's output and the result of the cross
+    attention.
 
     ```python
     torch.cat([torch.ones(2, 3, 4), torch.zeros(2, 3, 4)], dim=-1).shape    # torch.Size([2, 3, 8])
     ```
 
-    Here is copying after 1,500 steps of training, hidden size 64, on 500
-    rows it never saw. Each copy is written greedily, so a wrong digit feeds
-    the steps after it.
+    Here are the results after 1,500 steps of training with hidden size 64,
+    measured on 500 rows the models never saw. Each copy is written greedily,
+    so a wrong digit is fed back in and affects the steps after it.
 
-    | Length | One vector, digits | Rows | Cross attention, digits | Rows |
+    | Length | One vector, digits | Whole rows | Cross attention, digits | Whole rows |
     |---|---|---|---|---|
     | 20 | 27.0% | 0% | 99.9% | 99.4% |
     | 40 | 12.2% | 0% | 98.4% | 94.4% |
 
-    encdec2 measured digits with the true ones fed in before each guess. Read
-    that way, one vector here gets 56.4% at length 20 and 23.2% at 40, so the
-    gap is real either way.
+    encdec2 measured digits differently, by feeding in the true earlier
+    digits before each guess. Measured that way, the single vector here gets
+    56.4% at length 20 and 23.2% at length 40. So cross attention does far
+    better under either measure.
 
-    Copying is the cleanest test of reading long inputs, since every digit of
-    the row has to come back in order.
+    Copying is the cleanest test of reading long inputs, because every digit
+    of the row has to come back out in order.
 
-    This is Bahdanau, Cho and Bengio's fix of 2014 for translating long
-    sentences. The layout here, reading after each decoder step and joining
-    what it found to the output, is Luong and colleagues' version from a year
-    later. Three years on, the same reading became the whole model.
+    This is the fix Bahdanau, Cho and Bengio proposed in 2014 for translating
+    long sentences. The layout here is the version by Luong and colleagues
+    from a year later. It reads the input after each decoder step and joins
+    the result to the decoder's output. Three years later, attention like
+    this became the whole model, with no GRU at all.
     """,
 )
 
@@ -541,11 +556,13 @@ CROSS2_SOURCE = source_file(
 ''' + indented_part(CROSS_PART) + '''
 
 
-    # TODO: Finish read and forward. read gives cross the decoder's outputs and
-    #   the encoder's outputs, memory, with nothing blocked, and runs the head
-    #   on the outputs and what cross found, joined on the last dimension.
-    #   forward runs the encoder on the source and the decoder on so_far from
-    #   the encoder's final state, then returns read of the two.
+    # TODO: Finish read and forward. read runs self.cross with the decoder's
+    #   outputs as queries and the encoder's outputs, memory, as keys and
+    #   values, with nothing blocked. Then it joins outputs and the result of
+    #   self.cross along the last dimension and returns self.head of that.
+    #   forward embeds source and runs self.encoder on it. Then it embeds
+    #   so_far and runs self.decoder on it, starting from the encoder's final
+    #   state. It returns read of the decoder's outputs and memory.
 ''' + indented_part(COPIER_INIT) + '''
 
         def read(
@@ -563,11 +580,14 @@ CROSS2_SOURCE = source_file(
             ...
 
 
-    # TODO: Return model's copy of source, of shape (batch, steps), one symbol
-    #   at a time. First run model.encoder on the embedded source, for memory
-    #   and the decoder's first state. Then start every row from START, run the
-    #   decoder one step from its state, read with model.read, and feed the
-    #   likeliest symbol back in.
+    # TODO: Return model's copy of source, of shape (batch, steps), written one
+    #   symbol at a time. First run model.encoder on the embedded source. Its
+    #   outputs are memory, and its final state is the decoder's first state.
+    #   Start every row with the symbol START. At each step, run model.decoder
+    #   for one step on the embedded symbol and the current state, and pass
+    #   its outputs and memory to model.read. The most likely symbol is the
+    #   next symbol, and it is fed back in at the next step. Return all the
+    #   written symbols joined along dimension 1.
     def greedy_copy(
         model: nn.Module,
         source: Tensor,
@@ -575,7 +595,7 @@ CROSS2_SOURCE = source_file(
         ...
 
 
-    # Training as in encdec2, at a rate of 3e-3 with the gradients clipped.
+    # Training as in encdec2, with a learning rate of 3e-3 and the gradients clipped.
 ''' + indented_part(TRAIN_COPIER_PART) + '''
     ''',
 )
@@ -764,13 +784,13 @@ def check_cross2(checker: Checker) -> None:
     )
     checker.test(
         function="greedy_copy",
-        description="copies one symbol at a time, reading as it goes",
+        description="writes one symbol at a time, reading memory at each step",
         run=check_greedy_copy,
     )
     checker.test_method(
         class_name="Copier",
         method="forward",
-        description="learns to copy rows of 12 exactly",
+        description="learns to copy rows of 12 digits exactly",
         run=check_copier_learns,
     )
 
@@ -783,13 +803,15 @@ CROSS2 = Exercise(
     source=CROSS2_SOURCE,
     solution=CROSS2_SOLUTION,
     hints={
-        "Copier.read": "torch.zeros(memory.shape[:2], dtype=torch.bool) blocks nothing. Pass outputs, memory and it to "
-        "self.cross, torch.cat the outputs with the result on dim=-1, and run self.head.",
-        "Copier.forward": "Run self.encoder on the embedded source, keeping every step as memory and the last state. "
-        "The decoder's outputs come from self.embedding(so_far) and state. Return what self.read makes of those "
-        "outputs and memory.",
-        "greedy_copy": "torch.full((len(source), 1), START) starts it. Each step, run model.decoder on the embedded "
-        "symbol and the state, take model.read(outputs, memory).argmax(dim=2), keep it, and torch.cat at the end.",
+        "Copier.read": "torch.zeros(memory.shape[:2], dtype=torch.bool) is a mask that blocks nothing. Pass "
+        "outputs, memory and that mask to self.cross. Join outputs and the result with torch.cat on dim=-1, then "
+        "run self.head on it.",
+        "Copier.forward": "Run self.encoder on the embedded source. It returns the outputs of every step, which "
+        "are memory, and the last state. Run self.decoder on self.embedding(so_far) starting from that state. "
+        "Return self.read of the decoder's outputs and memory.",
+        "greedy_copy": "torch.full((len(source), 1), START) gives the first symbol of every row. At each step, "
+        "run model.decoder on the embedded symbol and the state. Then model.read(outputs, memory).argmax(dim=2) "
+        "is the next symbol. Keep every symbol in a list and join them with torch.cat at the end.",
     },
     introduces=(),
     check=check_cross2,

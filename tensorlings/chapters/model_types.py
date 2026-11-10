@@ -31,10 +31,11 @@ MODEL_TYPES = Chapter(
         """
         # Encoders, decoders and both
 
-        The same block builds three kinds of model, and their masks set them
-        apart. This chapter names the three, shows what each mask lets every
-        output reach, and then builds the kind behind GPT and Llama, a decoder
-        only language model, from tokens to generated text.
+        The same block builds three kinds of model, and the difference
+        between them is in their masks. This chapter names the three kinds
+        and shows which inputs each mask lets every output depend on. Then it
+        builds the kind behind GPT and Llama, a decoder only language model,
+        from tokens all the way to generated text.
 
         ## Further reading
 
@@ -57,7 +58,8 @@ def indented(part: str) -> str:
 # ---------------------------------------------------------------------------
 
 MASKED_ATTENTION_PART = '''
-# One head of attention that looks only where mask is True, as in mask1.
+# One head of attention. Each query looks only at the keys where mask is True,
+# the opposite of the blocked masks in mask1.
 class MaskedAttention(nn.Module):
     def __init__(
         self,
@@ -81,10 +83,11 @@ class MaskedAttention(nn.Module):
 
 ENCODER1_LESSON = prose(
     """
-    The block of block1 builds three kinds of model. What sets them apart is
-    where each attention layer may look, its mask. A mask is a table of True
-    and False, one row per query and one column per key, True where that query
-    may look.
+    The block of block1 can build three kinds of model. They differ in where
+    each attention layer may look, which its mask decides. In this chapter a
+    mask is a table of True and False values, with one row per query and one
+    column per key. It is True where that query may look at that key, which
+    is the opposite of the blocked masks in mask1.
 
     | Kind | Masks | What it does | Examples |
     |---|---|---|---|
@@ -97,33 +100,40 @@ ENCODER1_LESSON = prose(
     torch.tril(torch.ones(3, 3, dtype=torch.bool))    # True on and below the diagonal
     ```
 
-    Each kind fits its job. An encoder can't write text a token at a time,
-    since every position reads the ones after it. A decoder can't use the end
-    of a sentence to read its start. BERT reads the left and the right at
-    once, which suits labelling. GPT reads only the left, which suits writing.
+    Each kind suits a different job. An encoder cannot generate text one
+    token at a time, because every position reads the positions after it.
+    Those positions do not exist yet while the model writes. A decoder cannot
+    use the end of a sentence to understand its start. BERT reads the words
+    to the left and to the right at once, which suits labelling. GPT reads
+    only the words to the left, which suits writing.
 
-    A labelling task shows the gap. Two blocks tag each of 16 random digits
-    with whether the digit after it is bigger. Here is the share of tags right
-    on new rows after 800 steps, from three seeds.
+    A labelling task shows the difference. A model of two blocks tags each of
+    16 random digits with whether the digit after it is bigger. Here is the
+    fraction of tags it got right on new rows after 800 steps of training,
+    over three seeds.
 
     | Mask | Tags right |
     |---|---|
     | an encoder's | 100% |
     | a decoder's | 75.3% to 75.5% |
 
-    The decoder never sees the next digit, so it can only guess from the
-    current one. A 0 is followed by a bigger digit 9 times in 10, a 9 never,
-    and such guesses get 75% at best. When the whole input is there before
-    any output, read it with an encoder.
+    With the decoder's mask, a position never sees the next digit, so it can
+    only guess from the current one. A 0 is followed by a bigger digit 9
+    times in 10, and a 9 never is. Guesses like these get at most 75% right.
+    So when the whole input is available before any output is needed, read
+    it with an encoder.
 
-    In an encoder decoder the decoder's queries look at the encoder's keys, as
-    cross1 showed. Its cross mask is all True, one row per output position
-    and one column per input position.
+    In an encoder decoder model, the decoder's queries look at the encoder's
+    keys, as cross1 showed. The mask of this cross attention is all True,
+    with one row per output position and one column per input position.
 
-    The mask shows in what each output can reach. Nudge input j, and output t
-    moves only if position t may look at j. Autograd measures that, as causal1
-    did. Here is a one layer decoder over 4 positions. Row t is output t, the
-    other way round from block1's map, and a 1 marks each input j it reaches.
+    The mask decides which inputs each output depends on. If you change input
+    j, output t changes only if position t may look at position j. Autograd
+    can measure this, as in causal1. The gradient of output t with respect to
+    the input is nonzero only at the inputs that output t depends on. Here is
+    the result for a one layer decoder over 4 positions. Row t is output t,
+    which is the other way round from the map in block1. A 1 marks each input
+    j that output t depends on.
 
     ```text
     1 0 0 0
@@ -132,8 +142,9 @@ ENCODER1_LESSON = prose(
     1 1 1 1
     ```
 
-    The same layer with an encoder's mask reaches everything. Stacking more
-    decoder layers never lets the future in, since no layer looks ahead.
+    The same layer with an encoder's mask gives all ones, because every
+    output depends on every input. Stacking more decoder layers never makes
+    an output depend on a later input, because no layer looks ahead.
     """,
 )
 
@@ -155,7 +166,10 @@ ENCODER1_SOURCE = source_file(
 
 
     # TODO: Return the self attention mask of shape (steps, steps) for kind,
-    #   "encoder" or "decoder".
+    #   which is "encoder" or "decoder". True means the query may look at the
+    #   key.
+    #   Example: self_mask("decoder", 3) returns tensor([[ True, False, False],
+    #   [ True,  True, False], [ True,  True,  True]]).
     def self_mask(
         kind: str,
         steps: int,
@@ -163,10 +177,11 @@ ENCODER1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the three masks of an encoder decoder model, in this order:
-    #   the encoder's own, of shape (source_steps, source_steps), the decoder's
-    #   own, of shape (target_steps, target_steps), and the decoder's cross
-    #   mask onto the encoder, of shape (target_steps, source_steps).
+    # TODO: Return the three masks of an encoder decoder model as a tuple, in
+    #   this order. First the encoder's self attention mask, of shape
+    #   (source_steps, source_steps). Then the decoder's self attention mask,
+    #   of shape (target_steps, target_steps). Last the mask of the decoder's
+    #   cross attention onto the encoder, of shape (target_steps, source_steps).
     def encoder_decoder_masks(
         source_steps: int,
         target_steps: int,
@@ -174,9 +189,13 @@ ENCODER1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return a table of shape (steps, steps), True at [t, j] when output t
-    #   of model depends on input j. x has shape (1, steps, features), and model
-    #   maps it to the same shape. Find it with autograd, one output at a time.
+    # TODO: x has shape (1, steps, features), and model maps it to an output of
+    #   the same shape. Return a table of shape (steps, steps) that is True at
+    #   [t, j] when output position t depends on input position j. Find each
+    #   row t with autograd, from the gradient of output position t with
+    #   respect to x.
+    #   Example: for a one layer decoder over 4 positions, reach returns the
+    #   lower triangle shown in the lesson.
     def reach(
         model: nn.Module,
         x: Tensor,
@@ -481,11 +500,12 @@ ENCODER1 = Exercise(
     source=ENCODER1_SOURCE,
     solution=ENCODER1_SOLUTION,
     hints={
-        "self_mask": "torch.ones(steps, steps, dtype=torch.bool) for an encoder, and torch.tril of it for a decoder.",
+        "self_mask": "Use torch.ones(steps, steps, dtype=torch.bool) for an encoder, and torch.tril of that for a "
+        "decoder.",
         "encoder_decoder_masks": "Use self_mask for the first two. The cross mask is all True, one row per target "
         "step and one column per source step.",
-        "reach": "For each t, make x a fresh leaf with x.detach().requires_grad_(). Call .backward() on the sum of "
-        "output t, and keep x.grad[0].abs().sum(dim=-1) > 0 as row t.",
+        "reach": "For each t, make x a fresh leaf tensor with x.detach().requires_grad_(). Call .backward() on the "
+        "sum of output position t. Then x.grad[0].abs().sum(dim=-1) > 0 is row t.",
     },
     introduces=(),
     check=check_encoder1,
@@ -502,7 +522,7 @@ VERBS = ["sees", "likes", "chases", "finds", "draws"]
 OBJECTS = ["the ball", "a fish", "the moon", "a red hat", "the garden"]
 
 
-# A small made up language, three words picked at random in every sentence.
+# A small made up language. Every sentence is a subject, a verb and an object, each picked at random.
 def corpus(
     count: int,
     generator: torch.Generator,
@@ -525,7 +545,7 @@ def random_windows(
 '''
 
 BLOCK_PART = '''
-# A pre norm block as in block1, causal attention over heads, then the MLP.
+# A pre norm block as in block1, with causal multi head attention and then the MLP.
 class Block(nn.Module):
     def __init__(
         self,
@@ -612,44 +632,49 @@ def generate(
 
 DECODER1_LESSON = prose(
     """
-    This exercise builds the kind behind GPT and Llama, a decoder only
-    language model, end to end. It reads characters of a small made up
-    language, like `the dog chases a fish.`, and learns to write more of it.
+    This exercise builds the kind of model behind GPT and Llama, a decoder
+    only language model, from start to finish. It reads the characters of a
+    small made up language, with sentences like `the dog chases a fish.`, and
+    learns to write more of it.
 
-    A language model predicts the next token. The trick that makes training
-    fast is shifted targets. A window of tokens gives the inputs, every token
-    but the last, and the targets, every token but the first.
+    A language model predicts the next token. Training is fast because of
+    shifted targets. A window of tokens is split into inputs and targets. The
+    inputs are every token except the last, and the targets are every token
+    except the first.
 
     ```python
     window = torch.tensor([[5, 7, 2, 9]])
     window[:, :-1], window[:, 1:]    # (tensor([[5, 7, 2]]), tensor([[7, 2, 9]]))
     ```
 
-    Position t reads tokens 0 to t and is scored on token t + 1. The causal
-    mask keeps it from reading that answer. So one window of 33 tokens trains
-    32 predictions at once, and a batch of 32 windows trains 1,024 per step.
+    Position t of the input reads tokens 0 to t and must predict token t + 1.
+    The causal mask stops it from reading that answer. So one window of 33
+    tokens gives 32 predictions to train on at once, and a batch of 32
+    windows gives 1,024 per step.
 
-    The model adds a learned position embedding to a token embedding, then
-    runs a stack of the blocks of block1 and a last LayerNorm. A Linear head
-    gives a logit for every token of the vocabulary.
+    The model adds a learned position embedding to each token embedding. Then
+    it runs a stack of the blocks from block1 and a final LayerNorm. A Linear
+    head gives a logit for every token of the vocabulary.
 
-    Writing goes one token at a time. Feed the text so far, take the logits at
-    the last position, pick the likeliest token, add it and repeat. The model
-    has position embeddings for 32 steps only, so it reads the last 32 tokens
-    at most.
+    The model writes one token at a time. Run it on the text so far, take the
+    logits at the last position, and pick the most likely token. Add that
+    token to the text and repeat. The model has position embeddings for only
+    32 positions, so it can read at most the last 32 tokens.
 
-    Here is the run behind this exercise, 2 blocks and 27,861 weights, with
-    Adam at a rate of 0.01 and batches of 32 windows. The validation text is
-    2,000 more sentences of the language that training never saw.
+    Here is the training run behind this exercise. The model has 2 blocks and
+    27,861 weights, and it trains with Adam at a learning rate of 0.01 on
+    batches of 32 windows. The validation text is 2,000 more sentences of the
+    language that training never saw.
 
     | Steps | 0 | 100 | 200 |
     |---|---|---|---|
     | Validation loss, per character | 3.203 | 0.379 | 0.268 |
 
-    The loss starts near `log(21) = 3.04`, a guess among the 21 characters.
-    No model can get below about 0.19 here, since three words in each
-    sentence are picked at random. After 200 steps it writes
-    `the dog draws the moon. the dog draws the garden.` from `the dog `.
+    The loss starts near `log(21) = 3.04`, which is the loss of a uniform
+    guess among the 21 characters. No model can get below about 0.19 here,
+    because the three words of each sentence are picked at random. After 200
+    steps, given the prompt `the dog `, it writes
+    `the dog draws the moon. the dog draws the garden.`
     """,
 )
 
@@ -673,24 +698,28 @@ DECODER1_SOURCE = source_file(
 ''' + indented(BLOCK_PART) + '''
 
 
-    # TODO: Return the inputs and the targets of a batch of windows of tokens,
-    #   every token but the last of each window, and every token but the first.
+    # TODO: tokens has shape (batch, steps). Return a tuple of the inputs and
+    #   the targets. The inputs are every token of each window except the
+    #   last, and the targets are every token except the first.
+    #   Example: for the window above, shift(window) returns
+    #   (tensor([[5, 7, 2]]), tensor([[7, 2, 9]])).
     def shift(tokens: Tensor) -> tuple[Tensor, Tensor]:
         ...
 
 
     # TODO: Finish forward. Add the token embeddings of ids, of shape
     #   (batch, steps), to the position embeddings of positions 0 to steps - 1.
-    #   Run the blocks, the last norm and the head. Return the logits, of shape
-    #   (batch, steps, vocabulary).
+    #   Run the sum through self.blocks, self.norm and self.head, and return
+    #   the logits, of shape (batch, steps, vocabulary).
 ''' + indented(DECODER_INIT) + '''
 
         def forward(self, ids: Tensor) -> Tensor:
             ...
 
 
-    # TODO: Return the cross entropy of model's logits on the inputs of tokens
-    #   against their targets, from shift, over every position of every window.
+    # TODO: Split tokens into inputs and targets with shift. Run model on the
+    #   inputs, and return the cross entropy of its logits against the targets,
+    #   averaged over every position of every window.
     def lm_loss(
         model: nn.Module,
         tokens: Tensor,
@@ -698,8 +727,10 @@ DECODER1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return prompt with steps more tokens added, each the likeliest next
-    #   token after the last context tokens so far. Record nothing for autograd.
+    # TODO: prompt is a list of token ids. Return a new list with steps more ids
+    #   added to the end of prompt. Each new id is the most likely next token
+    #   when model reads the last context tokens so far. Make sure autograd
+    #   records nothing.
     def generate(
         model: nn.Module,
         prompt: list[int],
@@ -946,7 +977,7 @@ def check_decoder1(checker: Checker) -> None:
     )
     checker.test(
         function="generate",
-        description="adds the likeliest token, reading only the last context tokens",
+        description="adds the most likely token, reading only the last context tokens",
         run=check_generate,
     )
     checker.test(
@@ -964,13 +995,15 @@ DECODER1 = Exercise(
     source=DECODER1_SOURCE,
     solution=DECODER1_SOLUTION,
     hints={
-        "shift": "tokens[:, :-1] drops the last token of each window, and tokens[:, 1:] the first.",
-        "TinyDecoder.forward": "self.positions(torch.arange(ids.shape[1])) broadcasts over the batch when added to "
-        "self.tokens(ids). Then self.blocks, self.norm and self.head in turn.",
+        "shift": "tokens[:, :-1] drops the last token of each window, and tokens[:, 1:] drops the first.",
+        "TinyDecoder.forward": "self.positions(torch.arange(ids.shape[1])) has shape (steps, size), so it "
+        "broadcasts over the batch when added to self.tokens(ids). Then apply self.blocks, self.norm and self.head "
+        "in turn.",
         "lm_loss": "Run the model on the inputs from shift. Reshape the logits to (-1, vocabulary) and the targets "
         "to (-1) before F.cross_entropy.",
-        "generate": "Copy prompt with list(prompt). Inside torch.no_grad(), run the model on torch.tensor([ids[-context:]]) "
-        "and append the argmax of the logits at the last position, as a plain int.",
+        "generate": "Copy prompt with list(prompt). Inside torch.no_grad(), loop steps times and run the model on "
+        "torch.tensor([ids[-context:]]). Each time, append the argmax of the logits at the last position, as a plain "
+        "int from .item().",
     },
     introduces=(),
     check=check_decoder1,

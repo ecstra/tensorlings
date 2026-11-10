@@ -30,11 +30,12 @@ POSITIONS = Chapter(
         """
         # Positions
 
-        Attention compares every position with every other, and nothing in it
-        knows which came first. This chapter shows that, adds positions to the
-        input the two classic ways, learned and sinusoidal, then builds RoPE,
-        which turns queries and keys by their position instead, and shows why
-        most recent models use it.
+        Attention compares every position with every other position, but
+        nothing in it knows which position came first. This chapter shows
+        that. Then it adds position information to the input in the two
+        classic ways, learned and sinusoidal. Last, it builds RoPE, which
+        rotates the queries and keys by angles that depend on their position,
+        and shows why most recent models use it.
 
         ## Further reading
 
@@ -83,38 +84,42 @@ def attention_layer(
 POSITION1_LESSON = prose(
     """
     attention3 to attention5 built attention from queries, keys and values.
-    Nothing in that knows where a position sits. Each output row depends on
-    its own input row and on the set of the others, not their order.
+    Nothing in that computation uses the position of a row. Each output row
+    depends on its own input row and on the other input rows as a set, not on
+    their order.
 
-    So shuffling the input only shuffles the output. Take an attention layer
-    without the mask, 5 positions of 8 features, and the order 3, 0, 4, 1, 2.
-    The output of the shuffled input and the shuffled output differ by at most
-    1.2e-7, which is rounding.
+    So if you shuffle the input rows, the output rows come out shuffled the
+    same way, and nothing else changes. Take an attention layer without the
+    causal mask, an input of 5 positions with 8 features, and the order 3, 0,
+    4, 1, 2. Compare the layer's output on the shuffled input with the
+    shuffled output of the original input. They differ by at most 1.2e-7,
+    which is rounding error.
 
-    Indexing the steps dimension with a tensor of position numbers puts them
-    in that order.
+    To shuffle the positions, index the steps dimension with a tensor of
+    position numbers. The result has the positions in that order.
 
     ```python
     x = torch.tensor([[[1.0], [2.0], [3.0]]])    # one sequence of 3 positions
     x[:, torch.tensor([2, 0, 1])]                # tensor([[[3.], [1.], [2.]]])
     ```
 
-    So "dog bites man" and "man bites dog" give the same three rows, in other
-    places. A classifier that averages over the positions sees the same
-    summary for both, up to rounding.
+    So "dog bites man" and "man bites dog" give the same three output rows,
+    only in a different order. A classifier that averages the outputs over
+    the positions gets the same result for both sentences, up to rounding.
 
-    A layer that works on each position alone is blind to order too, like a
-    Linear, LayerNorm or an MLP. So a whole stack of them with attention is.
+    A layer that works on each position separately, like a Linear, LayerNorm
+    or an MLP, also ignores order. So a whole stack of such layers and
+    attention ignores order too.
 
-    The causal mask breaks this. A shuffled position sees other neighbours in
-    its past, and here the outputs then differ by up to 2.51. Haviv and
-    others found that language models with the mask and no positions at all
-    learn to work out positions from it. Most models still give every
-    position a signal of its own, which makes it easy, and position2 adds
-    one.
+    The causal mask changes this. After a shuffle, a position has different
+    rows before it, so it sees a different past. Here the outputs then differ
+    by up to 2.51. Haviv and others found that language models with the
+    causal mask and no position information at all learn to work out
+    positions from the mask. Most models still give every position a signal
+    of its own, which makes this easier. position2 adds such a signal.
 
-    `torch.allclose(a, b, atol=1e-5)` says whether two tensors match within
-    1e-5, as a plain True or False.
+    `torch.allclose(a, b, atol=1e-5)` returns a plain True or False, saying
+    whether two tensors match within 1e-5 everywhere.
     """,
 )
 
@@ -132,8 +137,11 @@ POSITION1_SOURCE = source_file(
     close = torch.allclose(torch.tensor([1.0]), torch.tensor([1.000001]), atol=1e-5)    # True
 
 
-    # TODO: Return x, of shape (batch, steps, features), with its positions in
-    #   the order that order, a tensor of position numbers, gives.
+    # TODO: x has shape (batch, steps, features), and order is a tensor of
+    #   position numbers. Return x with its positions rearranged, so that
+    #   position i of the result is position order[i] of x.
+    #   Example: for the x above, permute(x, torch.tensor([2, 0, 1])) returns
+    #   tensor([[[3.], [1.], [2.]]]).
     def permute(
         x: Tensor,
         order: Tensor,
@@ -141,8 +149,9 @@ POSITION1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return True when shuffling layer's input by order only shuffles its
-    #   output the same way, within 1e-5, and False otherwise.
+    # TODO: Return True if layer ignores order on x, and False otherwise. It
+    #   ignores order when running layer on x shuffled by order gives the same
+    #   result, within 1e-5, as shuffling layer(x) by order.
     def order_blind(
         layer: Callable[[Tensor], Tensor],
         x: Tensor,
@@ -151,8 +160,9 @@ POSITION1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return layer's output for x averaged over the positions, one row of
-    #   features per sequence, the way a classifier might sum up a sentence.
+    # TODO: Return layer(x) averaged over the positions, which gives one row of
+    #   features per sequence, of shape (batch, features). A classifier might
+    #   summarize a sentence this way.
     def pooled(
         layer: Callable[[Tensor], Tensor],
         x: Tensor,
@@ -242,7 +252,7 @@ def check_position1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="order_blind",
-        description="tells the layers that ignore order from the ones that don't",
+        description="tells apart the layers that ignore order and the ones that don't",
         inputs=(
             (Described(attention_layer(522, 4, causal=False), "an attention layer without the mask"), x, order),
             (Described(attention_layer(522, 4, causal=True), "an attention layer with the causal mask"), x, order),
@@ -274,8 +284,8 @@ POSITION1 = Exercise(
     solution=POSITION1_SOLUTION,
     hints={
         "permute": "Index the steps dimension, the second one, with order, as the lesson's example does.",
-        "order_blind": "Run layer on the shuffled input, and shuffle layer's output on x with permute. Then "
-        "compare the two with torch.allclose and atol=1e-5.",
+        "order_blind": "Run layer on the input shuffled with permute, and also shuffle layer(x) with permute. "
+        "Then compare the two results with torch.allclose and atol=1e-5.",
         "pooled": "Run layer on x, then take the mean over dim=1, the positions.",
     },
     introduces=(),
@@ -289,25 +299,29 @@ POSITION1 = Exercise(
 
 POSITION2_LESSON = prose(
     """
-    The fix is to give each position a row of numbers of its own and add it to
-    the input row there. Then the same input at two places looks different.
-    There are two classic ways to get those rows.
+    The fix is to give each position its own vector of numbers and add it to
+    the input row at that position. Then the same token at two different
+    positions gives two different rows. There are two classic ways to make
+    these position vectors.
 
-    Learned positions are an `nn.Embedding` with one row per position, trained
-    like any other weight. GPT-2 learns 1,024 of them. A longer sequence has
-    no row to look up, so the model can't read it.
+    **Learned positions** are an `nn.Embedding` with one row per position,
+    trained like any other weight. GPT-2 learns 1,024 of them. A position past
+    1,023 has no row to look up, so the model cannot read a longer sequence.
 
-    Sinusoidal positions, from the 2017 paper, are fixed waves. Column pair i
-    of the table holds a sine and a cosine at its own frequency.
+    **Sinusoidal positions**, from the 2017 paper by Vaswani and colleagues,
+    are fixed waves that are computed, not learned. The table has one row per
+    position. Columns 2i and 2i + 1 form pair i, which holds a sine and a
+    cosine at the pair's own frequency.
 
     ```text
     table[p, 2i]     = sin(p * 10000^(-2i / size))
     table[p, 2i + 1] = cos(p * 10000^(-2i / size))
     ```
 
-    The first pair turns fastest, one radian per position, and each pair
-    after it turns slower. Every position gets its own pattern, and any
-    position has one, however long the sequence.
+    For pair 0 the angle grows fastest, by one radian per position. For each
+    later pair the angle grows more slowly. So every position gets its own
+    pattern of values, and the formula gives a row for any position, however
+    long the sequence.
 
     ```python
     p = torch.arange(4)       # tensor([0, 1, 2, 3])
@@ -315,23 +329,25 @@ POSITION2_LESSON = prose(
     torch.arange(0, 8, 2)     # tensor([0, 2, 4, 6]), from 0 up to 8 in steps of 2
     ```
 
-    Their dot products depend only on how far apart two positions are. With a
-    size of 16, here is each row against the rows a few places further on.
+    The dot product of two rows of this table depends only on how far apart
+    the two positions are. Here the table has size 16, and each cell is the
+    dot product of a row with a row a few positions later.
 
-    | Row | Itself | 1 on | 2 on | 5 on | 20 on |
+    | Row | Itself | 1 later | 2 later | 5 later | 20 later |
     |---|---|---|---|---|---|
     | 0 | 8.000 | 7.485 | 6.368 | 6.137 | 5.776 |
     | 1000 | 8.000 | 7.485 | 6.368 | 6.137 | 5.776 |
 
-    Rows of a learned table start out random and have no such pattern until
-    training gives them one. RoPE in rope1 builds on this property of the
-    waves.
+    The rows of a learned table start out random, and they have no such
+    pattern unless training gives them one. RoPE, in rope1, builds on this
+    property of the waves.
 
-    Vaswani's team found the two kinds gave nearly identical results. They
-    picked the waves hoping the model would read longer text than it trained
-    on. Press and colleagues later found that a sinusoidal model reads only a
-    few dozen tokens past its training length before it gets worse. So with
-    either kind, train on the lengths the model will read.
+    Vaswani's team found that the two kinds gave nearly identical results.
+    They chose the waves in the hope that the model could read longer texts
+    than it was trained on. Press and colleagues later found that a
+    sinusoidal model handles only a few dozen tokens past its training length
+    before it gets worse. So with either kind, train on the lengths the model
+    will need to read.
     """,
 )
 
@@ -348,9 +364,11 @@ POSITION2_SOURCE = source_file(
     evens = torch.arange(0, 8, 2)    # tensor([0, 2, 4, 6])
 
 
-    # TODO: Return the steps by size table of sinusoidal positions from the
-    #   lesson, with the sines in the even columns and the cosines in the odd
-    #   ones. size is even.
+    # TODO: Return the table of sinusoidal positions from the lesson, of shape
+    #   (steps, size). Use the lesson's formula, with the sines in the even
+    #   columns and the cosines in the odd columns. size is even.
+    #   Example: sinusoidal_positions(2, 2) returns
+    #   tensor([[0.0000, 1.0000], [0.8415, 0.5403]]).
     def sinusoidal_positions(
         steps: int,
         size: int,
@@ -358,8 +376,9 @@ POSITION2_SOURCE = source_file(
         ...
 
 
-    # TODO: Finish forward. ids has shape (batch, steps). Return each id's row of
-    #   self.ids plus its position's row of self.positions.
+    # TODO: Finish forward. ids has shape (batch, steps). For each entry, return
+    #   the row of self.ids for its id plus the row of self.positions for its
+    #   position. The result has shape (batch, steps, size).
     class PositionalEmbedding(nn.Module):
         def __init__(
             self,
@@ -375,8 +394,11 @@ POSITION2_SOURCE = source_file(
             ...
 
 
-    # TODO: Return the dot product of each row of table with the row distance
-    #   further down, one number for each row that has one.
+    # TODO: table has shape (rows, size). For each row i that has a row
+    #   i + distance, return the dot product of row i with row i + distance.
+    #   The result has shape (rows - distance,).
+    #   Example: for sinusoidal_positions(30, 8) and distance 5, distance_scores
+    #   returns 25 numbers, each about 3.16.
     def distance_scores(
         table: Tensor,
         distance: int,
@@ -531,11 +553,13 @@ POSITION2 = Exercise(
     source=POSITION2_SOURCE,
     solution=POSITION2_SOLUTION,
     hints={
-        "sinusoidal_positions": "torch.arange(0, size, 2) / size gives 2i / size. Raise 10000 to minus that, multiply by "
-        "torch.arange(steps).unsqueeze(1), then fill table[:, 0::2] with the sines and table[:, 1::2] with the cosines.",
-        "PositionalEmbedding.forward": "torch.arange(ids.shape[1]) numbers the positions. Look up both tables and add.",
-        "distance_scores": "table[: len(table) - distance] and table[distance:] line each row up with the one "
-        "distance further down, distance 0 included. Multiply them and sum over dim=1.",
+        "sinusoidal_positions": "torch.arange(0, size, 2) / size gives 2i / size for every pair. Raise 10000 to minus "
+        "that to get the frequencies, and multiply them by torch.arange(steps).unsqueeze(1) to get the angles. Then "
+        "fill table[:, 0::2] with the sines and table[:, 1::2] with the cosines.",
+        "PositionalEmbedding.forward": "torch.arange(ids.shape[1]) gives the position numbers. Look up the ids in "
+        "self.ids and the position numbers in self.positions, and add the two results.",
+        "distance_scores": "table[: len(table) - distance] and table[distance:] pair each row with the row distance "
+        "further down. This also works for distance 0. Multiply the two slices and sum over dim=1.",
     },
     introduces=(),
     check=check_position2,
@@ -548,13 +572,15 @@ POSITION2 = Exercise(
 
 ROPE1_LESSON = prose(
     """
-    RoPE, rotary position embedding from Su and colleagues, adds nothing to
-    the input. It turns the queries and keys by their position instead.
+    **RoPE**, rotary position embedding, comes from Su and colleagues. It adds
+    nothing to the input. Instead it rotates each query and key by angles
+    that depend on its position.
 
-    The features go in pairs, (x0, x1), (x2, x3) and so on. At position m,
-    pair i turns by the angle `m * theta_i`, with `theta_i = 10000^(-2i / size)`,
-    position2's frequencies again. Turning a pair (a, b) by an angle phi gives
-    a new pair.
+    The features are grouped in pairs, (x0, x1), (x2, x3) and so on, and each
+    pair is treated as a point in the plane. At position m, pair i is rotated
+    by the angle `m * theta_i`, where `theta_i = 10000^(-2i / size)`. These
+    are the same frequencies as in position2. Rotating a pair (a, b) by an
+    angle phi gives a new pair (a', b').
 
     ```text
     a' = a cos(phi) - b sin(phi)
@@ -567,24 +593,27 @@ ROPE1_LESSON = prose(
     # (tensor(-4.3711e-08), tensor(1.)), so (1, 0) became (0, 1)
     ```
 
-    In an index, `...` stands for every dimension before the ones named, so
-    `x[..., 0]` is the first feature of every row, whatever x's shape. A shape
-    written `(..., size)` means the same, any dimensions, then size.
+    In an index, `...` stands for all the dimensions before the ones you
+    name. So `x[..., 0]` is the first feature of every row, whatever the shape
+    of x. A shape written `(..., size)` means any number of dimensions
+    followed by a last dimension of length `size`.
 
-    `x[..., 0::2]` takes every other feature from the first, the a of each
-    pair, and `x[..., 1::2]` the b. Stacking the new a and b on a last
-    dimension and flattening the last two zips them back in order.
+    `x[..., 0::2]` takes every other feature, starting from the first, which
+    gives the a of each pair. `x[..., 1::2]` gives the b of each pair. To put
+    the new values back in their original order, stack them on a new last
+    dimension and flatten the last two dimensions.
 
     ```python
     a, b = torch.tensor([1.0, 3.0]), torch.tensor([2.0, 4.0])
     torch.stack([a, b], dim=-1).flatten(-2)    # tensor([1., 2., 3., 4.])
     ```
 
-    Only queries and keys turn. Values carry what a position says, and that
-    shouldn't change with where it sits. RoPE has no weights to learn either.
-    Llama, Mistral and most models since use it. Hugging Face's Llama code
-    pairs feature i with feature i + size / 2 instead of its neighbour, the
-    same idea in another order.
+    Only the queries and keys are rotated. The values carry the content of a
+    position, and that content should not depend on where the position is.
+    RoPE also has no weights to learn. Llama, Mistral and most models since
+    use it. Hugging Face's Llama code pairs feature i with feature
+    i + size / 2 instead of with its neighbour. That is the same idea with
+    the features in another order.
     """,
 )
 
@@ -600,8 +629,11 @@ ROPE1_SOURCE = source_file(
     zipped = torch.stack([torch.tensor([1.0, 3.0]), torch.tensor([2.0, 4.0])], dim=-1).flatten(-2)    # tensor([1., 2., 3., 4.])
 
 
-    # TODO: Return the angles of RoPE, of shape (steps, size // 2), where row m
-    #   holds m * theta_i for each pair i.
+    # TODO: Return the angles of RoPE, of shape (steps, size // 2). Entry [m, i]
+    #   is m * theta_i, the angle of pair i at position m, where
+    #   theta_i = base ** (-2i / size).
+    #   Example: rope_angles(3, 4) returns
+    #   tensor([[0.0000, 0.0000], [1.0000, 0.0100], [2.0000, 0.0200]]).
     def rope_angles(
         steps: int,
         size: int,
@@ -610,8 +642,12 @@ ROPE1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return x, of shape (..., size), with each pair of neighbouring
-    #   features turned by its angle in angles, of shape (..., size // 2).
+    # TODO: x has shape (..., size) and angles has shape (..., size // 2).
+    #   Return x with each pair of neighbouring features, x[..., 2i] and
+    #   x[..., 2i + 1], rotated by angles[..., i] with the lesson's formula.
+    #   Example: a quarter turn of the pair (1, 0) gives about (0, 1), so
+    #   rotate_pairs(torch.tensor([1.0, 0.0]), torch.tensor([torch.pi / 2]))
+    #   returns about tensor([0., 1.]).
     def rotate_pairs(
         x: Tensor,
         angles: Tensor,
@@ -619,8 +655,8 @@ ROPE1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return x, of shape (..., steps, size), with RoPE applied, each
-    #   position turned by its own row of rope_angles.
+    # TODO: x has shape (..., steps, size). Return x with RoPE applied, so the
+    #   features at position m are rotated by row m of rope_angles.
     def rope(
         x: Tensor,
         base: float = 10000.0,
@@ -711,7 +747,7 @@ def check_rope1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="rotate_pairs",
-        description="turns each pair of neighbouring features by its angle",
+        description="rotates each pair of neighbouring features by its angle",
         inputs=(
             (torch.tensor([1.0, 0.0, 0.0, 2.0]), torch.tensor([math.pi / 2, math.pi])),
             (small_tensor(531, 3, 6), small_tensor(532, 3, 3) / 2),
@@ -722,7 +758,7 @@ def check_rope1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="rope",
-        description="turns each position by its own angles",
+        description="rotates each position by its own angles",
         inputs=(
             (small_tensor(533, 5, 4),),
             (small_tensor(534, 2, 6, 8), 100.0),
@@ -735,17 +771,17 @@ def check_rope1(checker: Checker) -> None:
 ROPE1 = Exercise(
     name="rope1",
     chapter=POSITIONS,
-    title="RoPE turns pairs of features",
+    title="RoPE rotates pairs of features",
     lesson=ROPE1_LESSON,
     source=ROPE1_SOURCE,
     solution=ROPE1_SOLUTION,
     hints={
-        "rope_angles": "base ** (-torch.arange(0, size, 2) / size) gives one frequency per pair. Multiply by "
-        "torch.arange(steps).unsqueeze(1), so each row is one position.",
-        "rotate_pairs": "a is x[..., 0::2] and b is x[..., 1::2]. Compute the new a and b from the lesson's formula "
-        "with torch.cos and torch.sin of angles, then stack on dim=-1 and flatten(-2).",
-        "rope": "x.shape[-2] is the number of positions and x.shape[-1] the size. Pass rope_angles of them to "
-        "rotate_pairs.",
+        "rope_angles": "base ** (-torch.arange(0, size, 2) / size) gives one frequency per pair. Multiply it by "
+        "torch.arange(steps).unsqueeze(1), so that each row belongs to one position.",
+        "rotate_pairs": "a is x[..., 0::2] and b is x[..., 1::2]. Compute the new a and b with the lesson's formula, "
+        "using torch.cos and torch.sin of angles. Then stack them on dim=-1 and call flatten(-2).",
+        "rope": "x.shape[-2] is the number of positions and x.shape[-1] is the size. Compute rope_angles from them "
+        "and pass the result to rotate_pairs together with x.",
     },
     introduces=(),
     check=check_rope1,
@@ -758,30 +794,32 @@ ROPE1 = Exercise(
 
 ROPE2_LESSON = prose(
     """
-    A score compares a query and a key with a dot product. With RoPE the query
-    at position m has turned by m times each angle, and the key at n by n
-    times. Two turned vectors compare the way the originals would after one
-    turn by the difference. So the score depends on n - m, how far apart they
-    are, and never on where they sit.
+    An attention score is the dot product of a query and a key. With RoPE,
+    pair i of the query at position m is rotated by `m * theta_i`, and pair i
+    of the key at position n by `n * theta_i`. Rotating both vectors changes
+    their dot product the same way as rotating only the key, by the
+    difference `(n - m) * theta_i`. So the score depends on `n - m`, how far
+    apart the two positions are, and never on where they are in the sequence.
 
-    Here is one query and one key of size 8, three positions apart, at four
-    places in a sequence. The second row adds position2's sinusoidal rows to
-    them instead, as GPT-2 adds its learned ones.
+    The table below uses one query and one key of size 8, three positions
+    apart, at four places in a sequence. The first row applies RoPE. The
+    second row instead adds the sinusoidal rows of position2 to the query and
+    the key, the way GPT-2 adds its learned rows.
 
     | Positions | 0 and 3 | 10 and 13 | 100 and 103 | 1000 and 1003 |
     |---|---|---|---|---|
     | RoPE | -0.334 | -0.334 | -0.334 | -0.334 |
     | Added positions | 1.342 | 1.168 | 0.589 | 1.175 |
 
-    With added positions the score mixes the content with where each one
-    sits, so the same pair of words scores differently at every place. With
-    RoPE a pattern learned at one place, like "look one back", means the same
-    at position 5 and at position 500.
+    With added positions, the score mixes the content with the positions
+    themselves, so the same pair of words gets a different score at every
+    place. With RoPE, a pattern learned at one place, like "look at the
+    previous token", works the same at position 5 and at position 500.
 
-    A trained model shows it. One attention layer learned to give the token
-    one place back, on sequences at positions 0 to 31. Then it read new
-    sequences there and at positions 500 to 531. Here is the share right, from
-    three seeds.
+    A trained model shows this. One attention layer was trained to output the
+    previous token, on sequences at positions 0 to 31. Then it was tested on
+    new sequences at positions 0 to 31 and at positions 500 to 531. Here is
+    the fraction it got right, over three seeds.
 
     | Positions | At 0 to 31 | At 500 to 531 |
     |---|---|---|
@@ -789,14 +827,16 @@ ROPE2_LESSON = prose(
     | sinusoidal, added | 100% | 40.1% to 63.6% |
     | RoPE | 100% | 100% |
 
-    The learned rows past 31 never trained, and the added waves take values
-    there the layer never saw. RoPE's scores depend only on the distance, so
-    the layer reads every place the same.
+    The learned rows for positions past 31 were never trained. The added
+    waves take values at those positions that the layer never saw. RoPE's
+    scores depend only on the distance, so the layer behaves the same at
+    every place.
 
-    The angles grow with the position, so a model trained on 2,000 positions
-    meets new angles past that. Chen and colleagues' position interpolation
-    scales every position down to fit the trained range. With under 1,000
-    steps of fine tuning it took LLaMA from 2,048 to 32,768 positions.
+    The angles still grow with the position, so a model trained on 2,000
+    positions meets angles it never saw beyond that length. Position
+    interpolation, by Chen and colleagues, scales every position down so it
+    fits in the trained range. With under 1,000 steps of fine tuning, it
+    extended LLaMA from 2,048 to 32,768 positions.
     """,
 )
 
@@ -815,8 +855,9 @@ ROPE2_SOURCE = source_file(
 ''' + INDENTED_ROPE_FUNCTIONS + '''
 
 
-    # TODO: Return the score of query q at position m against key k at position
-    #   n, the dot product after RoPE turns each by its position.
+    # TODO: q and k are vectors of the same even size. Rotate q by the RoPE
+    #   angles of position m, and k by the RoPE angles of position n. Return
+    #   the dot product of the two rotated vectors.
     def rope_score(
         q: Tensor,
         k: Tensor,
@@ -826,8 +867,9 @@ ROPE2_SOURCE = source_file(
         ...
 
 
-    # TODO: Return rope_score for q at each position m in starts against k at
-    #   m + distance, as one tensor.
+    # TODO: For each position m in starts, compute rope_score with q at
+    #   position m and k at position m + distance. Return the scores stacked
+    #   into one tensor of shape (len(starts),).
     def rope_scores_at_distance(
         q: Tensor,
         k: Tensor,
@@ -837,8 +879,9 @@ ROPE2_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the score of q plus table's row m against k plus table's row
-    #   m + distance, for each m in starts, as one tensor.
+    # TODO: For each m in starts, add row m of table to q and row m + distance
+    #   of table to k, then take the dot product of the two sums. Return the
+    #   scores stacked into one tensor of shape (len(starts),).
     def added_scores_at_distance(
         q: Tensor,
         k: Tensor,
@@ -1028,7 +1071,7 @@ def check_rope2(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="rope_score",
-        description="compares the turned query with the turned key",
+        description="takes the dot product of the rotated query and the rotated key",
         inputs=(
             (q, k, 2, 5),
             (small_tensor(537, 4), small_tensor(538, 4), 7, 1),
@@ -1068,12 +1111,12 @@ ROPE2 = Exercise(
     source=ROPE2_SOURCE,
     solution=ROPE2_SOLUTION,
     hints={
-        "rope_score": "rope_angles(max(m, n) + 1, len(q)) has a row for both positions. Turn q by row m and k by "
+        "rope_score": "rope_angles(max(m, n) + 1, len(q)) has a row for both positions. Rotate q by row m and k by "
         "row n with rotate_pairs, then take their dot product with @.",
-        "rope_scores_at_distance": "Call rope_score with m and m + distance for each m in starts, and torch.stack "
-        "the scores.",
-        "added_scores_at_distance": "Add table[m] to q and table[m + distance] to k, take the dot product for each m, "
-        "and torch.stack the scores.",
+        "rope_scores_at_distance": "Call rope_score with m and m + distance for each m in starts, and join the "
+        "scores with torch.stack.",
+        "added_scores_at_distance": "For each m, add table[m] to q and table[m + distance] to k, and take the dot "
+        "product. Join the scores with torch.stack.",
     },
     introduces=(),
     check=check_rope2,

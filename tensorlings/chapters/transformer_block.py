@@ -33,11 +33,13 @@ TRANSFORMER_BLOCK = Chapter(
         """
         # The transformer block
 
-        A transformer is one block repeated, attention to mix across positions
-        and an MLP to work within each, each wrapped in a norm and a residual.
-        This chapter builds the block, then GPT-2's exact version of it,
-        measures what each part buys by taking it away, and shows why stacking
-        blocks lets two attention layers do what one can't.
+        A transformer is one block repeated many times. Each block has an
+        attention layer, which mixes information across positions, and an
+        MLP, which works on each position separately. Each of the two has a
+        norm before it and a residual connection around it. This chapter
+        builds the block and then GPT-2's exact version of it. It measures
+        what each part contributes by taking it out. Last, it shows how
+        stacking blocks lets two attention layers do what one cannot.
 
         ## Further reading
 
@@ -103,22 +105,27 @@ class SelfAttention(nn.Module):
 BLOCK1_LESSON = prose(
     """
     A **transformer** is one block repeated many times. Each block has two
-    parts, each one residual4's pre norm block.
+    steps, and each step has the pre norm form from residual4,
+    `x = x + f(norm(x))`.
 
     ```text
     x = x + attention(norm1(x))
     x = x + mlp(norm2(x))
     ```
 
-    Attention mixes across positions, each one gathering from its past. The
-    MLP works within each position alone, with the same weights for all. So
-    a transformer alternates the two, across positions then within each,
-    block after block.
+    Attention mixes information across positions, so each position gathers
+    information from the positions before it. The MLP works on each position
+    separately, with the same weights at every position. So a transformer
+    alternates between mixing across positions and working within each
+    position, block after block.
 
-    To see which positions a layer reaches, nudge one input position and see
-    which outputs move. Nudge one feature, not all of them. LayerNorm takes the
-    mean away, so adding the same number to every feature changes nothing it
-    passes on.
+    To find out which output positions an input position can affect, change
+    that input position a little and see which outputs change. Change only
+    one feature, not all of them. LayerNorm subtracts the mean of the
+    features, so adding the same number to every feature would change nothing
+    after the norm. In the example below, position 1 changes, and
+    `.amax(dim=-1)` takes the largest change over the features of each
+    position.
 
     ```python
     x = torch.ones(1, 3, 2)
@@ -127,7 +134,7 @@ BLOCK1_LESSON = prose(
     (nudged - x).abs().amax(dim=-1)[0] > 1e-6    # tensor([False,  True, False])
     ```
 
-    Here is which outputs change when position 2 of 5 changes.
+    Here are the outputs that change when input position 2 of 5 changes.
 
     | Part | Outputs that change |
     |---|---|
@@ -135,11 +142,12 @@ BLOCK1_LESSON = prose(
     | MLP | 2 |
     | the whole block | 2, 3 and 4 |
 
-    Do it for every position and stack the rows, and you get a map of what
-    reaches what. Row p marks the outputs that input p reaches. For causal
-    attention it holds ones on and above the diagonal, for the MLP the
-    diagonal alone. One block reaches what its attention reaches, and a stack
-    of blocks can't reach any further back than that, only combine more.
+    Do this for every input position and stack the rows, and you get a map of
+    which inputs affect which outputs. Row p marks the outputs that input p
+    affects. For causal attention the map is True on and above the diagonal.
+    For the MLP it is True only on the diagonal. One block affects the same
+    outputs as its attention. A stack of blocks reaches no further than one
+    block does, but it can combine what it gathers in more ways.
     """,
 )
 
@@ -163,8 +171,9 @@ BLOCK1_SOURCE = source_file(
 ''' + INDENTED_SELF_ATTENTION + '''
 
 
-    # TODO: Finish forward with two pre norm steps, attention with norm1 first,
-    #   then mlp with norm2.
+    # TODO: Finish forward with the two pre norm steps shown in the lesson. The
+    #   first step uses self.norm1 and self.attention, and the second uses
+    #   self.norm2 and self.mlp.
     class Block(nn.Module):
         def __init__(
             self,
@@ -185,9 +194,11 @@ BLOCK1_SOURCE = source_file(
             ...
 
 
-    # TODO: Return which positions of layer's output change, as one True or
-    #   False each, when feature 0 of x at position gets 1 added. x has shape
-    #   (1, steps, size), and a change counts when it is above 1e-6.
+    # TODO: x has shape (1, steps, size). Add 1 to feature 0 of x at position,
+    #   run layer on both the original and the changed x, and return which
+    #   output positions changed. The result has shape (steps,), with True
+    #   where the largest change over the features is above 1e-6.
+    #   Example: for an MLP, only the changed position is True.
     def positions_reached(
         layer: Callable[[Tensor], Tensor],
         x: Tensor,
@@ -196,8 +207,8 @@ BLOCK1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the steps by steps map whose row p is positions_reached for
-    #   position p.
+    # TODO: Return the map of shape (steps, steps) whose row p is
+    #   positions_reached for position p.
     def reach_map(
         layer: Callable[[Tensor], Tensor],
         x: Tensor,
@@ -387,7 +398,7 @@ def check_block1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="positions_reached",
-        description="finds the outputs a change at one position reaches",
+        description="finds the outputs that change when one input position changes",
         inputs=(
             (Described(frozen(attention), "an attention layer"), one, 2),
             (Described(frozen(block.mlp), "an MLP"), one, 2),
@@ -400,7 +411,7 @@ def check_block1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="reach_map",
-        description="maps which outputs each input position reaches",
+        description="maps which outputs each input position affects",
         inputs=(
             (Described(frozen(attention), "an attention layer"), one),
             (Described(frozen(block.mlp), "an MLP"), one),
@@ -421,9 +432,10 @@ BLOCK1 = Exercise(
     hints={
         "Block.forward": "Add self.attention of self.norm1 of x to x. Then add self.mlp of self.norm2 of the "
         "result to the result.",
-        "positions_reached": "Clone x and add 1.0 to nudged[:, position, 0]. Compare layer's outputs on both as the "
-        "lesson's example compares the inputs.",
-        "reach_map": "Call positions_reached for each position in range(x.shape[1]) and torch.stack the rows.",
+        "positions_reached": "Clone x and add 1.0 to nudged[:, position, 0]. Then compare layer's outputs on nudged "
+        "and on x the same way the lesson's example compares the two inputs.",
+        "reach_map": "Call positions_reached for each position in range(x.shape[1]) and join the rows with "
+        "torch.stack.",
     },
     introduces=("transformer",),
     check=check_block1,
@@ -436,21 +448,24 @@ BLOCK1 = Exercise(
 
 BLOCK2_LESSON = prose(
     """
-    GPT-2's block is block1's, with fixed choices. The norms are LayerNorm.
-    The MLP is four times as wide as the model, a Linear up to `4 * size`, a
-    GELU, and a Linear back down. GPT-2 uses the GELU paper's cheaper tanh
-    approximation, `nn.GELU(approximate="tanh")`. It differs from the exact
-    GELU by at most 0.0005.
+    GPT-2's block is the block from block1, with some fixed choices. The
+    norms are LayerNorm. The MLP's hidden layer is four times as wide as the
+    model. It is a Linear from size up to `4 * size`, then a GELU, then a
+    Linear back down to size. GPT-2 uses a cheaper approximation of GELU
+    based on tanh, from the GELU paper. PyTorch provides it as
+    `nn.GELU(approximate="tanh")`, and it differs from the exact GELU by at
+    most 0.0005.
 
-    The names follow GPT-2's own trained weights, `ln_1`, `attn`, `ln_2` and
-    `mlp`, then `c_fc` and `c_proj` inside the MLP. With the same names its
-    weights load in, once the Linear ones are transposed, since GPT-2 stored
-    them the other way round. nanoGPT does exactly that.
+    The layer names match the names in GPT-2's released weights. They are
+    `ln_1`, `attn`, `ln_2` and `mlp`, with `c_fc` and `c_proj` inside the
+    MLP. With the same names, GPT-2's weights can be loaded into this block.
+    The Linear weights have to be transposed first, because GPT-2 stored them
+    the other way round. nanoGPT loads them exactly this way.
 
-    Count the weights from the shapes. Attention's `c_attn` maps size to
-    `3 * size` and `c_proj` maps size to size, both with biases. The MLP's two
-    Linears map size to `4 * size` and back. Each LayerNorm holds a scale and
-    a shift per feature.
+    You can count the weights from the shapes of the layers. In attention,
+    `c_attn` maps size to `3 * size` and `c_proj` maps size to size, both
+    with biases. The MLP's two Linears map size to `4 * size` and back. Each
+    LayerNorm holds a scale and a shift for every feature.
 
     | Part | Weights |
     |---|---|
@@ -458,12 +473,13 @@ BLOCK2_LESSON = prose(
     | MLP | `8 * size ** 2 + 5 * size` |
     | two LayerNorms | `4 * size` |
 
-    So two thirds of a block's weights sit in its MLP. At GPT-2 small's size of
-    768, a block holds 7,087,872. Twelve blocks, a table of 50,257 token rows,
-    a table of 1,024 position rows and a final LayerNorm make 124,439,808. The
-    output head reuses the token table, so it adds nothing. The GPT-2 paper
-    listed this model as 117M. Counting the released weights gives the number
-    above, which is why code like nanoGPT calls it GPT-2 124M.
+    So about two thirds of a block's weights are in its MLP. GPT-2 small has
+    size 768, so each of its blocks holds 7,087,872 weights. The whole model
+    has twelve blocks, a token table with 50,257 rows, a position table with
+    1,024 rows and a final LayerNorm. Together they hold 124,439,808 weights.
+    The output head reuses the token table, so it adds no weights. The GPT-2
+    paper listed this model as 117M. Counting the released weights gives the
+    number above, which is why code like nanoGPT calls it GPT-2 124M.
     """,
 )
 
@@ -483,8 +499,9 @@ BLOCK2_SOURCE = source_file(
 ''' + INDENTED_SELF_ATTENTION + '''
 
 
-    # TODO: Finish GPT2MLP. c_fc is a Linear from size to 4 * size, gelu is the
-    #   tanh GELU and c_proj is a Linear back to size. forward runs all three.
+    # TODO: Finish GPT2MLP. Set c_fc to a Linear from size to 4 * size, gelu to
+    #   the tanh approximation of GELU, and c_proj to a Linear from 4 * size
+    #   back to size. forward runs x through all three, in that order.
     class GPT2MLP(nn.Module):
         def __init__(self, size: int) -> None:
             super().__init__()
@@ -496,7 +513,8 @@ BLOCK2_SOURCE = source_file(
             ...
 
 
-    # TODO: Finish forward, block1's pre norm block with GPT-2's names.
+    # TODO: Finish forward. It is the pre norm block from block1 with GPT-2's
+    #   names, ln_1 and attn in the first step, then ln_2 and mlp in the second.
     class GPT2Block(nn.Module):
         def __init__(
             self,
@@ -513,15 +531,19 @@ BLOCK2_SOURCE = source_file(
             ...
 
 
-    # TODO: Return how many weights a GPT2Block of this size holds, worked out
-    #   from the shapes of its layers, without building one.
+    # TODO: Return the number of weights, biases included, in a GPT2Block of
+    #   this size. Work it out from the shapes of its layers, without building
+    #   a block.
+    #   Example: block_parameters(768) returns 7087872.
     def block_parameters(size: int) -> int:
         ...
 
 
-    # TODO: Return how many weights a GPT-2 model holds, a table of vocabulary
-    #   token rows, a table of max_steps position rows, layers blocks and a
-    #   final LayerNorm. Its head reuses the token table.
+    # TODO: Return the number of weights in a GPT-2 model. It has a token table
+    #   with vocabulary rows, a position table with max_steps rows, layers
+    #   blocks and a final LayerNorm. Its output head reuses the token table,
+    #   so the head adds no weights.
+    #   Example: gpt2_parameters(50257, 1024, 768, 12) returns 124439808.
     def gpt2_parameters(
         vocabulary: int,
         max_steps: int,
@@ -749,10 +771,11 @@ BLOCK2 = Exercise(
     solution=BLOCK2_SOLUTION,
     hints={
         "GPT2MLP.forward": "Run self.c_fc, then self.gelu, then self.c_proj.",
-        "GPT2Block.forward": "As block1's Block, with self.ln_1 and self.attn, then self.ln_2 and self.mlp.",
+        "GPT2Block.forward": "Write it like the Block of block1, with self.ln_1 and self.attn in the first step, "
+        "then self.ln_2 and self.mlp.",
         "block_parameters": "Add up the three rows of the lesson's table.",
-        "gpt2_parameters": "Both tables have size columns. Add layers blocks of block_parameters(size), and the final "
-        "LayerNorm's scale and shift.",
+        "gpt2_parameters": "Both tables have size columns. Add layers times block_parameters(size), and the scale "
+        "and shift of the final LayerNorm.",
     },
     introduces=(),
     check=check_block2,
@@ -965,14 +988,16 @@ def train_text(
 
 BLOCK3_LESSON = prose(
     """
-    A block has four kinds of part, attention, the MLP, the residuals and the
-    norms. Taking each one out in turn shows what it buys. The test is real
-    text, tiny Shakespeare one character at a time, which the GPT project
-    reads later.
+    A block has four kinds of part, which are attention, the MLP, the
+    residuals and the norms. Taking each one out in turn shows what it
+    contributes. The test uses real text, the tiny Shakespeare dataset read
+    one character at a time. The GPT project later trains on the same text.
 
-    Six blocks of size 64 with 4 heads read 64 characters and guess each next
-    one. Each model trained 1,000 steps of AdamW at a peak rate of 0.01,
-    warmed up then cosine down, clipped at 1. Here is the validation loss from
+    The model has six blocks of size 64 with 4 heads. It reads 64 characters
+    and predicts the next character at each position. Each version trained
+    for 1,000 steps of AdamW with a peak learning rate of 0.01. The rate
+    rose from near 0 over a warmup of 100 steps, then followed a cosine curve
+    down. The gradients were clipped at 1. Here is the validation loss from
     two seeds, where lower is better.
 
     | Taken out | Validation loss |
@@ -981,20 +1006,25 @@ BLOCK3_LESSON = prose(
     | attention | 2.490 |
     | the MLP | 1.908 to 1.930 |
     | the residuals | 3.353 to 3.355 |
-    | the norms | blew up to nan |
+    | the norms | diverged, the loss became nan |
 
     Attention is the only part that moves information between positions.
-    Without it each position sees only its own character, and the loss sits at
-    2.49. names1's counting bigram model gets 2.48 on this text. The MLP works
-    within each position, and taking it out costs about 0.18.
+    Without it, each position sees only its own character, and the loss stays
+    at 2.49. The counting bigram model of names1 gets 2.48 on this text. The
+    MLP works within each position, and taking it out makes the loss worse
+    by about 0.18.
 
-    Without residuals, six blocks never got past 3.35, what counting
-    characters alone gives. Dong and colleagues showed why. Stacked attention
-    without skips collapses its output toward one row repeated. The skips stop
-    that. MLPs only slow it, which is why six blocks with MLPs still failed.
+    Without residuals, the six blocks never got below 3.35. That is the loss
+    you get from counting how often each character appears. Dong and
+    colleagues showed why. Without residuals, stacked attention layers push
+    their output toward the same row repeated at every position. The
+    residuals prevent that. MLPs only slow it down, which is why six blocks
+    with MLPs still failed.
 
-    Without norms the stack blew up at 0.01. A fair test gives each stack the
-    rates that suit it, so here is each at its best of the rates tried.
+    Without norms, training diverged at a learning rate of 0.01, which means
+    the numbers grew out of control until the loss became nan. A fair test
+    gives each stack the learning rates that suit it. So here is each stack
+    at the best of the rates tried.
 
     | Stack | Rates tried | Best |
     |---|---|---|
@@ -1003,19 +1033,23 @@ BLOCK3_LESSON = prose(
     | 12 blocks without norms | 0.001 and 0.003 | 1.948 to 1.957 at 0.001 |
     | 12 blocks with norms | 0.02 | 1.709 to 1.733 |
 
-    The norms buy the rate. At 6 blocks the stack without norms trained only
-    up to 0.007, and still came out behind on both seeds. At 12 blocks it blew
-    up at 0.003 and trained only at 0.001. The normed stack trained at 0.02
-    and matched its 6 block loss. Xiong and colleagues found that a norm
-    before each part, as here, also lets a transformer train without warmup.
+    The norms allow a higher learning rate. With 6 blocks, the stack without
+    norms trained only at rates up to 0.007, and it still did worse on both
+    seeds. With 12 blocks, it diverged at 0.003 and trained only at 0.001.
+    The stack with norms trained at 0.02 and matched its 6 block loss. Xiong
+    and colleagues found that a norm before each part, as here, also lets a
+    transformer train without warmup.
 
-    So every part earns its place. Attention and the MLP do the work, and the
+    So every part is needed. Attention and the MLP do the computing, and the
     residuals and norms keep a deep stack trainable.
 
-    The check trains your block on a smaller task. At each step the target is
-    the number there times the one before it, which needs attention.
+    The check trains your block on a smaller task. The input is a sequence of
+    numbers, and the target at each step is the number there times the number
+    before it. This needs attention, because each position must read the
+    position before it.
 
-    A dict of flags reads well as a list of what is on.
+    Here is how to turn a dict of flags into a list of the names that are
+    switched on.
 
     ```python
     flags = {"attention": True, "mlp": False}
@@ -1040,11 +1074,12 @@ BLOCK3_SOURCE = source_file(
 ''' + INDENTED_SELF_ATTENTION + '''
 
 
-    # TODO: Finish branch and forward, a block whose parts switch off.
-    #   branch returns layer run on norm of x, or on x itself when use_norm is
-    #   False, plus x when use_residual is True. forward runs the attention
-    #   branch with norm1 when use_attention is True, then the MLP branch with
-    #   norm2 when use_mlp is True.
+    # TODO: Finish branch and forward, for a block whose parts can be switched
+    #   off. branch runs layer on norm(x), or on x itself when self.use_norm is
+    #   False. It adds x to that result when self.use_residual is True, and
+    #   returns it. forward runs the attention branch with norm1 when
+    #   self.use_attention is True. Then it runs the MLP branch with norm2 when
+    #   self.use_mlp is True, and returns x.
     class ToyBlock(nn.Module):
         def __init__(
             self,
@@ -1275,7 +1310,7 @@ def check_block3(checker: Checker) -> None:
     checker.test_method(
         class_name="ToyBlock",
         method="forward",
-        description="leaves out each part its flags switch off",
+        description="leaves out each part that its flags switch off",
         run=check_toy_block,
     )
     checker.test_method(
@@ -1294,8 +1329,8 @@ BLOCK3 = Exercise(
     source=BLOCK3_SOURCE,
     solution=BLOCK3_SOLUTION,
     hints={
-        "ToyBlock.forward": "In branch, pick layer(norm(x)) or layer(x) by self.use_norm, then add x only when "
-        "self.use_residual. In forward, call branch once for each part that is switched on.",
+        "ToyBlock.forward": "In branch, choose layer(norm(x)) or layer(x) depending on self.use_norm, then add x "
+        "only when self.use_residual is True. In forward, call branch once for each part that is switched on.",
     },
     introduces=(),
     check=check_block3,
@@ -1374,43 +1409,49 @@ def train_attention_only(
 
 INDUCTION1_LESSON = prose(
     """
-    Here is a task one attention layer can't do. A sequence of random tokens
-    ends with a token that showed up once before. The answer is the token that
-    came right after that earlier one. In `A B C D B` the last B showed up
-    at position 1, and C followed it, so the answer is C. Text is full of this.
-    A name seen once is likely to be followed again by what followed it then.
+    Here is a task that one attention layer cannot do. A sequence of random
+    tokens ends with a token that appeared once before. The answer is the
+    token that came right after that earlier appearance. In `A B C D B`, the
+    last token B also appears at position 1, and C follows it there, so the
+    answer is C. Real text is full of this pattern. After a name appears once, the
+    word that followed it is likely to follow it again.
 
     One layer can find the earlier B, with a query that matches keys of the
-    same token. But the answer sits one place later, at C. C's key knows only
-    C and its own position, nothing about what came before it. So no score in
-    one layer can single C out.
+    same token. But the answer is one position later, at C. The key at C is
+    computed from C and its position only, and it holds nothing about the
+    token before C. So no score in one layer can pick out C.
 
-    Two layers can. The first copies each position's previous token into it,
-    a shift by one, so C's position also holds "after B". The second layer's
-    query asks for "after B", matches C, and copies C. The first layer is a
-    previous token head and the second an induction head. Olsson and
-    colleagues found this pair working together in trained models.
+    Two layers can do it. The first layer copies each position's previous
+    token into that position, which shifts the tokens by one. Now the
+    position of C also holds B, the token before it. In the second layer, the
+    last B's query looks for a position whose previous token is B. It matches
+    the position of C and copies C. The first layer is called a **previous
+    token head** and the second an **induction head**. Olsson and colleagues
+    found this pair working together in trained models.
 
     You build both layers by hand, with one hot tokens and no training. The
-    shift is attention whose scores are high right below the diagonal, where
-    each position looks one place back. `torch.diag` with `diagonal=-1` puts
-    a vector there.
+    shift is an attention whose scores are high right below the diagonal, so
+    each position looks one position back. `torch.diag` with `diagonal=-1`
+    builds a matrix with a given vector right below the diagonal and zeros
+    everywhere else.
 
     ```python
     torch.diag(torch.full((2,), 5.0), diagonal=-1)    # tensor([[0., 0., 0.], [5., 0., 0.], [0., 5., 0.]])
     ```
 
-    Trained on the task instead for 3,000 steps, with 32 tokens in sequences
-    of 24, layers of attention alone got this far on new sequences.
+    Models made only of attention layers were also trained on this task, for
+    3,000 steps, with 32 possible tokens and sequences of 24. Here is how
+    often they gave the right answer on new sequences.
 
     | Layers | Right answers |
     |---|---|
     | 1 | 12.2% |
     | 2 | 99.9% |
 
-    Guessing gets 3.1%. One layer gets a little above that from shortcuts,
-    like preferring tokens the sequence holds. It can't compose a shift with a
-    match, and stacking is what lets a model do it.
+    Random guessing gets 3.1%. One layer does a little better than that by
+    using shortcuts, like preferring tokens that appear in the sequence. But
+    one layer cannot combine a shift with a match. Stacking layers is what
+    lets a model do that.
     """,
 )
 
@@ -1434,9 +1475,11 @@ INDUCTION1_SOURCE = source_file(
         return torch.softmax(scores.masked_fill(future, float("-inf")), dim=-1)
 
 
-    # TODO: Return the first layer's output, attention that copies each
-    #   position's previous row of x into it. Its scores are sharpness right
-    #   below the diagonal and 0 elsewhere. x has shape (batch, steps, size).
+    # TODO: Return the first layer's output, an attention that copies each
+    #   position's previous row of x into that position. x has shape
+    #   (batch, steps, size). The scores are a (steps, steps) matrix that is
+    #   sharpness right below the diagonal and 0 elsewhere. Use masked_weights
+    #   to turn the scores into weights.
     def previous_rows(
         x: Tensor,
         sharpness: float,
@@ -1444,9 +1487,9 @@ INDUCTION1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the second layer's scores, of shape (batch, steps, steps),
-    #   sharpness times the dot product of each row of x, the query, with each
-    #   row of previous, the key.
+    # TODO: Return the second layer's scores, of shape (batch, steps, steps).
+    #   Entry [b, i, j] is sharpness times the dot product of row i of x, the
+    #   query, with row j of previous, the key.
     def induction_scores(
         x: Tensor,
         previous: Tensor,
@@ -1455,8 +1498,10 @@ INDUCTION1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the second layer's output, the rows of x weighted by
-    #   masked_weights of induction_scores, with previous from previous_rows.
+    # TODO: Return the second layer's output. Compute previous with
+    #   previous_rows, then the scores with induction_scores. Turn the scores
+    #   into weights with masked_weights, and use them to take a weighted sum
+    #   of the rows of x.
     def induction_head(
         x: Tensor,
         sharpness: float,
@@ -1464,10 +1509,10 @@ INDUCTION1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return one answer id for each sequence of tokens, which has shape
-    #   (batch, steps), so a result of shape (batch,). Turn the tokens into one
-    #   hot rows of size vocabulary, run induction_head, and read its last
-    #   position.
+    # TODO: tokens has shape (batch, steps). Return the answer id for each
+    #   sequence, as a tensor of shape (batch,). Turn the tokens into one hot
+    #   rows of size vocabulary and run induction_head on them. The answer is
+    #   the id with the largest value at the last position of its output.
     def answers(
         tokens: Tensor,
         vocabulary: int,
@@ -1630,13 +1675,13 @@ INDUCTION1 = Exercise(
     solution=INDUCTION1_SOLUTION,
     hints={
         "previous_rows": "x.shape[-2] is the number of steps. Build the scores with torch.diag as the lesson does, "
-        "with steps - 1 entries of sharpness, then weight x by masked_weights of them.",
-        "induction_scores": "previous.transpose(-2, -1) turns each key row into a column, so x @ it gives every "
-        "dot product. Multiply by sharpness.",
-        "induction_head": "Get previous from previous_rows, the scores from induction_scores, and weight x by "
-        "masked_weights of the scores.",
-        "answers": "F.one_hot(tokens, num_classes=vocabulary).float() gives the rows. Take position -1 of "
-        "induction_head's output and its argmax over dim=-1.",
+        "from steps - 1 entries equal to sharpness. Then multiply masked_weights of the scores by x.",
+        "induction_scores": "previous.transpose(-2, -1) turns each key row into a column, so multiplying x by it "
+        "with @ gives every dot product. Multiply the result by sharpness.",
+        "induction_head": "Get previous from previous_rows and the scores from induction_scores. Then multiply "
+        "masked_weights of the scores by x.",
+        "answers": "F.one_hot(tokens, num_classes=vocabulary).float() gives the rows. Take position -1 of the "
+        "output of induction_head, then its argmax over dim=-1.",
     },
     introduces=(),
     check=check_induction1,

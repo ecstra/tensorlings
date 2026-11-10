@@ -33,11 +33,13 @@ MULTIHEAD = Chapter(
         """
         # Multi head attention
 
-        One attention makes one softmax per position, so it gathers from one
-        place or a blend. Multi head attention runs several smaller ones side
-        by side on slices of the features. This chapter splits and merges the
-        heads, matches PyTorch's layer, measures what heads buy, and shares
-        keys and values across heads to save memory.
+        A single attention computes one softmax per position. So each
+        position takes its information from one place, or from a blend of
+        places. Multi head attention runs several smaller attentions side by
+        side, each on its own slice of the features. This chapter splits the
+        features into heads and merges them back, and matches PyTorch's
+        attention layer. Then it measures how much several heads help, and
+        shares keys and values across heads to save memory.
 
         ## Further reading
 
@@ -87,29 +89,33 @@ def reference_multi_head_attention(
 
 MULTIHEAD1_LESSON = prose(
     """
-    One attention compares queries with keys in one way, and its softmax
-    makes one mix per position. Multi head attention runs several smaller
-    attentions side by side, each a head with its own slice of the features.
-    With size 8 and 2 heads, head 0 reads features 0 to 3 and head 1 reads
-    features 4 to 7. That holds for the queries, the keys and the values.
+    A single attention compares queries with keys in only one way, and its
+    softmax gives one set of weights per position. **Multi head attention**
+    runs several smaller attentions side by side. Each one is called a
+    **head**, and each head works on its own slice of the features. With size
+    8 and 2 heads, head 0 uses features 0 to 3 and head 1 uses features 4 to
+    7. The queries, the keys and the values are all split this way.
 
-    Splitting takes two moves. `.view` cuts the last dimension, so
-    `(batch, steps, size)` becomes `(batch, steps, heads, head_size)`. Then
-    `.transpose(1, 2)` swaps steps and heads, which gives
-    `(batch, heads, steps, head_size)`. Now each head looks like one more
-    batch, and attention works on the last two dimensions for every batch and
-    every head at once.
+    Splitting takes two steps. First `.view` splits the last dimension in
+    two, so `(batch, steps, size)` becomes `(batch, steps, heads, head_size)`,
+    where `head_size` is `size // heads`. Then `.transpose(1, 2)` swaps the
+    steps and heads dimensions, which gives `(batch, heads, steps, head_size)`.
+    Now each head looks like one more batch entry. Attention works on the
+    last two dimensions, so it runs for every batch entry and every head at
+    once.
 
     ```python
     x = torch.arange(16.0).view(1, 2, 8)        # one sequence, 2 steps, size 8
     x.view(1, 2, 2, 4).transpose(1, 2)[0, 1]    # head 1, tensor([[ 4.,  5.,  6.,  7.], [12., 13., 14., 15.]])
     ```
 
-    Merging undoes it. Transpose back to `(batch, steps, heads, head_size)`,
-    then join the last two dimensions. Here `.view` fails. A transpose only
-    changes the order PyTorch walks through memory, so the numbers no longer
-    sit in order, and `.view` needs them in order. `.reshape` copies them when
-    it has to.
+    Merging the heads undoes the split. Transpose back to
+    `(batch, steps, heads, head_size)`, then join the last two dimensions into
+    one of size `heads * head_size`. Here `.view` fails. A transpose does not
+    move any numbers in memory. It only changes the order in which PyTorch
+    reads them. So after a transpose the numbers are no longer stored in
+    reading order, and `.view` needs them in that order. `.reshape` works
+    either way, because it copies the numbers into order when it has to.
 
     ```python
     t = torch.zeros(2, 3, 4).transpose(1, 2)
@@ -117,8 +123,9 @@ MULTIHEAD1_LESSON = prose(
     t.reshape(2, 12)    # works
     ```
 
-    `F.scaled_dot_product_attention` from attention5 takes any number of
-    leading dimensions, so the split heads go straight in.
+    `F.scaled_dot_product_attention` from attention5 accepts any number of
+    dimensions before the last two. So you can pass it the split heads
+    directly.
     """,
 )
 
@@ -135,8 +142,11 @@ MULTIHEAD1_SOURCE = source_file(
     rows = torch.zeros(2, 3, 4).transpose(1, 2).reshape(2, 12)    # .view would fail here
 
 
-    # TODO: Return x, of shape (batch, steps, size), split into heads, of shape
-    #   (batch, heads, steps, size // heads).
+    # TODO: Return x, of shape (batch, steps, size), split into heads, with
+    #   shape (batch, heads, steps, head_size), where head_size is
+    #   size // heads. Head h holds the features from h * head_size up to
+    #   (h + 1) * head_size.
+    #   Example: for the x above, split_heads(x, 2)[0, 1] equals head_one.
     def split_heads(
         x: Tensor,
         heads: int,
@@ -144,15 +154,18 @@ MULTIHEAD1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return x, of shape (batch, heads, steps, head_size), with its heads
-    #   joined back, of shape (batch, steps, heads * head_size).
+    # TODO: Undo split_heads. x has shape (batch, heads, steps, head_size).
+    #   Return the heads joined back into the features, with shape
+    #   (batch, steps, heads * head_size).
+    #   Example: merge_heads(split_heads(x, 2)) equals x.
     def merge_heads(x: Tensor) -> Tensor:
         ...
 
 
-    # TODO: Return causal attention of q, k and v, each of shape
-    #   (batch, steps, size), run separately in each of heads heads with
-    #   F.scaled_dot_product_attention, and merged back to (batch, steps, size).
+    # TODO: q, k and v each have shape (batch, steps, size). Split each one into
+    #   heads heads, run causal attention in every head with
+    #   F.scaled_dot_product_attention, and return the heads merged back to
+    #   shape (batch, steps, size).
     def multi_head_attention(
         q: Tensor,
         k: Tensor,
@@ -269,12 +282,12 @@ MULTIHEAD1 = Exercise(
     source=MULTIHEAD1_SOURCE,
     solution=MULTIHEAD1_SOLUTION,
     hints={
-        "split_heads": "Unpack batch, steps, size from x.shape. .view(batch, steps, heads, size // heads), then "
-        ".transpose(1, 2).",
-        "merge_heads": "Unpack x.shape, .transpose(1, 2) back, then .reshape(batch, steps, heads * head_size), "
-        "since .view fails after a transpose.",
-        "multi_head_attention": "Split q, k and v with split_heads, pass them to F.scaled_dot_product_attention "
-        "with is_causal=True, and merge_heads the result.",
+        "split_heads": "Unpack batch, steps and size from x.shape. Then call .view(batch, steps, heads, size // "
+        "heads) and after it .transpose(1, 2).",
+        "merge_heads": "Unpack the four sizes from x.shape and call .transpose(1, 2) to swap back. Then call "
+        ".reshape(batch, steps, heads * head_size), because .view fails after a transpose.",
+        "multi_head_attention": "Split q, k and v with split_heads and pass them to F.scaled_dot_product_attention "
+        "with is_causal=True. Then call merge_heads on the result.",
     },
     introduces=(),
     check=check_multihead1,
@@ -308,32 +321,36 @@ INDENTED_HEAD_HELPERS = textwrap.indent(HEAD_HELPERS.strip("\n"), "    ")
 
 MULTIHEAD2_LESSON = prose(
     """
-    A multi head attention layer makes the queries, keys and values with one
-    Linear from size to `3 * size`. Then `.chunk(3, dim=-1)` cuts its output
-    in three. One big matrix multiplication runs faster than three small
-    ones. After the heads, attention4's output Linear, from size to
-    size, mixes what the heads found.
+    A multi head attention layer computes the queries, keys and values with a
+    single Linear layer from size to `3 * size`. Then `.chunk(3, dim=-1)` cuts
+    its output into three equal parts along the last dimension. One big
+    matrix multiplication runs faster than three small ones. After the heads
+    are merged, the output Linear from attention4, from size to size, mixes
+    the results of the different heads.
 
-    PyTorch's `nn.MultiheadAttention` keeps the same weights under other
-    names. Its `in_proj_weight`, of shape `(3 * size, size)`, holds the query,
-    key and value weights stacked in that order, `in_proj_bias` their biases,
-    and `out_proj` is the output Linear.
+    PyTorch's `nn.MultiheadAttention` has the same weights under other names.
+    Its `in_proj_weight`, of shape `(3 * size, size)`, holds the query, key
+    and value weights stacked in that order. `in_proj_bias` holds their
+    biases, and `out_proj` is the output Linear.
 
     ```python
     nn.MultiheadAttention(8, 2, batch_first=True).in_proj_weight.shape    # torch.Size([24, 8])
     ```
 
-    Copy its weights into your layer and get the same output, and that proves
-    the two are the same layer. `batch_first=True` makes it take
-    `(batch, steps, size)` like everything here.
+    If you copy its weights into your layer and both layers give the same
+    output, that proves they compute the same thing. `batch_first=True` makes
+    it take inputs of shape `(batch, steps, size)`, like everything here.
 
-    Its `attn_mask` reads True as blocked, like mask1's masks, so no flip is
-    needed there. It returns the output and the attention weights averaged
-    over the heads, and `need_weights=False` skips the weights.
+    In its `attn_mask`, True means blocked, as in the masks of mask1, so you
+    pass those masks unchanged. It returns two things, the output and the
+    attention weights averaged over the heads. Passing `need_weights=False`
+    skips computing the weights.
 
-    The heads add no weights, since splitting only changes shapes. 4 heads of
-    16 and 1 head of 64 both use `4 * 64 * 64 + 4 * 64`, 16,640 weights, three
-    input Linears and one output Linear with their biases.
+    The number of heads does not change the number of weights, because
+    splitting into heads only changes shapes. At size 64, 4 heads of size 16
+    and 1 head of size 64 both use `4 * 64 * 64 + 4 * 64`, which is 16,640
+    weights. These are the weights and biases of three input Linears, for
+    the queries, keys and values, and one output Linear.
     """,
 )
 
@@ -353,10 +370,11 @@ MULTIHEAD2_SOURCE = source_file(
 ''' + INDENTED_HEAD_HELPERS + '''
 
 
-    # TODO: Finish forward. Make q, k and v with self.qkv and .chunk, run
-    #   attention in self.heads heads with F.scaled_dot_product_attention, merge
-    #   them, and run self.out. blocked, when given, is True where a query may
-    #   not look at a key, as in mask1.
+    # TODO: Finish forward. x has shape (batch, steps, size). Compute q, k and v
+    #   with self.qkv and .chunk. Run attention in self.heads heads with
+    #   F.scaled_dot_product_attention, merge the heads, and return the result
+    #   of self.out. blocked is either None or a mask that is True where a
+    #   query may not look at a key, as in mask1.
     class MultiHeadAttention(nn.Module):
         def __init__(
             self,
@@ -376,8 +394,9 @@ MULTIHEAD2_SOURCE = source_file(
             ...
 
 
-    # TODO: Copy the weights of theirs, an nn.MultiheadAttention, into ours, a
-    #   MultiHeadAttention of the same size, without recording for autograd.
+    # TODO: Copy the weights and biases of theirs, an nn.MultiheadAttention,
+    #   into ours, a MultiHeadAttention of the same size. Make sure autograd
+    #   records nothing while copying.
     def copy_from_torch(
         ours: nn.Module,
         theirs: nn.MultiheadAttention,
@@ -385,8 +404,9 @@ MULTIHEAD2_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the number of weights in a multi head attention layer of
-    #   size size, biases included, which doesn't depend on the heads.
+    # TODO: Return the number of weights, biases included, in a multi head
+    #   attention layer of size size. The number of heads does not change it.
+    #   Example: weight_count(64) returns 16640.
     def weight_count(size: int) -> int:
         ...
     ''',
@@ -419,7 +439,7 @@ MULTIHEAD2_SOLUTION = source_file(
             self.qkv = nn.Linear(size, 3 * size)
             self.out = nn.Linear(size, size)
 
-        # F.scaled_dot_product_attention reads True as a pair that takes part, so blocked is flipped.
+        # F.scaled_dot_product_attention reads True as "the query may look at this key", so blocked is flipped.
         def forward(
             self,
             x: Tensor,
@@ -557,12 +577,13 @@ MULTIHEAD2 = Exercise(
     source=MULTIHEAD2_SOURCE,
     solution=MULTIHEAD2_SOLUTION,
     hints={
-        "MultiHeadAttention.forward": "Run self.qkv on x and cut it into q, k and v with .chunk(3, dim=-1). Pass "
-        "the split heads to F.scaled_dot_product_attention with attn_mask=~blocked, or None without a mask. Merge, "
-        "then self.out.",
-        "copy_from_torch": "Inside torch.no_grad(), .copy_ in_proj_weight and in_proj_bias into ours.qkv, and "
-        "out_proj's weight and bias into ours.out.",
-        "weight_count": "Three input Linears and one output Linear, each size * size weights and size biases.",
+        "MultiHeadAttention.forward": "Run self.qkv on x and cut the result into q, k and v with .chunk(3, "
+        "dim=-1). Pass the split heads to F.scaled_dot_product_attention with attn_mask=~blocked, or "
+        "attn_mask=None when blocked is None. Merge the heads, then apply self.out.",
+        "copy_from_torch": "Inside torch.no_grad(), use .copy_ to copy in_proj_weight and in_proj_bias into the "
+        "weight and bias of ours.qkv. Copy the weight and bias of out_proj into ours.out the same way.",
+        "weight_count": "Count three input Linears and one output Linear. Each has size * size weights and size "
+        "biases.",
     },
     introduces=(),
     check=check_multihead2,
@@ -580,28 +601,33 @@ LOOKUP_OFFSETS = (1, 3)
 
 MULTIHEAD3_LESSON = prose(
     """
-    Each head makes one softmax, so it gathers from one place, or a blend.
-    Heads earn their keep on a task that needs two places at once.
+    Each head computes one softmax per position. So a head takes its
+    information from one position, or from a blend of positions. Several
+    heads help on a task that needs information from two positions at once.
 
-    Here every position copies two earlier tokens at once, the one right
-    before it and the one 3 back, out of 16 kinds. The model is one attention
-    layer of size 16, then a Linear that turns each position into scores for
-    the two tokens. 1 head of 16 and 2 heads of 8 have the same weights. 600
-    steps each give this, on 2,000 new sequences.
+    In this task, every position must copy two earlier tokens at once,
+    meaning it predicts both of them. One is the token right before it, and
+    the other is the token 3 positions back. There are 16 possible tokens.
+    The model is one attention layer of size 16, followed by a Linear layer
+    that turns each position into scores for the two tokens. 1 head of size
+    16 and 2 heads of size 8 have the same number of weights. Each version
+    trains for 600 steps and is measured on 2,000 new sequences.
 
     | Heads | Average of the two | Token right before | Token 3 back |
     |---|---|---|---|
     | 1 | 57.6% | 98.1% | 17.1% |
     | 2 | 100% | 100% | 100% |
 
-    The single head settles on one place and copies it. The other place it
-    barely learns, 17.1% against 6.3% for a blind guess. Two heads each take
-    one place. Over three seeds, one head averaged 56.6% to 59.3% and two
-    heads 100% every time.
+    The single head learns to look at one position, the token right before,
+    and copies that token. It barely learns the other one, with 17.1% right
+    against 6.3% for a random guess. With two heads, each head looks at one
+    of the two positions. Over three random seeds, one head averaged between
+    56.6% and 59.3%, and two heads scored 100% every time.
 
-    An MLP after the attention can pull a single head's blend apart, so here
-    is a harder test with one. Each position copies four earlier tokens, 1 to
-    4 back, after 1,000 steps, over three seeds.
+    An MLP after the attention could separate the tokens mixed in a single
+    head's blend. So here is a harder test, with an MLP added. Each position
+    copies four earlier tokens, from 1 to 4 positions back. Each model trains
+    for 1,000 steps, over three seeds.
 
     | Heads | Average of the four |
     |---|---|
@@ -609,9 +635,10 @@ MULTIHEAD3_LESSON = prose(
     | 2 | 91.4% to 95.0% |
     | 4 | 100% on every seed |
 
-    Each head reads one place, so four places need four heads. The original
-    paper found a single head 0.9 BLEU, its translation score, worse than its
-    best number of heads.
+    Each head reads from one position, so copying from four positions needs
+    four heads. The original paper on multi head attention found that a
+    single head scored 0.9 BLEU worse than its best number of heads. BLEU is
+    the score that paper used to measure translation quality.
     """,
 )
 
@@ -646,11 +673,14 @@ MULTIHEAD3_SOURCE = source_file(
 ''' + INDENTED_HEAD_HELPERS + '''
 
 
-    # TODO: Return what each position from max(offsets) on should copy, of shape
-    #   (batch, positions, len(offsets)). Entry [b, i, j] is the token offsets[j]
-    #   back from position max(offsets) + i of sequence b. For the x above,
-    #   lookup_targets(x, (1, 3)) is tensor([[[7, 5], [1, 2]]]), since position
-    #   3 copies 7 and 5, and position 4 copies 1 and 2.
+    # TODO: x has shape (batch, steps). Return the tokens that each position
+    #   should copy, for every position from max(offsets) on. The result has
+    #   shape (batch, steps - max(offsets), len(offsets)). Entry [b, i, j] is
+    #   the token offsets[j] positions before position max(offsets) + i of
+    #   sequence b.
+    #   Example: for the x above, lookup_targets(x, (1, 3)) returns
+    #   tensor([[[7, 5], [1, 2]]]). Position 3 copies 7 and 5, and position 4
+    #   copies 1 and 2.
     def lookup_targets(
         x: Tensor,
         offsets: tuple[int, ...],
@@ -658,8 +688,9 @@ MULTIHEAD3_SOURCE = source_file(
         ...
 
 
-    # TODO: Finish the line that sets mixed, causal attention of q, k and v in
-    #   self.heads heads, merged back to shape (batch, steps, size).
+    # TODO: Finish the line that sets mixed. It should hold causal attention of
+    #   q, k and v in self.heads heads, merged back to shape
+    #   (batch, steps, size).
     class LookupModel(nn.Module):''' + LOOKUP_MODEL_INIT + '''
         def forward(self, x: Tensor) -> Tensor:
             batch, steps = x.shape
@@ -670,8 +701,11 @@ MULTIHEAD3_SOURCE = source_file(
             return self.read(self.out(mixed)).view(batch, steps, 2, 16)
 
 
-    # TODO: Return the share of lookup_targets that model copies right, from
-    #   position max(offsets) on, without recording for autograd.
+    # TODO: Return the fraction of lookup_targets that model predicts right, as
+    #   a float. model(x) has shape (batch, steps, len(offsets), 16), with a
+    #   score for every possible token, and its prediction is the token with
+    #   the highest score. Compare only the positions from max(offsets) on, and
+    #   make sure autograd records nothing.
     def lookup_accuracy(
         model: nn.Module,
         x: Tensor,
@@ -888,7 +922,7 @@ def check_multihead3(checker: Checker) -> None:
     checker.test_method(
         class_name="LookupModel",
         method="forward",
-        description="trained, two heads copy both tokens and one head can't",
+        description="after training, two heads copy both tokens and one head can't",
         run=check_heads_help,
     )
 
@@ -901,13 +935,13 @@ MULTIHEAD3 = Exercise(
     source=MULTIHEAD3_SOURCE,
     solution=MULTIHEAD3_SOLUTION,
     hints={
-        "lookup_targets": "Take first as the largest of offsets, and steps the length of each sequence, x.shape[1]. "
-        "Then x[:, first - offset : steps - offset] holds the token offset back for every position from first on. "
-        "torch.stack one per offset with dim=2.",
-        "LookupModel.forward": "Split q, k and v into self.heads heads, pass them to F.scaled_dot_product_attention "
-        "with is_causal=True, and merge_heads the result.",
-        "lookup_accuracy": "Inside torch.no_grad(), take model(x)[:, max(offsets):].argmax(dim=-1), compare it with "
-        "lookup_targets(x, offsets), and take the mean as floats.",
+        "lookup_targets": "Set first to the largest offset and steps to x.shape[1], the length of each sequence. "
+        "Then x[:, first - offset : steps - offset] holds the token offset positions back, for every position from "
+        "first on. Make one such slice per offset and join them with torch.stack and dim=2.",
+        "LookupModel.forward": "Split q, k and v into self.heads heads and pass them to "
+        "F.scaled_dot_product_attention with is_causal=True. Then call merge_heads on the result.",
+        "lookup_accuracy": "Inside torch.no_grad(), model(x)[:, max(offsets):].argmax(dim=-1) gives the predicted "
+        "tokens. Compare them with lookup_targets(x, offsets) and take the mean of the matches as floats.",
     },
     introduces=(),
     check=check_multihead3,
@@ -922,18 +956,21 @@ MULTIHEAD3 = Exercise(
 
 GQA1_LESSON = prose(
     """
-    While a model writes, it keeps every earlier position's keys and values,
-    so each new token computes only its own. That store is the KV cache, and
-    on long texts it can outgrow the model's weights in memory. Its size in
-    bytes is `2 * layers * key_value_heads * head_size * positions * bytes`,
-    the 2 for the keys and the values.
+    While a model generates text, it stores the keys and values of every
+    earlier position. Then each new token only has to compute its own key and
+    value. This store is called the **KV cache**. On long texts it can take
+    more memory than the model's weights. Its size in bytes is
+    `2 * layers * key_value_heads * head_size * positions * bytes`. The 2 is
+    there because the cache holds both keys and values, and `bytes` is the
+    size of one number in bytes.
 
-    Grouped query attention shrinks it. It keeps every query head but gives
-    the keys and values fewer heads, each shared by a group of query heads.
-    Meta's Llama 2 70B, a language model of 70 billion weights, has 80 layers
-    and heads of size 128. It has 64 query heads and 8 key value heads, so
-    each key value head serves 8 query heads. Multi query attention is the
-    extreme, one key value head for all.
+    **Grouped query attention** makes the cache smaller. It keeps every query
+    head but gives the keys and values fewer heads. Each key value head is
+    shared by a group of query heads. Meta's Llama 2 70B, a language model
+    with 70 billion weights, has 80 layers and heads of size 128. It has 64
+    query heads and 8 key value heads, so each key value head is shared by 8
+    query heads. **Multi query attention** is the extreme case, with a single
+    key value head shared by all the query heads.
 
     | Llama 2 70B, 16 bit numbers | KV cache per token | For 4,096 tokens |
     |---|---|---|
@@ -941,11 +978,12 @@ GQA1_LESSON = prose(
     | 8 key value heads, as it shipped | 320 KiB | 1.25 GiB |
 
     A KiB is 1,024 bytes, a MiB is 1,024 KiB, and a GiB is 1,024 MiB. So a
-    MiB, 1,048,576 bytes, is a little more than a MB, a million.
+    MiB, which is 1,048,576 bytes, is a little more than a MB, which is a
+    million bytes.
 
-    Here is multihead3's harder test, four earlier tokens copied at once
-    with an MLP after the attention. It runs with 4 query heads of 4, for
-    1,000 steps over three seeds.
+    Here is the harder test from multihead3, where each position copies four
+    earlier tokens and an MLP follows the attention. It runs with 4 query
+    heads of size 4, for 1,000 steps, over three seeds.
 
     | Key value heads | Cache per position | Average of the four |
     |---|---|---|
@@ -953,24 +991,28 @@ GQA1_LESSON = prose(
     | 2, grouped | 16 numbers | 100% on every seed |
     | 1, multi query | 8 numbers | 100% on every seed |
 
-    The cache shrinks four times and every token is still copied right. The
-    GQA paper converted T5 XXL, a language model by Google, to fewer key
-    value heads and trained it a little more. With one, it averaged 46.6 over
-    seven tasks, against 47.2 for plain multi head. With 8 it got 47.1, at
-    0.28 seconds a sample against 0.24 for one and 1.51 for plain multi head.
+    The cache becomes four times smaller, and every token is still copied
+    right. The GQA paper converted T5 XXL, a language model by Google, to
+    fewer key value heads and trained it a little more. With one key value
+    head, it averaged a score of 46.6 over seven tasks, against 47.2 for
+    plain multi head attention. With 8 key value heads it scored 47.1. That
+    version took 0.28 seconds per sample, against 0.24 seconds with one key
+    value head and 1.51 seconds with plain multi head attention.
 
+    Let `groups` be the number of query heads that share each key value head.
     Query head `i` uses key value head `i // groups`. `repeat_interleave`
-    copies each key value head `groups` times in a row, which lines them up
-    that way. `.repeat` tiles them, the wrong order.
+    copies each key value head `groups` times in a row, which puts each copy
+    in line with the query heads that use it. `.repeat` repeats the whole
+    list of heads instead, which gives the wrong order.
 
     ```python
     torch.tensor([1, 2]).repeat_interleave(2)    # tensor([1, 1, 2, 2])
     torch.tensor([1, 2]).repeat(2)               # tensor([1, 2, 1, 2])
     ```
 
-    `F.scaled_dot_product_attention` shares them itself with
-    `enable_gqa=True`. Its CPU kernel and FlashAttention on a GPU skip the
-    copies.
+    `F.scaled_dot_product_attention` can share the key value heads itself
+    when you pass `enable_gqa=True`. Its CPU implementation, and
+    FlashAttention on a GPU, then work without making the copies.
     """,
 )
 
@@ -985,8 +1027,11 @@ GQA1_SOURCE = source_file(
     in_a_row = torch.tensor([1, 2]).repeat_interleave(2)    # tensor([1, 1, 2, 2])
 
 
-    # TODO: Return x, of shape (batch, kv_heads, steps, head_size), with each
-    #   head copied groups times in a row along dimension 1.
+    # TODO: x has shape (batch, kv_heads, steps, head_size). Return x with each
+    #   head copied groups times in a row along dimension 1, so the result has
+    #   shape (batch, kv_heads * groups, steps, head_size).
+    #   Example: with heads A and B and groups = 2, the heads come out in the
+    #   order A, A, B, B.
     def repeat_kv(
         x: Tensor,
         groups: int,
@@ -994,9 +1039,11 @@ GQA1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return causal attention of q, of shape (batch, heads, steps,
-    #   head_size), with k and v of fewer heads, each shared by heads //
-    #   kv_heads query heads in a row. Use repeat_kv, not enable_gqa.
+    # TODO: q has shape (batch, heads, steps, head_size). k and v have fewer
+    #   heads, with shape (batch, kv_heads, steps, head_size). Each key value
+    #   head is shared by heads // kv_heads query heads in a row. Return causal
+    #   attention of q, k and v. Share the heads with repeat_kv, not with
+    #   enable_gqa.
     def grouped_attention(
         q: Tensor,
         k: Tensor,
@@ -1005,7 +1052,10 @@ GQA1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the KV cache's size in bytes, for positions positions.
+    # TODO: Return the size of the KV cache in bytes for positions positions,
+    #   with the formula from the lesson. bytes_per_number is the size of one
+    #   number in bytes.
+    #   Example: kv_cache_bytes(80, 8, 128, 4096, 2) returns 1342177280.
     def kv_cache_bytes(
         layers: int,
         kv_heads: int,
@@ -1093,7 +1143,7 @@ def check_gqa1(checker: Checker) -> None:
     )
     checker.test(
         function="grouped_attention",
-        description="lines the heads up itself, without enable_gqa",
+        description="shares the heads itself, without enable_gqa",
         run=check_grouped_with_repeat,
     )
     check_on_inputs(
@@ -1117,10 +1167,10 @@ GQA1 = Exercise(
     source=GQA1_SOURCE,
     solution=GQA1_SOLUTION,
     hints={
-        "repeat_kv": "The lesson's repeat_interleave, with dim=1 so it copies whole heads.",
-        "grouped_attention": "groups is q.shape[1] // k.shape[1]. Pass q and the repeated k and v to "
-        "F.scaled_dot_product_attention with is_causal=True.",
-        "kv_cache_bytes": "Multiply 2, for keys and values, by every argument.",
+        "repeat_kv": "Use repeat_interleave from the lesson, with dim=1 so that it copies whole heads.",
+        "grouped_attention": "The number of groups is q.shape[1] // k.shape[1]. Pass q and the repeated k and v "
+        "to F.scaled_dot_product_attention with is_causal=True.",
+        "kv_cache_bytes": "Multiply 2, which counts the keys and the values, by every argument.",
     },
     introduces=(),
     check=check_gqa1,
