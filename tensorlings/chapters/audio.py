@@ -35,13 +35,14 @@ AUDIO = Chapter(
         """
         # Audio as tokens
 
-        A second of sound is thousands of samples, far too many tokens for a
-        transformer. This chapter turns sound into the two kinds of tokens
-        audio models read. Log mel frames are what speech recognizers such as
-        Whisper read, 100 a second, which Whisper's first layers turn into 50
-        tokens. A residual quantizer gives a few streams of codebook ids,
-        which neural codecs such as SoundStream and EnCodec make so a model
-        can write sound as well as read it.
+        A second of sound is thousands of samples, far too many to use as
+        tokens in a transformer. This chapter turns sound into the two kinds
+        of tokens that audio models read. The first kind is log mel frames,
+        which speech recognizers such as Whisper read. There are 100 frames a
+        second, and Whisper's first layers turn them into 50 tokens. The
+        second kind is codebook ids from a residual quantizer, in a few
+        parallel streams. Neural codecs such as SoundStream and EnCodec make
+        these, so a model can write sound as well as read it.
 
         ## Further reading
 
@@ -282,27 +283,37 @@ TONES = (200.0, 300.0, 6000.0, 6100.0)
 
 SOUND1_LESSON = prose(
     """
-    Whisper, a speech recognizer, resamples all audio to 16,000 samples a
-    second. It then reads an 80 channel log mel spectrogram, from windows of
-    25 milliseconds taken every 10 milliseconds. That is stft1's spectrogram
-    with two changes.
+    Whisper is a speech recognizer. It first resamples all audio to 16,000
+    samples a second. Then it reads an 80 channel log mel spectrogram,
+    computed from windows of 25 milliseconds taken every 10 milliseconds.
+    That is the spectrogram from stft1 with two changes.
 
-    - The **mel scale** spaces frequencies the way hearing does, fine at low pitches and coarse at high ones.
-    - A log turns loudness, which spans many powers of 10, into a range a network handles well.
+    - The **mel scale** spaces frequencies the way human hearing does, with fine steps at low pitches and coarse steps at high ones.
+    - Taking the log turns loudness, which spans many powers of 10, into a small range that a network handles well.
 
-    The HTK formula maps a frequency of f hertz to m = 2595 log10(1 + f /
-    700) mels. It runs near a straight line at low frequencies and bends into
-    a log above. Its inverse is f = 700 (10 to the power m / 2595, minus 1).
+    The HTK formula converts a frequency of `f` hertz to `m` mels. The
+    second line below is its inverse, from mels back to hertz.
+
+    ```text
+    m = 2595 * log10(1 + f / 700)
+    f = 700 * (10 ** (m / 2595) - 1)
+    ```
+
+    At low frequencies the mel scale is close to a straight line, and at high
+    frequencies it grows like a logarithm.
 
     ```python
     torch.log10(torch.tensor([10.0, 1000.0]))    # tensor([1., 3.])
     ```
 
-    A filter bank turns a spectrum's frequencies into channels. Place n_mels
-    plus 2 points evenly in mels, from 0 to half the sample rate, then turn
-    them back into hertz. Channel i is a triangle over the frequencies. It is
-    0 at point i, rises to 1 at point i + 1, and falls to 0 at point i + 2.
-    torchaudio's melscale_fbanks builds its default filters this way.
+    A filter bank turns the frequencies of a spectrum into mel channels. To
+    build one, place `n_mels + 2` points evenly spaced in mels, from 0 up to
+    the mels of half the sample rate. Then convert the points back to hertz.
+    Filter i is a triangle over the frequencies. It is 0 at point i, rises to
+    1 at point i + 1, and falls back to 0 at point i + 2. torchaudio's
+    `melscale_fbanks` builds its default filters this way. At each
+    frequency, the triangle is the smaller of a rising line and a falling
+    line, clamped at 0.
 
     ```python
     up = torch.tensor([-0.5, 0.5, 1.5])
@@ -310,17 +321,18 @@ SOUND1_LESSON = prose(
     torch.clamp(torch.minimum(up, down), min=0)    # tensor([0.0000, 0.5000, 0.0000])
     ```
 
-    Whisper's own filters come from librosa, which uses the Slaney scale,
-    straight below 1,000 Hz, and gives every triangle the same area. This
-    file keeps Whisper's rate, window, hop and 80 channels with the HTK
-    filters.
+    Whisper's own filters come from librosa, which uses the Slaney scale
+    instead. The Slaney scale is a straight line below 1,000 Hz, and its
+    triangles all have the same area. This file keeps Whisper's sample rate,
+    window, hop length and 80 channels, but uses the HTK filters.
 
-    Each window's power, the strength squared, times the filters gives one
-    number per channel. Whisper's code floors it at 1e-10 and takes the log
-    in base 10.
+    The power of a frequency in a window is its magnitude squared. The
+    magnitude is the `.abs()` of the STFT, as in stft1. Multiplying the power
+    by the filters gives one number per channel. Whisper's code raises any
+    value below 1e-10 up to 1e-10, then takes the log in base 10.
 
-    With these filters, channel 0 spans 45 Hz and channel 79 spans 525 Hz.
-    Here is the loudest channel for four pure tones, a second each.
+    With these filters, channel 0 covers 45 Hz and channel 79 covers 525 Hz.
+    Here is the loudest channel for four pure tones, each one second long.
 
     | Tone | Loudest channel |
     |---|---|
@@ -329,13 +341,15 @@ SOUND1_LESSON = prose(
     | 6,000 Hz | 72 |
     | 6,100 Hz | 72 |
 
-    100 Hz apart is four channels down low and the same channel up high, as
-    for a listener. A second of sound becomes 98 frames of 80 numbers.
-    Whisper pads both ends and drops the last frame, for exactly 100.
+    At low frequencies, two tones 100 Hz apart land four channels apart. At
+    high frequencies they land in the same channel, which matches how hard
+    it is for a listener to tell them apart. A second of sound becomes 98
+    frames of 80 numbers. Whisper pads both ends of the audio and drops the
+    last frame, which gives exactly 100 frames.
 
-    Whisper's first layers are two convolutions, the second with a stride
-    of 2. They turn the 100 frames a second into 50 token vectors, where the
-    raw audio held 16,000 samples.
+    Whisper's first layers are two convolutions, and the second has a stride
+    of 2. Together they turn the 100 frames of each second into 50 token
+    vectors. The raw audio of that second held 16,000 samples.
     """,
 )
 
@@ -353,14 +367,15 @@ SOUND1_SOURCE = source_file(
     peaks = torch.clamp(torch.tensor([-1.0, 2.0]), min=0)   # tensor([0., 2.])
 
 
-    # TODO: Return each frequency in hertz turned into mels, 2595 times the
-    #   base 10 log of 1 plus hertz over 700.
+    # TODO: Convert each frequency in hertz to mels with the HTK formula,
+    #   m = 2595 * log10(1 + f / 700). hertz is a tensor of any shape.
+    #   Example: hz_to_mel(torch.tensor([700.0])) returns tensor([781.1729]).
     def hz_to_mel(hertz: Tensor) -> Tensor:
         ...
 
 
-    # TODO: Return each number of mels turned back into hertz, the inverse of
-    #   hz_to_mel.
+    # TODO: Convert each value in mels back to hertz. This is the inverse of
+    #   hz_to_mel, f = 700 * (10 ** (m / 2595) - 1).
     def mel_to_hz(mels: Tensor) -> Tensor:
         ...
 
@@ -370,6 +385,8 @@ SOUND1_SOURCE = source_file(
     #   n_mels + 2 points evenly in mels from 0 to the mels of sample_rate / 2,
     #   and turn them back into hertz. Filter i rises from 0 at point i to 1 at
     #   point i + 1 and falls to 0 at point i + 2, and is 0 everywhere else.
+    #   Column i of the result is filter i, so entry [j, i] is the value of
+    #   filter i at frequency j.
     def mel_filters(
         n_freqs: int,
         n_mels: int,
@@ -379,9 +396,11 @@ SOUND1_SOURCE = source_file(
 
 
     # TODO: Return the log mel frames of signal, of shape (n_mels, frames).
-    #   Take torch.stft with n_fft=n_fft, hop_length=hop, a Hann window of n_fft,
-    #   center=False and return_complex=True. Square its strengths for the
-    #   power, multiply by the filters, floor at 1e-10 and take the base 10 log.
+    #   Compute torch.stft with n_fft=n_fft, hop_length=hop, a Hann window of
+    #   length n_fft, center=False and return_complex=True. The power is the
+    #   magnitude squared, of shape (n_fft // 2 + 1, frames). Combine the power
+    #   with the filters by matrix multiplication to get (n_mels, frames).
+    #   Raise every value below 1e-10 up to 1e-10, then take the base 10 log.
     def log_mel(
         signal: Tensor,
         n_fft: int,
@@ -391,8 +410,10 @@ SOUND1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the channel whose average over the frames is highest, as a
-    #   plain whole number.
+    # TODO: log_mels has shape (n_mels, frames). Return the index of the
+    #   channel whose average over the frames is highest, as a plain Python int.
+    #   Example: loudest_channel(torch.tensor([[1.0, 2.0], [4.0, 0.0],
+    #   [2.0, 2.5]])) returns 2, since the averages are 1.5, 2.0 and 2.25.
     def loudest_channel(log_mels: Tensor) -> int:
         ...
 
@@ -407,8 +428,8 @@ SOUND1_SOURCE = source_file(
         return torch.sin(2 * math.pi * frequency * t)
 
 
-    # Whisper's rate, window, hop and 80 channels, with the HTK filters, and the loudest channel for tones of 200,
-    # 300, 6000 and 6100 Hz.
+    # Whisper's sample rate, window, hop length and 80 channels, with the HTK filters. tone_channels holds the
+    # loudest channel for tones of 200, 300, 6000 and 6100 Hz.
     filter_bank = mel_filters(201, 80, 16000)
     tone_channels = [loudest_channel(log_mel(tone(f, 1.0, 16000), 400, 160, filter_bank)) for f in (200, 300, 6000, 6100)]
     ''',
@@ -464,7 +485,7 @@ def check_sound1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="hz_to_mel",
-        description="turns hertz into mels",
+        description="converts hertz to mels",
         inputs=(
             (torch.tensor([0.0, 700.0, 1000.0, 8000.0]),),
             (torch.tensor([[100.0, 4000.0], [50.0, 300.0]]),),
@@ -475,7 +496,7 @@ def check_sound1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="mel_to_hz",
-        description="turns mels back into hertz",
+        description="converts mels back to hertz",
         inputs=(
             (torch.tensor([0.0, 781.0, 2840.0]),),
             (torch.tensor([[150.0, 1500.0], [400.0, 2000.0]]),),
@@ -498,7 +519,7 @@ def check_sound1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="log_mel",
-        description="gives the base 10 log of each channel's power, one column per window",
+        description="returns the base 10 log of each channel's power, one column per window",
         inputs=(
             (
                 Described(noise(960, 800), "800 samples of noise"),
@@ -519,7 +540,7 @@ def check_sound1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="loudest_channel",
-        description="gives the channel with the highest average",
+        description="returns the channel with the highest average",
         inputs=(
             (torch.tensor([[1.0, 2.0], [4.0, 0.0], [2.0, 2.5]]),),
             (Described(REFERENCE["log_mel"](two_tones(2500.0, 440.0, 1600, 8000), 128, 64, REFERENCE["mel_filters"](65, 12, 8000)), "the log mel frames of a 2,500 Hz tone"),),
@@ -543,14 +564,16 @@ SOUND1 = Exercise(
     solution=SOUND1_SOLUTION,
     hints={
         "hz_to_mel": "Divide hertz by 700, add 1, take torch.log10 and multiply by 2595.",
-        "mel_to_hz": "Undo each step of hz_to_mel in reverse: divide by 2595, raise 10 to that power, take away 1, "
-        "multiply by 700.",
-        "mel_filters": "points[:-2], points[1:-1] and points[2:] are each filter's left, top and right. The rising "
-        "side is (freq minus left) over (top minus left), with the frequencies as a column so it broadcasts to (n_freqs, "
-        "n_mels). The falling side mirrors it. Take the smaller of the two, then clamp at 0.",
-        "log_mel": "The power is the stft's .abs() squared, of shape (n_fft // 2 + 1, frames). filters.T times it gives "
-        "(n_mels, frames). torch.clamp with min=1e-10, then .log10().",
-        "loudest_channel": "The mean over dim=1 gives one number per channel. Its argmax, turned into an int.",
+        "mel_to_hz": "Undo the steps of hz_to_mel in reverse order. Divide by 2595, raise 10 to that power, subtract "
+        "1, and multiply by 700.",
+        "mel_filters": "points[:-2], points[1:-1] and points[2:] hold each filter's left edge, peak and right edge. The "
+        "rising side is (frequency minus left) divided by (peak minus left), with the frequencies as a column so the "
+        "result broadcasts to (n_freqs, n_mels). The falling side mirrors it. Take the smaller of the two sides, then "
+        "clamp at 0.",
+        "log_mel": "The power is the .abs() of the stft, squared, with shape (n_fft // 2 + 1, frames). Matrix multiply "
+        "filters.T by the power to get (n_mels, frames). Then torch.clamp with min=1e-10, then .log10().",
+        "loudest_channel": "The mean over dim=1 gives one number per channel. Return the argmax of those means, turned "
+        "into an int.",
     },
     introduces=(),
     check=check_sound1,
@@ -568,50 +591,58 @@ ENTRIES = 64
 SOUND2_LESSON = prose(
     """
     A neural codec such as SoundStream or EnCodec turns sound into codebook
-    ids, so a model can write sound as well as read it. Its encoder gives 75
-    vectors a second at 24,000 samples a second.
+    ids, so a model can write sound as well as read it. For audio at 24,000
+    samples a second, the codec's encoder outputs 75 vectors a second.
 
-    vq1's quantizer gives each vector one id from one codebook. SoundStream
-    works out that 6,000 bits a second at 75 vectors a second is 80 bits per
-    vector. One codebook would need 2 to the 80 entries for that.
+    The quantizer from vq1 gives each vector one id from one codebook.
+    SoundStream points out that 6,000 bits a second at 75 vectors a second is
+    80 bits per vector. A single codebook would need `2 ** 80` entries to
+    spend that many bits.
 
-    A **residual quantizer** uses several small codebooks in a row. The first
-    picks the nearest entry to the vector. The second picks the nearest entry
-    to what is left over, and so on. Each codebook's ids form one stream, and
-    decoding adds the chosen entries back up.
+    A **residual quantizer** uses several small codebooks one after another.
+    The first codebook picks the entry nearest to the vector. What is left
+    over, the vector minus that entry, is called the residual. The second
+    codebook picks the entry nearest to the residual, and so on. Each
+    codebook's ids form one stream. Decoding adds up the chosen entries from
+    all the codebooks.
 
     ```python
     z = torch.tensor([2.6])
     first = torch.tensor([3.0])    # the nearest entry in codebook 1
-    z - first                       # tensor([-0.4000]), what codebook 2 quantizes
+    z - first                       # tensor([-0.4000]), the residual that codebook 2 quantizes
     ```
 
-    Every codebook of K entries adds log2(K) bits per vector. EnCodec's
-    codebooks hold 1,024 entries, 10 bits each, and it uses up to 32 of them.
+    Every codebook of K entries adds `log2(K)` bits per vector. EnCodec's
+    codebooks hold 1,024 entries, so each one adds 10 bits, and EnCodec uses
+    up to 32 of them.
 
-    SoundStream starts its codebooks with k-means on its first batch, then
-    keeps updating them. k-means, given in the file, starts from vectors
-    picked at random from the data. It then moves each entry to the average
-    of the vectors nearest it, again and again. Here each codebook is fitted
-    with k-means on what the codebooks before it left over.
+    SoundStream initializes its codebooks with k-means on its first batch,
+    then keeps updating them during training. The file gives you k-means. It
+    starts with entries picked at random from the data. Then it repeatedly
+    moves each entry to the average of the vectors nearest to it. Here each
+    codebook is fitted with k-means on the residuals that the codebooks
+    before it left over.
 
-    These are the log mel frames of sound1 for made up sounds: tones, a
-    chirp, a burst of noise. Each channel is standardized with the training
-    frames. The codebooks of 64 entries are fitted on 40 sounds and scored on
-    10 others, on 3 seeds.
+    The vectors here are sound1's log mel frames of made up sounds, which
+    mix tones, a rising chirp and a burst of noise. Each channel is
+    standardized with the mean and standard deviation of the training frames.
+    The codebooks have 64 entries each. They are fitted on 40 sounds and
+    scored on 10 others, with 3 seeds. The relative error is the squared
+    error that is left, divided by the squared size of the frames.
 
-    | Codebooks | Bits per frame | Share of the frames left as error |
+    | Codebooks | Bits per frame | Relative error |
     |---|---|---|
     | 1 | 6 | 18.7% to 21.8% |
     | 2 | 12 | 11.6% to 14.5% |
     | 4 | 24 | 8.2% to 9.3% |
     | 8 | 48 | 5.6% to 6.1% |
 
-    The file fits on 20 sounds so it runs fast, and its errors land inside
-    each range. Every codebook added cuts what is left. One codebook for 48
-    bits would need 2 to the 48 entries, about 281 trillion. SoundStream also
-    trains with a random number of codebooks per example, its quantizer
-    dropout. So one model serves every bitrate from 3 to 18 kilobits a second.
+    The file fits its codebooks on 20 sounds so it runs fast, and its errors
+    still fall inside each range. Every added codebook lowers the error. A
+    single codebook for 48 bits would need `2 ** 48` entries, about 281
+    trillion. SoundStream also trains with a random number of codebooks for
+    each example, which it calls quantizer dropout. So one model works at
+    every bitrate from 3 to 18 kilobits a second.
     """,
 )
 
@@ -630,22 +661,24 @@ SOUND2_SOURCE = source_file(
     bits = math.log2(1024)                                          # 10.0
 
 
-    # sound1's log mel frames.
+    # The log mel code from sound1.
 ''' + indented(MEL_PART) + '''
 
 
-    # Made up sounds: tones that start and stop, a chirp, a burst of noise.
+    # Made up sounds, with tones that start and stop, a rising chirp and a burst of noise.
 ''' + indented(SOUNDS_PART) + '''
 
 
-    # vq1's nearest code, k-means, and the error left as a share of the frames.
+    # nearest_codes from vq1, k-means, and relative_error, which divides the squared error by the squared size of z.
 ''' + indented(GIVEN_CODES_PART) + '''
 
 
     # TODO: Quantize z, of shape (n, d), with each codebook in turn. codebooks
-    #   has shape (levels, K, d). Each level picks the nearest_codes of what is
-    #   left, then takes those entries away from it. Return the ids, of shape
-    #   (n, levels), and the sum of every level's entries, of shape (n, d).
+    #   has shape (levels, K, d). The residual starts as z. At each level, find
+    #   the nearest_codes of the residual in that level's codebook, then
+    #   subtract the chosen entries from the residual. Return the ids, of shape
+    #   (n, levels), and the quantized vectors, which are the sum of every
+    #   level's chosen entries, of shape (n, d).
     def residual_quantize(
         z: Tensor,
         codebooks: Tensor,
@@ -653,8 +686,9 @@ SOUND2_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the vectors that ids, of shape (n, levels), stand for, the
-    #   sum over the levels of each codebook's chosen entries.
+    # TODO: Return the vectors that ids stands for. ids has shape (n, levels),
+    #   and column l holds indices into codebooks[l]. Each vector is the sum
+    #   over the levels of the chosen entries, so the result has shape (n, d).
     def decode(
         ids: Tensor,
         codebooks: Tensor,
@@ -662,8 +696,11 @@ SOUND2_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the bits a second that `codebooks` codebooks of `entries`
-    #   entries each send at `frames_per_second`, as a plain number.
+    # TODO: Return how many bits a second the ids take, as a plain number.
+    #   There are `frames_per_second` frames a second. Each frame has one id
+    #   from each of `codebooks` codebooks, and each id takes log2(entries)
+    #   bits.
+    #   Example: bits_per_second(75, 32, 1024) returns 24000.0.
     def bits_per_second(
         frames_per_second: float,
         codebooks: int,
@@ -673,8 +710,10 @@ SOUND2_SOURCE = source_file(
 
 
     # TODO: Fit `levels` codebooks of `entries` entries each, one after
-    #   another. Each comes from kmeans(..., entries, steps, generator) on what
-    #   the ones before left of `vectors`. Return them stacked, of shape
+    #   another. The residual starts as `vectors`. Each codebook comes from
+    #   kmeans(..., entries, steps, generator) run on the residual. Before the
+    #   next level, subtract each vector's nearest entry in the new codebook
+    #   from the residual. Return the codebooks stacked, of shape
     #   (levels, entries, d).
     def fit_codebooks(
         vectors: Tensor,
@@ -686,7 +725,8 @@ SOUND2_SOURCE = source_file(
         ...
 
 
-    # Codebooks fitted on 20 made up sounds, then the error left on 10 others with 1, 2, 4 and 8 of them.
+    # Fits 8 codebooks on 20 made up sounds, then measures the relative error on 10 other sounds with the first 1,
+    # 2, 4 and 8 codebooks.
     filter_bank = mel_filters(201, 80, 16000)
     sounds = torch.Generator().manual_seed(0)
     frames = torch.cat([log_mel(made_up_sound(1.0, 16000, sounds), 400, 160, filter_bank).T for _ in range(30)])
@@ -763,12 +803,12 @@ def expect_ids_and_vectors(
     )
 
     if not isinstance(actual, (tuple, list)) or len(actual) != 2:
-        raise Mismatch(f"{call} should give two things, the ids and the quantized vectors, but it gives {value_text(actual)}.")
+        raise Mismatch(f"{call} should return two things, the ids and the quantized vectors, but it returns {value_text(actual)}.")
 
     ids, quantized = actual
 
     if isinstance(ids, Tensor) and ids.is_floating_point():
-        raise Mismatch(f"The ids from {call} hold decimals. Ids index a codebook, so they are whole numbers, as nearest_codes gives them.")
+        raise Mismatch(f"The ids from {call} are floats. Ids index a codebook, so they must be integers, as nearest_codes returns them.")
 
     expect_tensor(
         call=f"the ids from {call}",
@@ -800,11 +840,11 @@ def check_errors(value: object) -> None:
     expected = reference_errors()
 
     if not isinstance(value, list) or len(value) != len(expected):
-        raise Mismatch(f"errors is {value_text(value)}, but it should be a list of {len(expected)} shares.")
+        raise Mismatch(f"errors is {value_text(value)}, but it should be a list of {len(expected)} relative errors.")
 
     for levels, found, wanted in zip(LEVELS, value, expected):
         expect_close(
-            call=f"the error left with {levels} codebooks",
+            call=f"the relative error with {levels} codebooks",
             actual=found,
             expected=wanted,
             tolerance=1e-5,
@@ -815,7 +855,7 @@ def check_sound2(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="residual_quantize",
-        description="quantizes what each level leaves for the next",
+        description="quantizes the residual each level leaves for the next",
         inputs=(
             (torch.tensor([[2.6, 0.4], [-1.7, -2.4], [0.1, 1.2], [2.2, -0.6]]), Described(CODEBOOKS, "three codebooks of 4 entries")),
             (Described(torch.randn(7, 3, generator=torch.Generator().manual_seed(961)), "7 random vectors of 3"), Described(random_codebooks(962, 2, 5, 3), "two random codebooks of 5 entries")),
@@ -849,7 +889,7 @@ def check_sound2(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="fit_codebooks",
-        description="fits each codebook on what the ones before left over",
+        description="fits each codebook on the residual the ones before it left",
         inputs=(
             (Described(torch.randn(40, 3, generator=torch.Generator().manual_seed(964)), "40 random vectors of 3"), 3, 4, 5, seeded(965)),
             (Described(torch.randn(30, 2, generator=torch.Generator().manual_seed(966)), "30 random vectors of 2"), 2, 6, 3, seeded(967)),
@@ -859,7 +899,7 @@ def check_sound2(checker: Checker) -> None:
     )
     checker.check_name(
         name="errors",
-        description="is the error left with 1, 2, 4 and 8 codebooks",
+        description="is the relative error with 1, 2, 4 and 8 codebooks",
         run=check_errors,
     )
 
@@ -872,13 +912,14 @@ SOUND2 = Exercise(
     source=SOUND2_SOURCE,
     solution=SOUND2_SOLUTION,
     hints={
-        "residual_quantize": "Keep what is left in a variable that starts as z, and a running sum that starts as "
-        "zeros. For each codebook, nearest_codes of what is left gives the ids. Add those entries to the sum, take them "
-        "from what is left. torch.stack the ids along dim=1.",
+        "residual_quantize": "Keep the residual in a variable that starts as z, and a running sum that starts as "
+        "zeros. For each codebook, nearest_codes of the residual gives the ids. Add the chosen entries to the sum and "
+        "subtract them from the residual. torch.stack the ids along dim=1.",
         "decode": "For each level, codebook[ids[:, level]] picks its entries. Stack them and sum over the levels.",
-        "bits_per_second": "Each codebook adds math.log2(entries) bits per frame.",
-        "fit_codebooks": "Loop levels times. kmeans on what is left gives a codebook. Take each vector's nearest entry "
-        "away from what is left before the next level. torch.stack the codebooks.",
+        "bits_per_second": "Each codebook adds math.log2(entries) bits to every frame. Multiply that by the number of "
+        "codebooks and by the frames per second.",
+        "fit_codebooks": "Loop levels times. kmeans on the residual gives a codebook. Before the next level, subtract "
+        "each vector's nearest entry in that codebook from the residual. torch.stack the codebooks.",
     },
     introduces=(),
     check=check_sound2,

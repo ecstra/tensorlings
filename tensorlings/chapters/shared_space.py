@@ -35,11 +35,12 @@ SHARED_SPACE = Chapter(
         """
         # Two kinds, one space
 
-        CLIP trained an image encoder and a text encoder together until each
-        image sat next to its caption. Then a new picture could be named by
-        the nearest caption, even for names it never trained on. This
-        chapter does the same with signals and short descriptions of them,
-        then measures what the batch size and the temperature do.
+        CLIP trained an image encoder and a text encoder together, so that
+        each image's features ended up close to its caption's features. Then
+        a new picture could be named by finding the nearest caption, even for
+        names that never appeared in training. This chapter does the same
+        with signals and short descriptions of them. Then it measures how the
+        batch size and the temperature affect the result.
 
         ## Further reading
 
@@ -338,41 +339,47 @@ FILE_IMPORTS = '''
 
 CLIP1_LESSON = prose(
     """
-    CLIP, from Radford and colleagues, trained on 400 million pictures with
-    their captions from the internet. Its task was to predict which caption
-    goes with which picture. Here the pictures become signals of 64 steps,
-    and the captions short descriptions made from three parts.
+    CLIP, from Radford and colleagues, trained on 400 million pictures from
+    the internet, each with its caption. Its task was to predict which
+    caption goes with which picture. Here the pictures are replaced by
+    signals of 64 steps, and the captions by short descriptions. Each
+    description has three parts, a shape, a period and a level.
 
     ```text
     rises then falls | repeats every 8 | high
     ```
 
-    A signal encoder and a text encoder each map their input to 32 numbers.
-    For a batch of N pairs, contrastive1's similarity matrix compares every
-    signal with every description, and the right pairs sit on the diagonal.
+    A signal encoder and a text encoder each map their input to a vector of
+    32 numbers, its features. For a batch of N pairs, contrastive1's
+    similarity matrix compares every signal with every description. Entry
+    `[i, j]` is the cosine between signal i and description j, so the right
+    pairs are on the diagonal.
 
-    CLIP's loss is **symmetric**. Each row is a choice among N descriptions,
-    as contrastive1's InfoNCE was, and each column a choice among N signals.
-    The loss is the average of the two cross entropies.
+    CLIP's loss is **symmetric**. Each row of the matrix is a classification
+    over the N descriptions, as in contrastive1's InfoNCE. Each column is a
+    classification over the N signals. The loss is the average of the cross
+    entropy over the rows and the cross entropy over the columns.
 
     ```python
     scores = torch.tensor([[2.0, 0.0], [1.0, 3.0]])
     scores.T    # tensor([[2., 1.], [0., 3.]]), the columns as rows
     ```
 
-    CLIP learns its temperature too. It keeps `log_scale`, a single number
-    that training moves, and multiplies the cosines by its exp. It starts at
-    the scale of a temperature of 0.07. The paper clips it so the logits are
-    never scaled by more than 100, which they found kept training stable.
+    CLIP also learns its temperature. Dividing the cosines by a temperature
+    T is the same as multiplying them by a scale of `1 / T`. CLIP keeps
+    `log_scale`, a single learned number, and multiplies the cosines by
+    `log_scale.exp()`. `log_scale` starts at `log(1 / 0.07)`, the scale for a
+    temperature of 0.07. The paper clips the scale so it never exceeds 100,
+    which they found kept training stable.
 
-    The text encoder reads a description's 7 word slots. It embeds each word
-    and flattens the 7 embeddings into one row before a Linear, so the order
-    of the words counts. "rises then falls" and "falls then rises" share
-    every word, so an encoder that only averaged them could not tell them
-    apart.
+    Each description has 7 word slots, and the text encoder reads all 7. It
+    embeds each word and flattens the 7 embeddings into one vector before a
+    Linear layer, so the order of the words matters. "rises then falls" and
+    "falls then rises" share every word. So an encoder that averaged the word
+    embeddings could not tell them apart.
 
-    CLIP's batches held 32,768 pairs. clip3 measures what the batch size does
-    here.
+    CLIP's batches held 32,768 pairs. clip3 measures how the batch size
+    affects training here.
     """,
 )
 
@@ -384,13 +391,16 @@ def clip1_source(solved: bool) -> str:
             ...'''
     forward_todo = "" if solved else '''
     # TODO: Finish forward. ids has shape (batch, 7). Embed every word with
-    #   self.embed, flatten each row's 7 embeddings into one row of 112
-    #   numbers, and return self.proj of it.'''
+    #   self.embed, which gives 16 numbers per word. Flatten each row's 7
+    #   embeddings into one vector of 112 numbers, and return self.proj
+    #   applied to it, of shape (batch, size).'''
     loss = indented(LOSS_SOLUTION) if solved else '''
-    # TODO: Return CLIP's symmetric loss. Scale both features to length 1,
-    #   multiply their similarity matrix by scale, and average the cross
-    #   entropy of the rows with that of the columns. Pair i is the right
-    #   answer for row i and for column i.
+    # TODO: Return CLIP's symmetric loss. signal_features and text_features
+    #   both have shape (N, size). Normalize every row of both to length 1.
+    #   The similarity matrix has shape (N, N), and entry [i, j] is the cosine
+    #   between signal i and text j. Multiply it by scale to get the scores.
+    #   Take the cross entropy over the rows and over the columns, where the
+    #   right answer for row i and for column i is i, and average the two.
     def clip_loss(
         signal_features: Tensor,
         text_features: Tensor,
@@ -399,10 +409,11 @@ def clip1_source(solved: bool) -> str:
         ...
 
 
-    # TODO: Take one training step and return the loss as a plain number.
-    #   The scale is log_scale's exp, clamped to at most 100. Score both
-    #   encoders with clip_loss, zero the old gradients, backpropagate, and
-    #   step the optimizer.
+    # TODO: Take one training step and return the loss as a plain Python
+    #   float. The scale is log_scale.exp(), clamped to at most 100. Compute
+    #   clip_loss on the signal encoder's features of signals and the text
+    #   encoder's features of ids. Then zero the old gradients, call backward
+    #   on the loss, and step the optimizer.
     def clip_step(
         signal_encoder: nn.Module,
         text_encoder: nn.Module,
@@ -420,10 +431,10 @@ def clip1_source(solved: bool) -> str:
     flipped = torch.tensor([[2.0, 0.0], [1.0, 3.0]]).T                    # tensor([[2., 1.], [0., 3.]])
     rows = nn.Embedding(5, 4)(torch.zeros(3, 7, dtype=torch.long)).flatten(1).shape    # torch.Size([3, 28])
     capped = torch.tensor(150.0).clamp(max=100.0)                          # tensor(100.)
-    start = math.exp(math.log(1 / 0.07))                                   # 14.285..., a temperature of 0.07
+    start = math.exp(math.log(1 / 0.07))                                   # 14.285..., the scale for a temperature of 0.07
 
 
-    # Signals of 64 steps and their descriptions, in 144 combinations.
+    # Signals of 64 steps and their descriptions. There are 144 combinations of shape, period and level.
 ''' + indented(DATA_PART) + '''
 
 
@@ -591,11 +602,11 @@ CLIP1 = Exercise(
     hints={
         "TextEncoder.forward": "self.embed(ids) has shape (batch, 7, 16). flatten(1) makes it (batch, 112) for "
         "self.proj.",
-        "clip_loss": "F.normalize both with dim=1, take the first times the second's transpose, and multiply by scale. "
-        "The targets are torch.arange of the batch size. Take the cross entropy of the scores and of their "
+        "clip_loss": "F.normalize both with dim=1. Matrix multiply the first by the second's transpose, and multiply "
+        "by scale. The targets are torch.arange of the batch size. Take the cross entropy of the scores and of their "
         "transpose, and average the two.",
-        "clip_step": "The scale is log_scale.exp() clamped with max=100.0. Then the loss, zero_grad, backward and "
-        "step, and the loss as a plain number.",
+        "clip_step": "The scale is log_scale.exp() clamped with max=100.0. Then compute the loss, call zero_grad, "
+        "backward and step, and return the loss as a plain number.",
     },
     introduces=(),
     check=check_clip1,
@@ -611,37 +622,40 @@ CLIP1 = Exercise(
 CLIP2_LESSON = prose(
     """
     A classifier trained on the 96 seen combinations has one output per
-    combination. It can never answer with a name it has no output for.
+    combination. It can never answer with a combination it has no output
+    for.
 
-    CLIP names an input another way. Encode every candidate description,
-    encode the signal, and pick the description with the largest cosine. The
-    candidates are only text, so any new description can join them. CLIP
-    called this zero shot transfer, and wrote its candidates as prompts like
-    "A photo of a {label}."
+    CLIP names an input in a different way. It encodes every candidate
+    description and the input. Then it picks the description whose features
+    have the largest cosine with the input's features. The candidates are
+    only text, so you can add any new description to them. CLIP called this
+    zero shot transfer. It wrote its candidates as prompts like "A photo of a
+    {label}."
 
     Training here held out twelve pairs of a shape and a period, such as
-    "rises then falls" with "repeats every 8". Each word was seen, but never
-    in those pairs. With each of the four levels, they make the 48 unseen
-    combinations, `UNSEEN`.
+    "rises then falls" with "repeats every 8". Training saw every word, but
+    never saw those shapes and periods together. Combined with each of the
+    four levels, the twelve pairs give the 48 unseen combinations in
+    `UNSEEN`.
 
     ```python
     torch.tensor([[0.1, 0.9, 0.3], [0.8, 0.2, 0.0]]).argmax(dim=1)    # tensor([1, 0])
     ```
 
-    `train_clip`, given in the file, runs clip1's step. Here are both
-    encoders after 1,500 steps of 64 pairs, on 3 seeds. Each score names
-    1,000 new signals among all 144 descriptions, where a guess is right
-    under 1% of the time.
+    The given function `train_clip` runs clip1's training step in a loop.
+    Here are both encoders after 1,500 steps of 64 pairs, with 3 seeds. Each
+    score comes from naming 1,000 new signals, choosing among all 144
+    descriptions. A random guess would be right less than 1% of the time.
 
-    | Signals from | Named right |
+    | Signals from | Named correctly |
     |---|---|
     | the 96 seen combinations | 100% on every seed |
     | the 48 unseen combinations | 98.3% to 100% |
 
-    The text encoder learned each word's place in the space, so a new
-    combination of seen words lands near the signals that match it. That is
-    why CLIP's text side mattered. It turned a fixed list of classes into
-    any list you can write.
+    The text encoder learned where each word belongs in the space. So the
+    features of a new combination of seen words end up near the signals
+    that match it. That is why CLIP's text encoder mattered. It turned a
+    fixed list of classes into any list you can write.
     """,
 )
 
@@ -649,9 +663,10 @@ CLIP2_LESSON = prose(
 def clip2_source(solved: bool) -> str:
     header = "# clip2.py, a solution for comparison" if solved else "# clip2.py"
     naming = indented(NAMING_SOLUTION) if solved else '''
-    # TODO: Return text_encoder's features for each of combos' descriptions,
-    #   scaled to length 1. Put text_encoder in eval mode and record nothing
-    #   for autograd.
+    # TODO: Return text_encoder's features for the description of each
+    #   combination in combos, with every row normalized to length 1.
+    #   description_ids(combos) gives the word ids. Put text_encoder in eval
+    #   mode and run it inside torch.no_grad().
     def describe(
         text_encoder: nn.Module,
         combos: list[tuple[str, int, float]],
@@ -659,10 +674,10 @@ def clip2_source(solved: bool) -> str:
         ...
 
 
-    # TODO: Return, for each signal, the index of the description whose
-    #   cosine with the signal's features is largest. descriptions are
-    #   describe's rows. Put signal_encoder in eval mode and record nothing
-    #   for autograd.
+    # TODO: For each signal, return the index of the description whose cosine
+    #   with the signal's features is largest. descriptions is the output of
+    #   describe, with one normalized row per description. Put signal_encoder
+    #   in eval mode and run it inside torch.no_grad().
     def name_signals(
         signal_encoder: nn.Module,
         descriptions: Tensor,
@@ -671,10 +686,10 @@ def clip2_source(solved: bool) -> str:
         ...
 
 
-    # TODO: Draw 1,000 signals from combos with make_pairs and generator, name
-    #   them among the descriptions of every combination in COMBOS, and return
-    #   the share named right as a plain number. make_pairs' third result is
-    #   each signal's place in COMBOS.
+    # TODO: Draw 1,000 signals from combos with make_pairs and generator. Name
+    #   them among the descriptions of all combinations in COMBOS. Return the
+    #   fraction named correctly, as a plain Python float. The third result of
+    #   make_pairs is each signal's index in COMBOS, which is the right name.
     def naming_accuracy(
         signal_encoder: nn.Module,
         text_encoder: nn.Module,
@@ -701,7 +716,7 @@ def clip2_source(solved: bool) -> str:
 ''' + indented(TEXT_FORWARD) + '''
 
 
-    # clip1's loss and step, and a loop around them.
+    # clip1's loss and step, and train_clip, which runs the step in a loop.
 ''' + indented(LOSS_SOLUTION) + '''
 
 
@@ -711,7 +726,7 @@ def clip2_source(solved: bool) -> str:
 ''' + naming + '''
 
 
-    # Trained on SEEN, then asked to name signals from both lists.
+    # Trains on SEEN, then names signals from both SEEN and UNSEEN.
     signal_encoder, text_encoder, scale = train_clip(1500, 64, None, 0)
     seen_score = naming_accuracy(signal_encoder, text_encoder, SEEN, torch.Generator().manual_seed(500))
     unseen_score = naming_accuracy(signal_encoder, text_encoder, UNSEEN, torch.Generator().manual_seed(501))
@@ -823,7 +838,7 @@ def check_score(
 def check_clip2(checker: Checker) -> None:
     checker.test(
         function="describe",
-        description="gives each description's features, scaled to length 1",
+        description="returns each description's features, normalized to length 1",
         run=check_describe,
     )
     checker.test(
@@ -838,7 +853,7 @@ def check_clip2(checker: Checker) -> None:
     )
     checker.check_name(
         name="seen_score",
-        description="names signals from the combinations training saw",
+        description="is the fraction of signals from seen combinations named correctly",
         run=check_score(
             name="seen_score",
             low=0.95,
@@ -847,7 +862,7 @@ def check_clip2(checker: Checker) -> None:
     )
     checker.check_name(
         name="unseen_score",
-        description="names signals from combinations training never saw",
+        description="is the fraction of signals from unseen combinations named correctly",
         run=check_score(
             name="unseen_score",
             low=0.8,
@@ -866,10 +881,10 @@ CLIP2 = Exercise(
     hints={
         "describe": "description_ids(combos) gives the word ids. Run text_encoder on them inside torch.no_grad() and "
         "F.normalize the result along dim 1.",
-        "name_signals": "Scale signal_encoder(signals) to length 1, multiply by descriptions' transpose, and take the "
-        "argmax over dim 1.",
-        "naming_accuracy": "make_pairs(combos, 1000, generator) gives the signals and their places. Name them among "
-        "describe(text_encoder, COMBOS), then the share of names equal to the places.",
+        "name_signals": "Normalize signal_encoder(signals) to length 1 along dim 1, multiply by the transpose of "
+        "descriptions, and take the argmax over dim 1.",
+        "naming_accuracy": "make_pairs(combos, 1000, generator) gives the signals and their places in COMBOS. Name "
+        "them among describe(text_encoder, COMBOS), then return the fraction of names equal to the places.",
     },
     introduces=(),
     check=check_clip2,
@@ -884,9 +899,10 @@ CLIP2 = Exercise(
 
 CLIP3_LESSON = prose(
     """
-    What did the space learn? Take the cosine of every two descriptions, and
-    group the pairs by how many of their three parts differ. Here are the
-    averages after clip2's training, on 3 seeds.
+    What did the space learn? Take the cosine between the features of every
+    two descriptions, and group the pairs by how many of their three parts
+    differ. Here are the average cosines after clip2's training, over 3
+    seeds.
 
     | Parts that differ | Average cosine |
     |---|---|
@@ -894,24 +910,27 @@ CLIP3_LESSON = prose(
     | 2 | 0.19 to 0.20 |
     | 3 | -0.21 to -0.23 |
 
-    The space is laid out by the parts. Descriptions that share more of
-    them sit closer, and a signal lands near the parts it shows.
+    The space is organized by the parts. Descriptions that share more parts
+    are closer together, and a signal's features end up near the
+    descriptions of the parts it shows.
 
-    The temperature decides how sharp each row's softmax can get. A cosine
+    The temperature limits how sharp each row's softmax can get. A cosine
     lies between -1 and 1. At a temperature of 1, the right description out
-    of 96 does best with a cosine of 1 while all 95 rivals score -1. Even
-    then it gets `math.exp(1) / (math.exp(1) + 95 * math.exp(-1))`, about
-    0.072. `right_share` measures the share each right pair really gets, on
-    a batch of one signal for each seen description.
+    of 96 does best with a cosine of 1 and the 95 others at -1. Even
+    then its softmax probability is
+    `math.exp(1) / (math.exp(1) + 95 * math.exp(-1))`, about 0.072.
+    `right_share` measures the probability each right pair actually gets. It
+    uses a batch with one signal for each seen description.
 
     ```python
     torch.softmax(torch.eye(3) * 10, dim=1).diagonal()    # tensor([0.9999, 0.9999, 0.9999])
     ```
 
-    Here is clip2's training at fixed temperatures and with a learned one,
-    naming the 48 unseen combinations, on 3 seeds.
+    Here is clip2's training run at fixed temperatures and with a learned
+    temperature. Each score is the fraction of signals from the 48 unseen
+    combinations named correctly, over 3 seeds.
 
-    | Temperature | Unseen named right |
+    | Temperature | Unseen named correctly |
     |---|---|
     | 1 | 27.6%, 67.9% and 70.2% |
     | 0.3 | 98.4% to 99.9% |
@@ -919,29 +938,32 @@ CLIP3_LESSON = prose(
     | 0.03 | 94.0% to 98.7% |
     | learned, from 0.07 | 98.3% to 100% |
 
-    A temperature of 1 caps how sure the model can be, so the loss keeps
-    pulling at pairs it already has right. There the trained model gives
-    each right pair 0.025 to 0.026 of the softmax. The learned temperature
-    settled at 0.038 to 0.040, where each right pair gets 0.997 to 0.999.
-    Learning it lands with the best fixed values, with no training run for
-    each value tried.
+    A temperature of 1 limits how confident the model can be, so the loss
+    keeps pushing on pairs it already gets right. At that temperature, the
+    trained model gives each right pair a softmax probability of only 0.025
+    to 0.026. The learned temperature ended up at 0.038 to 0.040, where each
+    right pair gets 0.997 to 0.999. The learned temperature scores as well
+    as the best fixed values, without a separate training run for each value
+    tried.
 
-    The batch size decides how many rivals each pair meets per step. A
-    bigger batch also sees more pairs. To change only the rivals, each run
-    below takes the same 120 steps on the same batches of 256 pairs. Each
-    batch is cut into groups, and the loss compares a pair only with the
-    others in its group.
+    In each step, a pair is compared against the other pairs in the batch,
+    which are called negatives. So the batch size decides how many negatives
+    each pair meets. But a bigger batch also trains on more pairs. To change
+    only the number of negatives, each run below takes the same 120 steps on
+    the same batches of 256 pairs. Each batch is cut into groups, and the
+    loss compares a pair only with the other pairs in its group.
 
-    | Pairs per group | Unseen named right after 120 steps |
+    | Pairs per group | Unseen named correctly after 120 steps |
     |---|---|
     | 4 | 18.9% to 40.5% |
     | 16 | 84.0% to 90.5% |
     | 64 | 90.4% to 98.9% |
     | 256 | 92.7% to 99.4% |
 
-    More rivals name more signals right, on every seed. Rivals matter most
-    early in training, as SimCLR's batch size figure shows. After 480 steps
-    all four land at 92.6% to 100%. CLIP's batches held 32,768 pairs.
+    More negatives mean more signals named correctly, on every seed.
+    Negatives matter most early in training, as SimCLR's figure on batch
+    size shows. After 480 steps, all four group sizes reach 92.6% to 100%.
+    CLIP's batches held 32,768 pairs.
     """,
 )
 
@@ -949,9 +971,11 @@ CLIP3_LESSON = prose(
 def clip3_source(solved: bool) -> str:
     header = "# clip3.py, a solution for comparison" if solved else "# clip3.py"
     space = indented(SPACE_SOLUTION) if solved else '''
-    # TODO: Return the share softmax gives each row's right pair, the entry
-    #   on the diagonal, averaged over the rows, as a plain number. Multiply
-    #   similarities by scale first, and take the softmax along each row.
+    # TODO: similarities is a square matrix whose diagonal holds the right
+    #   pairs. Multiply it by scale and take the softmax along each row. Return
+    #   the average of the diagonal entries, which are the probabilities the
+    #   rows give their right pairs, as a plain Python float.
+    #   Example: right_share(torch.eye(3), 10.0) returns about 0.9999.
     def right_share(
         similarities: Tensor,
         scale: float,
@@ -959,11 +983,11 @@ def clip3_source(solved: bool) -> str:
         ...
 
 
-    # TODO: Return the average cosine between the descriptions of every two
-    #   combinations in COMBOS that differ in exactly 1, 2 and 3 of their
-    #   parts, as a list of three plain numbers. Take the features with
-    #   describe. Two combinations differ in a part when their shapes, periods
-    #   or levels are not equal.
+    # TODO: Return a list of three plain numbers. They are the average cosines
+    #   between the descriptions of two combinations in COMBOS that differ in
+    #   exactly 1, 2 and 3 of their three parts. Get the features with
+    #   describe. Two combinations differ in a part when their shapes, their
+    #   periods or their levels are not equal.
     def similarity_by_difference(text_encoder: nn.Module) -> list[float]:
         ...'''
 
@@ -1002,8 +1026,8 @@ def clip3_source(solved: bool) -> str:
 ''' + space + '''
 
 
-    # clip2's training, then the space's layout, and how sure the model can be on a batch of one signal for each
-    # seen description, so each row has one right pair.
+    # Runs clip2's training, then measures the layout of the space. Then it measures how confident the model can
+    # be, on a batch with one signal for each seen description, so each row has one right pair.
     signal_encoder, text_encoder, scale = train_clip(1500, 64, None, 0)
     by_difference = similarity_by_difference(text_encoder)
     signals = signals_of(SEEN, torch.Generator().manual_seed(502))
@@ -1062,7 +1086,7 @@ def check_by_difference(value: object) -> None:
 
     if not value[0] > value[1] > value[2]:
         raise Mismatch(
-            f"by_difference is {value_text(value)}, but descriptions that differ in fewer parts should sit closer. "
+            f"by_difference is {value_text(value)}, but descriptions that differ in fewer parts should be closer. "
             "Check similarity_by_difference.",
         )
 
@@ -1070,7 +1094,7 @@ def check_by_difference(value: object) -> None:
 def check_clip3(checker: Checker) -> None:
     checker.test(
         function="right_share",
-        description="gives the softmax's share on the diagonal, averaged over the rows",
+        description="returns the average softmax probability on the diagonal",
         run=check_right_share,
     )
     checker.test(
@@ -1080,12 +1104,12 @@ def check_clip3(checker: Checker) -> None:
     )
     checker.check_name(
         name="by_difference",
-        description="is the trained space's cosines by parts that differ",
+        description="is the trained space's average cosines, by number of parts that differ",
         run=check_by_difference,
     )
     checker.check_name(
         name="share_at_one",
-        description="is how sure a temperature of 1 lets the model be",
+        description="is how confident a temperature of 1 lets the model be",
         run=check_score_range(
             name="share_at_one",
             low=0.0,
@@ -1095,7 +1119,7 @@ def check_clip3(checker: Checker) -> None:
     )
     checker.check_name(
         name="share_learned",
-        description="is how sure the learned temperature lets it be",
+        description="is how confident the learned temperature lets the model be",
         run=check_score_range(
             name="share_learned",
             low=0.9,
@@ -1134,11 +1158,11 @@ CLIP3 = Exercise(
     source=clip3_source(solved=False),
     solution=clip3_source(solved=True),
     hints={
-        "right_share": "torch.softmax of scale times similarities along dim 1, then .diagonal() for each row's right "
-        "pair, then the mean as a plain number.",
+        "right_share": "Take torch.softmax of scale times similarities along dim 1, then .diagonal() for each row's "
+        "right pair, then the mean as a plain number.",
         "similarity_by_difference": "describe(text_encoder, COMBOS) times its transpose gives every cosine. Make a "
-        "tensor of each combination's shape index, period and level. Compare every row with every row and sum the "
-        "parts that differ. Then average the cosines where that count is 1, 2 or 3.",
+        "tensor of each combination's shape index, period and level. Compare every row with every other row using != "
+        "and broadcasting, and sum the parts that differ. Then average the cosines where that count is 1, 2 or 3.",
     },
     introduces=(),
     check=check_clip3,

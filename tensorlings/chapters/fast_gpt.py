@@ -52,11 +52,12 @@ FAST_GPT = Chapter(
         """
         # Project: a faster GPT
 
-        Section 12's project. You time your GPT from gpt3 as it writes, then
-        give it kvcache1's cache and quant3's int8 weights, check what each
-        changes in the text it writes, and measure speed, validation loss and
-        size before and after. Which change pays depends on the device, so
-        the measuring is the point.
+        This is the project for Section 12. You measure how fast your GPT from
+        gpt3 writes text. Then you add the KV cache from kvcache1 and the int8
+        weights from quant3, and check whether each one changes the text the
+        model writes. You measure speed, validation loss and model size before
+        and after. Which change actually helps depends on the device, so the
+        measuring is the point of the project.
 
         ## Further reading
 
@@ -187,41 +188,47 @@ FAST1_NAMES = '''
 
 FAST1_LESSON = prose(
     """
-    Section 12's project. Your GPT from gpt3 writes with gpt4's `generate`.
-    Here you time it, then make it faster with kvcache1's cache and quant3's
-    int8 weights, and time it again.
+    This is the project for Section 12. Your GPT from gpt3 writes text with
+    the `generate` function from gpt4. In this project you measure how fast it
+    writes. Then you make it faster with the KV cache from kvcache1 and the
+    int8 weights from quant3, and measure it again.
 
-    Timing uses profile1's `time_call`, warmup first and a synchronize after
-    each call. Writing also draws from a random generator. On a GPU,
-    `torch.multinomial` needs that generator on the same device, or it stops
-    with an error.
+    The timing uses `time_call` from profile1. It runs a few warmup calls
+    first, and it synchronizes the device after each timed call. Writing text
+    also draws random samples from a random number generator. On a GPU,
+    `torch.multinomial` raises an error unless that generator is on the same
+    device as the model.
 
     ```python
     torch.Generator(device=torch.device("cpu")).device    # device(type='cpu')
     ```
 
-    `tokens_per_second` times one call of a writing function and divides the
-    tokens written by the seconds. It takes the writing function itself as
-    an argument, so fast3 can time `cached_generate` with it too.
+    `tokens_per_second` times one call of a writing function. Then it divides
+    the number of tokens written by the seconds the call took. It takes the
+    writing function as an argument, so fast3 can use it to time
+    `cached_generate` too.
 
-    `step_seconds` times one forward pass over a text of a given length. gpt4's
-    `generate` runs one for every token it writes, over the whole text so
-    far, up to `block_size` tokens.
+    `step_seconds` times one forward pass of the model over a text of a given
+    length. gpt4's `generate` runs one forward pass for every token it writes.
+    Each pass covers the whole text so far, up to the last `block_size`
+    tokens.
 
-    Here is the trained model from gpt3 on this Mac's CPU, over three runs on
-    a quiet machine. It wrote 100 tokens after "ROMEO:".
+    Here are the timings for the trained model from gpt3 on this Mac's CPU.
+    Each cell is the range over three runs on an otherwise idle machine. The
+    model wrote 100 tokens after the prompt "ROMEO:".
 
     | Tokens per second | Step at 8 tokens | Step at 128 tokens |
     |---|---|---|
     | 1,405 to 1,418 | 0.44 to 0.47 ms | 1.05 to 1.07 ms |
 
-    A step over 128 tokens took 2.3 to 2.4 times a step over 8. Each step
-    reruns the model over the whole text so far, so writing slows as the
-    text grows. fast2 adds kvcache1's cache, which runs only the newest
-    token.
+    A step over 128 tokens took 2.3 to 2.4 times as long as a step over 8
+    tokens. Each step runs the model over the whole text again, so writing
+    gets slower as the text grows. fast2 adds the KV cache from kvcache1. With
+    the cache, each step runs the model on the newest token only.
 
-    The last lines of the file time your machine's CPU with your functions,
-    writing 100 tokens as the table did. The result shows what they got.
+    The last lines of the file use your functions to time the model on your
+    machine's CPU, writing 100 tokens like the table above. The Result tab
+    shows the numbers they got.
     """,
 )
 
@@ -229,8 +236,8 @@ FAST1_SOURCE = source_file(
     '''
     # fast1.py
 ''' + IMPORTS + '''
-    sampler = torch.Generator(device=torch.device("cpu")).manual_seed(0)    # draws on the CPU
-    rate = 32 / 0.04                                                        # 800.0 tokens per second
+    sampler = torch.Generator(device=torch.device("cpu")).manual_seed(0)    # a random generator on the CPU
+    rate = 32 / 0.04                                                        # 32 tokens in 0.04 seconds is 800.0 per second
 
 
 ''' + GIVEN_GPT + '''
@@ -239,10 +246,12 @@ FAST1_SOURCE = source_file(
 ''' + GIVEN_TIMING + '''
 
 
-    # TODO: Return how many tokens per second write produces. Move model and
-    #   prompt to device, and make a generator on device seeded with 0. Then
-    #   time write(model, prompt, steps, 0.8, 20, generator) with time_call,
-    #   1 warmup call and 3 timed ones, and divide steps by the seconds.
+    # TODO: Return how many tokens per second the writing function write
+    #   produces. Move model and prompt to device, and make a torch.Generator
+    #   on device seeded with 0. Then time the call
+    #   write(model, prompt, steps, 0.8, 20, generator) with time_call, using
+    #   1 warmup call and 3 timed calls. Return steps divided by the seconds
+    #   that time_call returns.
     def tokens_per_second(
         write: Callable[..., Tensor],
         model: nn.Module,
@@ -253,10 +262,12 @@ FAST1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the seconds one forward pass of model takes on a batch of one
-    #   text, length token ids that are all 0, on device. Move model to device
-    #   and put it in eval mode, record nothing for autograd, and time it with
-    #   time_call, 3 warmup calls and 10 timed ones.
+    # TODO: Return how many seconds one forward pass of model takes on device.
+    #   The input is a batch of one text made of length token ids that are all
+    #   0, so it has shape (1, length) and dtype torch.long, and it is made on
+    #   device. Move model to device and put it in eval mode. Run the pass
+    #   inside torch.no_grad() so autograd records nothing, and time it with
+    #   time_call, using 3 warmup calls and 10 timed calls.
     def step_seconds(
         model: nn.Module,
         length: int,
@@ -439,16 +450,22 @@ def check_tokens_per_second(
     called = write.calls[0]
 
     if called["model"] != "meta":
-        raise Mismatch(f"{call} handed write the model on the CPU, where a GPU can't run it. Move model to device first.")
+        raise Mismatch(
+            f"{call} passed write the model while it was on the CPU, where a GPU can't run it. Move model to device "
+            "first.",
+        )
 
     if called["ids"] != "meta":
-        raise Mismatch(f"{call} handed write the prompt on the CPU, where a GPU can't read it. Move prompt to device first.")
+        raise Mismatch(
+            f"{call} passed write the prompt while it was on the CPU, where a GPU can't read it. Move prompt to "
+            "device first.",
+        )
 
     if recorder.devices != ["meta"]:
         made = ", ".join(recorder.devices) if recorder.devices else "none"
         raise Mismatch(
-            f"{call} made generators on these devices, {made}, but it should make one on device. "
-            "torch.multinomial on a GPU stops with an error when its generator sits on the CPU.",
+            f"{call} made generators on these devices, {made}, but it should make one generator on device. "
+            "On a GPU, torch.multinomial raises an error when its generator is on the CPU.",
         )
 
     wanted = {"steps": steps, "temperature": 0.8, "top_k": 20, "seed": 0}
@@ -536,7 +553,7 @@ def check_step_seconds(
 
     if seen["dtype"] != torch.long:
         raise Mismatch(
-            f"{call} ran the model on ids of dtype {seen['dtype']}, but they should be torch.long, whole numbers the "
+            f"{call} ran the model on ids of dtype {seen['dtype']}, but they should be torch.long, integers that the "
             "embedding can look up.",
         )
 
@@ -570,7 +587,7 @@ def check_fast1(checker: Checker) -> None:
     for steps, seconds in ((32, 0.25), (10, 0.5)):
         checker.test(
             function="tokens_per_second",
-            description="times one write on the device and divides",
+            description="times one call of write on device and divides steps by the seconds",
             run=lambda found, steps=steps, seconds=seconds: check_tokens_per_second(found, steps, seconds),
         )
 
@@ -582,10 +599,10 @@ def check_fast1(checker: Checker) -> None:
         )
 
     for name, description in (
-        ("plain_speed", "is your CPU's speed writing with generate"),
-        ("short_step", "is one forward pass over 8 tokens"),
-        ("long_step", "is one forward pass over 128 tokens"),
-        ("growth", "is how many times longer 128 tokens take"),
+        ("plain_speed", "is how many tokens per second generate writes on your CPU"),
+        ("short_step", "is the seconds of one forward pass over 8 tokens"),
+        ("long_step", "is the seconds of one forward pass over 128 tokens"),
+        ("growth", "is how many times longer a pass over 128 tokens takes than one over 8"),
     ):
         checker.check_name(
             name=name,
@@ -602,10 +619,11 @@ FAST1 = Exercise(
     source=FAST1_SOURCE,
     solution=FAST1_SOLUTION,
     hints={
-        "tokens_per_second": "Move both with .to(device), make torch.Generator(device=device).manual_seed(0), and hand "
-        "time_call a lambda that calls write. Then steps divided by what time_call returns.",
-        "step_seconds": "torch.zeros(1, length, dtype=torch.long, device=device) gives the ids. Call time_call on a "
-        "lambda that runs model(ids), inside torch.no_grad().",
+        "tokens_per_second": "Move model and prompt with .to(device), and make the generator with "
+        "torch.Generator(device=device).manual_seed(0). Pass time_call a lambda that calls write. Then divide steps "
+        "by the seconds that time_call returns.",
+        "step_seconds": "torch.zeros(1, length, dtype=torch.long, device=device) makes the ids. Inside "
+        "torch.no_grad(), call time_call on a lambda that runs model(ids).",
         "plain_speed": "It comes from tokens_per_second. Make that pass first.",
         "short_step": "It comes from step_seconds. Make that pass first.",
         "long_step": "It comes from step_seconds. Make that pass first.",
@@ -622,7 +640,8 @@ FAST1 = Exercise(
 # ---------------------------------------------------------------------------
 
 SETTINGS_OF_PART = '''
-# The five numbers a GPT was made with, read off its layers.
+# Returns the five settings a GPT was made with, read off its layers. They are the vocabulary size,
+# block_size, embedding size, number of blocks and number of heads.
 def settings_of(model: nn.Module) -> tuple[int, int, int, int, int]:
     vocabulary, size = model.wte.weight.shape
 
@@ -666,27 +685,33 @@ FAST2_NAMES = '''
 
 FAST2_LESSON = prose(
     """
-    kvcache1's `CachedGPT` holds the same layers as gpt2's GPT, under the same
-    names. So a plain model's `state_dict` loads straight into it, and
-    `settings_of`, given, reads the five numbers to make it with.
+    The `CachedGPT` from kvcache1 has the same layers as the GPT from gpt2,
+    with the same names. So the `state_dict` of a plain GPT loads directly
+    into a `CachedGPT`. To make the `CachedGPT` you need the five settings the
+    GPT was made with. The given function `settings_of` reads them off the
+    GPT's layers.
 
     ```python
     model.state_dict()["wte.weight"].shape    # torch.Size([65, 128])
     ```
 
-    quant3's `quantize_linears_` then swaps the blocks' Linears for int8 ones.
-    Order matters here. An `Int8Linear` keeps no `weight` parameter for a
-    state dict to load into, so the weights load first. Only the blocks get
-    quantized, since `lm_head` shares its table with `wte`.
+    Then `quantize_linears_` from quant3 replaces each `nn.Linear` in the
+    blocks with an `Int8Linear`. The order of these two steps matters. An
+    `Int8Linear` has no `weight` parameter for a state dict to load into, so
+    load the weights first and quantize after. Only the blocks get quantized,
+    because `lm_head` shares its weight with the embedding table `wte`.
 
-    The cache is exact. kvcache1 checked it against gpt4's `generate` token
-    for token. int8 is not exact. Each weight moves by up to half a step of
-    its row's scale, so the scores move a little. Now and then a sample lands
-    on another token, and from there the two texts part.
+    The cache is exact. kvcache1 checked that the cached model writes the same
+    tokens as gpt4's `generate`, one by one. int8 is not exact. Rounding to
+    int8 changes each weight by up to half of its row's scale, so the scores
+    change a little. Once in a while, sampling then picks a different token.
+    Every later token depends on the tokens before it, so from that point on
+    the two texts are different.
 
-    `first_difference` finds where. Here is the trained model from gpt3,
-    writing 100 tokens after "ROMEO:", for five seeds. A position counts the
-    prompt's 6 tokens too.
+    `first_difference` finds the first position where two texts differ. Here
+    is the trained model from gpt3 writing 100 tokens after "ROMEO:", with
+    five different seeds. Positions count from the start of the prompt, so the
+    6 prompt tokens are positions 0 to 5.
 
     | Seed | Cache, first difference | int8, first difference |
     |---|---|---|
@@ -696,9 +721,10 @@ FAST2_LESSON = prose(
     | 3 | none | 51 |
     | 4 | none | none |
 
-    The cache wrote exactly what `generate` wrote, on all five seeds. int8 parted
-    from it on three seeds of five, the earliest at position 51, and wrote
-    the same 106 tokens on the other two.
+    With the cache, the model wrote exactly what `generate` wrote for all five
+    seeds. With int8, the text differed on three of the five seeds, the
+    earliest at position 51. On the other two seeds, int8 wrote the same 106
+    tokens as `generate`.
     """,
 )
 
@@ -719,9 +745,10 @@ FAST2_SOURCE = source_file(
 ''' + indented(SETTINGS_OF_PART) + '''
 
 
-    # TODO: Return a CachedGPT with model's settings and weights, in eval mode.
-    #   When int8 is True, swap the Linears of its blocks, and only those, for
-    #   Int8Linear. Leave model itself as it was.
+    # TODO: Return a CachedGPT with the same settings and weights as model, in
+    #   eval mode. When int8 is True, also replace every nn.Linear in its
+    #   blocks with Int8Linear, and leave every other layer as it is. Do not
+    #   change model itself.
     def fast_model(
         model: nn.Module,
         int8: bool,
@@ -729,8 +756,11 @@ FAST2_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the first position where the texts a and b differ, both of
-    #   shape (1, n), as a plain number. Return None when they are the same.
+    # TODO: a and b are two texts of token ids, both of shape (1, n). Return the
+    #   first position where they differ, as a plain Python int. Return None
+    #   when they are the same.
+    #   Example: first_difference(torch.tensor([[3, 1, 4]]),
+    #   torch.tensor([[3, 1, 5]])) returns 2.
     def first_difference(
         a: Tensor,
         b: Tensor,
@@ -851,7 +881,7 @@ def expect_position(
         return
 
     if actual is not None:
-        raise Mismatch(f"{call} is {value_text(actual)}, but it should be None, since the two are the same.")
+        raise Mismatch(f"{call} is {value_text(actual)}, but it should be None, since the two texts are the same.")
 
 
 def check_first_difference(found: Callable[..., object]) -> None:
@@ -913,13 +943,13 @@ def check_fast2(checker: Checker) -> None:
 
     checker.test(
         function="first_difference",
-        description="finds where two texts part, or None",
+        description="finds the first position where two texts differ, or None",
         run=check_first_difference,
     )
 
     for name, description in (
-        ("cache_differs_at", "is where the cached text leaves generate's"),
-        ("int8_differs_at", "is where the int8 text leaves generate's"),
+        ("cache_differs_at", "is the first position where the cached text differs from generate's"),
+        ("int8_differs_at", "is the first position where the int8 text differs from generate's"),
     ):
         checker.check_name(
             name=name,
@@ -936,10 +966,10 @@ FAST2 = Exercise(
     source=FAST2_SOURCE,
     solution=FAST2_SOLUTION,
     hints={
-        "fast_model": "Make CachedGPT(*settings_of(model)) and load model.state_dict() into it. Then, when int8 is "
-        "True, quantize_linears_ on its .h, and return it after .eval().",
-        "first_difference": "Compare a[0] with b[0], and .nonzero() gives the positions that differ. None when there "
-        "are none, else the first one's .item().",
+        "fast_model": "Make CachedGPT(*settings_of(model)) and load model.state_dict() into it. When int8 is True, "
+        "call quantize_linears_ on its .h, which holds the blocks. Return it after calling .eval().",
+        "first_difference": "Compare a[0] with b[0] using !=, then .nonzero() gives the positions where they differ. "
+        "Return None when there are none. Otherwise turn the first position into a number with .item().",
         "cache_differs_at": "It comes from fast_model and first_difference. Make those pass first.",
         "int8_differs_at": "It comes from fast_model and first_difference. Make those pass first.",
     },
@@ -1020,24 +1050,27 @@ FAST_REFERENCE = namespace_of(
 
 FAST3_LESSON = prose(
     """
-    Now the four together, measured three ways: tokens per second, validation
-    loss, and the bytes of the weights. `compare` runs each setup through
-    fast1's `tokens_per_second` and gpt3's `validation_loss`.
+    Now you compare four setups. They are the plain model, the model with
+    int8 weights, the model with the cache, and the model with both. Each
+    setup gets measured by its tokens per second, its validation loss and the
+    size of its weights in bytes. `compare` runs each setup through fast1's
+    `tokens_per_second` and gpt3's `validation_loss`.
 
-    Two small pieces make that work. gpt3's `validation_loss` wants a model
-    that returns scores, and a `CachedGPT` returns its scores and its caches.
-    `ScoresOnly` wraps it and hands back the scores alone. And
-    `quantize_linears_` changes a model in place, so the int8 setup without
-    the cache quantizes a copy.
+    Two small pieces make this work. First, gpt3's `validation_loss` expects a
+    model that returns only scores, but a `CachedGPT` returns its scores and
+    its caches. `ScoresOnly` wraps a `CachedGPT` and returns only the scores.
+    Second, `quantize_linears_` changes a model in place. So the int8 setup
+    without the cache quantizes a copy, and the plain model stays as it was.
 
     ```python
     from copy import deepcopy
-    twin = deepcopy(nn.Linear(2, 2))    # its own weights, changing it leaves the first alone
+    twin = deepcopy(nn.Linear(2, 2))    # a copy with its own weights, so changing twin leaves the original alone
     ```
 
-    Here is the trained model from gpt3 on this Mac's CPU, writing 100 tokens
-    after "ROMEO:". The speeds span three runs on a quiet machine. The losses
-    are over gpt3's 20 validation batches.
+    Here are the results for the trained model from gpt3 on this Mac's CPU,
+    writing 100 tokens after "ROMEO:". Each speed is the range over three runs
+    on an otherwise idle machine. Each loss is the average over gpt3's 20
+    validation batches.
 
     | Setup | Tokens per second | Validation loss | Bytes |
     |---|---|---|---|
@@ -1046,19 +1079,26 @@ FAST3_LESSON = prose(
     | Cache | 3,700 to 3,816 | 1.5351 | 3,272,192 |
     | Cache and int8 | 1,515 to 1,535 | 1.5353 | 931,328 |
 
-    The cache wrote about 2.7 times as fast as plain, with the same loss.
-    int8 made the model 3.5 times smaller and moved the loss in the fourth
-    decimal. Memory is what quant3's `Int8Linear` saves. It turns every
-    weight back into a float32 matrix before each multiply, which adds work.
+    The cache wrote about 2.7 times as fast as the plain model, with the same
+    loss. int8 made the model 3.5 times smaller and changed the loss only in
+    the fourth decimal place. int8 also wrote more slowly, because quant3's
+    `Int8Linear` saves memory only. Before each matrix multiplication, it
+    converts every weight back into a float32 matrix, which adds work.
 
-    quant3 said fast kernels turn each whole number into a float inside the
-    multiply. PyTorch has such a fused kernel for the CPU, `torch._weight_int8pack_mm`.
-    Its leading underscore marks it private, free to change between versions.
-    It scales each output inside the multiply, so no float32 weight is built.
-    On gpt3's trained model its scores matched `Int8Linear`'s to 1.4e-5.
+    quant3 mentioned that fast kernels convert each integer to a float inside
+    the multiplication itself. A kernel that does both steps in one pass like
+    this is called fused. PyTorch has a fused int8 kernel for the CPU,
+    `torch._weight_int8pack_mm`. The leading underscore marks it as private,
+    which means it can change between PyTorch versions. It multiplies each
+    output by its row's scale inside the same pass, so it never builds a
+    float32 weight matrix. On gpt3's trained model, its scores matched the scores of
+    `Int8Linear` to within 1.4e-5.
 
-    Here is one cached step after 64 tokens on 4 threads, for three untrained
-    GPTs. The three kinds of weights took turns, over six runs.
+    The next table times one cached step, which writes one token after 64
+    tokens of text, on 4 CPU threads. It uses three untrained GPTs. A row like
+    "8 blocks of 512" means 8 blocks with an embedding size of 512. The three
+    kinds of weights took turns in each round of timing, and each range covers
+    six runs.
 
     | Model | float32 bytes | float32 | `Int8Linear` | Fused int8 |
     |---|---|---|---|---|
@@ -1066,22 +1106,25 @@ FAST3_LESSON = prose(
     | 8 blocks of 512 | 102 MB | 2.1 to 2.5 ms | 4.0 to 5.9 ms | 1.6 to 2.0 ms |
     | 12 blocks of 1,024 | 609 MB | 10 to 15 ms | 32 to 48 ms | 5.6 to 8.4 ms |
 
-    Fused int8 beat float32 on both bigger models. It took 76 to 92 percent
-    of float32's time on the middle one, and 52 to 63 on the biggest. Writing
-    one token multiplies matrices by vectors. With big weights, reading them
-    takes longer than the math, memory bound in profile2's sense, so reading
-    fewer bytes wins. With small ones the reading is quick, and turning each
-    whole number into a float costs more than it saves.
+    Fused int8 was faster than float32 on both bigger models. It took 76 to 92
+    percent of float32's time on the middle model, and 52 to 63 percent on the
+    biggest. Writing one token multiplies each weight matrix by a single
+    vector. With big weights, reading them from memory takes longer than the
+    arithmetic, which profile2 called memory bound. So reading fewer bytes
+    makes the step faster. With small weights the reading is quick, and
+    converting each integer to a float costs more time than the smaller reads
+    save.
 
-    PyTorch's gpt-fast found the same on an A100. Unfused int8 ran slower
-    than 16 bits, and fused int8 took a 7 billion parameter Llama from 107
-    tokens a second to 157. GPTQ's kernel reads 3 bit weights and turns each
-    into a float only inside the multiply. On a 175 billion parameter model
-    it took 71 ms a token on one A100, where FP16 needed five and took 230 ms.
+    PyTorch's gpt-fast project found the same on an A100 GPU. Unfused int8
+    ran slower than 16 bit weights. Fused int8 sped up a 7 billion parameter
+    Llama model from 107 tokens a second to 157. GPTQ's kernel reads 3 bit
+    weights and converts each one to a float only inside the multiplication.
+    On a 175 billion parameter model it took 71 ms per token on one A100. With
+    FP16 weights, the same model needed five A100s and took 230 ms per token.
 
     The last line of the file runs `compare` on your CPU, writing 100 tokens
-    as the table did, and the result shows your table. It scores 5
-    validation batches, to keep the check short.
+    like the first table, and the Result tab shows your table. It scores only
+    5 validation batches, to keep the check short.
     """,
 )
 
@@ -1089,7 +1132,7 @@ FAST3_SOURCE = source_file(
     '''
     # fast3.py
 ''' + FAST3_IMPORTS + '''
-    twin = deepcopy(nn.Linear(2, 2))    # its own weights, changing twin leaves the first one alone
+    twin = deepcopy(nn.Linear(2, 2))    # a copy with its own weights, so changing twin leaves the original alone
 
 
 ''' + GIVEN_GPT + '''
@@ -1114,8 +1157,10 @@ FAST3_SOURCE = source_file(
 ''' + indented(FAST_MODEL_SOLUTION) + '''
 
 
-    # TODO: Finish ScoresOnly. It keeps model and its block_size, and its forward
-    #   returns only the scores of model's (scores, caches).
+    # TODO: Finish ScoresOnly, a wrapper around a CachedGPT. __init__ stores
+    #   model and model.block_size as attributes of self. forward runs the
+    #   stored model on ids, which returns (scores, caches), and returns only
+    #   the scores.
     class ScoresOnly(nn.Module):
         def __init__(self, model: nn.Module) -> None:
             super().__init__()
@@ -1125,16 +1170,17 @@ FAST3_SOURCE = source_file(
             ...
 
 
-    # TODO: Return a copy of model whose blocks' Linears are Int8Linear, in eval
-    #   mode. Leave model itself as it was.
+    # TODO: Return a copy of model in eval mode, with every nn.Linear in the
+    #   copy's blocks replaced by Int8Linear. Do not change model itself.
     def int8_copy(model: nn.Module) -> nn.Module:
         ...
 
 
-    # TODO: Finish compare. Set speed to the tokens per second of write on setup,
-    #   with tokens_per_second, prompt, steps and device. Set loss to the
-    #   validation_loss of scored on data over batches batches, with a new
-    #   generator seeded with 1 and device.
+    # TODO: Finish compare. It measures the four setups and returns a dict from
+    #   each setup's name to (speed, loss, bytes). Set speed to the tokens per
+    #   second that write produces with setup, from tokens_per_second with
+    #   prompt, steps and device. Set loss with validation_loss, passing
+    #   scored, data, batches, a new torch.Generator seeded with 1, and device.
     def compare(
         model: nn.Module,
         prompt: Tensor,
@@ -1212,7 +1258,7 @@ def check_scores_only(found: type) -> None:
         if getattr(wrapped, "block_size", None) != settings[1]:
             raise Mismatch(
                 f"{call} has block_size {value_text(getattr(wrapped, 'block_size', None))}, but it should keep the "
-                f"model's, {settings[1]}. validation_loss reads it to cut its batches.",
+                f"model's, {settings[1]}. validation_loss reads it to decide how long each text in a batch is.",
             )
 
         with torch.no_grad():
@@ -1220,8 +1266,8 @@ def check_scores_only(found: type) -> None:
 
             if isinstance(scores, (tuple, list)):
                 raise Mismatch(
-                    f"{call}, run on ids of shape (2, 5), gives a {type(scores).__name__}, but it should give the "
-                    "scores alone, the first of the two things a CachedGPT returns.",
+                    f"{call}, run on ids of shape (2, 5), returns a {type(scores).__name__}, but it should return "
+                    "only the scores, the first of the two things a CachedGPT returns.",
                 )
 
             expect_tensor(
@@ -1363,14 +1409,14 @@ def check_compare(found: Callable[..., object]) -> None:
 
         if not isinstance(scores, Tensor):
             raise Mismatch(
-                f"{call} handed validation_loss a model that gives a {type(scores).__name__}, not scores. A cached "
-                "setup gives its scores and its caches, so wrap it in ScoresOnly first.",
+                f"{call} passed validation_loss a model that returns a {type(scores).__name__}, not scores. A cached "
+                "setup returns its scores and its caches, so wrap it in ScoresOnly first.",
             )
 
         if scores.shape[:2] != prompt.shape:
             raise Mismatch(
-                f"{call} handed validation_loss a model whose scores for ids of shape {tuple(prompt.shape)} have shape "
-                f"{tuple(scores.shape)}. ScoresOnly belongs around the cached setups only.",
+                f"{call} passed validation_loss a model whose scores for ids of shape {tuple(prompt.shape)} have shape "
+                f"{tuple(scores.shape)}. Wrap only the cached setups in ScoresOnly.",
             )
 
         return FAST_REFERENCE["validation_loss"](scored, *arguments)
@@ -1385,7 +1431,10 @@ def check_compare(found: Callable[..., object]) -> None:
     )
 
     if first_layer_kinds(model) != before:
-        raise Mismatch(f"{call} quantized the model it was handed, so later setups measured the wrong one. Use int8_copy.")
+        raise Mismatch(
+            f"{call} quantized the model it was handed, so the later setups measured a quantized model instead of the "
+            "plain one. Use int8_copy.",
+        )
 
     if speed.calls != expected_speed.calls:
         timed = "; ".join(f"{write} on a {kinds[0]} with {kinds.count('Int8Linear')} Int8Linear" for write, kinds in speed.calls)
@@ -1438,7 +1487,7 @@ def check_fast3(checker: Checker) -> None:
     checker.test_method(
         class_name="ScoresOnly",
         method="forward",
-        description="hands back the scores alone, with the model's block_size",
+        description="returns only the scores, and keeps the model's block_size",
         run=check_scores_only,
     )
     checker.test(
@@ -1453,7 +1502,7 @@ def check_fast3(checker: Checker) -> None:
     )
     checker.check_name(
         name="table",
-        description="is your CPU's comparison",
+        description="is the comparison table measured on your CPU",
         run=check_table,
     )
 
@@ -1466,9 +1515,10 @@ FAST3 = Exercise(
     source=FAST3_SOURCE,
     solution=FAST3_SOLUTION,
     hints={
-        "ScoresOnly.forward": "In __init__, keep the model and its block_size as attributes of self. forward runs the "
-        "kept model on ids and hands back the first of the two things it returns.",
-        "int8_copy": "deepcopy(model) first, then quantize_linears_ on the copy's .h, and return the copy after .eval().",
+        "ScoresOnly.forward": "In __init__, store the model and its block_size as attributes of self. forward runs "
+        "the stored model on ids and returns the first of the two things the model returns.",
+        "int8_copy": "Make deepcopy(model) first. Then call quantize_linears_ on the copy's .h, and return the copy "
+        "after calling .eval().",
         "compare": "tokens_per_second takes write, setup, prompt, steps and device in that order. validation_loss "
         "takes scored, data, batches, torch.Generator().manual_seed(1) and device.",
         "table": "It comes from compare. Make that pass first.",

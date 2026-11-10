@@ -36,10 +36,11 @@ TOKENS_FOR_EVERYTHING = Chapter(
         """
         # Tokens for everything
 
-        Tables, text, grids, series, sound, video, sets and graphs all end as
-        a matrix of tokens. This chapter maps each kind to its structure and
-        its tokens, shows what attention needs added to read a set, a
-        sequence, a grid or a graph, then puts two kinds in one sequence.
+        Tables, text, grids, time series, sound, video, sets and graphs all
+        end up as a matrix of tokens. This chapter lists each kind of input
+        with its structure and the tokens it becomes. It shows what you have
+        to add so attention can read a set, a sequence, a grid or a graph.
+        Then it puts two kinds of input into one sequence.
 
         ## Further reading
 
@@ -256,45 +257,48 @@ def pinned_threads() -> Iterator[None]:
 
 TOKENS1_LESSON = prose(
     """
-    Every input this course has met ends the same way, as a matrix with one
-    row per token. Here is the map, with the exercise that showed each kind.
+    Every kind of input in this course ends up the same way, as a matrix
+    with one row per token. Here is a map of them, with the exercise that
+    covered each kind.
 
-    | Input | Its structure | What fits it | The tokens it becomes |
+    | Input | Its structure | The layer that suits it | The tokens it becomes |
     |---|---|---|---|
     | a table's numbers | a meaning per column, no order | a token per column, table1 | one per column |
-    | text | order, a fixed vocabulary | embeddings, embedding1, of bpe1's tokens | one per piece of text |
-    | a grid or an image | nearby cells go together | convolution, conv3, or patches, vit1 | 196 patches of 16 by 16 at 224 by 224 |
-    | a time series | order and local shape | patches, series1 | 42 for 336 steps in PatchTST |
+    | text | order, a fixed vocabulary | embeddings of bpe1's tokens, embedding1 | one per piece of text |
+    | a grid or an image | nearby cells are related | convolution, conv3, or patches, vit1 | 196 patches of 16 by 16 from 224 by 224 |
+    | a time series | order and local shape | patches, series1 | 42 patches for 336 steps in PatchTST |
     | audio | thousands of samples a second | log mel frames, sound1 | 1,500 for 30 seconds in Whisper |
     | video | frames over time | tubelets, video1 | 4,900 for 2 seconds at 224 by 224 |
     | a set | no order at all | Deep Sets, sets1 | one per element |
     | a graph | edges between nodes | message passing, message1 | one per node |
 
-    Whisper's frames come every 10 ms, so 30 seconds hold 3,000. Its second
-    convolution has a stride of two, which halves them to 1,500.
+    Whisper makes a frame every 10 ms, so 30 seconds give 3,000 frames. Its
+    second convolution has a stride of 2, which halves that to 1,500 tokens.
 
-    Attention reads every kind the same way, and position1 showed it ignores
-    order. So what you add to the tokens is what says how they relate.
+    Attention treats every token the same way, and position1 showed that it
+    ignores order. So whatever you add, to the tokens or as a mask, is what
+    tells attention how the tokens relate.
 
-    - Nothing: attention sees a set, and shuffling the inputs shuffles the outputs the same way.
-    - A position table added place by place: a sequence, as position2 did.
-    - A table for the row plus one for the column: a grid.
-    - A mask that lets each token look only at its neighbours: a graph, with mask1's masks.
+    - Add nothing, and attention sees a set. Shuffling the inputs shuffles the outputs the same way.
+    - Add a position table, one row per place, and attention sees a sequence, as in position2.
+    - Add one table for the row plus one for the column, and attention sees a grid.
+    - Give attention a mask that lets each token look only at its neighbours, and it sees a graph, as with mask1's masks.
 
-    `attend`, given in the file, is attention with no weights of its own, so
-    only what you add can change its answer. Its mask is the other way round
-    from mask1's. It holds True where a token may look, as
-    `F.scaled_dot_product_attention` reads one.
+    The file gives you `attend`, which is attention with no learned weights
+    of its own. So only what you add can change its output. Its mask means
+    the opposite of mask1's. It holds True where a token may look, which is
+    how `F.scaled_dot_product_attention` reads a boolean mask.
 
     ```python
     torch.arange(6) // 3    # tensor([0, 0, 0, 1, 1, 1]), the row of each place in a grid 3 wide
     torch.arange(6) % 3     # tensor([0, 1, 2, 0, 1, 2]), its column
     ```
 
-    equivariance1 tested a symmetry directly. `shuffle_gap` does that for a
-    shuffle, and `reach` finds which outputs change when one token does.
-    Section 14's combine5 later turns this map into a guide for picking a
-    structure for a problem of your own.
+    equivariance1 measured a symmetry directly. `shuffle_gap` does the same
+    for shuffling. It compares attention on shuffled inputs with attention's
+    outputs shuffled the same way. `reach` finds which outputs change when
+    one token changes. Later, Section 14's combine5 turns this map into a
+    guide for choosing a structure for your own problem.
     """,
 )
 
@@ -319,9 +323,10 @@ TOKENS1_SOURCE = source_file(
 ''' + indented(ATTEND_PART) + '''
 
 
-    # TODO: Return tokens with a position added to each, the first row of
-    #   table to the first token and so on. tokens has shape (count, size) or
-    #   (batch, count, size), and table has at least count rows.
+    # TODO: Return tokens with a position added to each token. Add row 0 of
+    #   table to the first token, row 1 to the second, and so on. tokens has
+    #   shape (count, size) or (batch, count, size), and table has shape
+    #   (rows, size) with at least count rows.
     def with_positions(
         tokens: Tensor,
         table: Tensor,
@@ -329,10 +334,10 @@ TOKENS1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return tokens with a grid position added. The tokens fill a grid
-    #   `width` wide, row by row, so token k sits in row k // width and column
-    #   k % width. Add the row's row of `rows` and the column's row of
-    #   `columns`.
+    # TODO: Return tokens, of shape (count, size), with a grid position added.
+    #   The tokens fill a grid `width` wide, row by row, so token k sits in row
+    #   k // width and column k % width. Add rows[k // width] and
+    #   columns[k % width] to token k.
     def with_grid_positions(
         tokens: Tensor,
         rows: Tensor,
@@ -342,17 +347,19 @@ TOKENS1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return which tokens of a graph may look at which, of True and
-    #   False. A node may look at the nodes it has an edge to in adjacency,
-    #   of 0 and 1, and at itself.
+    # TODO: adjacency is a (nodes, nodes) matrix of 0s and 1s, with a 1 at
+    #   [i, j] when node i has an edge to node j. Return a boolean matrix of
+    #   the same shape that is True where node i may look at node j. A node may
+    #   look at the nodes it has an edge to, and at itself.
     def graph_allowed(adjacency: Tensor) -> Tensor:
         ...
 
 
-    # TODO: Return the largest change, as a plain number, between attend on
-    #   the shuffled elements and attend's outputs shuffled the same way. Make
-    #   tokens with make_tokens in both cases, and let every token see every
-    #   other.
+    # TODO: Return the largest absolute difference between two results, as a
+    #   plain Python float. The first is attend on the shuffled elements,
+    #   elements[order]. The second is attend on the original elements, with
+    #   its outputs then shuffled by order. Make the tokens with make_tokens in
+    #   both cases, and let every token see every other token.
     def shuffle_gap(
         make_tokens: Callable[[Tensor], Tensor],
         elements: Tensor,
@@ -361,9 +368,10 @@ TOKENS1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return which of attend's outputs change, as True and False, when
-    #   1.0 is added to every number of the token at node. Leave tokens as it
-    #   was, and count a change of more than 1e-6.
+    # TODO: Add 1.0 to every number in the token at index node, and run attend
+    #   before and after the change. Return a boolean tensor with one entry
+    #   per token, True where that token's output changed by more than 1e-6.
+    #   Do not change tokens itself.
     def reach(
         tokens: Tensor,
         allowed: Tensor,
@@ -372,7 +380,7 @@ TOKENS1_SOURCE = source_file(
         ...
 
 
-    # Six elements of size 8, shuffled. A set, a sequence and a grid 3 wide.
+    # Six elements of size 8 and a shuffled order. The three gaps treat them as a set, a sequence and a grid 3 wide.
     generator = torch.Generator().manual_seed(0)
     elements = torch.randn(6, 8, generator=generator)
     order = torch.randperm(6, generator=generator)
@@ -557,7 +565,7 @@ def check_tokens1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="with_grid_positions",
-        description="adds each token's row and column",
+        description="adds each token's row and column embeddings",
         inputs=(
             (small_tensor(1104, 6, 3), small_tensor(1105, 2, 3), small_tensor(1106, 3, 3), 3),
             (small_tensor(1107, 8, 2), small_tensor(1108, 4, 2), small_tensor(1109, 2, 2), 2),
@@ -570,7 +578,7 @@ def check_tokens1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="graph_allowed",
-        description="lets each node see its edges and itself",
+        description="lets each node see the nodes it has edges to, and itself",
         inputs=(
             (ring_of(5),),
             (torch.tensor([[0, 1, 0], [1, 0, 0], [0, 0, 0]]),),
@@ -591,7 +599,7 @@ def check_tokens1(checker: Checker) -> None:
     )
 
     for name, text in (
-        ("set_gap", "is the shuffle gap of the bare elements"),
+        ("set_gap", "is the shuffle gap of the elements with nothing added"),
         ("sequence_gap", "is the shuffle gap with positions"),
         ("grid_gap", "is the shuffle gap with grid positions"),
     ):
@@ -603,7 +611,7 @@ def check_tokens1(checker: Checker) -> None:
 
     checker.check_name(
         name="reached",
-        description="is what node 0 reaches on a ring",
+        description="is which outputs change when node 0 changes, on a ring",
         run=check_reached,
     )
 
@@ -616,14 +624,15 @@ TOKENS1 = Exercise(
     source=TOKENS1_SOURCE,
     solution=TOKENS1_SOLUTION,
     hints={
-        "with_positions": "Slice table to as many rows as there are tokens, tokens.shape[-2], and add.",
+        "with_positions": "Slice table to its first tokens.shape[-2] rows, one per token, and add the slice to tokens.",
         "with_grid_positions": "Make the places with torch.arange of the token count. Integer division by width "
-        "gives each row, the remainder gives each column. Index rows and columns with them and add both.",
-        "graph_allowed": "Turn adjacency into True and False with .bool(), then or it with an identity of booleans "
-        "for the diagonal.",
-        "shuffle_gap": "Build an all True allowed of size len(elements). Run attend once on make_tokens(elements) and "
-        "once on make_tokens(elements[order]). Shuffle the first result with [order], then take the largest "
-        "absolute difference.",
+        "gives each token's row, and the remainder gives its column. Index rows and columns with them and add both "
+        "to tokens.",
+        "graph_allowed": "Turn adjacency into booleans with .bool(). Then combine it with | and a boolean identity "
+        "matrix from torch.eye, which covers the diagonal.",
+        "shuffle_gap": "Build an allowed mask that is all True, of shape (len(elements), len(elements)). Run attend "
+        "once on make_tokens(elements) and once on make_tokens(elements[order]). Shuffle the first result with "
+        "[order], then take the largest absolute difference.",
         "reach": "Clone tokens, add 1.0 to row node of the clone, and run attend on both. A row changed if its "
         "largest absolute difference, over dim 1, is above 1e-6.",
     },
@@ -638,44 +647,48 @@ TOKENS1 = Exercise(
 
 TOKENS2_LESSON = prose(
     """
-    One sequence can hold several kinds at once. BERT set out the recipe for
-    two sentences, and it carries over to any two kinds.
+    One sequence can hold several kinds of input at once. BERT set out how to
+    do this for two sentences, and the same recipe works for any two kinds of
+    input.
 
     - A class token comes first, as in vit1, and the answer is read from its output.
     - A separator token can mark where one part ends.
     - A learned **type embedding**, BERT's segment embedding, is added to every token and says which part it came from.
 
-    Here the two parts are series A and B, each cut into 4 patches of 4 and
-    made tokens by one shared Linear. `pairs`, given in the file, makes the
-    examples. The task asks whether A's mean is the larger.
+    Here the two parts are two time series, A and B. Each is cut into 4
+    patches of 4 numbers, and one shared Linear layer turns each patch into a
+    token. The given function `pairs` makes the examples. The task is to say
+    whether A's mean is larger than B's.
 
-    With no types and no positions, the model sees one bag of tokens, A's
-    and B's mixed. Swap A and B and the bag is the same, but the answer
-    flips. No training can beat a coin flip then.
+    With no types and no positions, the model sees an unordered set of
+    tokens, with A's and B's mixed together. If you swap A and B, the set is
+    the same, but the correct answer flips. So no amount of training can
+    beat a coin flip.
 
-    An `nn.Embedding(3, size)` holds one row for the class token, one for A
-    and one for B. Each token gets its kind's row added.
+    An `nn.Embedding(3, size)` holds three rows, one for the class token, one
+    for A and one for B. Each token gets the row for its kind added to it.
 
     ```python
     kinds = torch.tensor([0] + [1] * 2 + [2] * 2)    # tensor([0, 1, 1, 2, 2])
     ```
 
-    The block is PyTorch's `nn.TransformerEncoderLayer`, as vit2 used it.
-    Both models trained 600 steps of Adam on batches of 64, then were scored
-    on 2,000 new pairs, on 3 seeds.
+    The model's block is PyTorch's `nn.TransformerEncoderLayer`, as in vit2.
+    Both models trained for 600 steps of Adam on batches of 64. Then each
+    was scored on 2,000 new pairs, with 3 seeds.
 
-    | Model | Right on new pairs | Largest change when A and B swap |
+    | Model | Accuracy on new pairs | Largest change when A and B swap |
     |---|---|---|
     | no types | 48.8% to 51.3% | under 2e-7 |
     | types | 96.4% to 97.8% | 18.7 to 29.4 |
 
-    The model with no types gives a pair and its swap the same answer, so
-    it is a coin flip. The type rows make A's tokens and B's differ, and the
-    task becomes easy.
+    The model with no types gives a pair and its swap the same answer, so it
+    does no better than a coin flip. The type rows make A's tokens different
+    from B's, and then the task becomes easy.
 
-    A model that reads several kinds needs to know which token came from
-    which. BERT adds a segment embedding for that. Positions can carry it
-    too, but only when each kind always sits in the same place.
+    A model that reads several kinds of input needs to know which kind each
+    token came from. BERT adds a segment embedding for that. Position
+    embeddings can carry this information too, but only when each kind
+    always sits in the same positions.
     """,
 )
 
@@ -683,11 +696,12 @@ TOKENS2_LESSON = prose(
 def tokens2_source(solved: bool) -> str:
     header = "# tokens2.py, a solution for comparison" if solved else "# tokens2.py"
     build = indented(SEQUENCE_SOLUTION) if solved else '''
-    # TODO: Return the sequence of shape (batch, 1 + a's count + b's count,
-    #   size). cls, of shape (size,), comes first for every example, then
-    #   a_tokens, then b_tokens. When types is not None, add types' row 0 to
-    #   the class token, row 1 to every token of A and row 2 to every token
-    #   of B.
+    # TODO: a_tokens has shape (batch, a_count, size) and b_tokens has shape
+    #   (batch, b_count, size). Return the sequence of shape
+    #   (batch, 1 + a_count + b_count, size). It holds cls, of shape (size,),
+    #   first for every example, then a_tokens, then b_tokens. When types is
+    #   not None, add row 0 of types to the class token, row 1 to every token
+    #   of A, and row 2 to every token of B.
     def build_sequence(
         cls: Tensor,
         a_tokens: Tensor,
@@ -703,9 +717,9 @@ def tokens2_source(solved: bool) -> str:
         ) -> Tensor:
             ...'''
     swap = indented(SWAP_SOLUTION) if solved else '''
-    # TODO: Return the largest change in model's output, as a plain number,
-    #   when a and b trade places. Put model in eval mode and record nothing
-    #   for autograd.
+    # TODO: Return the largest absolute change in model's output when a and b
+    #   swap places, as a plain Python float. Put model in eval mode and run it
+    #   inside torch.no_grad().
     def swap_gap(
         model: nn.Module,
         a: Tensor,
@@ -713,10 +727,11 @@ def tokens2_source(solved: bool) -> str:
     ) -> float:
         ...'''
     forward_todo = "" if solved else '''
-    # TODO: Finish forward. Cut a and b, each of shape (batch, PATCH *
-    #   PATCHES), into patches of PATCH numbers and make tokens of them with
-    #   self.patch. Build the sequence with self.cls and self.types, run
-    #   self.block, and return self.head of the class token's output.'''
+    # TODO: Finish forward. a and b each have shape (batch, PATCH * PATCHES).
+    #   Cut each into patches of PATCH numbers, and turn the patches into
+    #   tokens with self.patch. Build the sequence with build_sequence,
+    #   self.cls and self.types, and run self.block on it. Return self.head
+    #   applied to the class token's output, of shape (batch, 2).'''
 
     return source_file(
         f'''
@@ -733,7 +748,7 @@ def tokens2_source(solved: bool) -> str:
     patches = torch.arange(16.0).reshape(2, -1, 4).shape            # torch.Size([2, 2, 4])
 
 
-    # Pairs of series and whether A's mean is the larger.
+    # Pairs of series A and B, labelled 1 when A's mean is larger.
 ''' + indented(PAIRS_PART) + '''
 
 ''' + build + '''
@@ -745,11 +760,11 @@ def tokens2_source(solved: bool) -> str:
 ''' + swap + '''
 
 
-    # Training and scoring, as video2 wrote them.
+    # Training and scoring functions, written as in video2.
 ''' + indented(TRAIN_PART) + f'''
 
 
-    # Both models trained the same way, then scored on 2,000 new pairs and with A and B swapped.
+    # Trains both models the same way, then scores them on 2,000 new pairs and measures their swap gaps.
     test_a, test_b, test_labels = pairs(2000, torch.Generator().manual_seed(900))
     torch.manual_seed(0)
     untyped = MixedModel(use_types=False)
@@ -875,7 +890,7 @@ def check_tokens2(checker: Checker) -> None:
     )
     checker.test(
         function="swap_gap",
-        description="gives the largest change when A and B trade places",
+        description="returns the largest change when A and B swap places",
         run=check_swap_gap,
     )
 
@@ -906,10 +921,12 @@ TOKENS2 = Exercise(
     solution=tokens2_source(solved=True),
     hints={
         "build_sequence": "Expand cls to (batch, 1, size) and join it with a_tokens and b_tokens along dim 1. For "
-        "the types, make the kind of every place, 0 then 1s then 2s, and add types of those kinds.",
+        "the types, make a tensor with the kind of every position. That is a 0, then a 1 for each token of A, then a 2 "
+        "for each token of B. Add types of that tensor to the sequence.",
         "MixedModel.forward": "reshape(len(a), -1, PATCH) cuts a into patches. Run both through self.patch, build the "
-        "sequence, run self.block, and take position 0 of its output into self.head.",
-        "swap_gap": "The largest absolute difference between model(a, b) and model(b, a), turned into a plain number.",
+        "sequence, run self.block, and pass position 0 of its output to self.head.",
+        "swap_gap": "Take the largest absolute difference between model(a, b) and model(b, a), and turn it into a "
+        "plain number.",
     },
     introduces=("type embedding",),
     check=check_tokens2,

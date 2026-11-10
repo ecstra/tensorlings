@@ -36,11 +36,12 @@ TABLES = Chapter(
         """
         # Tables
 
-        A table holds rows of examples and columns of different kinds, each
-        on its own scale. This chapter turns every column into a token of
-        its own, gives a number column periodic features so a network can
-        see fine steps in it, and runs attention over the column tokens. The
-        data is California's 20,640 housing blocks of 1990.
+        A table holds rows of examples and columns of different kinds, and
+        each column has its own scale. This chapter turns every column into
+        its own token. It gives number columns periodic features, so a
+        network can pick up small differences in their values. Then it runs
+        attention over the column tokens. The data is California's 20,640
+        housing blocks from 1990.
 
         ## Further reading
 
@@ -102,7 +103,7 @@ def recording_hook(
 # The split, the targets and the standardizing, given in every file of the chapter.
 GIVEN_PART = '''
 LOCATION = 2      # the first two number columns, longitude and latitude
-PLACES = 5        # the categories of the distance to the ocean
+PLACES = 5        # the number of categories for the distance to the ocean
 
 
 def split_rows(
@@ -126,7 +127,8 @@ def standardized(
     return (numbers - mean) / spread
 
 
-# The log of each block's value, standardized with the training rows, so an error of 1 is one spread of it.
+# The log of each block's value, standardized with the training rows. So an error of 1 means one standard
+# deviation of the log value.
 def log_targets(
     values: Tensor,
     rows: Tensor,
@@ -386,42 +388,48 @@ def prepared_housing(seed: int) -> dict[str, Tensor]:
 
 TABLE1_LESSON = prose(
     """
-    Part A of this section takes each kind of input on its own. The course
-    met numbers in Section 2, grids in Section 5, sequences in Section 6 and
-    text in Section 7. Tables, time series, audio and video come next.
+    Part A of this section covers one kind of input at a time. The course
+    covered numbers in Section 2, grids in Section 5, sequences in Section 6
+    and text in Section 7. Tables, time series, audio and video come next.
 
     A table holds rows of examples and columns of different kinds. Here each
-    row is one of California's 20,640 housing blocks of 1990. Eight columns
-    are numbers, from longitude to median income. One is a category, how far
-    the block sits from the ocean. The target is the block's median value.
+    row is one of California's 20,640 housing blocks from 1990. Eight columns
+    hold numbers, from longitude to median income. One column is a category
+    that says how close the block is to the ocean. The target, the number the
+    model learns to predict, is the block's median house value.
 
-    A real table has holes. 207 blocks have no bedroom count, so it reads as
-    nan. `fill_missing` puts each column's median over the training rows in
-    every hole, so the test rows never shape the fill. `nanmedian` skips the
-    holes. With an even count it takes the lower of the two middle values,
-    where `nanquantile(0.5)` takes their average.
+    Real tables have holes, which are missing values. 207 blocks have no
+    bedroom count, so that entry is nan, which stands for "not a number".
+    `fill_missing` replaces every hole with its column's median over the
+    training rows. Using only the training rows means the test rows have no
+    influence on the filled values. `nanmedian` ignores the nan entries. With
+    an even number of values it returns the lower of the two middle values,
+    while `nanquantile(0.5)` returns their average.
 
     ```python
     nan = float("nan")
     torch.tensor([[1.0, nan], [nan, 4.0], [3.0, 6.0], [8.0, 5.0]]).nanmedian(dim=0).values    # tensor([3., 5.])
     ```
 
-    An MLP reads a row as one long vector. Gorishniy and colleagues give each
-    column a token of its own instead, their **FT-Transformer**. A number
-    column scales a learned vector by its value and adds a learned bias. A
-    category column picks a row of an embedding table, as embedding1 did.
+    An MLP reads a row as one long vector. Gorishniy and colleagues instead
+    give each column its own token, in a model they call the
+    **FT-Transformer**. For a number column, the token is a learned vector
+    multiplied by the value, plus a learned bias. For a category column, the
+    token is a row of an embedding table, as in embedding1.
 
     ```text
     number token = value * weight[column] + bias[column]
     ```
 
-    Each column gets its own weight, so each can mean something different.
-    A class token goes in front, as in vit1, and the model reads its answer
-    there. So a row of 8 numbers and 1 category becomes 10 tokens.
+    Each column has its own weight vector, so the same value can mean
+    something different in different columns. A class token goes in front
+    of the column tokens, as in vit1, and the model reads its answer from the
+    class token's output. So a row of 8 numbers and 1 category becomes 10
+    tokens.
 
-    Tokens are what attention reads, so table3 runs attention over them. A
-    token per column also lets each column choose its own embedding, which
-    table2 uses for the two location columns.
+    Attention works on tokens, so table3 runs attention over these. Giving
+    each column its own token also lets each column have its own kind of
+    embedding. table2 uses that for the two location columns.
     """,
 )
 
@@ -447,8 +455,13 @@ TABLE1_SOURCE = source_file(
 
 
     # TODO: Return numbers with every nan replaced by its column's median over
-    #   the given rows. numbers has shape (count, columns) and rows holds the
-    #   row numbers to take the medians from. Leave every other entry as it is.
+    #   the given rows. numbers has shape (count, columns), and rows holds the
+    #   indices of the rows to take the medians from. Leave every other entry
+    #   as it is.
+    #   Example: with numbers = torch.tensor([[1.0, nan], [nan, 4.0],
+    #   [3.0, 6.0], [8.0, 5.0]]) and rows = torch.tensor([0, 1, 2, 3]), the
+    #   column medians are 3 and 5, so fill_missing returns
+    #   tensor([[1., 5.], [3., 4.], [3., 6.], [8., 5.]]).
     def fill_missing(
         numbers: Tensor,
         rows: Tensor,
@@ -460,8 +473,11 @@ TABLE1_SOURCE = source_file(
 
 
     # TODO: Return one token per number. numbers has shape (rows, columns), and
-    #   weight and bias have shape (columns, size). Each value scales its
-    #   column's weight, then adds its column's bias, giving (rows, columns, size).
+    #   weight and bias have shape (columns, size). The token for a value in
+    #   column c is value * weight[c] + bias[c], so the result has shape
+    #   (rows, columns, size).
+    #   Example: number_tokens(torch.tensor([[2.0]]), torch.tensor([[1.0, -1.0]]),
+    #   torch.tensor([[0.5, 0.5]])) returns tensor([[[ 2.5000, -1.5000]]]).
     def number_tokens(
         numbers: Tensor,
         weight: Tensor,
@@ -470,9 +486,11 @@ TABLE1_SOURCE = source_file(
         ...
 
 
-    # TODO: Finish forward. Return the class token, one token per number
-    #   column from number_tokens, then the place's token from self.place, in
-    #   that order along dimension 1, for a shape of (rows, 1 + columns + 1, size).
+    # TODO: Finish forward. numbers has shape (rows, columns) and places has
+    #   shape (rows,). Join three groups of tokens along dimension 1, in this
+    #   order. First the class token, then one token per number column from
+    #   number_tokens, then each row's place token from self.place. The result
+    #   has shape (rows, 1 + columns + 1, size).
     class ColumnTokens(nn.Module):
         def __init__(
             self,
@@ -637,7 +655,7 @@ def check_table1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="fill_missing",
-        description="puts each column's median over the given rows in every hole",
+        description="replaces every nan with its column's median over the given rows",
         inputs=(
             # Every column holds an odd count of numbers in the given rows, so its median is one middle value and
             # torch's nanmedian, which takes the lower of two, agrees with nanquantile's average of them.
@@ -666,12 +684,12 @@ def check_table1(checker: Checker) -> None:
     checker.test_method(
         class_name="ColumnTokens",
         method="forward",
-        description="puts the class token, the number tokens and the place token in a row",
+        description="joins the class token, the number tokens and the place token, in that order",
         run=check_column_tokens,
     )
     checker.check_name(
         name="tokens",
-        description="the first 4 blocks as 10 tokens each",
+        description="is the first 4 blocks, as 10 tokens each",
         run=check_tokens,
     )
 
@@ -684,12 +702,14 @@ TABLE1 = Exercise(
     source=TABLE1_SOURCE,
     solution=TABLE1_SOLUTION,
     hints={
-        "fill_missing": "numbers[rows].nanmedian(dim=0).values gives each column's median, skipping the holes. "
-        "torch.where with numbers.isnan() picks it in the holes and the number everywhere else.",
-        "number_tokens": "numbers.unsqueeze(-1) has shape (rows, columns, 1), so times weight it gives one vector per "
-        "value. Add bias after.",
-        "ColumnTokens.forward": "The class token has shape (1, 1, size). Copy it for every row with .expand(len(numbers), "
-        "-1, -1). The place token from self.place(places) needs .unsqueeze(1). torch.cat the three along dim=1.",
+        "fill_missing": "numbers[rows].nanmedian(dim=0).values gives each column's median, ignoring the holes. "
+        "torch.where with the condition numbers.isnan() takes the median where there is a hole and the original "
+        "number everywhere else.",
+        "number_tokens": "numbers.unsqueeze(-1) has shape (rows, columns, 1). Multiplying it by weight broadcasts to "
+        "one vector per value. Then add bias.",
+        "ColumnTokens.forward": "The class token has shape (1, 1, size). Repeat it for every row with "
+        ".expand(len(numbers), -1, -1). self.place(places) has shape (rows, size), so it needs .unsqueeze(1) to "
+        "become one token per row. Then torch.cat the three groups along dim=1.",
         "tokens": "It comes from fill_missing and ColumnTokens. Get those right first.",
     },
     introduces=("FT-Transformer",),
@@ -703,43 +723,53 @@ TABLE1 = Exercise(
 
 TABLE2_LESSON = prose(
     """
-    A house's value changes fast across a map. A street by the coast and
-    one a mile inland can differ a lot, so the value takes fine steps along
-    latitude and longitude.
+    House values change quickly from place to place. A street by the coast
+    and a street a mile inland can have very different values. So the value
+    can change a lot over a small change in latitude or longitude.
 
-    An MLP learns smooth functions of its inputs first. Tancik and colleagues
-    show a plain MLP fails to learn fine detail in a low dimensional input.
-    Feeding it waves of the input fixes that.
+    An MLP tends to learn smooth functions of its inputs first. Tancik and
+    colleagues showed that a plain MLP fails to learn fine detail when its
+    input has only a few dimensions. Feeding the MLP sine and cosine waves of
+    the input fixes that.
 
-    Gorishniy and colleagues give each number column its own waves. A value
-    x becomes the sine and cosine of 2π c x for k frequencies c. The
-    frequencies are learned, starting from a normal of a chosen spread.
+    Gorishniy and colleagues give each number column its own set of waves.
+    With k frequencies `c`, a value `x` becomes the 2k numbers
+    `sin(2π c x)` and `cos(2π c x)`. The frequencies are learned. They start
+    as random draws from a normal distribution with a standard deviation you
+    choose, called `spread` in the code.
 
     ```python
     angles = 2 * math.pi * torch.tensor([[0.5, 1.0]]) * 0.25    # frequencies 0.5 and 1 at x = 0.25
-    torch.cat([angles.sin(), angles.cos()], dim=-1)          # tensor([[0.7071, 1.0000, 0.7071, 0.0000]])
+    torch.cat([angles.sin(), angles.cos()], dim=-1)          # tensor([[ 7.0711e-01,  1.0000e+00,  7.0711e-01, -4.3711e-08]])
     ```
 
-    A high frequency flips sign over a small change in x, so the network can
-    tell close values apart. Then a Linear per column and a ReLU make each
-    column's embedding, the paper's PLR, for periodic, linear, ReLU.
+    The last value, `-4.3711e-08`, is `cos(π / 2)`, which is 0 apart from
+    rounding. A wave with a high frequency changes sign over a small change
+    in `x`, so the network can tell close values apart. Then each column's
+    waves go through a Linear layer of its own and a ReLU, which gives that
+    column's embedding. The paper calls this PLR, short for periodic, linear,
+    ReLU.
 
-    Here the two location columns get the waves and the other columns stay
-    as they are. Each model trained for 40 epochs with AdamW, keeping the
-    epoch with the lowest validation error, on 3 splits and seeds.
+    Here only the two location columns get the waves, and the other columns
+    go into the MLP unchanged. Each model trained for 40 epochs with AdamW,
+    and kept its weights from the epoch with the lowest validation error.
+    Each model was trained on 3 different data splits, each with its own
+    seed.
 
     | Columns | Plain MLP | Periodic location |
     |---|---|---|
     | longitude and latitude alone | 0.60 to 0.62 | 0.50 to 0.51 |
     | all of them | 0.43 to 0.44 | 0.38 to 0.40 |
 
-    The error is the root mean squared error of the log value, measured in
-    spreads of it. An error of 0.4 is a typical miss of about 26% of a
-    block's value.
+    The error is the root mean squared error of the log value, in units of
+    the log value's standard deviation. An error of 0.4 means a typical miss
+    of about 26% of a block's value.
 
-    With location alone the waves cut the error by 17%, on every seed. On the
-    whole table they cut it by 9%. The paper reports ensembles of MLP-PLR at
-    0.453 on this data, against 0.486 for plain MLPs, in its own units.
+    With location alone, the waves cut the error by 17%, and they helped on
+    every seed. On the whole table they cut it by 9%. The paper reports an
+    error of 0.453 on this data for ensembles of MLP-PLR, which average the
+    answers of several trained models. Plain MLPs got 0.486. The paper
+    measures error in its own units.
     """,
 )
 
@@ -760,13 +790,17 @@ TABLE2_SOURCE = source_file(
 
 
     angles = 2 * math.pi * torch.tensor([[0.5, 1.0]]) * 0.25
-    waves = torch.cat([angles.sin(), angles.cos()], dim=-1)    # tensor([[0.7071, 1.0000, 0.7071, 0.0000]])
+    waves = torch.cat([angles.sin(), angles.cos()], dim=-1)    # tensor([[ 7.0711e-01,  1.0000e+00,  7.0711e-01, -4.3711e-08]])
 
 
-    # TODO: Return the periodic features of values. values has shape (rows,
-    #   columns) and frequencies (columns, k). Take angles of 2π times each
-    #   frequency times its column's value, then the sines and the cosines
-    #   side by side, for a shape of (rows, columns, 2k).
+    # TODO: Return the periodic features of values. values has shape
+    #   (rows, columns) and frequencies has shape (columns, k). For a value x
+    #   in column c, the angles are 2π * frequencies[c] * x. Return the sines
+    #   of the angles followed by their cosines along the last dimension, so
+    #   the result has shape (rows, columns, 2k).
+    #   Example: periodic(torch.tensor([[0.25]]), torch.tensor([[0.5, 1.0]]))
+    #   returns the waves above with one more dimension,
+    #   tensor([[[ 7.0711e-01,  1.0000e+00,  7.0711e-01, -4.3711e-08]]]).
     def periodic(
         values: Tensor,
         frequencies: Tensor,
@@ -777,9 +811,11 @@ TABLE2_SOURCE = source_file(
     per_column = (torch.ones(3, 2, 4).unsqueeze(-1) * torch.ones(2, 4, 5)).sum(dim=-2)    # shape (3, 2, 5)
 
 
-    # TODO: Finish forward. Take periodic(values, self.frequencies), mix each
-    #   column's waves with that column's weight, of shape (2k, size), add its
-    #   bias and take a ReLU. The result has shape (rows, columns, size).
+    # TODO: Finish forward. Compute the waves with periodic(values,
+    #   self.frequencies), of shape (rows, columns, 2k). For each column c,
+    #   multiply the vector of its 2k waves by the matrix self.weight[c], of
+    #   shape (2k, size), add self.bias[c], and apply a ReLU. The result has
+    #   shape (rows, columns, size).
     class PeriodicEmbedding(nn.Module):
         def __init__(
             self,
@@ -800,15 +836,17 @@ TABLE2_SOURCE = source_file(
             ...
 
 
-    # The plain MLP of the lesson's table, with the place joined as a one hot.
+    # The plain MLP from the lesson's table. It joins the place to the numbers as a one hot vector.
 '''
     + indented(TABLE_MLP_PART)
     + '''
 
 
     # TODO: Finish forward. Embed the first LOCATION columns of numbers with
-    #   self.location and flatten each row's embeddings. Join them with the
-    #   other columns and run self.mlp on that and the places.
+    #   self.location, which gives shape (rows, LOCATION, 16), and flatten each
+    #   row's embeddings into one vector. Join that with the remaining columns
+    #   of numbers along dimension 1. Return self.mlp run on the joined
+    #   numbers and places.
     class LocationMLP(nn.Module):
         def __init__(
             self,
@@ -862,7 +900,7 @@ TABLE2_SOLUTION = source_file(
     + '''
 
 
-    # The plain MLP of the lesson's table, with the place joined as a one hot.
+    # The plain MLP from the lesson's table. It joins the place to the numbers as a one hot vector.
 '''
     + indented(TABLE_MLP_PART)
     + "\n\n\n"
@@ -977,7 +1015,7 @@ def check_table2(checker: Checker) -> None:
     checker.test_method(
         class_name="PeriodicEmbedding",
         method="forward",
-        description="mixes each column's waves with its own weight, adds its bias and takes a ReLU",
+        description="multiplies each column's waves by that column's weight, adds its bias and applies a ReLU",
         run=check_periodic_embedding,
     )
     checker.test_method(
@@ -996,10 +1034,12 @@ TABLE2 = Exercise(
     source=TABLE2_SOURCE,
     solution=TABLE2_SOLUTION,
     hints={
-        "periodic": "values.unsqueeze(-1) has shape (rows, columns, 1), so times frequencies it gives every column's "
-        "k frequencies. Multiply by 2 * math.pi, then torch.cat the .sin() and the .cos() along the last dim.",
+        "periodic": "values.unsqueeze(-1) has shape (rows, columns, 1). Multiplying it by frequencies broadcasts to "
+        "shape (rows, columns, k), each value times its column's k frequencies. Multiply that by 2 * math.pi, then "
+        "torch.cat the .sin() and the .cos() along the last dimension.",
         "PeriodicEmbedding.forward": "The waves have shape (rows, columns, 2k). waves.unsqueeze(-1) times self.weight "
-        "has shape (rows, columns, 2k, size). Sum over dim=-2, add self.bias, then torch.relu.",
+        "broadcasts to shape (rows, columns, 2k, size). Sum over dim=-2 to get (rows, columns, size), add self.bias, "
+        "then apply torch.relu.",
         "LocationMLP.forward": "self.location(numbers[:, :LOCATION]) has shape (rows, 2, 16). .flatten(1) makes it "
         "(rows, 32). torch.cat it with numbers[:, LOCATION:] along dim=1 and pass that and places to self.mlp.",
     },
@@ -1014,36 +1054,42 @@ TABLE2 = Exercise(
 
 TABLE3_LESSON = prose(
     """
-    table1's tokens meet attention here. ColumnTokens turns a row's 8
-    numbers and its place into 10 tokens, the class token first. Then
-    attention reads them with PyTorch's `nn.TransformerEncoderLayer`, as vit2
-    read its patches. No position table is needed, since each column's own
-    weight marks where a token came from. The class token's output goes
-    through a LayerNorm, a ReLU and a Linear, the head Gorishniy and
-    colleagues use.
+    Here attention runs over the tokens from table1. ColumnTokens turns a
+    row's 8 numbers and its place into 10 tokens, with the class token first.
+    Then PyTorch's `nn.TransformerEncoderLayer` runs attention over them, as
+    vit2 did over its image patches. No position embedding is needed, because
+    each column's own weight already tells the model which column a token
+    came from. The class token's output then goes through a LayerNorm, a ReLU
+    and a Linear layer. This is the head that Gorishniy and colleagues use.
 
-    Their paper puts this FT-Transformer at 0.459 on California's housing
-    against 0.499 for an MLP, in its own units. It wins with the paper's
-    setup, not with table2's plain one.
+    Their paper reports an error of 0.459 for this FT-Transformer on the
+    California housing data, against 0.499 for an MLP, in the paper's own
+    units. The FT-Transformer wins with the paper's setup, listed below. It
+    does not win with table2's simpler setup.
 
-    - quantile transform: each number becomes its share of the training
-      values below it, then the normal's value with that share below it.
-      Long tails like the rooms' spread out.
-    - size: tokens of 64 numbers through 3 blocks of 8 heads. The first
-      block skips its norm, since its tokens come straight from ColumnTokens.
-    - ReGLU: llama2's SwiGLU with a ReLU in place of the SiLU, as the feed
-      forward.
-    - dropout: 0.2 on attention's weights, 0.1 in the feed forward and none
-      on the residual adds.
-    - training: until 16 epochs pass with no lower validation error, with
-      attention at a rate of 3e-4 and the MLP at its better 1e-3.
+    - quantile transform: each number is replaced by the fraction p of
+      training values below it. Then p is replaced by the value that has a
+      fraction p of a standard normal distribution below it, which
+      `torch.special.ndtri` computes. Columns with long tails, like the room
+      counts, end up spread out like a normal distribution.
+    - size: each token is a vector of 64 numbers, and there are 3 blocks with
+      8 attention heads each. The first block skips the LayerNorm before
+      attention, because its tokens come straight from ColumnTokens.
+    - ReGLU: the feed forward layer is llama2's SwiGLU with a ReLU instead of
+      the SiLU.
+    - dropout: 0.2 on the attention weights, 0.1 in the feed forward layer,
+      and none on the residual connections.
+    - training: stop once 16 epochs pass without a new lowest validation
+      error. Attention trains with a learning rate of 3e-4. The MLP trains
+      with 1e-3, the rate that works better for it.
 
     ```python
     torch.special.ndtri(torch.tensor([0.1, 0.5, 0.9]))    # tensor([-1.2816,  0.0000,  1.2816])
     ```
 
-    Both read the same inputs, on 3 splits and seeds, scored as in table2.
-    Attention wins on every seed, by 0.009 to 0.011.
+    Both models read the same inputs. Each was trained on 3 splits and seeds,
+    and scored as in table2. Attention has the lower error on every seed, by
+    0.009 to 0.011.
 
     | Model | Test error |
     |---|---|
@@ -1051,19 +1097,21 @@ TABLE3_LESSON = prose(
     | attention over the column tokens | 0.407 to 0.415 |
 
     A token per column also lets a row have holes. An MLP has an input for
-    every column, so a hole needs a number, and table1 put the median there.
-    Attention can leave the hole's token out. `src_key_padding_mask` hides
-    tokens from attention, True where a token is hidden, as mask1's padding
-    masks were. The hole still needs a 0 for its nan, which would spoil
-    attention's sums.
+    every column, so each hole needs some number, and table1 filled in the
+    median. Attention can leave the hole's token out instead.
+    `src_key_padding_mask` hides tokens from attention. It is True where a
+    token is hidden, like the padding masks in mask1. The hole's nan still
+    has to be replaced by 0. A hidden token still enters attention's weighted
+    sums with a weight of 0, and 0 times nan is nan.
 
     ```python
     torch.tensor([[1.0, float("nan")]]).nan_to_num()    # tensor([[1., 0.]])
     ```
 
-    Both trained again with a tenth of the numbers dropped, as fuse3 will do
-    with whole inputs. So the MLP learns that a median may mark a hole. Then
-    a column went missing from every test row.
+    Both models were then trained again with a random tenth of the numbers
+    removed, as fuse3 will do with whole inputs. That way the MLP learns that
+    a median value may stand for a missing number. Then one column was
+    removed from every test row.
 
     | Missing from the test rows | MLP, median in the hole | Attention, token left out |
     |---|---|---|
@@ -1073,14 +1121,15 @@ TABLE3_LESSON = prose(
     | population | 0.483 to 0.505 | 0.467 to 0.485 |
     | households | 0.429 to 0.444 | 0.419 to 0.435 |
 
-    Trained with holes, the MLP does as well on complete rows, so column
-    tokens pay off when columns go missing. Rooms, bedrooms, households and
-    population each tell of the others. With any of them missing, or the
-    location, attention wins on every seed. No column tells of income, and
-    there the two tie.
+    After training with holes, the MLP does as well as attention on complete
+    rows. So column tokens help when columns go missing. Rooms, bedrooms,
+    households and population are closely related, so each one gives
+    information about the others. When any of them is missing, or the
+    location is, attention has the lower error on every seed. No other column
+    says much about income, and with income missing the two models tie.
 
-    `rmse` scores in eval mode without autograd, then switches back, as
-    gpt3's validation_loss did.
+    `rmse` scores the model in eval mode without autograd, then switches it
+    back to training mode, as gpt3's `validation_loss` did.
     """,
 )
 
@@ -1100,7 +1149,7 @@ TABLE3_SOURCE = source_file(
     + '''
 
 
-    # table1's tokens, done.
+    # ColumnTokens from table1, already finished.
 '''
     + indented(TOKENS_SOLUTION)
     + '''
@@ -1114,19 +1163,20 @@ TABLE3_SOURCE = source_file(
     shape = layer(torch.ones(1, 3, 4), src_key_padding_mask=mask).shape      # torch.Size([1, 3, 4])
 
 
-    # The paper's feed forward, llama2's SwiGLU with a ReLU in place of the SiLU.
+    # The paper's feed forward layer, llama2's SwiGLU with a ReLU instead of the SiLU.
 '''
     + indented(REGLU_PART)
     + '''
 
 
-    # TODO: Finish forward. A nan in numbers is a missing number. Note where
-    #   they are, then turn them into 0 so no nan reaches a token. Make the
-    #   tokens with self.tokens, which puts the class token first, then one
-    #   per number, then the place. Run each block in self.blocks with
-    #   src_key_padding_mask, True at the token of every missing number and
-    #   False at the class and place tokens. Return self.head of the class
-    #   token's output, one answer per row, of shape (rows,).
+    # TODO: Finish forward. numbers has shape (rows, 8), and a nan in it is a
+    #   missing number. Record where the nans are, then replace them with 0 so
+    #   no nan reaches a token. Make the tokens with self.tokens, which puts
+    #   the class token first, then one token per number, then the place
+    #   token. Run the tokens through each block in self.blocks, passing
+    #   src_key_padding_mask. The mask is True at the token of every missing
+    #   number, and False at the class and place tokens. Run self.head on the
+    #   class token's output and return one answer per row, of shape (rows,).
 '''
     + indented(TRANSFORMER_INIT)
     + '''
@@ -1139,9 +1189,11 @@ TABLE3_SOURCE = source_file(
             ...
 
 
-    # TODO: Return the root mean squared error of model's answers against
-    #   targets, as a plain number. Put the model in eval mode, score it
-    #   without recording for autograd, then put it back in training mode.
+    # TODO: Return the root mean squared error of model(numbers, places)
+    #   against targets, which is sqrt(mean((answers - targets) ** 2)), as a
+    #   plain Python float. Put the model in eval mode and run it inside
+    #   torch.no_grad(), so autograd records nothing. Then put the model back
+    #   in training mode before returning.
     def rmse(
         model: nn.Module,
         numbers: Tensor,
@@ -1168,7 +1220,7 @@ TABLE3_SOLUTION = source_file(
     + '''
 
 
-    # table1's tokens, done.
+    # ColumnTokens from table1, already finished.
 '''
     + indented(TOKENS_SOLUTION)
     + '''
@@ -1182,7 +1234,7 @@ TABLE3_SOLUTION = source_file(
     shape = layer(torch.ones(1, 3, 4), src_key_padding_mask=mask).shape
 
 
-    # The paper's feed forward, llama2's SwiGLU with a ReLU in place of the SiLU.
+    # The paper's feed forward layer, llama2's SwiGLU with a ReLU instead of the SiLU.
 '''
     + indented(REGLU_PART)
     + '''
@@ -1248,8 +1300,8 @@ def check_column_transformer(found: type) -> None:
 
         if isinstance(actual, Tensor) and actual.isnan().any():
             raise Mismatch(
-                f"{call} gives nan. A hidden token still meets the others in attention's weighted sum, and 0 "
-                "times nan is nan, so turn the missing numbers into 0 before making any token.",
+                f"{call} returns nan. A hidden token still enters attention's weighted sum with a weight of 0, and "
+                "0 times nan is nan. So replace the missing numbers with 0 before making any token.",
             )
 
         expect_tensor(
@@ -1323,7 +1375,7 @@ def check_table3(checker: Checker) -> None:
     )
     checker.test(
         function="rmse",
-        description="scores in eval mode without autograd, then switches back",
+        description="scores in eval mode without autograd, then switches back to training mode",
         run=check_rmse,
     )
 
@@ -1336,10 +1388,10 @@ TABLE3 = Exercise(
     source=TABLE3_SOURCE,
     solution=TABLE3_SOLUTION,
     hints={
-        "ColumnTransformer.forward": "Keep numbers.isnan() and give self.tokens the numbers with nan_to_num() and the "
-        "places. The tokens run class, the 8 numbers in order, then place. So the mask is a column of False, the isnan "
-        "columns, and a column of False, joined along dim=1. Loop over self.blocks passing src_key_padding_mask=, then "
-        "keep [:, 0], run self.head and .squeeze(1).",
+        "ColumnTransformer.forward": "Save numbers.isnan(), and pass self.tokens the numbers after nan_to_num() along "
+        "with the places. The tokens come in the order class, the 8 numbers, place. So the mask is a column of False, "
+        "then the isnan columns, then a column of False, joined along dim=1. Loop over self.blocks passing "
+        "src_key_padding_mask=. Then take the class token with [:, 0], run self.head on it, and .squeeze(1).",
         "rmse": "Call model.eval(). Inside torch.no_grad(), take F.mse_loss of the model's answers and targets, then "
         ".sqrt().item(). Call model.train() before returning.",
     },

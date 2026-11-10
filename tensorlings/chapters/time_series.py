@@ -37,11 +37,12 @@ TIME_SERIES = Chapter(
         """
         # Time series
 
-        A time series is one reading after another at a steady pace. This
-        chapter cuts a series into patches and reads each patch as a token,
-        normalizes every window on its own and restores the forecast after,
-        and tests PatchTST's two choices, patches and columns kept apart,
-        each against its other way. The data is the CDC's weekly count of
+        A time series is a sequence of readings taken at a steady pace. This
+        chapter cuts a series into patches and turns each patch into a token.
+        It normalizes every window with its own mean and standard deviation,
+        and undoes that normalization on the forecast. Then it tests
+        PatchTST's two design choices, patches and keeping the columns apart,
+        each against the alternative. The data is the CDC's weekly count of
         doctor visits for flu-like illness in the US, from 2002 to 2020.
 
         ## Further reading
@@ -103,9 +104,9 @@ def recording_hook(
 
 # The split, the standardizing and the windows, given in every file of the chapter.
 GIVEN_PART = '''
-LOOKBACK = 104          # two years of weeks, what PatchTST reads of the flu table
-TRAIN_END = 676         # the first 70% of the 966 weeks train
-VALIDATION_END = 773    # the next 10% pick the epoch, the last 20% test
+LOOKBACK = 104          # two years of weeks, how far back PatchTST reads in the flu table
+TRAIN_END = 676         # the first 70% of the 966 weeks are for training
+VALIDATION_END = 773    # the next 10% pick the best epoch, and the last 20% are for testing
 
 
 def standardized_series(table: Tensor) -> Tensor:
@@ -114,7 +115,8 @@ def standardized_series(table: Tensor) -> Tensor:
     return (table - training.mean(dim=0)) / training.std(dim=0)
 
 
-# Every window of LOOKBACK weeks whose forecast of horizon weeks starts at or after start and ends by end.
+# Cuts series into windows of LOOKBACK weeks, each paired with the horizon weeks that follow it. It keeps the
+# pairs whose following weeks start at or after week start and end by week end.
 def windows(
     series: Tensor,
     start: int,
@@ -314,38 +316,46 @@ def flu_series() -> Tensor:
 
 SERIES1_LESSON = prose(
     """
-    A time series is one reading after another at a steady pace. Here it is
-    the CDC's flu table, 966 weeks from 2002 to 2020. Each week holds 7
-    numbers, such as the share of doctor visits for flu-like illness and the
-    count of patients seen.
+    A time series is a sequence of readings taken at a steady pace, such as
+    once a week. Here it is the CDC's flu table, 966 weeks from 2002 to 2020.
+    Each week holds 7 numbers, such as the percentage of doctor visits that
+    were for flu-like illness and the number of patients seen.
 
-    The task is to forecast the next weeks of each column from the last 104,
-    two years of history. Section 6 read sequences one step at a time. A
-    transformer could take each week as a token, as gpt3 took characters.
+    The task is to forecast the coming weeks of each column from the last
+    104 weeks, which is two years of history. Section 6 read sequences one
+    step at a time. A transformer could instead take each week as a token, as
+    gpt3 took each character as a token.
 
-    One reading says little alone. A patch of readings holds a shape, such
-    as a rise or a peak. Nie and colleagues cut the series into patches and
-    make each patch a token, their **PatchTST**.
+    A single reading says little on its own. A patch, a run of consecutive
+    readings, shows a shape such as a rise or a peak. Nie and colleagues cut
+    the series into patches and make each patch a token. They call the model
+    **PatchTST**.
 
     ```python
     torch.arange(6.0).unsqueeze(0).unfold(1, 3, 2)    # tensor([[[0., 1., 2.], [2., 3., 4.]]])
     ```
 
-    `unfold` slides a window of 3 along the series in steps of 2. PatchTST
-    repeats the last reading `stride` times at the end first, so the final
-    readings get a patch of their own. That adds one patch to the count.
+    `unfold(1, 3, 2)` slides a window of 3 readings along dimension 1 in
+    steps of 2, and returns each window as a patch. The step between patches
+    is called the stride. Here the last reading, 5, is in no patch at all. So
+    before cutting, PatchTST adds `stride` copies of the last reading to the
+    end of the series. That gives the final readings a patch of their own,
+    and adds one patch to the count.
 
-    The flu settings from PatchTST's own scripts are patches of 24 weeks every
-    2 weeks, so 104 weeks become 42 patches. A Linear turns each patch into a
-    token of size 16, and a learned position is added, as gpt2 did.
+    PatchTST's own scripts for the flu data use patches of 24 weeks, with a
+    new patch every 2 weeks. So 104 weeks become 42 patches. A Linear layer
+    turns each patch into a token, a vector of size 16. Then a learned
+    position embedding is added, as in gpt2.
 
-    Attention compares every token with every other. 104 tokens make 10,816
-    scores in each head of each block, and 42 patches make 1,764, about 6
-    times fewer. With a stride of 8, as the paper uses on bigger tables, the
-    saving grows as the square of the stride.
+    Attention computes a score for every pair of tokens. With 104 tokens that
+    is 104 * 104 = 10,816 scores in each head of each block. With 42 patches
+    it is 1,764, about 6 times fewer. The paper uses a stride of 8 on bigger
+    tables. The number of tokens shrinks by about the stride, so the number
+    of scores shrinks by about the square of the stride.
 
-    PatchTST also treats every column as its own series, sharing one model
-    across all 7. series2 takes the columns apart that way.
+    PatchTST also treats every column as a separate series, and uses one
+    shared model for all 7 columns. series2 splits the columns apart this
+    way.
     """,
 )
 
@@ -367,13 +377,14 @@ SERIES1_SOURCE = source_file(
     + '''
 
 
-    count = (10 - 4) // 2 + 2    # 5 patches of 4 in a series of 10, every 2 readings
+    count = (10 - 4) // 2 + 2    # a series of 10 readings makes 5 patches of 4 readings with a stride of 2
 
 
     # TODO: Return how many patches a series of `lookback` readings makes.
-    #   Each patch holds `length` readings, and a new one starts every
-    #   `stride` readings, after `stride` copies of the last reading are added
-    #   at the end, as PatchTST does. Give a plain int.
+    #   First `stride` copies of the last reading are added at the end, as
+    #   PatchTST does. Then each patch holds `length` readings, and a new patch
+    #   starts every `stride` readings. Return a plain int.
+    #   Example: patch_count(104, 24, 2) returns 42.
     def patch_count(
         lookback: int,
         length: int,
@@ -385,11 +396,13 @@ SERIES1_SOURCE = source_file(
     sliding = torch.arange(6.0).unsqueeze(0).unfold(1, 3, 2)    # tensor([[[0., 1., 2.], [2., 3., 4.]]])
 
 
-    # TODO: Return the patches of each series. `series` has shape (rows,
-    #   readings). Add `stride` copies of each row's last reading at its end.
-    #   Then cut patches of `length` readings, a new one every `stride`
-    #   readings, for a shape of (rows, patch_count(readings, length, stride),
-    #   length).
+    # TODO: Return the patches of each series. `series` has shape
+    #   (rows, readings). Add `stride` copies of each row's last reading to
+    #   the end of that row. Then cut patches of `length` readings, with a new
+    #   patch every `stride` readings. The result has shape
+    #   (rows, patch_count(readings, length, stride), length).
+    #   Example: patches(torch.arange(6.0).unsqueeze(0), 3, 2) returns
+    #   tensor([[[0., 1., 2.], [2., 3., 4.], [4., 5., 5.]]]).
     def patches(
         series: Tensor,
         length: int,
@@ -398,9 +411,10 @@ SERIES1_SOURCE = source_file(
         ...
 
 
-    # TODO: Finish forward. Cut series into patches, turn each into a token
-    #   with self.project and add self.position, for a shape of (rows,
-    #   patches, size).
+    # TODO: Finish forward. Cut series into patches with your patches function,
+    #   self.length and self.stride. Turn each patch into a token with
+    #   self.project, then add self.position. The result has shape
+    #   (rows, patches, size).
     class PatchEmbedding(nn.Module):
         def __init__(
             self,
@@ -482,7 +496,7 @@ def expect_whole_number(
     )
 
     if isinstance(actual, float):
-        raise Mismatch(f"{call} is {actual}, a float. A count of patches is a whole number, so use // and give an int.")
+        raise Mismatch(f"{call} is {actual}, a float. A count of patches is a whole number, so use // and return an int.")
 
     expect_value(
         call=call,
@@ -552,7 +566,7 @@ def check_series1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="patch_count",
-        description="counts the patches, with the stride's copies at the end",
+        description="counts the patches, including the extra one from the copies at the end",
         inputs=(
             (104, 24, 2),
             (336, 16, 8),
@@ -564,7 +578,7 @@ def check_series1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="patches",
-        description="adds stride copies of the last reading, then cuts patches every stride",
+        description="adds stride copies of the last reading, then cuts a patch every stride readings",
         inputs=(
             (small_tensor(9503, 2, 10), 4, 2),
             (small_tensor(9504, 3, 9), 3, 3),
@@ -580,7 +594,7 @@ def check_series1(checker: Checker) -> None:
     )
     checker.check_name(
         name="flu_patches",
-        description="the first column's training windows in patches of 24 weeks",
+        description="is the first column's training windows, cut into patches of 24 weeks",
         run=check_flu_patches,
     )
 
@@ -593,10 +607,11 @@ SERIES1 = Exercise(
     source=SERIES1_SOURCE,
     solution=SERIES1_SOLUTION,
     hints={
-        "patch_count": "(lookback - length) // stride counts the steps after the first patch. Add 1 for the first "
-        "patch and 1 for the patch the copies at the end make.",
-        "patches": "series[:, -1:] keeps each row's last reading as a column. .expand(-1, stride) copies it stride "
-        "times. torch.cat that onto the end along dim=1, then .unfold(1, length, stride).",
+        "patch_count": "(lookback - length) // stride counts the patches that start after the first one. Add 1 for "
+        "the first patch, and 1 more for the extra patch that the copies at the end make.",
+        "patches": "series[:, -1:] takes each row's last reading as a column of shape (rows, 1). .expand(-1, stride) "
+        "repeats it stride times. torch.cat that onto the end of series along dim=1, then call "
+        ".unfold(1, length, stride).",
         "PatchEmbedding.forward": "patches(series, self.length, self.stride) has shape (rows, patches, length). "
         "self.project turns the last dimension into size, then add self.position.",
         "flu_patches": "It comes from patches. Get that right first.",
@@ -612,53 +627,61 @@ SERIES1 = Exercise(
 
 SERIES2_LESSON = prose(
     """
-    PatchTST treats each of the 7 columns as a series of its own. All 7 share
-    one model, so a window of shape (rows, 104, 7) becomes 7 times as many
-    rows of 104 readings.
+    PatchTST treats each of the 7 columns as a separate series, and all 7
+    columns share one model. So a batch of windows of shape (rows, 104, 7)
+    becomes a batch of 7 times as many series, each of 104 readings.
 
     ```python
     torch.zeros(2, 5, 3).transpose(1, 2).reshape(-1, 5).shape    # torch.Size([6, 5])
     ```
 
-    A series drifts. Over 18 years more doctors report to the CDC and they see
-    more patients. Each column was standardized with the training weeks, so
-    its training mean is 0. Here is its mean over the test weeks.
+    A series can drift, which means its typical level changes over time.
+    Over 18 years, more doctors started reporting to the CDC, and they saw
+    more patients. Each column was standardized with the mean and standard
+    deviation of the training weeks, so its mean over the training weeks is
+    0. Here is each column's mean over the test weeks.
 
     | Share of visits, weighted | Visits, ages 0 to 4 | Flu visits | Doctors | Patients |
     |---|---|---|---|---|
     | 0.40 | 1.50 | 1.97 | 2.44 | 2.90 |
 
-    The patients seen in the test weeks average 2.9 training spreads above
-    the training mean. A model fitted to the training levels misses by that.
+    On average, the number of patients seen in the test weeks is 2.9 training
+    standard deviations above the training mean. A model fitted to the
+    training levels misses by about that much.
 
-    Kim and colleagues' **RevIN** takes each window's own mean and spread off
-    before the model, then puts them back on the forecast. The model sees
-    only the shape of the window, and the level comes back from the window
-    itself. RevIN also learns a scale and a shift, left out here.
+    **RevIN**, from Kim and colleagues, normalizes each window with the
+    window's own mean and standard deviation before the model sees it. Then
+    it reverses the normalization on the forecast. So the model sees only the
+    shape of the window, and the level of the forecast comes from the window
+    itself. RevIN also learns a scale and a shift, which this chapter leaves
+    out.
 
     ```text
     forecast = model((window - mean) / spread) * spread + mean
     ```
 
-    This file takes the spread with `.std()` and adds 0.00001, so a flat
-    window can't divide by 0. RevIN's own code differs in two small ways. It
-    adds the 0.00001 to the variance inside the square root, dividing by n.
-    It also stops gradients through the mean and spread.
+    Here `spread` is the window's standard deviation, the name the code uses
+    for it. This file computes it with `.std()` and adds 0.00001, so a flat
+    window never divides by 0. RevIN's own code differs in two small ways. It
+    adds the 0.00001 to the variance inside the square root, and its variance
+    divides by n instead of n - 1. It also stops gradients from flowing
+    through the mean and the spread.
 
-    Here is a plain Linear from 104 weeks to the next ones, with and without
-    RevIN. Each trained with Adam for 60 epochs on batches of 128, on 3
-    seeds. The error is the mean squared error over the test weeks,
-    standardized.
+    Here is a plain Linear layer that maps 104 weeks to the following weeks,
+    with and without RevIN. Each trained with Adam for 60 epochs on batches
+    of 128, with 3 seeds. The error is the mean squared error over the test
+    weeks, measured on the standardized values.
 
     | Weeks ahead | 24 | 36 | 48 | 60 |
     |---|---|---|---|---|
     | Linear | 2.21 to 2.32 | 2.16 to 2.31 | 2.14 to 2.30 | 2.29 to 2.37 |
     | Linear with RevIN | 2.05 to 2.10 | 1.89 to 1.94 | 1.89 to 1.92 | 1.95 to 2.01 |
 
-    RevIN lowers the error at every horizon on every seed. On the 3 seeds'
-    averages it cuts the error by 8% at 24 weeks and by 14% to 15% further
-    ahead. Seed by seed the cut runs from 5% to 17%. The further ahead the
-    forecast, the more the level matters, and the more RevIN helps.
+    The horizon is how many weeks ahead the model forecasts. RevIN lowers
+    the error at every horizon on every seed. Averaged over the 3 seeds, it
+    cuts the error by 8% at 24 weeks and by 14% to 15% at the longer
+    horizons. For single seeds the cut ranges from 5% to 17%. The further
+    ahead the forecast, the more the level matters, and the more RevIN helps.
     """,
 )
 
@@ -683,15 +706,19 @@ SERIES2_SOURCE = source_file(
     rows = torch.zeros(2, 5, 3).transpose(1, 2).reshape(-1, 5).shape    # torch.Size([6, 5])
 
 
-    # TODO: Return the windows with every column as a series of its own.
-    #   windows has shape (count, readings, columns). Give (count * columns,
-    #   readings), the first window's columns first, in column order.
+    # TODO: Return the windows with every column as a separate series. windows
+    #   has shape (count, readings, columns). Return shape
+    #   (count * columns, readings), with rows in window order, so the first
+    #   window's columns come first, in column order.
+    #   Example: for windows of shape (2, 5, 3), row 4 of the result is
+    #   windows[1, :, 1], column 1 of window 1.
     def channels_apart(windows: Tensor) -> Tensor:
         ...
 
 
-    # TODO: Undo channels_apart for forecasts. forecasts has shape (count *
-    #   channels, horizon). Give (count, horizon, channels).
+    # TODO: Undo channels_apart for forecasts. forecasts has shape
+    #   (count * channels, horizon), with rows in the order channels_apart
+    #   makes. Return shape (count, horizon, channels).
     def channels_together(
         forecasts: Tensor,
         channels: int,
@@ -702,16 +729,19 @@ SERIES2_SOURCE = source_file(
     spread = torch.tensor([[1.0, 3.0]]).std(dim=1, keepdim=True)    # tensor([[1.4142]])
 
 
-    # TODO: Return each series scaled to a mean of 0 and a spread of 1, with
-    #   the mean and spread it used. series has shape (rows, readings). Take
-    #   both along dim 1 keeping that dimension. Use `.std()` as it is and add
-    #   1e-5 to the spread, this file's form, not RevIN's own square root of
-    #   the variance.
+    # TODO: Return each series scaled to a mean of 0 and a standard deviation
+    #   of 1, together with the mean and spread used. series has shape
+    #   (rows, readings). Compute the mean with .mean() and the spread with
+    #   .std(), both along dim 1 and keeping that dimension, then add 1e-5 to
+    #   the spread. That is the lesson's form, not RevIN's own square root of
+    #   the variance. Return the tuple (scaled series, mean, spread).
     def normalized(series: Tensor) -> tuple[Tensor, Tensor, Tensor]:
         ...
 
 
-    # TODO: Put each row's mean and spread back on its forecasts.
+    # TODO: Undo normalized on the forecasts. forecasts has shape
+    #   (rows, horizon), and mean and spread have shape (rows, 1). Multiply
+    #   each row by its spread, then add its mean.
     def restored(
         forecasts: Tensor,
         mean: Tensor,
@@ -720,14 +750,15 @@ SERIES2_SOURCE = source_file(
         ...
 
 
-    # The plain Linear of the lesson's first row.
+    # The plain Linear from the first row of the lesson's table.
 '''
     + indented(LINEAR_PART)
     + '''
 
 
-    # TODO: Finish forward. Normalize the series, run self.linear on it, and
-    #   restore the forecasts with the series' own mean and spread.
+    # TODO: Finish forward. Normalize the series with normalized, run
+    #   self.linear on the scaled series, and undo the normalization on the
+    #   forecasts with restored, using the mean and spread from normalized.
     class NormalizedLinear(nn.Module):
         def __init__(
             self,
@@ -777,7 +808,7 @@ SERIES2_SOLUTION = source_file(
     + '''
 
 
-    # The plain Linear of the lesson's first row.
+    # The plain Linear from the first row of the lesson's table.
 '''
     + indented(LINEAR_PART)
     + "\n\n\n"
@@ -829,7 +860,7 @@ def check_series2(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="normalized",
-        description="scales each series by its own mean and spread, and gives both",
+        description="normalizes each series with its own mean and spread, and returns both",
         inputs=(
             (small_tensor(9517, 2, 5) + 3,),
             (small_tensor(9518, 3, 4),),
@@ -867,11 +898,11 @@ SERIES2 = Exercise(
         "makes each column of each window a row.",
         "channels_together": ".reshape(-1, channels, forecasts.shape[1]) groups each window's rows, then "
         ".transpose(1, 2) puts the columns last.",
-        "normalized": "series.mean(dim=1, keepdim=True), and the same with .std plus 1e-5, this file's form rather than "
-        "RevIN's square root of the variance. Return (series - mean) / spread, mean and spread.",
+        "normalized": "Take series.mean(dim=1, keepdim=True), and the same with .std, plus 1e-5. That is this file's "
+        "form, not RevIN's square root of the variance. Return (series - mean) / spread, mean and spread.",
         "restored": "Multiply by spread, then add mean. Both have one column, so they broadcast over the forecasts.",
-        "NormalizedLinear.forward": "normalized(series) gives three things, the scaled series, its mean and its spread. "
-        "Run self.linear on the scaled series, then pass that, the mean and the spread to restored.",
+        "NormalizedLinear.forward": "normalized(series) returns three things, the scaled series, its mean and its "
+        "spread. Run self.linear on the scaled series, then pass the result, the mean and the spread to restored.",
     },
     introduces=("RevIN",),
     check=check_series2,
@@ -884,33 +915,36 @@ SERIES2 = Exercise(
 
 SERIES3_LESSON = prose(
     """
-    series1's patches and series2's RevIN make PatchTST. A window is
-    normalized, cut into patches, turned into tokens, and read by 3
-    transformer blocks. The blocks' outputs are flattened into one long
-    vector, and a Linear reads the forecast off it. Then the level goes back.
+    Together, series1's patches and series2's RevIN make PatchTST. A window
+    is normalized, cut into patches, turned into tokens, and passed through 3
+    transformer blocks. The outputs of the last block are flattened into one
+    long vector, and a Linear layer maps that vector to the forecast.
+    Finally the window's mean and spread are put back on the forecast.
 
-    The sizes are PatchTST's own for this table. Tokens have size 16 with 4
-    heads, and Adam trains at a rate of 0.0025. Dropout is 0.3, which
-    `nn.TransformerEncoderLayer` also applies to the attention weights.
-    PatchTST leaves those alone, and normalizes with BatchNorm in place of
-    LayerNorm.
+    The sizes are the ones PatchTST uses for this table. Tokens have size 16,
+    attention has 4 heads, and Adam trains with a learning rate of 0.0025.
+    Dropout is 0.3, and `nn.TransformerEncoderLayer` also applies it to the
+    attention weights. PatchTST itself applies no dropout to the attention
+    weights. It also normalizes with BatchNorm instead of LayerNorm.
 
-    Zeng and colleagues found a one layer linear model beating the time
+    Zeng and colleagues found that a one layer linear model beat the time
     series transformers built before PatchTST. Nie and colleagues answered
-    with two choices. Here each one is tested against its other way.
+    with two design choices. Here each choice is tested against the
+    alternative.
 
-    - **Patches**: a token is 24 weeks, and a new one starts every 2 weeks. The other way makes every week a token, `PatchForecaster(lookback, horizon, 1, 1)`.
-    - **Columns apart**: each column is its own series, as in series2. Mixing them instead puts a patch of all 7 columns in one token.
+    - **Patches**: each token covers 24 weeks, and a new token starts every 2 weeks. The alternative makes every week its own token, with `PatchForecaster(lookback, horizon, 1, 1)`.
+    - **Columns apart**: each column is a separate series, as in series2. The alternative puts the same patch of all 7 columns into one token.
 
-    The paper argues that patches let a model read further back for fewer
-    tokens. So PatchTST here reads 148 weeks, nearly three years, in 64
-    patches. One token a week reads this file's 104 weeks in 105 tokens, or
-    the same 148 weeks in 149.
+    The paper argues that patches let a model look further back with fewer
+    tokens. So PatchTST here reads 148 weeks, nearly three years, as 64
+    patches. With one token a week, this file's 104 weeks take 105 tokens,
+    and the same 148 weeks take 149. The extra token comes from the copy of
+    the last week added at the end.
 
-    Each model trained for 60 epochs on 3 seeds, on batches of 128 series.
-    The mixed model's batches held 18 windows, which is 126 series. Each
-    number is the mean squared error over the test weeks, averaged over the
-    seeds.
+    Each model trained for 60 epochs with 3 seeds, on batches of 128 series.
+    The mixed model reads whole windows, so its batches held 18 windows,
+    which is 126 series. Each number is the mean squared error over the test
+    weeks, averaged over the seeds.
 
     | Weeks ahead | 24 | 36 | 48 | 60 |
     |---|---|---|---|---|
@@ -919,22 +953,25 @@ SERIES3_LESSON = prose(
     | A token a week, 148 weeks | 1.85 | 1.93 | 1.97 | 2.13 |
     | Columns mixed, 148 weeks | 2.52 | 2.04 | 2.04 | 2.55 |
 
-    With 64 tokens in place of 105, PatchTST cuts the error of single weeks
-    over 104 weeks by 3% to 7% at every horizon. It scores lower on 10 of
-    the 12 seed matched runs. Single weeks over the same 148 weeks need 149
-    tokens, so a head scores 22,201 pairs in place of 4,096. They score
-    lower than the patches at 24 weeks, and higher at 36, 48 and 60, by up
-    to 14%.
+    PatchTST uses 64 tokens instead of 105. At every horizon, its error is
+    3% to 7% lower than one token a week over 104 weeks. It has the lower
+    error in 10 of the 12 pairs of runs with the same seed and horizon. One
+    token a week over the same 148 weeks needs 149 tokens, so each head
+    computes 22,201 scores instead of 4,096. That model has a lower error
+    than the patches at 24 weeks. At 36, 48 and 60 weeks its error is higher,
+    by up to 14%.
 
     Mixing the columns raises the error at every horizon, by 33% at 24
-    weeks, 9% at 36, 11% at 48 and 37% at 60. It loses on every seed at 24
-    and 60 weeks, while at 36 and 48 one seed of it scores lower. The paper
-    finds mixing worse at every horizon of this table too, and shows why on
-    its Weather table. There a mixed model's test error starts rising after
-    a few epochs, while a model with its columns apart keeps improving.
+    weeks, 9% at 36, 11% at 48 and 37% at 60. The mixed model is worse on
+    every seed at 24 and 60 weeks. At 36 and 48 weeks, one of its seeds has
+    a lower error than PatchTST. The paper also finds mixing worse at every
+    horizon on this table, and shows why on its Weather table. There, a
+    mixed model's test error starts rising after a few epochs, while a model
+    with its columns apart keeps improving.
 
-    `forecast_error` takes a window's columns apart, as the model reads them,
-    and scores in eval mode without recording for autograd.
+    `forecast_error` splits each window's columns apart, the way the model
+    reads them. Then it scores the model in eval mode without recording for
+    autograd.
     """,
 )
 
@@ -956,7 +993,7 @@ SERIES3_SOURCE = source_file(
     + '''
 
 
-    # series1's patches and series2's columns and RevIN, done.
+    # The patch code from series1 and the column and RevIN code from series2, already finished.
 '''
     + indented(PATCH_SOLUTION)
     + "\n\n"
@@ -969,10 +1006,12 @@ SERIES3_SOURCE = source_file(
     flat = torch.zeros(2, 42, 16).flatten(1).shape    # torch.Size([2, 672]), each row's tokens in one vector
 
 
-    # TODO: Finish forward. Normalize the series, embed it in patches, apply
-    #   self.dropout and run self.blocks. Flatten each row's tokens into one
-    #   vector, run self.head, and restore the forecasts with the series' own
-    #   mean and spread. series has shape (rows, lookback).
+    # TODO: Finish forward. series has shape (rows, lookback). Normalize it with
+    #   normalized, and turn the scaled series into patch tokens with
+    #   self.embed. Apply self.dropout to the tokens and run them through
+    #   self.blocks. Flatten each row's tokens into one vector, run self.head
+    #   on it, and undo the normalization with restored, using the mean and
+    #   spread from normalized. The result has shape (rows, horizon).
     class PatchForecaster(nn.Module):
         def __init__(
             self,
@@ -1008,10 +1047,12 @@ SERIES3_SOURCE = source_file(
             ...
 
 
-    # TODO: Return the mean squared error of model's forecasts of future from
-    #   past, as a plain number. past has shape (count, lookback, columns) and
-    #   future (count, horizon, columns). Take both apart with channels_apart.
-    #   Score in eval mode without recording for autograd, then switch back.
+    # TODO: Return the mean squared error between model's forecasts from past
+    #   and the true values in future, as a plain Python float. past has shape
+    #   (count, lookback, columns) and future has shape
+    #   (count, horizon, columns). Split both with channels_apart, since the
+    #   model reads one column at a time. Score in eval mode inside
+    #   torch.no_grad(), then put the model back in training mode.
     def forecast_error(
         model: nn.Module,
         past: Tensor,
@@ -1039,7 +1080,7 @@ SERIES3_SOLUTION = source_file(
     + '''
 
 
-    # series1's patches and series2's columns and RevIN, done.
+    # The patch code from series1 and the column and RevIN code from series2, already finished.
 '''
     + indented(PATCH_SOLUTION)
     + "\n\n"
@@ -1160,12 +1201,12 @@ def check_series3(checker: Checker) -> None:
     checker.test_method(
         class_name="PatchForecaster",
         method="forward",
-        description="normalizes, embeds the patches, runs the blocks, reads the forecast and restores the level",
+        description="normalizes, embeds the patches, runs the blocks, computes the forecast and restores the level",
         run=check_patch_forecaster,
     )
     checker.test(
         function="forecast_error",
-        description="takes the columns apart and scores in eval mode without autograd",
+        description="splits the columns apart and scores in eval mode without autograd",
         run=check_forecast_error,
     )
 
@@ -1178,9 +1219,9 @@ SERIES3 = Exercise(
     source=SERIES3_SOURCE,
     solution=SERIES3_SOLUTION,
     hints={
-        "PatchForecaster.forward": "normalized(series) gives the scaled series, its mean and its spread. Run self.embed "
-        "on the scaled series, then self.dropout, then self.blocks. .flatten(1) the result, run self.head, and pass "
-        "that, the mean and the spread to restored.",
+        "PatchForecaster.forward": "normalized(series) returns the scaled series, its mean and its spread. Run "
+        "self.embed on the scaled series, then self.dropout, then self.blocks. Call .flatten(1) on the result, run "
+        "self.head, and pass its output, the mean and the spread to restored.",
         "forecast_error": "Call model.eval(). Inside torch.no_grad(), take F.mse_loss of model(channels_apart(past)) "
         "and channels_apart(future), then .item(). Call model.train() before returning.",
     },
