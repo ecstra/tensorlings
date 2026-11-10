@@ -29,10 +29,11 @@ MASKED_MODELING = Chapter(
         """
         # Masked modeling
 
-        Hide part of the input and train the model to fill it in. The hidden
-        part is the answer, so any pile of text or images becomes training
-        data with no labels. This chapter builds BERT's masking for text and
-        MAE's for images, and measures why images need far more hidden.
+        Hide part of the input and train the model to predict the hidden part.
+        The hidden part is the answer, so any collection of text or images
+        becomes training data, with no labels needed. This chapter builds
+        BERT's masking for text and MAE's masking for images. It also measures
+        why images need a much larger share hidden than text does.
 
         ## Further reading
 
@@ -122,35 +123,42 @@ def copy_table() -> tuple[float, float]:
 MASKED1_LESSON = prose(
     """
     Section 8 learns from data with no labels. One way is to hide part of the
-    input and ask the model to fill it in. The hidden part is the answer, so
-    any pile of text becomes training data.
+    input and train the model to predict the hidden part. The hidden part is
+    the answer, so any collection of text becomes training data.
 
     BERT does this to text. In each sequence it chooses 15% of the tokens at
-    random. A chosen token becomes a special `[MASK]` token 80% of the time,
-    and a random token 10% of the time. The last 10% it stays as it was. The
-    model reads the whole corrupted sequence, both ways at once, and predicts
-    the original token at every chosen position.
+    random. A chosen token is replaced by a special `[MASK]` token 80% of the
+    time, and by a random token 10% of the time. In the remaining 10% it stays
+    unchanged. The model reads the whole corrupted sequence, looking both left
+    and right of each position. It predicts the original token at every
+    chosen position.
 
-    The loss counts the chosen positions alone. Everywhere else the input
-    already holds the answer. Here is what that means, on 100,000 characters
-    of Shakespeare with characters as tokens and 15% chosen.
+    The loss is computed only at the chosen positions, because everywhere
+    else the input already holds the answer. The table shows why this
+    matters. It uses 100,000 characters of Shakespeare, with each character
+    as a token and 15% of them chosen.
 
     | A model that copies its input gets right | |
     |---|---|
     | of all positions | 86.6% |
     | of the chosen positions | 10.7% |
 
-    The copier learns nothing, yet a loss over every position would rate it
-    well. Counted on the chosen positions alone, the only way to score is to
-    read the context.
+    A model that copies its input has learned nothing, yet a loss over every
+    position would rate it well. With the loss only at the chosen positions,
+    the only way to do well is to use the surrounding tokens.
 
-    Why not turn every chosen token into `[MASK]`? `[MASK]` never shows up in
-    real text, so a model that only learned to fill it in would meet
-    something new once used. The random and unchanged tokens mean any token
-    might be the one to predict, so the model keeps track of all of them.
+    Why not replace every chosen token with `[MASK]`? The reason is that
+    `[MASK]` never appears in real text. A model that only learned to predict
+    at `[MASK]` would see unfamiliar inputs once it is used on real text.
+    When some chosen tokens are random or unchanged, any token might be one
+    the model has to predict. So the model has to build a useful
+    representation at every position.
 
-    A tensor of True and False picks entries of a tensor, and from a tensor of
-    scores, it picks whole rows of scores.
+    Indexing a tensor with a boolean tensor, a tensor of True and False,
+    picks the entries where it is True. If the boolean tensor covers only the
+    first dimensions, each True picks a whole row. Here `scores` has shape
+    `(2, 3, 5)` and the boolean tensor has shape `(2, 3)`. So each of its 3
+    True values picks a row of 5 scores.
 
     ```python
     scores = torch.zeros(2, 3, 5)
@@ -167,15 +175,16 @@ MASKED1_SOURCE = source_file(
     import torch.nn.functional as F
     from torch import Tensor
 
-    MASK = 65    # the id of [MASK], one past the 65 characters
+    MASK = 65    # the id of [MASK], since the 65 characters use ids 0 to 64
 
     ids = torch.tensor([7, 3, 9])
-    hidden = torch.where(torch.tensor([False, True, True]), MASK, ids)    # tensor([ 7, 65, 65])
+    hidden = torch.where(torch.tensor([False, True, True]), MASK, ids)    # tensor([ 7, 65, 65]), MASK where True, ids elsewhere
 
 
-    # TODO: Return a tensor of True and False the shape of ids, True where a
-    #   token is chosen. Draw torch.rand(ids.shape, generator=generator) and
-    #   choose where the draw is below rate.
+    # TODO: Choose tokens at random. Draw one random number per token with
+    #   torch.rand(ids.shape, generator=generator). Return a boolean tensor with
+    #   the shape of ids that is True where the draw is below rate. True marks
+    #   a chosen token.
     def choose(
         ids: Tensor,
         rate: float,
@@ -184,11 +193,12 @@ MASKED1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return ids with BERT's corruption of the chosen tokens. First draw
-    #   roll with torch.rand(ids.shape, generator=generator), then random_ids
-    #   with torch.randint(0, vocabulary, ids.shape, generator=generator). A
-    #   chosen token becomes MASK where roll is below 0.8, its random id where
-    #   roll is from 0.8 up to 0.9, and stays where roll is 0.9 or more.
+    # TODO: Return a copy of ids with BERT's corruption applied to the chosen
+    #   tokens. First draw roll with torch.rand(ids.shape, generator=generator),
+    #   then random_ids with torch.randint(0, vocabulary, ids.shape,
+    #   generator=generator). Where a token is chosen and roll < 0.8, it
+    #   becomes MASK. Where it is chosen and 0.8 <= roll < 0.9, it becomes its
+    #   entry of random_ids. Every other token stays unchanged.
     def corrupt(
         ids: Tensor,
         chosen: Tensor,
@@ -198,8 +208,9 @@ MASKED1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the cross entropy of scores, of shape (batch, steps,
-    #   vocabulary), against ids at the chosen positions alone.
+    # TODO: Return the cross entropy of scores against ids, computed only at
+    #   the chosen positions. scores has shape (batch, steps, vocabulary), and
+    #   ids and chosen have shape (batch, steps).
     def masked_loss(
         scores: Tensor,
         ids: Tensor,
@@ -208,9 +219,12 @@ MASKED1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return what a model that copies its input scores, as two plain
-    #   numbers: the share of all positions where corrupted equals ids, then
-    #   the same share among the chosen positions.
+    # TODO: Measure a model that copies its input, so its prediction for every
+    #   position is the corrupted token. Return two Python floats in a tuple.
+    #   The first is the fraction of all positions where corrupted equals ids.
+    #   The second is the same fraction over the chosen positions only.
+    #   Example: for corrupted = [[1, 65, 3, 9]], ids = [[1, 2, 3, 4]] and
+    #   chosen = [[False, True, False, True]], it returns (0.5, 0.0).
     def copy_scores(
         corrupted: Tensor,
         ids: Tensor,
@@ -281,7 +295,7 @@ def expect_chosen(
     )
 
     if actual.dtype != torch.bool:
-        raise Mismatch(f"{call} holds {actual.dtype} numbers, but scores[chosen] picks positions only with True and False. Return the comparison as it is.")
+        raise Mismatch(f"{call} holds {actual.dtype} numbers, but scores[chosen] picks positions only when chosen holds True and False. Return the boolean result of the comparison without converting it.")
 
 
 def expect_ids(
@@ -296,7 +310,7 @@ def expect_ids(
     )
 
     if actual.dtype.is_floating_point:
-        raise Mismatch(f"{call} holds {actual.dtype} numbers, but token ids are whole numbers. Keep the dtype of ids.")
+        raise Mismatch(f"{call} holds {actual.dtype} numbers, but token ids are integers. Keep the dtype of ids.")
 
 
 def expect_pair_close(
@@ -305,11 +319,11 @@ def expect_pair_close(
     expected: tuple[float, float],
 ) -> None:
     if not isinstance(actual, tuple) or len(actual) != 2:
-        raise Mismatch(f"{call} should give two numbers in a tuple, all positions first.")
+        raise Mismatch(f"{call} should return two numbers in a tuple, the fraction over all positions first.")
 
     for name, part, wanted in zip(("all positions", "the chosen positions"), actual, expected):
         expect_close(
-            call=f"the share of {name} from {call}",
+            call=f"the fraction over {name} from {call}",
             actual=part,
             expected=wanted,
         )
@@ -330,7 +344,7 @@ def check_masked1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="corrupt",
-        description="masks 80%, swaps 10% and keeps 10% of the chosen tokens",
+        description="masks 80%, randomizes 10% and keeps 10% of the chosen tokens",
         inputs=(
             (token_rows(624, 4, 10, 20), chosen_rows(625, 4, 10), 20, seeded(626)),
             (token_rows(627, 3, 12, 65), chosen_rows(628, 3, 12), 65, seeded(629)),
@@ -341,7 +355,7 @@ def check_masked1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="masked_loss",
-        description="takes the cross entropy at the chosen positions alone",
+        description="computes the cross entropy at the chosen positions only",
         inputs=(
             (small_tensor(630, 2, 5, 7) / 2, token_rows(631, 2, 5, 7), chosen_rows(632, 2, 5)),
             (small_tensor(633, 3, 4, 6) / 2, token_rows(634, 3, 4, 6), chosen_rows(635, 3, 4)),
@@ -352,7 +366,7 @@ def check_masked1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="copy_scores",
-        description="gives what copying the input scores, everywhere and where chosen",
+        description="returns how often copying the input is right, everywhere and at the chosen positions",
         inputs=(
             copy_inputs(636, 5, 20, 12),
             copy_inputs(656, 4, 25, 30),
@@ -370,13 +384,13 @@ MASKED1 = Exercise(
     source=MASKED1_SOURCE,
     solution=MASKED1_SOLUTION,
     hints={
-        "choose": "Compare torch.rand of ids.shape, drawn with the generator, with rate.",
-        "corrupt": "torch.where(chosen & (roll < 0.8), MASK, ids) handles the masked ones. A second torch.where puts "
-        "random_ids where chosen and roll is from 0.8 up to 0.9.",
-        "masked_loss": "scores[chosen] gives one row of scores per chosen position, and ids[chosen] the answers. Pass "
-        "both to F.cross_entropy.",
-        "copy_scores": "Compare corrupted with ids for right, one bool per token. Its mean as floats is the first "
-        "share, and right[chosen]'s mean the second. .item() each one.",
+        "choose": "Draw torch.rand with ids.shape and the generator, and compare the draws with rate using <.",
+        "corrupt": "torch.where(chosen & (roll < 0.8), MASK, ids) handles the tokens that become MASK. A second "
+        "torch.where puts random_ids where a token is chosen and roll is at least 0.8 and below 0.9.",
+        "masked_loss": "scores[chosen] gives one row of scores per chosen position, and ids[chosen] gives the matching "
+        "answers. Pass both to F.cross_entropy.",
+        "copy_scores": "Compare corrupted with ids to get right, one boolean per token. The mean of right as floats is "
+        "the first fraction, and the mean of right[chosen] is the second. Call .item() on each.",
     },
     introduces=(),
     check=check_masked1,
@@ -468,41 +482,49 @@ def neighbour_fill_table() -> dict[float, tuple[float, float]]:
 
 MASKED2_LESSON = prose(
     """
-    MAE, the masked autoencoder, does the same to images. It cuts an image into
-    patches, as vit1 did, and hides 75% of them at random. The encoder reads
-    only the visible quarter. A light decoder puts a learned mask token where
-    each hidden patch was and rebuilds every patch. The loss counts only the
-    hidden ones, as in BERT.
+    MAE, the masked autoencoder, does the same to images. It cuts an image
+    into patches, as vit1 did, and hides 75% of them at random. The encoder
+    reads only the visible quarter of the patches. Then a small decoder puts
+    a learned mask token, a vector the model trains, in place of each hidden
+    patch. The decoder reconstructs every patch, and the loss is computed
+    only on the hidden ones, as in BERT.
 
-    Why 75% when BERT hides 15%? Neighbouring patches of a photo look alike,
-    which the MAE paper calls spatial redundancy. Hide a few, and averaging
-    their neighbours fills them in, with no idea of what the image shows.
-    Here is that averaging on 1,000 CIFAR-10 test images in patches of 4 by
-    4. Its error is shown as a share of the error of filling every hidden
-    patch with the average of the visible patches.
+    Why hide 75% when BERT hides 15%? Neighbouring patches of a photo look
+    alike, which the MAE paper calls spatial redundancy. If only a few
+    patches are hidden, averaging their neighbours fills them in well,
+    without knowing anything about what the image shows. The table tries this
+    averaging on 1,000 CIFAR-10 test images, cut into patches of 4 by 4
+    pixels. Its error is shown as a percentage of a baseline error. The
+    baseline fills every hidden patch with the average of all the visible
+    patches.
 
     | Hidden | 15% | 50% | 75% |
     |---|---|---|---|
     | Error left by averaging neighbours | 49% | 68% | 87% |
     | Hidden patches with no visible neighbour | 0.4% | 9.5% | 37% |
 
-    At 15%, averaging halves the error, so a model could score well by
-    learning to blur. At 75% it barely helps, and the model has to know what
-    images look like. A **linear probe** trains one Linear layer on the
-    frozen encoder's outputs, to test how much those outputs already hold.
-    The paper found 75% best for a linear probe. Fine tuning the whole
-    encoder worked well anywhere from 40% to 80%. Hiding most patches also
-    makes the encoder cheap, since it reads a quarter of them.
+    At 15%, averaging neighbours halves the error, so a model could do well
+    by learning to blur. At 75% averaging barely helps, so the model has to
+    learn what images look like. A **linear probe** tests how useful an
+    encoder's outputs already are. It freezes the encoder, so its weights
+    stay fixed, and trains one Linear layer on its outputs. The paper found
+    that hiding 75% gave the best linear probe. When the whole encoder was
+    fine tuned, anything from 40% to 80% worked well. Hiding most patches
+    also makes the encoder cheap to run, since it reads only a quarter of
+    them.
 
-    Random masking shuffles the patches. Draw a random number per patch, sort
-    them, and keep the patches that come first.
+    Random masking works like a shuffle. Draw a random number for each patch,
+    sort the patches by their numbers, and keep the patches that come first.
+    `argsort` returns the indices that would sort a tensor.
 
     ```python
     torch.tensor([[0.7, 0.1, 0.4]]).argsort(dim=1)    # tensor([[1, 2, 0]]), patch 1 first
     ```
 
-    Indexing with a column of row numbers and a matrix of positions picks
-    different positions from each row.
+    To pick different positions from each row, index with two tensors. The
+    first is a column of row numbers, of shape `(rows, 1)`. The second holds
+    the positions to pick from each row. Broadcasting pairs every row number
+    with the positions in its row of the second tensor.
 
     ```python
     x = torch.tensor([[10, 11, 12], [20, 21, 22]])
@@ -523,12 +545,18 @@ MASKED2_SOURCE = source_file(
     picked = x[torch.arange(2).unsqueeze(1), torch.tensor([[2, 0], [1, 2]])]    # tensor([[12, 10], [21, 22]])
 
 
-    # TODO: Hide ratio of the patches of each image, at random. patches has shape
-    #   (batch, count, size). Draw torch.rand(batch, count, generator=generator),
-    #   and keep the int(count * (1 - ratio)) patches whose draws sort first, in
-    #   that sorted order. Return the visible patches, of shape (batch, kept,
-    #   size), their positions, of shape (batch, kept), and a tensor of True
-    #   and False of shape (batch, count), True where a patch is hidden.
+    # TODO: Hide a fraction ratio of each image's patches, chosen at random.
+    #   patches has shape (batch, count, size). Draw one random number per patch
+    #   with torch.rand(batch, count, generator=generator). Keep the
+    #   kept = int(count * (1 - ratio)) patches with the smallest draws, in
+    #   order of their draws from smallest up. Return a tuple of three tensors,
+    #   the kept patches of shape (batch, kept, size), their positions of shape
+    #   (batch, kept), and a boolean tensor of shape (batch, count) that is True
+    #   where a patch is hidden.
+    #   Example: for patches = [[[0.], [1.], [2.], [3.]]], ratio 0.5 and a
+    #   generator seeded with 0, the draws are [[0.4963, 0.7682, 0.0885,
+    #   0.1320]]. It returns ([[[2.], [3.]]], [[2, 3]],
+    #   [[True, True, False, False]]).
     def random_masking(
         patches: Tensor,
         ratio: float,
@@ -537,9 +565,12 @@ MASKED2_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the decoder's input, of shape (batch, count, size), the visible
-    #   patches put back at their positions and mask_token, of shape (size,), at
-    #   every hidden one.
+    # TODO: Return the decoder's input, a tensor of shape (batch, count, size).
+    #   visible has shape (batch, kept, size), and keep holds their positions,
+    #   of shape (batch, kept). Put each visible patch back at its position,
+    #   and put mask_token, of shape (size,), at every other position.
+    #   Example: fill_in(torch.tensor([[[1.0], [2.0]]]), torch.tensor([[2, 0]]),
+    #   3, torch.tensor([9.0])) returns tensor([[[2.], [9.], [1.]]]).
     def fill_in(
         visible: Tensor,
         keep: Tensor,
@@ -549,8 +580,9 @@ MASKED2_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the mean squared error over the hidden patches alone: each
-    #   patch's mean squared error over its numbers, averaged over the patches
+    # TODO: Return the mean squared error over the hidden patches only. First
+    #   compute each patch's mean squared error over its size numbers, which
+    #   gives shape (batch, count). Then average those errors over the patches
     #   where hidden is True.
     def masked_mse(
         predicted: Tensor,
@@ -584,7 +616,7 @@ def expect_masking(
     expected: tuple[Tensor, Tensor, Tensor],
 ) -> None:
     if not isinstance(actual, tuple) or len(actual) != 3:
-        raise Mismatch(f"{call} should give the visible patches, their positions and the hidden mask, in a tuple.")
+        raise Mismatch(f"{call} should return a tuple of the visible patches, their positions and the hidden mask.")
 
     for name, part, wanted in zip(("visible patches", "positions", "hidden mask"), actual, expected):
         expect_tensor(
@@ -594,10 +626,10 @@ def expect_masking(
         )
 
     if actual[1].dtype.is_floating_point:
-        raise Mismatch(f"The positions of {call} hold {actual[1].dtype} numbers, but positions pick patches and must be whole numbers.")
+        raise Mismatch(f"The positions of {call} hold {actual[1].dtype} numbers, but positions are used as indices, so they must be integers.")
 
     if actual[2].dtype != torch.bool:
-        raise Mismatch(f"The hidden mask of {call} should hold True and False, not {actual[2].dtype}.")
+        raise Mismatch(f"The hidden mask of {call} should be a boolean tensor of True and False, not {actual[2].dtype}.")
 
 
 def visible_patches(
@@ -628,7 +660,7 @@ def check_masked2(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="random_masking",
-        description="keeps the patches whose draws sort first",
+        description="keeps the patches with the smallest random draws",
         inputs=(
             (small_tensor(640, 2, 8, 3), 0.75, seeded(641)),
             (small_tensor(642, 3, 10, 2), 0.4, seeded(643)),
@@ -650,7 +682,7 @@ def check_masked2(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="masked_mse",
-        description="averages the error over the hidden patches alone",
+        description="averages the error over the hidden patches only",
         inputs=(
             (small_tensor(648, 3, 6, 4), small_tensor(649, 3, 6, 4), Described(hidden_patches(646, 3, 6, 4, 0.5), "half of each image's patches hidden")),
             (small_tensor(654, 2, 8, 3), small_tensor(655, 2, 8, 3), Described(hidden_patches(652, 2, 8, 3, 0.75), "three quarters of each image's patches hidden")),
@@ -663,18 +695,18 @@ def check_masked2(checker: Checker) -> None:
 MASKED2 = Exercise(
     name="masked2",
     chapter=MASKED_MODELING,
-    title="MAE's masking, and why so much",
+    title="MAE's masking, and why it hides so much",
     lesson=MASKED2_LESSON,
     source=MASKED2_SOURCE,
     solution=MASKED2_SOLUTION,
     hints={
-        "random_masking": "keep = the draws' argsort over dim=1, cut to the first kept. Make rows a column of row "
-        "numbers, torch.arange over batch with .unsqueeze(1). It picks each row's patches with patches[rows, keep]. "
-        "Start hidden all True and set it False at [rows, keep].",
-        "fill_in": "mask_token.expand(batch, count, size).clone() gives a tensor you can write into. Put visible at "
-        "[rows, keep] the same way random_masking picked them.",
-        "masked_mse": "((predicted - patches) ** 2).mean(dim=-1) is one error per patch. Pick the hidden ones with "
-        "[hidden] and take their mean.",
+        "random_masking": "Set keep to the argsort of the draws over dim=1, cut to the first kept columns. Make rows a "
+        "column of row numbers, torch.arange over batch with .unsqueeze(1). Then patches[rows, keep] picks each "
+        "image's kept patches. Start hidden all True and set it to False at [rows, keep].",
+        "fill_in": "mask_token.expand(batch, count, size).clone() gives a full tensor of mask tokens that you can "
+        "write into. Assign visible to it at [rows, keep], with rows built as in random_masking.",
+        "masked_mse": "((predicted - patches) ** 2).mean(dim=-1) is one error per patch. Pick the errors of the "
+        "hidden patches with [hidden] and take their mean.",
     },
     introduces=("linear probe",),
     check=check_masked2,

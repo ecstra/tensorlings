@@ -34,11 +34,12 @@ AUTOENCODERS = Chapter(
         """
         # Autoencoders
 
-        An autoencoder squeezes its input into a small code and rebuilds the
-        input from it, with no labels. This chapter builds one for MNIST
-        digits, measures why the code has to be small or the input noisy for
-        it to learn anything, and shows that a linear one finds the same
-        directions as PCA.
+        An autoencoder compresses its input into a small code, a short vector
+        of numbers, and then reconstructs the input from that code. It needs
+        no labels. This chapter builds one for MNIST digits. It measures why
+        the code has to be small, or the input noisy, for the autoencoder to
+        learn anything useful. Then it shows that a linear autoencoder finds
+        the same directions as PCA.
 
         ## Further reading
 
@@ -171,34 +172,38 @@ def code_size_table() -> dict[int, float]:
 AUTOENCODER1_LESSON = prose(
     """
     Section 8 learns from data with no labels. An **autoencoder** is the
-    plainest way. An encoder squeezes the input into a small code, and a
-    decoder rebuilds the input from that code. The loss is how far the
-    rebuild lands from the input.
+    simplest way to do that. It has two parts. An encoder compresses the
+    input into a small code, a short vector of numbers. A decoder then
+    reconstructs the input from that code. The loss measures how far the
+    reconstruction is from the original input.
 
-    For an MNIST digit, the encoder maps 784 pixels down to, say, 32 numbers,
-    and the decoder maps them back to 784. If 32 numbers rebuild the digit
-    well, they hold most of what makes it that digit. Nothing tells the model
-    which digit it is.
+    For an MNIST digit, the encoder might map the 784 pixels down to 32
+    numbers. The decoder then maps those 32 numbers back to 784 pixels. If 32
+    numbers are enough to reconstruct the digit well, they must hold most of
+    what makes it that digit. The model is never told which digit it is.
 
-    The decoder ends in a sigmoid, since pixels run from 0 to 1, the output
-    rule of activations2. The loss is the mean squared error between the
-    rebuild and the input, so the input is its own target.
+    The decoder ends in a sigmoid, because pixels run from 0 to 1. This
+    follows the rule for output activations from activations2. The loss is
+    the mean squared error between the reconstruction and the input, so the
+    input is its own target.
 
     ```python
     rebuilt = torch.tensor([0.9, 0.1])
     F.mse_loss(rebuilt, torch.tensor([1.0, 0.0]))    # tensor(0.0100)
     ```
 
-    Here are codes of four sizes, each trained for 1,500 steps on 20,000
-    digits, measured on 2,000 digits it never saw.
+    The table compares codes of four sizes. Each autoencoder trained for
+    1,500 steps on 20,000 digits, and was then measured on 2,000 digits it
+    never saw.
 
     | Code size | 2 | 8 | 32 | 128 |
     |---|---|---|---|---|
     | Error on new digits | 0.049 | 0.026 | 0.014 | 0.011 |
 
-    Two numbers already rebuild a blurry digit. More numbers rebuild finer
-    strokes, and the error keeps falling as the code grows. autoencoder2
-    asks what happens when it grows past the input.
+    A code of only 2 numbers already reconstructs a blurry digit. Larger
+    codes reconstruct finer strokes, and the error keeps falling as the code
+    grows. autoencoder2 asks what happens when the code grows larger than the
+    input.
     """,
 )
 
@@ -215,15 +220,17 @@ AUTOENCODER1_SOURCE = source_file(
     error = F.mse_loss(rebuilt, torch.tensor([1.0, 0.0]))    # tensor(0.0100)
 
 
-    # TODO: Finish forward. It returns the decoder's rebuild of the encoder's
-    #   code for x, of the same shape as x.
+    # TODO: Finish forward. Pass x, of shape (batch, 784), through self.encoder
+    #   to get the code. Then pass the code through self.decoder and return the
+    #   reconstruction, which has the same shape as x.
 ''' + indented(AUTOENCODER_INIT) + '''
 
         def forward(self, x: Tensor) -> Tensor:
             ...
 
 
-    # TODO: Return the mean squared error between model's rebuild of x and x.
+    # TODO: Return the mean squared error between model(x), the reconstruction
+    #   of x, and x itself.
     def reconstruction_loss(
         model: nn.Module,
         x: Tensor,
@@ -231,10 +238,11 @@ AUTOENCODER1_SOURCE = source_file(
         ...
 
 
-    # TODO: Finish the loop. Each step draws a batch of 128 rows of x with
-    #   torch.randint(0, len(x), (128,), generator=generator), takes
-    #   reconstruction_loss on it, and steps Adam. Return the last loss as a
-    #   plain number.
+    # TODO: Finish the loop. In each step, pick a batch of 128 rows of x at the
+    #   random indices torch.randint(0, len(x), (128,), generator=generator).
+    #   Compute reconstruction_loss of model on the batch, and take one step of
+    #   the Adam optimizer. Store the loss in a variable named loss, because the
+    #   last line returns loss.item().
     def train_autoencoder(
         model: nn.Module,
         x: Tensor,
@@ -300,7 +308,7 @@ def check_train_autoencoder(found: object) -> None:
         tolerance=1e-5,
     )
     expect_tensor(
-        call="the decoder's last weights after those steps",
+        call="the weights of the decoder's last Linear layer after those steps",
         actual=model.decoder[2].weight.detach(),
         expected=expected_model.decoder[2].weight.detach(),
     )
@@ -312,7 +320,7 @@ def check_autoencoder_learns(found: type) -> None:
     error = validation_error(model, 1000)
 
     if error > LEARNS_BELOW:
-        raise Mismatch(f"After 300 steps, Autoencoder(32) rebuilds new digits with an error of {error:.4f}, but it should be below {LEARNS_BELOW}.")
+        raise Mismatch(f"After 300 steps, Autoencoder(32) reconstructs new digits with an error of {error:.4f}. It should be below {LEARNS_BELOW}.")
 
 
 # The solution reaches about 0.033 in these 300 steps, and an untrained model sits far above.
@@ -323,13 +331,13 @@ def check_autoencoder1(checker: Checker) -> None:
     checker.test_method(
         class_name="Autoencoder",
         method="forward",
-        description="rebuilds x from its code",
+        description="reconstructs x from its code",
         run=check_autoencoder_forward,
     )
     check_on_inputs(
         checker=checker,
         function="reconstruction_loss",
-        description="gives the mean squared error of the rebuild",
+        description="returns the mean squared error of the reconstruction",
         inputs=(
             (Described(seeded_autoencoder(REFERENCE["Autoencoder"], 4), "Autoencoder(4)"), Described(digit_rows("validation_x", 3), "3 digits")),
             (Described(seeded_autoencoder(REFERENCE["Autoencoder"], 8), "Autoencoder(8)"), Described(digit_rows("validation_x", 5), "5 digits")),
@@ -339,13 +347,13 @@ def check_autoencoder1(checker: Checker) -> None:
     )
     checker.test(
         function="train_autoencoder",
-        description="draws batches of 128 and steps Adam on the rebuild",
+        description="draws batches of 128 and takes Adam steps on the reconstruction loss",
         run=check_train_autoencoder,
     )
     checker.test_method(
         class_name="Autoencoder",
         method="forward",
-        description="learns to rebuild digits it never saw",
+        description="learns to reconstruct digits it never saw",
         run=check_autoencoder_learns,
     )
 
@@ -358,10 +366,10 @@ AUTOENCODER1 = Exercise(
     source=AUTOENCODER1_SOURCE,
     solution=AUTOENCODER1_SOLUTION,
     hints={
-        "Autoencoder.forward": "Run self.encoder on x, then self.decoder on the code it gives.",
-        "reconstruction_loss": "F.mse_loss of model(x) against x itself.",
-        "train_autoencoder": "batch = x[torch.randint(...)] with the generator. Take the loss on the batch, then "
-        "zero_grad, backward and step.",
+        "Autoencoder.forward": "Run self.encoder on x, then run self.decoder on the code it returns.",
+        "reconstruction_loss": "Call F.mse_loss on model(x) and x itself.",
+        "train_autoencoder": "Index x with torch.randint(...), passing the generator, to get the batch. Compute the "
+        "loss on the batch, then call zero_grad, backward and step.",
     },
     introduces=("autoencoder",),
     check=check_autoencoder1,
@@ -504,14 +512,16 @@ def bottleneck_table(seed: int = 0) -> dict[str, tuple[float, float, float]]:
 
 AUTOENCODER2_LESSON = prose(
     """
-    Rebuilding the input is an easy job for a model that can copy it. Give an
-    autoencoder a code as wide as its input and nothing forces it to learn
+    Reconstructing the input is easy for a model that can copy it. If an
+    autoencoder's code is as wide as its input, nothing forces it to learn
     what digits look like.
 
-    The models here have one layer each way, so a code of 1,024 numbers is
-    wider than the 784 pixels. Each trained for 1,500 steps, on 3 seeds. The
-    noisy error feeds in digits with noise of spread 0.5 added and compares
-    the rebuild with the clean digit.
+    The models here have one layer in the encoder and one in the decoder. A
+    code of 1,024 numbers is wider than the 784 pixels. Each model trained
+    for 1,500 steps, on 3 seeds. The clean error is the usual reconstruction
+    error. For the noisy error, each digit gets noise with a standard
+    deviation of 0.5 added, and the reconstruction is compared with the clean
+    digit.
 
     | Autoencoder | Clean error | Noisy error |
     |---|---|---|
@@ -520,24 +530,28 @@ AUTOENCODER2_LESSON = prose(
     | ReLU, code 1,024 | 0.0030 to 0.0032 | 0.022 to 0.023 |
     | ReLU, code 1,024, denoising | 0.0074 | 0.013 |
 
-    The wide linear one rebuilds clean digits almost perfectly and passes
-    most of the noise through. It learned to copy. With a code of 32 it can't
-    copy, so it keeps what digits share and drops most of the noise.
+    The wide linear autoencoder reconstructs clean digits almost perfectly,
+    but it also passes most of the noise through to its output. It learned to
+    copy its input. With a code of 32 it cannot copy. So it keeps what digits
+    have in common and drops most of the noise.
 
-    A **denoising autoencoder** removes the shortcut without shrinking the
-    code. It reads a noisy digit and is scored against the clean one, so
-    copying its input can never be right. Vincent and colleagues proposed it
-    in 2008. In 2010 they showed it learns stroke detectors from digits,
-    where an ordinary autoencoder doesn't.
+    A **denoising autoencoder** stops the copying without shrinking the code.
+    Its input is a noisy digit, and its loss compares the output with the
+    clean digit. So copying the input can never give the right answer.
+    Vincent and colleagues proposed it in 2008. In 2010 they showed that it
+    learns stroke detectors from digits, and an ordinary autoencoder does
+    not.
 
-    A probe measures what a code is worth. It trains a Linear head on the
-    codes of 1,000 labelled digits and scores 2,000 others. On the pixels
-    alone it gets 81.5%. On the two wide ReLU codes, over 3 seeds, the plain
-    one gets 82.4% to 82.7% and the denoising one 87.4% to 87.9%. The noise
-    made a better code on every seed.
+    A linear probe, from masked2, measures how useful a code is. Here it
+    trains a Linear layer to classify the codes of 1,000 labelled digits, then
+    tests it on 2,000 other digits. On the raw pixels it gets 81.5% right. On
+    the two wide ReLU codes, over 3 seeds, the plain one gets 82.4% to 82.7%.
+    The denoising one gets 87.4% to 87.9%. Training with noise made a better
+    code on every seed.
 
-    The same idea runs through Section 8. Masking in 62_masked_modeling is a
-    kind of noise too, with the hidden part as the answer.
+    The same idea appears across Section 8. The masking in
+    62_masked_modeling is also a kind of noise, with the hidden part as the
+    answer.
     """,
 )
 
@@ -553,8 +567,9 @@ AUTOENCODER2_SOURCE = source_file(
     noise = 0.5 * torch.randn(3, generator=torch.Generator().manual_seed(0))    # tensor([ 0.7705, -0.1467, -1.0894])
 
 
-    # TODO: Return x with noise added, drawn with torch.randn(x.shape,
-    #   generator=generator) and scaled by std.
+    # TODO: Return x with random noise added. Draw the noise with
+    #   torch.randn(x.shape, generator=generator) and multiply it by std, so
+    #   std is the standard deviation of the noise.
     def add_noise(
         x: Tensor,
         std: float,
@@ -563,8 +578,9 @@ AUTOENCODER2_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the mean squared error between model's rebuild of a noisy
-    #   copy of x and the clean x.
+    # TODO: Return the denoising loss. Make a noisy copy of x with add_noise,
+    #   pass it through model, and return the mean squared error between that
+    #   output and the clean x.
     def denoising_loss(
         model: nn.Module,
         x: Tensor,
@@ -574,8 +590,10 @@ AUTOENCODER2_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the same error as a plain number, measured in eval mode and
-    #   without recording for autograd. Then put model back in training mode.
+    # TODO: Return the same error as denoising_loss, as a Python float. Put
+    #   model in eval mode first, and compute the error inside torch.no_grad()
+    #   so autograd records nothing. Put model back in training mode before
+    #   returning.
     def noisy_error(
         model: nn.Module,
         x: Tensor,
@@ -620,13 +638,13 @@ def check_noisy_error(found: object) -> None:
             raise Mismatch("noisy_error ran the model in training mode. Call model.eval() first.")
 
         if any(recording for _, recording in modes):
-            raise Mismatch("noisy_error recorded for autograd. Run the model inside torch.no_grad().")
+            raise Mismatch("noisy_error let autograd record the computation. Run the model inside torch.no_grad().")
 
         if not model.training:
             raise Mismatch("noisy_error left the model in eval mode. Call model.train() before returning.")
 
         expect_close(
-            call=f"noisy_error of Autoencoder({code}) on {count} digits, noise of spread {std}",
+            call=f"noisy_error of Autoencoder({code}) on {count} digits, noise with standard deviation {std}",
             actual=actual,
             expected=expected,
             tolerance=1e-6,
@@ -637,7 +655,7 @@ def check_autoencoder2(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="add_noise",
-        description="adds noise of the given spread",
+        description="adds noise with the given standard deviation",
         inputs=(
             (small_tensor(473, 2, 3), 0.5, seeded(474)),
             (small_tensor(475, 4), 2.0, seeded(476)),
@@ -648,7 +666,7 @@ def check_autoencoder2(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="denoising_loss",
-        description="scores the rebuild of a noisy copy against the clean one",
+        description="compares the reconstruction of a noisy copy with the clean input",
         inputs=(
             (Described(seeded_autoencoder(REFERENCE["Autoencoder"], 4), "Autoencoder(4)"), Described(digit_rows("validation_x", 3), "3 digits"), 0.4, seeded(477)),
             (Described(seeded_autoencoder(REFERENCE["Autoencoder"], 8), "Autoencoder(8)"), Described(digit_rows("validation_x", 5), "5 digits"), 0.8, seeded(488)),
@@ -671,11 +689,11 @@ AUTOENCODER2 = Exercise(
     source=AUTOENCODER2_SOURCE,
     solution=AUTOENCODER2_SOLUTION,
     hints={
-        "add_noise": "x plus std times torch.randn of x's shape, drawn with the generator.",
-        "denoising_loss": "Run model on add_noise(x, std, generator), and take F.mse_loss of that against x, not "
-        "against the noisy copy.",
-        "noisy_error": "model.eval(), then inside torch.no_grad() take the same error as denoising_loss and .item() it. "
-        "Call model.train() before returning.",
+        "add_noise": "Add std times torch.randn of x's shape, drawn with the generator, to x.",
+        "denoising_loss": "Run model on add_noise(x, std, generator). Then take F.mse_loss of the output against the "
+        "clean x, not the noisy copy.",
+        "noisy_error": "Call model.eval(). Then inside torch.no_grad(), compute the same error as denoising_loss and "
+        "convert it with .item(). Call model.train() before returning.",
     },
     introduces=("denoising autoencoder",),
     check=check_autoencoder2,
@@ -866,61 +884,71 @@ def against_pca(seeds: range = range(3)) -> dict[int, tuple[list[float], float]]
 
 AUTOENCODER3_LESSON = prose(
     """
-    Take the activations out, and an autoencoder is two matrices. The
-    encoder maps a centered input down to a code of k numbers and the decoder
-    maps it back. Baldi and Hornik showed in 1989 that the best such pair
-    keeps the same k directions as principal component analysis, PCA. Those
-    are the directions along which the data spreads the most.
+    Without activations, an autoencoder is two matrices. The encoder maps a
+    centered input, one with the average input subtracted, down to a code of
+    k numbers. The decoder maps the code back to the input's size. Baldi and
+    Hornik showed in 1989 that the best such pair of matrices keeps the same
+    k directions as principal component analysis, PCA. PCA's directions are
+    the ones along which the data varies the most.
 
-    A set of k directions **spans** a **space**, every point you can reach by
-    scaling the directions and adding them up. The directions are a
-    **basis** of that space, and many different bases span the same one.
+    A set of k directions **spans** a **space**. The space is every point you
+    can reach by scaling the directions and adding them up. The directions
+    are called a **basis** of that space. Many different bases span the same
+    space.
 
-    The best pair keeps PCA's space but picks its own axes. Any basis of that
-    space rebuilds the input equally well, so the decoder's columns come out
-    as a mix of PCA's directions. Comparing the two means comparing the
-    spaces they span.
+    The best pair of matrices keeps PCA's space but picks its own basis for
+    it. Any basis of that space reconstructs the input equally well. So the
+    decoder's columns come out as a mix of PCA's directions, not PCA's
+    directions themselves. To compare the two, compare the spaces they span.
 
     A **projection** onto a space maps every point to its nearest point in
     that space. Two bases span the same space exactly when they give the same
-    projection. `torch.linalg.qr` turns a basis of columns into one of
-    perpendicular unit columns spanning the same space, and with that basis
-    `q @ q.T` is the projection.
+    projection. `torch.linalg.qr` turns a basis, stored as columns, into a
+    new basis `q` for the same space. The columns of `q` have length 1 and
+    are perpendicular to each other. With that basis, the projection matrix
+    is `q @ q.T`.
 
     ```python
     q, _ = torch.linalg.qr(torch.tensor([[2.0], [0.0]]))
-    q @ q.T    # tensor([[1., 0.], [0., 0.]]), up to the sign of q
+    q @ q.T    # tensor([[1., 0.], [0., 0.]]), whatever the sign of q
     ```
 
-    The gap between two spaces of k directions is the size of the difference
-    of their projections, divided by the square root of 2k. It is 0 for the
-    same space and 1 for spaces at right angles.
+    To measure the gap between two spaces of k directions, subtract their
+    projection matrices and take the norm of the difference. The norm of a
+    matrix here is the square root of the sum of its squared entries, which
+    `.norm()` computes. Then divide by the square root of `2 * k`. The gap is
+    0 for the same space, and 1 for spaces at right angles to each other.
 
-    `torch.pca_lowrank(x, q=q, center=True)` gives PCA's first q directions
-    as the columns of its third result. It is a fast random method. On MNIST,
-    asked for exactly 16 directions, it lands 0.30 to 0.38 from the true
-    space, depending on its draw. Asked for 2k + 10 with 4 rounds of
-    refining, `niter=4`, and cut back to k, it lands within 0.001.
+    `torch.pca_lowrank(x, q=q, center=True)` returns three results, and the
+    columns of the third are PCA's first q directions. It is a fast method
+    that uses random numbers, so it is only approximate. On MNIST, asked for
+    exactly 16 directions, its space has a gap of 0.30 to 0.38 from the true
+    space, depending on the random draw. Ask it for `2 * k + 10` directions
+    with 4 refining rounds, `niter=4`, then keep the first k. The gap is then
+    within 0.001.
 
-    Here is a linear autoencoder with a code of 16, trained for 1,500 steps on
-    20,000 digits with 3 seeds, against PCA's first 16 directions.
+    Here is a linear autoencoder with a code of 16, trained for 1,500 steps
+    on 20,000 digits with 3 seeds. It is compared with PCA's first 16
+    directions.
 
-    - Its gap to PCA's space: 0.05 to 0.08.
-    - The gap of 16 random directions to it: 0.99.
-    - The cosine between its first column and PCA's first direction: 0.01 to 0.52.
+    - The gap from the decoder's columns to PCA's space: 0.05 to 0.08.
+    - The gap from 16 random directions to PCA's space: 0.99.
+    - The cosine similarity of the decoder's first column and PCA's first direction: 0.01 to 0.52.
 
-    So it found PCA's space, in a basis of its own. With activations, an
-    autoencoder can find curved shapes PCA can't. PCA rebuilds a digit by
-    projecting it, less the average digit, onto its space and adding the
-    average back. Here are both on the same 2,000 new digits.
+    So the autoencoder found PCA's space, but with a basis of its own. With
+    activations, an autoencoder can fit curved shapes in the data that PCA
+    cannot. PCA reconstructs a digit in three steps. It subtracts the average
+    digit, projects the result onto its space, and adds the average back. The
+    table compares autoencoder1's model and PCA on the same 2,000 new digits.
 
     | Code size | 2 | 8 | 32 |
     |---|---|---|---|
     | Error of autoencoder1's model, 3 seeds | 0.048 to 0.049 | 0.026 | 0.014 |
     | Error of PCA | 0.056 | 0.038 | 0.018 |
 
-    For a small code the curved fit's error is 13% to 33% lower. That is what
-    made the deep autoencoders of Hinton and Salakhutdinov worth training.
+    For these small codes, the autoencoder with activations has an error 13%
+    to 33% lower than PCA's. That advantage is what made the deep
+    autoencoders of Hinton and Salakhutdinov worth training.
     """,
 )
 
@@ -936,19 +964,25 @@ AUTOENCODER3_SOURCE = source_file(
     from torch import Tensor
 
     q, _ = torch.linalg.qr(torch.tensor([[2.0], [0.0]]))
-    onto_first = q @ q.T          # tensor([[1., 0.], [0., 0.]]), up to the sign of q
+    onto_first = q @ q.T          # tensor([[1., 0.], [0., 0.]]), whatever the sign of q
 
 
-    # TODO: Return the projection onto the space the columns of basis span, of
-    #   shape (rows, rows). Make the columns perpendicular with torch.linalg.qr
-    #   first.
+    # TODO: Return the projection matrix onto the space that the columns of
+    #   basis span. basis has shape (rows, k), and the result has shape
+    #   (rows, rows). First make the columns perpendicular, with length 1,
+    #   using torch.linalg.qr as the lesson shows.
+    #   Example: projection(torch.tensor([[1.0], [1.0]])) returns
+    #   tensor([[0.5000, 0.5000], [0.5000, 0.5000]]).
     def projection(basis: Tensor) -> Tensor:
         ...
 
 
-    # TODO: Return the gap between the spaces a and b span, each a basis of k
-    #   columns, as a plain number: the norm of the difference of their
-    #   projections, divided by the square root of 2 * k.
+    # TODO: Return the gap between the spaces spanned by the columns of a and
+    #   of b, as a Python float. a and b each have shape (rows, k). Subtract
+    #   their projection matrices, take the norm of the difference, and divide
+    #   it by the square root of 2 * k.
+    #   Example: subspace_gap(torch.eye(4)[:, :2], torch.eye(4)[:, 2:]) returns
+    #   1.0, because those two spaces are at right angles.
     def subspace_gap(
         a: Tensor,
         b: Tensor,
@@ -956,10 +990,11 @@ AUTOENCODER3_SOURCE = source_file(
         ...
 
 
-    # TODO: Return PCA's first k directions of x, as k columns. Ask
-    #   torch.pca_lowrank for q = 2 * k + 10 directions, or fewer when x has
-    #   fewer rows or columns, with center=True and niter=4. Keep the first k
-    #   columns of its third result.
+    # TODO: Return PCA's first k directions of x, as a tensor of k columns. x
+    #   has shape (points, size), so the result has shape (size, k). Call
+    #   torch.pca_lowrank with center=True and niter=4, and ask for
+    #   q = 2 * k + 10 directions, or fewer if x has fewer rows or columns than
+    #   that. Keep the first k columns of its third result.
     def pca_basis(
         x: Tensor,
         k: int,
@@ -967,7 +1002,8 @@ AUTOENCODER3_SOURCE = source_file(
         ...
 
 
-    # Two matrices and no activations, trained on centered data.
+    # A linear autoencoder, made of two matrices with no activations. It trains
+    #   on centered data.
 ''' + indented(LINEAR_AUTOENCODER) + '''
     ''',
 )
@@ -1001,14 +1037,15 @@ def check_pca_basis(found: object) -> None:
         actual = found(x, k)
 
         if not isinstance(actual, Tensor) or tuple(actual.shape) != (40, k):
-            raise Mismatch(f"pca_basis of 400 points in 40 dimensions, k={k}, should give 40 rows of {k} columns.")
+            raise Mismatch(f"pca_basis of 400 points in 40 dimensions, k={k}, should return a tensor of shape (40, {k}).")
 
         gap = SUBSPACE_REFERENCE["subspace_gap"](actual, exact_pca(x, k))
 
         if gap > 0.01:
             raise Mismatch(
-                f"pca_basis of 400 points in 40 dimensions, k={k}, spans a space {gap:.3f} away from PCA's first {k} "
-                "directions. The random method needs the extra directions and the 4 rounds of refining the TODO asks for.",
+                f"pca_basis of 400 points in 40 dimensions, k={k}, spans a space with a gap of {gap:.3f} from PCA's first "
+                f"{k} directions. torch.pca_lowrank uses random numbers, so it needs the extra directions and the 4 "
+                "refining rounds that the TODO asks for.",
             )
 
 
@@ -1037,14 +1074,14 @@ def check_matches_pca(found: object) -> None:
     )
 
     if near > 0.05:
-        raise Mismatch(f"The trained linear autoencoder's space is {near:.3f} from PCA's, but it should be near 0.")
+        raise Mismatch(f"The gap between the trained linear autoencoder's space and PCA's space is {near:.3f}, but it should be near 0.")
 
 
 def check_autoencoder3(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="projection",
-        description="projects onto the space the columns span",
+        description="returns the projection onto the space the columns span",
         inputs=(
             (small_tensor(484, 4, 2),),
             (Described(torch.tensor([[2.0, 1.0], [0.0, 1.0], [0.0, 0.0]]), "two columns in 3 dimensions"),),
@@ -1055,7 +1092,7 @@ def check_autoencoder3(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="subspace_gap",
-        description="is 0 for the same space and grows as they part",
+        description="is 0 for the same space and grows as the spaces differ more",
         inputs=(
             (small_tensor(485, 5, 2), small_tensor(485, 5, 2) @ torch.tensor([[2.0, 1.0], [0.0, 3.0]])),
             (small_tensor(486, 5, 2), small_tensor(487, 5, 2)),
@@ -1076,7 +1113,7 @@ def check_autoencoder3(checker: Checker) -> None:
     )
     checker.test(
         function="subspace_gap",
-        description="finds a trained linear autoencoder in PCA's space",
+        description="shows that a trained linear autoencoder lies in PCA's space",
         run=check_matches_pca,
     )
 
@@ -1089,12 +1126,12 @@ AUTOENCODER3 = Exercise(
     source=AUTOENCODER3_SOURCE,
     solution=AUTOENCODER3_SOLUTION,
     hints={
-        "projection": "torch.linalg.qr of the basis gives an orthonormal q first and a factor you can drop. Return q "
-        "times its own transpose.",
-        "subspace_gap": "Take projection of a minus projection of b, its .norm(), and divide by math.sqrt(2 * k) with k "
-        "the number of columns. Return it with .item().",
-        "pca_basis": "min(2 * k + 10, x.shape[0], x.shape[1]) is how many to ask for. torch.pca_lowrank gives three "
-        "results, the directions are the last, and [:, :k] keeps the first k columns.",
+        "projection": "torch.linalg.qr of the basis returns q, whose columns are perpendicular with length 1, and a "
+        "second factor you can ignore. Return q matrix multiplied by its own transpose.",
+        "subspace_gap": "Subtract projection(b) from projection(a) and take the .norm() of the result. Divide it by "
+        "math.sqrt(2 * k), where k is the number of columns, and convert it with .item().",
+        "pca_basis": "Ask for min(2 * k + 10, x.shape[0], x.shape[1]) directions. torch.pca_lowrank returns three "
+        "results, and the directions are the last one. Then [:, :k] keeps the first k columns.",
     },
     introduces=("span", "basis", "projection"),
     check=check_autoencoder3,
@@ -1109,17 +1146,18 @@ AUTOENCODER3 = Exercise(
 
 QUIZ11_LESSON = prose(
     """
-    This quiz has no examples and no new tools. Each function combines moves
-    from Section 8. If a step is unclear, the exercise in the table shows it.
+    This quiz has no examples and no new tools. Each function combines steps
+    from Section 8. If a step is unclear, the exercise listed in the table
+    shows how to do it.
 
-    | Function | Moves | Shown in |
+    | Function | Steps | Shown in |
     |---|---|---|
-    | `vocabulary_pairs` | the common words kept as a vocabulary, each turned into its place in it, then every id paired with its neighbours | word2vec1 |
-    | `skipgram_loss` | rows looked up in two tables by id, then the negative sampling loss of the real and made up pairs | embedding1, word2vec2 |
-    | `nearest` | every row and the chosen one scaled to length 1, their cosines, and the k closest with the row itself left out | word2vec3 |
-    | `info_nce` | the cosine of every pair of rows over a temperature, then cross entropy with each row's partner as the right class | contrastive1 |
-    | `masked_loss` | positions chosen where a random draw falls below the rate, then cross entropy at those alone | masked1 |
-    | `subspace_gap` | a QR basis and its projection for each space, then the norm of their difference over the square root of 2k | autoencoder3 |
+    | `vocabulary_pairs` | keep the common words as a vocabulary, replace each kept word by its index in it, then pair every id with its neighbours | word2vec1 |
+    | `skipgram_loss` | look up rows in the two tables by id, then compute the negative sampling loss of the real and made up pairs | embedding1, word2vec2 |
+    | `nearest` | scale every row and the chosen row to length 1, take their cosines, and keep the k highest except the chosen row | word2vec3 |
+    | `info_nce` | divide the cosine of every pair of rows by a temperature, then take the cross entropy with each row's partner as the target | contrastive1 |
+    | `masked_loss` | choose the positions where a random draw is below the rate, then take the cross entropy at those positions only | masked1 |
+    | `subspace_gap` | a QR basis and its projection matrix for each space, then the norm of their difference divided by the square root of 2k | autoencoder3 |
     """,
 )
 
@@ -1127,7 +1165,7 @@ QUIZ11_SOURCE = source_file(
     '''
     # quiz11.py
     #
-    # No examples and no new tools. Each function combines moves from Section 8.
+    # No examples and no new tools. Each function combines steps from Section 8.
 
     import math
     from collections import Counter
@@ -1139,10 +1177,11 @@ QUIZ11_SOURCE = source_file(
 
     # TODO: Return the skip gram pairs of words as a long tensor of shape
     #   (pairs, 2). The vocabulary is the words seen at least min_count times,
-    #   most common first and ties in alphabetical order. Turn each kept word
-    #   into its place in the vocabulary and drop the rest. Then pair each id
-    #   with every other id at most window places away, centers in order and
-    #   contexts in order within each, the center first.
+    #   with the most common first and ties in alphabetical order. Replace each
+    #   kept word by its index in the vocabulary, and drop the other words. Then
+    #   pair each id with every other id at most window places away. List the
+    #   pairs center by center, and for each center from its leftmost neighbour
+    #   to its rightmost. Put the center id first in each pair.
     def vocabulary_pairs(
         words: list[str],
         min_count: int,
@@ -1151,11 +1190,12 @@ QUIZ11_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the mean over the batch of the negative sampling loss.
-    #   centers and contexts are the two tables, each of shape (vocabulary,
-    #   size). pairs has shape (batch, 2), a center id then a context id, and
-    #   negatives (batch, k), the made up ids of each pair. Look the centers up
-    #   in centers, and the contexts and the made up ids in contexts.
+    # TODO: Return the negative sampling loss, averaged over the batch. centers
+    #   and contexts are the two embedding tables, each of shape (vocabulary,
+    #   size). Each row of pairs, of shape (batch, 2), holds a center id and
+    #   then a context id. negatives has shape (batch, k) and holds the made up
+    #   ids for each pair. Look up the center ids in centers, and look up the
+    #   context ids and the made up ids in contexts.
     def skipgram_loss(
         centers: Tensor,
         contexts: Tensor,
@@ -1166,7 +1206,8 @@ QUIZ11_SOURCE = source_file(
 
 
     # TODO: Return the indices of the k rows of vectors with the highest cosine
-    #   similarity to row index, highest first, leaving row index out.
+    #   similarity to vectors[index], as a list with the highest first. Leave
+    #   out the row at index itself.
     def nearest(
         vectors: Tensor,
         index: int,
@@ -1175,9 +1216,10 @@ QUIZ11_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the InfoNCE loss of z1 against z2, each (batch, size): the
-    #   cosine similarity of every row of z1 with every row of z2, over
-    #   temperature, with row i of z2 as the right class for row i of z1.
+    # TODO: Return the InfoNCE loss of z1 against z2, which each have shape
+    #   (batch, size). The scores are the cosine similarity of every row of z1
+    #   with every row of z2, divided by temperature. Take the cross entropy of
+    #   the scores, with column i as the target of row i.
     def info_nce(
         z1: Tensor,
         z2: Tensor,
@@ -1187,8 +1229,9 @@ QUIZ11_SOURCE = source_file(
 
 
     # TODO: Choose the positions where torch.rand(ids.shape, generator=generator)
-    #   is below rate. Return the cross entropy of scores, (positions,
-    #   vocabulary), against ids at the chosen positions alone.
+    #   is below rate. scores has shape (positions, vocabulary), and ids has
+    #   shape (positions,). Return the cross entropy of scores against ids at
+    #   the chosen positions only.
     def masked_loss(
         scores: Tensor,
         ids: Tensor,
@@ -1198,9 +1241,10 @@ QUIZ11_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the gap between the spaces the columns of a and b span,
-    #   each a basis of k columns, as a plain number: the norm of the
-    #   difference of their projections, divided by the square root of 2 * k.
+    # TODO: Return the gap between the spaces spanned by the columns of a and
+    #   of b, as a Python float. a and b each have k columns. Subtract their
+    #   projection matrices, take the norm of the difference, and divide it by
+    #   the square root of 2 * k.
     def subspace_gap(
         a: Tensor,
         b: Tensor,
@@ -1339,7 +1383,7 @@ def check_quiz11(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="skipgram_loss",
-        description="looks the rows up and scores the real pair up and the made up ones down",
+        description="looks up the rows and computes the negative sampling loss",
         inputs=(
             (quiz11_tensor(1110, 6, 3), quiz11_tensor(1111, 6, 3), quiz11_ids(1112, 6, 4, 2), quiz11_ids(1113, 6, 4, 5)),
             (quiz11_tensor(1120, 5, 2), quiz11_tensor(1121, 5, 2), quiz11_ids(1122, 5, 6, 2), quiz11_ids(1123, 5, 6, 3)),
@@ -1350,7 +1394,7 @@ def check_quiz11(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="nearest",
-        description="gives the closest rows by cosine, leaving the row out",
+        description="returns the most similar rows by cosine, leaving out the row itself",
         inputs=(
             (quiz11_tensor(1113, 8, 4), 3, 3),
             (quiz11_tensor(1114, 6, 5), 0, 2),
@@ -1361,7 +1405,7 @@ def check_quiz11(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="info_nce",
-        description="takes each row's partner as the right class",
+        description="uses column i as the target of row i",
         inputs=(
             (quiz11_tensor(1115, 5, 4), quiz11_tensor(1116, 5, 4), 0.5),
             (quiz11_tensor(1117, 3, 6) * 4, quiz11_tensor(1118, 3, 6), 0.1),
@@ -1372,7 +1416,7 @@ def check_quiz11(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="masked_loss",
-        description="scores the chosen positions alone",
+        description="computes the cross entropy at the chosen positions only",
         inputs=(
             (quiz11_tensor(1119, 6, 5), torch.tensor([1, 4, 0, 2, 2, 3]), 0.5, seeded(1130)),
             (quiz11_tensor(1127, 5, 7), torch.tensor([6, 0, 3, 3, 5]), 0.4, seeded(1131)),
@@ -1383,7 +1427,7 @@ def check_quiz11(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="subspace_gap",
-        description="is 0 for the same space and grows as they part",
+        description="is 0 for the same space and grows as the spaces differ more",
         inputs=(
             (quiz11_tensor(1124, 5, 2), quiz11_tensor(1124, 5, 2) @ torch.tensor([[1.0, 2.0], [-1.0, 1.0]])),
             (quiz11_tensor(1125, 6, 3), quiz11_tensor(1126, 6, 3)),
@@ -1407,19 +1451,20 @@ QUIZ11 = Exercise(
     source=QUIZ11_SOURCE,
     solution=QUIZ11_SOLUTION,
     hints={
-        "vocabulary_pairs": "Count with Counter, keep and sort the words as word2vec1's vocabulary did, and make a dict "
-        "from each kept word to its place. The ids are the places of the kept words in order. Then loop over each "
-        "center and each context up to window away, skipping the center itself.",
-        "skipgram_loss": "Index centers with pairs[:, 0], contexts with pairs[:, 1], and contexts with negatives for "
-        "rows of shape (batch, k, size). Then F.logsigmoid of the real dot products, plus the sum over k of "
-        "F.logsigmoid of minus the made up ones, and minus the mean.",
-        "nearest": "Normalize the rows and the chosen row, multiply, set the chosen row's score to minus "
-        "infinity, then .topk(k).indices.tolist().",
-        "info_nce": "F.normalize both on dim=1, multiply z1 by z2's transpose, divide by temperature, and "
-        "F.cross_entropy against torch.arange(len(z1)).",
-        "masked_loss": "chosen is the draw compared with rate. Index scores and ids with it, then F.cross_entropy.",
-        "subspace_gap": "Each projection is torch.linalg.qr's first result times its own transpose. The gap is the "
-        "norm of their difference over the square root of 2k, as a plain number.",
+        "vocabulary_pairs": "Count with Counter, then keep and sort the words as word2vec1's vocabulary did. Make a dict "
+        "from each kept word to its index. The ids are the indices of the kept words, in text order. Then loop over "
+        "each center and each context up to window away, skipping the center itself.",
+        "skipgram_loss": "Index centers with pairs[:, 0] and contexts with pairs[:, 1]. Index contexts with negatives "
+        "to get rows of shape (batch, k, size). Add F.logsigmoid of the real dot products to the sum over k of "
+        "F.logsigmoid of minus the made up dot products. Return minus the mean.",
+        "nearest": "Normalize the rows and the chosen row, and multiply them to get one cosine per row. Set the chosen "
+        "row's score to minus infinity, then use .topk(k).indices.tolist().",
+        "info_nce": "Normalize both with F.normalize on dim=1, multiply z1 by the transpose of z2, and divide by "
+        "temperature. Then call F.cross_entropy against torch.arange(len(z1)).",
+        "masked_loss": "chosen is the draw compared with rate using <. Index scores and ids with chosen, then call "
+        "F.cross_entropy.",
+        "subspace_gap": "Each projection matrix is the first result of torch.linalg.qr times its own transpose. The gap "
+        "is the norm of their difference divided by the square root of 2k, as a Python float.",
     },
     introduces=(),
     check=check_quiz11,

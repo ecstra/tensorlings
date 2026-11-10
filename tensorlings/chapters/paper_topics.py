@@ -37,11 +37,12 @@ PAPER_TOPICS = Chapter(
         """
         # Project: a map of papers
 
-        Section 8's project. Cora is a graph of 2,708 machine learning papers
-        joined by their citations. You learn a vector for every paper from
-        random walks along the citations, with word2vec's skip gram and no
-        topic in sight. Then a linear probe finds each paper's topic from 140
-        labelled papers, and you measure what the citations bought against the
+        This is Section 8's project. Cora is a graph of 2,708 machine learning
+        papers, linked by their citations. You learn a vector for every paper
+        from random walks along the citations, using word2vec's skip gram. The
+        topics of the papers are never used for this. Then a linear probe
+        predicts each paper's topic after training on 140 labelled papers.
+        Finally you measure how much the citations help, compared with the
         papers' own words. The training runs outside the app, in about 10
         seconds.
 
@@ -151,7 +152,8 @@ def walk_pairs(
 '''
 
 WALKS_GIVEN = '''
-# walks_per_paper rounds, each a walk from every paper in a fresh shuffled order, as DeepWalk's paper does.
+# Makes walks_per_paper rounds of walks, as DeepWalk's paper does. Each round starts one walk from every paper,
+# in a new random order.
 def all_walks(
     neighbours: list[list[int]],
     walks_per_paper: int,
@@ -240,46 +242,51 @@ TOPICS_REFERENCE = namespace_of(SETTINGS_PART + SKIPGRAM_PART + WALK_SOLUTION + 
 TOPICS1_LESSON = prose(
     """
     This is Section 8's project. Cora is a graph of 2,708 machine learning
-    papers joined by 5,278 citations. Each paper also has one of 7 topics,
-    such as neural networks or theory. Here no topic is ever used. Each paper
-    learns a vector from the citations alone, and topics2 checks what it knows.
+    papers, linked by 5,278 citations. Each paper also has one of 7 topics,
+    such as neural networks or theory. This exercise never uses the topics.
+    Each paper gets a vector learned from the citations alone, and topics2
+    checks what those vectors know about the topics.
 
     DeepWalk, from Perozzi and colleagues, turns a graph into sentences. A
-    random walk starts at a paper and steps to a paper it cites or that cites
-    it, picked at random, again and again. Each walk is a sentence and each
-    paper a word. Then word2vec2's skip gram learns a vector for every paper.
-    Papers that turn up near each other in walks end up with vectors that
-    point the same way.
+    random walk starts at a paper. At each step it moves to a random paper
+    that the current paper cites or is cited by. Each walk is treated as a
+    sentence, and each paper as a word. Then word2vec2's skip gram learns a
+    vector for every paper. Papers that appear near each other in walks end
+    up with vectors that point in similar directions.
 
-    A citation joins two papers either way round, so each paper's neighbours
-    are the papers on the other end of its links.
+    A walk can follow a citation in either direction. So a paper's neighbours
+    are all the papers at the other end of its links, whichever paper cites
+    which.
 
     ```python
     walk = [0, 8, 0, 14]    # paper 0, a neighbour, back to 0, then another neighbour
     ```
 
-    A pair is a paper and another one at most `window` steps away in the same
-    walk, on either side. The pairs one step apart line up as two shifted
-    copies of the walks.
+    A pair is a paper and another paper at most `window` steps away from it
+    in the same walk, before or after it. The pairs that are one step apart
+    come from two shifted copies of the walks. `walks[:, :-1]` drops the last
+    paper of each walk, and `walks[:, 1:]` drops the first. Lined up, they put
+    each paper next to the paper that follows it.
 
     ```python
     walks = torch.tensor([[0, 8, 0]])
     walks[:, :-1], walks[:, 1:]    # (tensor([[0, 8]]), tensor([[8, 0]])), each paper and the next
     ```
 
-    `deepwalk_step` is word2vec2's training step. It draws a batch of pairs,
-    then 5 made up papers for each. A paper is drawn by how often it shows up
-    in the walks, raised to the power 3/4.
+    `deepwalk_step` is the training step from word2vec2. It draws a batch of
+    pairs, then 5 made up papers for each pair. The made up papers are drawn
+    with probability proportional to how often each paper appears in the
+    walks, raised to the power 3/4.
 
     Once every check passes, train with `.venv/bin/python run.py train
-    topics1`. It walks 10 times from every paper, each walk 40 papers long.
-    With a window of 10, as DeepWalk's paper used, that gives 18.7 million
-    pairs. Then it trains 2,000 steps of 4,096 pairs.
+    topics1`. It starts 10 walks from every paper, each 40 papers long. With
+    a window of 10, the value DeepWalk's paper used, that gives 18.7 million
+    pairs. Then it trains for 2,000 steps on batches of 4,096 pairs.
 
-    The three runs behind this project took 9 to 10 seconds each on an Apple
-    M5's GPU. Two on 4 of its CPU threads were faster, at 5.6 to 5.8 seconds.
-    The loss fell from 4.16, word2vec2's 6 log 2, to about 1.0 within 500
-    steps, and held there.
+    The three training runs behind this project took 9 to 10 seconds each on
+    an Apple M5's GPU. Two runs on 4 of its CPU threads were faster, at 5.6
+    to 5.8 seconds. The loss fell from 4.16, which is `6 * log 2` as in
+    word2vec2, to about 1.0 within 500 steps, and stayed there.
     """,
 )
 
@@ -300,16 +307,20 @@ TOPICS1_SOURCE = source_file(
     from tensorlings.training import best_device, save_checkpoint
 
     walks = torch.tensor([[0, 8, 0]])
-    after = walks[:, 1:]    # tensor([[8, 0]]), the paper one step later
+    after = walks[:, 1:]    # tensor([[8, 0]]), the walk without its first paper
 ''' + indented(SETTINGS_PART) + '''
 
 
-    # word2vec2's noise, loss and model.
+    # The noise distribution, loss and model from word2vec2.
 ''' + indented(SKIPGRAM_PART) + '''
 
 
-    # TODO: Return count lists, each paper's neighbours. For each link (a, b),
-    #   in the order links lists them, add b to a's list, then a to b's.
+    # TODO: Return a list of count lists, where list i holds the neighbours of
+    #   paper i. links has shape (links, 2), one citation (a, b) per row. Go
+    #   through the links in order, and for each one append b to a's list, then
+    #   a to b's list.
+    #   Example: neighbour_lists(torch.tensor([[0, 1], [1, 2]]), 3) returns
+    #   [[1], [0, 2], [1]].
     def neighbour_lists(
         links: Tensor,
         count: int,
@@ -317,8 +328,9 @@ TOPICS1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return a walk of length papers as a list, starting at start. Each
-    #   step picks one of the last paper's neighbours, the one at position
+    # TODO: Return a random walk as a list of length papers, starting at start.
+    #   At each step, let options be the neighbours of the walk's last paper,
+    #   and append the option at index
     #   torch.randint(len(options), (1,), generator=generator).
     def random_walk(
         neighbours: list[list[int]],
@@ -329,9 +341,12 @@ TOPICS1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return every pair of a paper and another 1 to window steps from it
-    #   in the same walk, before or after, as a tensor of shape (pairs, 2), the
-    #   center first. walks has shape (count, length).
+    # TODO: Return every skip gram pair from walks, as a tensor of shape
+    #   (pairs, 2) with the center paper first. walks has shape (count, length).
+    #   A pair is a paper and another paper 1 to window steps before or after
+    #   it in the same walk. The order of the pairs does not matter.
+    #   Example: walk_pairs(torch.tensor([[0, 1, 2]]), 1) returns the pairs
+    #   [0, 1], [1, 2], [1, 0] and [2, 1], in any order.
     def walk_pairs(
         walks: Tensor,
         window: int,
@@ -342,12 +357,13 @@ TOPICS1_SOURCE = source_file(
 ''' + indented(WALKS_GIVEN) + '''
 
 
-    # TODO: Take one training step and return the loss as a plain number. Draw
-    #   batch rows of pairs with torch.randint and generator, then batch *
-    #   NEGATIVES made up papers with torch.multinomial(noise, ...,
-    #   replacement=True, generator=generator), as rows of NEGATIVES. Move the
-    #   centers, the contexts and the made up papers to device, take model's
-    #   loss of them, and step.
+    # TODO: Take one training step and return the loss as a Python float.
+    #   First pick batch rows of pairs at random indices from torch.randint,
+    #   drawn with generator. Then draw batch * NEGATIVES made up papers with
+    #   torch.multinomial(noise, ..., replacement=True, generator=generator),
+    #   and reshape them to (batch, NEGATIVES). Move the center column, the
+    #   context column and the made up papers to device, and pass them to model
+    #   to get the loss. Then take one optimizer step.
     def deepwalk_step(
         model: nn.Module,
         optimizer: torch.optim.Optimizer,
@@ -412,7 +428,7 @@ def expect_pairs(
         raise Mismatch(f"{call} is a {type(actual).__name__}, but it should be a tensor of shape (pairs, 2).")
 
     if actual.is_floating_point():
-        raise Mismatch(f"{call} holds {actual.dtype} numbers, but papers are whole numbers, as the walks are.")
+        raise Mismatch(f"{call} holds {actual.dtype} numbers, but paper ids are integers, as in the walks.")
 
     if actual.shape != expected.shape:
         raise Mismatch(
@@ -496,7 +512,7 @@ def check_topics1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="random_walk",
-        description="steps to a random neighbour each time",
+        description="moves to a random neighbour at each step",
         inputs=(
             (Described(small, f"the neighbours {small}"), 4, 6, seeded(644)),
             (Described(chain, f"the neighbours {chain}"), 0, 9, seeded(645)),
@@ -533,13 +549,14 @@ TOPICS1 = Exercise(
     hints={
         "neighbour_lists": "Make one empty list per paper. Loop over links.tolist(), and append each end of a link to "
         "the other end's list.",
-        "random_walk": "Keep a list that starts as [start]. While it is shorter than length, look up the neighbours "
-        "of its last paper and append the one torch.randint picks, read out with .item().",
+        "random_walk": "Start a list as [start]. While it is shorter than length, look up the neighbours of its last "
+        "paper. Append the neighbour at the index torch.randint picks, converted to an int with .item().",
         "walk_pairs": "For each gap from 1 to window, walks[:, :-gap] and walks[:, gap:] line up each paper with the "
-        "one gap steps later. Flatten both, stack them both ways round into columns, and torch.cat every gap's rows.",
-        "deepwalk_step": "The rows of pairs come first, then the made up papers, both drawn with generator, so the "
-        "draws match. The loss is model(centers, contexts, made_up), each moved with .to(device). Then zero_grad, "
-        "backward and step.",
+        "paper gap steps later. Flatten both and stack them as two columns, in both orders. Then torch.cat the rows "
+        "from every gap.",
+        "deepwalk_step": "Draw the rows of pairs first and the made up papers second, both with generator, so the "
+        "random numbers match. The loss is model(centers, contexts, made_up), with each moved by .to(device). Then "
+        "call zero_grad, backward and step.",
     },
     introduces=(),
     check=check_topics1,
@@ -553,7 +570,8 @@ TOPICS1 = Exercise(
 # ---------------------------------------------------------------------------
 
 SPLIT_GIVEN = '''
-# Planetoid's 20 labelled papers per topic and 1,000 for test, with Kipf and Welling's 500 for validation, from one fixed shuffle.
+# Planetoid's split, 20 labelled papers per topic and 1,000 for test, plus Kipf and Welling's 500 for validation.
+# One fixed shuffle makes it the same on every run.
 def split_papers(topics: Tensor) -> tuple[Tensor, Tensor, Tensor]:
     order = torch.randperm(len(topics), generator=torch.Generator().manual_seed(100))
     train = torch.cat([order[topics[order] == topic][:20] for topic in range(TOPICS)])
@@ -603,33 +621,36 @@ LOAD_LINE = 'embeddings = load_checkpoint(SkipGram(PAPERS, SIZE), "topics1").cen
 
 TOPICS2_LESSON = prose(
     """
-    topics1's vectors never saw a topic. A linear probe, as masked2 described
-    it, measures what they learned anyway. A single Linear layer from each
-    paper's 64 numbers to the 7 topics trains on a few labelled papers. A
-    deeper head could learn the topics by itself. A linear one can only use
-    what the vectors already lay out in straight lines.
+    topics1's vectors were learned without any topics. A linear probe, as
+    described in masked2, measures what they learned anyway. A single Linear
+    layer maps each paper's 64 numbers to scores for the 7 topics, and it
+    trains on a few labelled papers. A deeper network could learn the topics
+    by itself. A linear layer can only find topics that the vectors already
+    separate with flat boundaries, like lines or planes.
 
-    The split follows Planetoid, from Yang and colleagues. Only 20 papers of
-    each topic keep their topic, 140 in all, and 1,000 are for test. Kipf and
-    Welling added 500 papers for validation, and so does this split.
-    `split_papers` makes it, the same every run.
+    The split of the papers follows Planetoid, from Yang and colleagues. Only
+    20 papers of each topic are labelled for training, 140 in all, and 1,000
+    papers are for test. Kipf and Welling added 500 papers for validation,
+    and so does this split. `split_papers` makes the split, and it is the
+    same on every run.
 
-    word2vec3 compared word vectors by their direction, with the cosine. The
-    probe reads directions too. Each paper's vector is scaled to length 1
-    first, so a paper that turned up in many walks doesn't stand out by its
-    length alone.
+    word2vec3 compared word vectors by their direction, with cosine
+    similarity. The probe uses directions too. Each paper's vector is first
+    scaled to length 1. So a paper that appeared in many walks does not stand
+    out because of its length alone.
 
     ```python
     F.normalize(torch.tensor([[3.0, 4.0]]), dim=1)    # tensor([[0.6000, 0.8000]])
     ```
 
-    The probe trains with Adam on all 140 papers at once, with a weight decay
-    picked on validation, as decay2 picked one. topics3 picks it each time.
-    Here it is 0.005.
+    The probe trains with Adam on all 140 papers at once. Its weight decay is
+    chosen by the validation score, as in decay2. topics3 writes the code that
+    makes this choice. Here the decay is fixed at 0.005.
 
-    In the run behind this project, three trainings of topics1 scored 65.4%,
-    66.6% and 69.6% on validation. The check asks for more than 62%. topics3
-    measures what that is worth.
+    In the runs behind this project, probes on three trainings of topics1
+    scored 65.4%, 66.6% and 69.6% on validation. The check asks for more than
+    62%. topics3 measures how good that score is by comparing it with other
+    vectors.
     """,
 )
 
@@ -645,27 +666,29 @@ TOPICS2_SOURCE = source_file(
     from tensorlings.data import load_cora
     from tensorlings.training import load_checkpoint
 
-    lengths = F.normalize(torch.tensor([[3.0, 4.0]]), dim=1)    # tensor([[0.6000, 0.8000]]), a length of 1
+    lengths = F.normalize(torch.tensor([[3.0, 4.0]]), dim=1)    # tensor([[0.6000, 0.8000]]), the row scaled to length 1
 ''' + indented(SETTINGS_PART) + '''
 
 
-    # word2vec2's model, to load topics1's vectors into.
+    # The model from word2vec2, needed to load topics1's vectors.
 ''' + indented(SKIPGRAM_PART) + '''
 
 
 ''' + indented(SPLIT_GIVEN) + '''
 
 
-    # TODO: Return vectors with each row scaled to a length of 1.
+    # TODO: Return vectors, of shape (papers, size), with each row scaled to a
+    #   length of 1.
     def unit_rows(vectors: Tensor) -> Tensor:
         ...
 
 
-    # TODO: Make a Linear from features' width to TOPICS right after
-    #   torch.manual_seed(0), so every probe starts the same. Train it with Adam
-    #   at a rate of 0.01 and weight decay decay, for steps steps of cross
-    #   entropy on the rows of features and topics that rows picks, all at once.
-    #   Return the trained Linear.
+    # TODO: Train and return a linear probe. Call torch.manual_seed(0), then
+    #   create an nn.Linear from features.shape[1] inputs to TOPICS outputs, so
+    #   every probe starts from the same weights. Train it with Adam, with a
+    #   learning rate of 0.01 and weight_decay=decay, for steps steps. Each step
+    #   uses all the papers that rows picks at once. The loss is the cross
+    #   entropy of the probe's scores for those papers against their topics.
     def train_probe(
         features: Tensor,
         topics: Tensor,
@@ -676,8 +699,10 @@ TOPICS2_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the share of the papers that rows picks whose topic probe
-    #   gets right, as a plain number, without recording for autograd.
+    # TODO: Return the fraction of the papers picked by rows whose topic the
+    #   probe predicts correctly, as a Python float. The prediction is the topic
+    #   with the highest score. Compute it inside torch.no_grad(), so autograd
+    #   records nothing.
     def accuracy(
         probe: nn.Linear,
         features: Tensor,
@@ -786,7 +811,7 @@ def check_accuracy_without_autograd(found: object) -> None:
     found(probe, small_rows(658, 20, 4), torch.randint(0, TOPICS, (20,), generator=torch.Generator().manual_seed(659)), torch.arange(20))
 
     if any(recording):
-        raise Mismatch("accuracy recorded for autograd. Score inside torch.no_grad().")
+        raise Mismatch("accuracy let autograd record the computation. Compute the score inside torch.no_grad().")
 
 
 def check_validation_score(value: object) -> None:
@@ -803,8 +828,8 @@ def check_validation_score(value: object) -> None:
 
     if expected <= PROBE_BAR:
         raise Mismatch(
-            f"A probe on your topics1 vectors labels {expected:.1%} of the validation papers right, but it should pass "
-            f"{PROBE_BAR:.0%}. Check topics1's functions, then train it again.",
+            f"A probe on your topics1 vectors predicts the topic of {expected:.1%} of the validation papers correctly. "
+            f"It should get more than {PROBE_BAR:.0%}. Check topics1's functions, then train topics1 again.",
         )
 
 
@@ -826,7 +851,7 @@ def check_topics2(checker: Checker) -> None:
     )
     checker.test(
         function="train_probe",
-        description="trains a Linear with Adam on the rows picked",
+        description="trains a Linear with Adam on the picked rows",
         run=check_train_probe,
     )
     torch.manual_seed(657)
@@ -836,7 +861,7 @@ def check_topics2(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="accuracy",
-        description="gives the share of the picked papers labelled right",
+        description="returns the fraction of the picked papers whose topic is predicted correctly",
         inputs=(
             (Described(probe, f"a Linear from 4 to {TOPICS}"), small_rows(658, 20, 4), torch.randint(0, TOPICS, (20,), generator=torch.Generator().manual_seed(659)), torch.arange(0, 20, 2)),
             (Described(wider_probe, f"a Linear from 5 to {TOPICS}"), small_rows(669, 30, 5), torch.randint(0, TOPICS, (30,), generator=torch.Generator().manual_seed(670)), torch.arange(5, 30)),
@@ -846,12 +871,12 @@ def check_topics2(checker: Checker) -> None:
     )
     checker.test(
         function="accuracy",
-        description="scores without recording for autograd",
+        description="computes the score without autograd recording",
         run=check_accuracy_without_autograd,
     )
     checker.check_name(
         name="validation_score",
-        description=f"the probe on your topics1 vectors, past {PROBE_BAR:.0%} on validation",
+        description=f"the probe on your topics1 vectors scores more than {PROBE_BAR:.0%} on validation",
         run=check_validation_score,
     )
 
@@ -864,14 +889,15 @@ TOPICS2 = Exercise(
     source=TOPICS2_SOURCE,
     solution=TOPICS2_SOLUTION,
     hints={
-        "unit_rows": "F.normalize scales rows to a length of 1. Name the dimension the rows run along.",
-        "train_probe": "Seed first, then the Linear, then torch.optim.Adam with lr=0.01 and weight_decay=decay. "
-        "Each step, the cross entropy of the probe on features[rows] against topics[rows], then zero_grad, "
-        "backward, step.",
+        "unit_rows": "F.normalize scales vectors to length 1 along the dimension you pass as dim. Each row's numbers "
+        "lie along dimension 1.",
+        "train_probe": "Seed first, then create the Linear, then torch.optim.Adam with lr=0.01 and "
+        "weight_decay=decay. In each step, compute the cross entropy of the probe on features[rows] against "
+        "topics[rows]. Then call zero_grad, backward and step.",
         "accuracy": "Inside torch.no_grad(), compare the argmax over dim=1 of the probe on features[rows] with "
-        "topics[rows], average as floats, and read the number out with .item().",
-        "validation_score": "It comes out of the three functions above and topics1's trained vectors. If it is low, "
-        "check topics1, then train it again.",
+        "topics[rows]. Average the matches as floats, and read the number out with .item().",
+        "validation_score": "The three functions above compute it from topics1's trained vectors. If it is low, check "
+        "topics1's functions, then train topics1 again.",
     },
     introduces=(),
     check=check_topics2,
@@ -959,18 +985,19 @@ TABLE_LINES = '''
 
 TOPICS3_LESSON = prose(
     """
-    A probe score means little alone. Three comparisons give it weight, all
-    with the same 140 labels.
+    A probe score means little on its own. Three comparisons show what it is
+    worth, all trained on the same 140 labels.
 
-    - Random vectors: a vector of 64 random numbers per paper. Whatever beats it is what the walks taught.
-    - Words: each paper's own words, a 1 for each of the 1,433 words it uses. Here the probe reads the papers themselves.
-    - Words and embeddings: both, each scaled to length 1, side by side.
+    - Random vectors: 64 random numbers per paper. Whatever the embeddings score above this comes from the walks.
+    - Words: 1,433 numbers per paper, with a 1 for each word the paper uses. Here the probe reads the papers' own text.
+    - Words and embeddings: both vectors, each scaled to length 1, joined end to end.
 
-    Each one gets its weight decay picked on validation from 0.0005, 0.005,
-    0.05 and 0.5, as decay2 did. Then its test score is measured once.
+    For each set of vectors, the weight decay is chosen from 0.0005, 0.005,
+    0.05 and 0.5 by the validation score, as in decay2. Then the test score
+    is measured once, with that decay.
 
-    Here are the test scores of the run behind this project, for three
-    trainings of topics1, on 1,000 papers.
+    Here are the test scores on the 1,000 test papers, from the runs behind
+    this project. The embeddings come from three trainings of topics1.
 
     | Vectors | Test score |
     |---|---|
@@ -979,18 +1006,20 @@ TOPICS3_LESSON = prose(
     | Embeddings | 66.6% to 69.6% |
     | Words and embeddings | 72.2% to 73.1% |
 
-    The citations alone beat the papers' own words by 8 to 11 points, with no
-    topic seen while learning them. Kipf and Welling report DeepWalk at 67.2%
-    on Planetoid's own split. Side by side, words and embeddings beat either
-    one, since each holds what the other lacks.
+    The embeddings, learned from the citations alone with no topics, beat the
+    papers' own words by 8 to 11 points. Kipf and Welling report 67.2% for
+    DeepWalk on Planetoid's own split. Words and embeddings together beat
+    either one alone, because each holds information the other lacks.
 
-    The citations know the topics because 81% of Cora's links join two papers
-    of the same topic. A walk mostly stays inside one topic. So papers of a
-    topic share walks, and skip gram pulls their vectors together.
+    The citations carry information about topics because 81% of Cora's links
+    join two papers with the same topic. So a walk mostly stays inside one
+    topic. Papers of the same topic then appear in the same walks, and skip
+    gram pulls their vectors together.
 
-    A probe reads one direction per topic. Neighbours read the map itself.
-    For every paper, take the 10 papers whose vectors point closest to its
-    own, by cosine, and count how many share its topic.
+    A linear probe looks for one direction per topic. Another test looks at
+    which papers are close to each other. For every paper, take the 10 papers
+    whose vectors have the highest cosine similarity to its own. Then count
+    how many of them share its topic.
 
     | Vectors | Nearest 10 sharing the topic |
     |---|---|
@@ -998,9 +1027,10 @@ TOPICS3_LESSON = prose(
     | Words | 54.8% |
     | Embeddings | 74.4% to 74.7% |
 
-    Random vectors share a topic only as often as topics repeat by chance.
-    The embeddings' neighbours share it three times in four. Paper 0 is about
-    neural networks, and so are all five of its nearest papers.
+    The neighbours from random vectors share a topic only as often as two
+    random papers do by chance. The neighbours from the embeddings share it
+    about three times in four. Paper 0 is about neural networks, and so are
+    all five of its nearest papers.
     """,
 )
 
@@ -1017,25 +1047,25 @@ TOPICS3_SOURCE = source_file(
     from tensorlings.training import load_checkpoint
 
     scores = torch.tensor([0.2, 0.9, 0.4])
-    best = scores.topk(2).indices    # tensor([1, 2]), the places of the two largest
+    best = scores.topk(2).indices    # tensor([1, 2]), the indices of the two largest
 ''' + indented(SETTINGS_PART) + '''
     DECAYS = [0.0005, 0.005, 0.05, 0.5]
 
 
-    # word2vec2's model, to load topics1's vectors into.
+    # The model from word2vec2, needed to load topics1's vectors.
 ''' + indented(SKIPGRAM_PART) + '''
 
 
-    # topics2's split and probe.
+    # The split and the probe from topics2.
 ''' + indented(SPLIT_GIVEN) + '''
 
 
 ''' + indented(PROBE_SOLUTION) + '''
 
 
-    # TODO: Train a probe of 200 steps on train for each decay in decays, and
-    #   return the decay whose probe scores best on validation, the first one
-    #   on a tie.
+    # TODO: For each decay in decays, train a probe for 200 steps on the train
+    #   papers and measure its accuracy on the validation papers. Return the
+    #   decay with the highest accuracy. If several tie, return the first one.
     def pick_decay(
         features: Tensor,
         topics: Tensor,
@@ -1046,9 +1076,9 @@ TOPICS3_SOURCE = source_file(
         ...
 
 
-    # TODO: Pick the decay on validation, train a probe of 200 steps on train
-    #   with it, and return its accuracy on test. split is (train, validation,
-    #   test).
+    # TODO: Return a probe's accuracy on the test papers. split is a tuple
+    #   (train, validation, test). Pick the decay with pick_decay, train a probe
+    #   for 200 steps on train with that decay, and return its accuracy on test.
     def test_score(
         features: Tensor,
         topics: Tensor,
@@ -1058,8 +1088,9 @@ TOPICS3_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the count papers whose vectors are closest to paper's by
-    #   cosine, the closest first, leaving paper itself out.
+    # TODO: Return the indices of the count papers whose vectors have the
+    #   highest cosine similarity to the vector of paper, as a tensor with the
+    #   most similar first. Leave out paper itself.
     def nearest_papers(
         vectors: Tensor,
         paper: int,
@@ -1068,9 +1099,10 @@ TOPICS3_SOURCE = source_file(
         ...
 
 
-    # TODO: For every paper, take its count closest papers by cosine, itself
-    #   left out. Return the share of all of them that have the same topic as
-    #   the paper they are close to, as a plain number.
+    # TODO: For every paper, find the count other papers with the highest
+    #   cosine similarity to it. Over all those neighbours of all papers,
+    #   return the fraction that have the same topic as the paper they are
+    #   near, as a Python float.
     def neighbour_agreement(
         vectors: Tensor,
         topics: Tensor,
@@ -1167,7 +1199,7 @@ def expect_places(
     )
 
     if isinstance(actual, Tensor) and actual.is_floating_point():
-        raise Mismatch(f"{call} holds {actual.dtype} numbers, but papers are whole numbers. topk's .indices gives them.")
+        raise Mismatch(f"{call} holds {actual.dtype} numbers, but paper indices are integers. Use the .indices of topk.")
 
     expect_tensor(
         call=call,
@@ -1238,13 +1270,13 @@ def check_topics3(checker: Checker) -> None:
     )
     checker.test(
         function="test_score",
-        description="picks the decay on validation, then scores test once",
+        description="picks the decay on validation, then measures accuracy on test once",
         run=check_test_score,
     )
     check_on_inputs(
         checker=checker,
         function="nearest_papers",
-        description="gives the closest papers by cosine, leaving the paper out",
+        description="returns the most similar papers by cosine, leaving out the paper itself",
         inputs=(
             (small_rows(671, 8, 3), 2, 3),
             (small_rows(672, 12, 5), 0, 4),
@@ -1255,7 +1287,7 @@ def check_topics3(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="neighbour_agreement",
-        description="gives the share of near papers that share a topic",
+        description="returns the fraction of nearest papers that share a topic",
         inputs=(
             (small_rows(673, 12, 3), torch.randint(0, 3, (12,), generator=torch.Generator().manual_seed(674)), 3),
             (small_rows(675, 20, 4), torch.randint(0, 4, (20,), generator=torch.Generator().manual_seed(676)), 5),
@@ -1279,23 +1311,25 @@ def check_topics3(checker: Checker) -> None:
 TOPICS3 = Exercise(
     name="topics3",
     chapter=PAPER_TOPICS,
-    title="Project: what the citations bought",
+    title="Project: how much the citations help",
     lesson=TOPICS3_LESSON,
     source=TOPICS3_SOURCE,
     solution=TOPICS3_SOLUTION,
     hints={
-        "pick_decay": "Score a probe of 200 steps for every decay with train_probe and accuracy on validation. Keep "
-        "the scores in a list, and return the decay at the place of the largest. list.index finds the first one.",
-        "test_score": "Unpack split into its three parts. pick_decay finds the decay, then one more probe with it "
-        "is scored on test.",
-        "nearest_papers": "Scale the rows to length 1, so a matrix product gives every cosine. Set paper's own "
-        "score to minus infinity so it can't be picked, then take the topk's indices.",
-        "neighbour_agreement": "Every cosine at once is the scaled rows times their transpose. Fill the diagonal with "
-        "minus infinity, take the topk along each row, look up those papers' topics, and compare them with each "
-        "paper's own topic.",
-        "scores": "It comes out of test_score on the four sets of vectors the file builds.",
-        "agreement": "It comes out of neighbour_agreement on the three sets of vectors the file builds.",
-        "nearest": "It comes out of nearest_papers on the embeddings, with each paper's topic looked up by name.",
+        "pick_decay": "For every decay, train a probe of 200 steps with train_probe and score it with accuracy on "
+        "validation. Keep the scores in a list, and return the decay at the index of the largest score. list.index "
+        "finds the first one.",
+        "test_score": "Unpack split into its three parts. Use pick_decay to find the decay, then train one more probe "
+        "with it and score that probe on test.",
+        "nearest_papers": "Scale the rows to length 1, so a matrix product gives every cosine. Set the score of paper "
+        "itself to minus infinity so it cannot be picked, then take the indices from topk.",
+        "neighbour_agreement": "Multiply the scaled rows by their transpose to get every cosine at once. Fill the "
+        "diagonal with minus infinity and take the topk along each row. Look up those papers' topics and compare "
+        "them with each paper's own topic.",
+        "scores": "The file computes it with test_score on the four sets of vectors it builds.",
+        "agreement": "The file computes it with neighbour_agreement on the three sets of vectors it builds.",
+        "nearest": "The file computes it with nearest_papers on the embeddings, then looks up each paper's topic by "
+        "name.",
     },
     introduces=(),
     check=check_topics3,
