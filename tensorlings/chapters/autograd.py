@@ -32,11 +32,12 @@ AUTOGRAD = Chapter(
         """
         # Autograd
 
-        Autograd records every step of a calculation as it runs, then walks the
-        steps backward to find every gradient. This chapter builds a small
-        autograd engine for single numbers, one piece per exercise, in the
-        style of Karpathy's micrograd. It ends with PyTorch's own, which works
-        the same way on whole tensors.
+        Autograd, short for automatic differentiation, records every step of a
+        calculation while it runs. Then it goes through those steps backward to
+        compute every gradient. This chapter builds a small autograd engine for
+        single numbers, one piece per exercise, in the style of Karpathy's
+        micrograd. It ends with PyTorch's own autograd, which works the same
+        way on whole tensors.
 
         ## Further reading
 
@@ -167,12 +168,14 @@ def check_build(
 
 AUTOGRAD1_LESSON = prose(
     """
-    Backprop by hand works, but writing the backward lines for every
-    calculation gets old fast. Instead, let every number remember how it was
-    made. A program can then walk the graph backward by itself. This is
-    **autograd**, and the next exercises build a small one.
+    Backpropagation by hand works, but writing the backward lines for every
+    calculation quickly becomes tedious. Instead, each number can keep a
+    record of how it was made. Then a program can go backward through the
+    computation graph on its own. This is called **autograd**, short for
+    automatic differentiation. The next exercises build a small version of it.
 
-    Start with a class that holds a number and the values it came from.
+    Start with a class that holds a number and the values that number was
+    computed from.
 
     ```python
     class Value:
@@ -186,8 +189,8 @@ AUTOGRAD1_LESSON = prose(
             return Value(self.data + other.data, (self, other), "+")
     ```
 
-    Python calls `__add__` when it meets `+` between two `Value`s, so `a + b`
-    runs `a.__add__(b)`. In the same way `a * b` runs `a.__mul__(b)`.
+    Python calls `__add__` when it sees `+` between two `Value`s, so `a + b`
+    runs `a.__add__(b)`. In the same way, `a * b` runs `a.__mul__(b)`.
 
     ```python
     a = Value(2.0)
@@ -198,12 +201,14 @@ AUTOGRAD1_LESSON = prose(
     c.op                    # '+'
     ```
 
-    `c` knows it is the sum of `a` and `b`. The values a value was made from
-    are its children, and it is their parent. Every value keeps a link to its
-    children, so the whole computation graph hangs off the last value.
+    `c` records that it is the sum of `a` and `b`. The values that a value was
+    made from are called its children, and the value is their parent. So `a`
+    and `b` are the children of `c`. Every value keeps a reference to its
+    children. So starting from the last value and following the children, you
+    can reach the whole computation graph.
 
-    `grad` starts at 0. It holds the value's gradient once backpropagation
-    fills it in. The next exercises build that part.
+    `grad` starts at 0. Later, backpropagation will store the value's gradient
+    in it. The next exercises build that part.
     """,
 )
 
@@ -226,17 +231,22 @@ AUTOGRAD1_SOURCE = source_file(
             self.children = children
             self.op = op
 
-        # a + b makes a new Value that remembers a, b and the "+".
+        # a + b returns a new Value that stores the sum, its children a and b,
+        # and the op "+".
         def __add__(self, other: "Value") -> "Value":
             return Value(self.data + other.data, (self, other), "+")
 
-        # TODO: Make a * b work the same way, remembering both Values and "*".
+        # TODO: Make a * b work the same way as a + b. Return a new Value whose
+        #   data is the product, whose children are both Values, and whose op
+        #   is "*".
+        #   Example: (Value(2.0) * Value(-3.0)).data is -6.0.
         def __mul__(self, other: "Value") -> "Value":
             ...
 
 
-    # TODO: Return a * b + c, built from the Values passed in, so the result
-    #   remembers how it was made.
+    # TODO: Return a * b + c, computed with the Values passed in, so the result
+    #   records how it was made. Its children are the Value of a * b and c.
+    #   Example: build(Value(2.0), Value(3.0), Value(4.0)).data is 10.0.
     def build(
         a: Value,
         b: Value,
@@ -303,12 +313,12 @@ def check_autograd1(checker: Checker) -> None:
 AUTOGRAD1 = Exercise(
     name="autograd1",
     chapter=AUTOGRAD,
-    title="A number that remembers",
+    title="A number that remembers how it was made",
     lesson=AUTOGRAD1_LESSON,
     source=AUTOGRAD1_SOURCE,
     solution=AUTOGRAD1_SOLUTION,
     hints={
-        "Value.__mul__": "Follow __add__, with * in place of + for the data and '*' as the op.",
+        "Value.__mul__": "Copy the pattern of __add__. Use * instead of + for the data, and '*' as the op.",
         "build": "Use * and + on the Values as you would on numbers. Python calls __mul__ and __add__ for you.",
     },
     introduces=("autograd",),
@@ -322,13 +332,13 @@ AUTOGRAD1 = Exercise(
 
 AUTOGRAD2_LESSON = prose(
     """
-    chain3 walked a graph backward with two rules. An addition passes its
-    gradient to each input unchanged. A multiplication gives each input the
-    gradient times the other input.
+    chain3 went backward through a graph using two rules. An addition passes
+    the gradient of its result unchanged to each input. A multiplication gives
+    each input the gradient of its result times the other input.
 
-    Each `Value` can carry its own rule as a small function, set up when the
-    value is made. The function reads the result's `grad` and adds to the
-    inputs' `grad`.
+    Each `Value` can store its rule as a small function, created when the
+    value is made. The function reads the `grad` of the result and adds to the
+    `grad` of each input.
 
     ```python
     def __add__(self, other):
@@ -343,10 +353,11 @@ AUTOGRAD2_LESSON = prose(
     ```
 
     `backward_step` is defined inside `__add__`, so it can still use `self`,
-    `other` and `out` after `__add__` returns. A value that no operation made
-    keeps a step that does nothing.
+    `other` and `out` after `__add__` returns. A value that was not made by an
+    operation, like `Value(2.0)`, keeps a step that does nothing.
 
-    To run a step by hand, set the result's gradient and call its step.
+    To run a step by hand, set the gradient of the result and call its
+    `backward_step`.
 
     ```python
     a, b = Value(2.0), Value(-3.0)
@@ -356,12 +367,13 @@ AUTOGRAD2_LESSON = prose(
     a.grad, b.grad      # (1.0, 1.0)
     ```
 
-    A step adds with `+=` and never sets with `=`. In `a + a` the step hands
-    `a` a part through each use, and the second part must add to the first,
-    as chain2 showed. With `=` the second would wipe out the first.
+    A step adds to a gradient with `+=` and never overwrites it with `=`. In
+    `a + a`, the step gives `a` one part of the gradient for each use. The
+    second part must be added to the first, as chain2 showed. With `=`, the
+    second part would replace the first.
 
-    The order of the steps matters too. A value can only pass its gradient on
-    once every value made from it has handed it its part.
+    The order of the steps matters too. A value can pass its gradient on only
+    after every value made from it has run its step and added its part.
     """,
 )
 
@@ -385,7 +397,7 @@ AUTOGRAD2_SOURCE = source_file(
             self.op = op
             self.backward_step = lambda: None
 
-        # An addition passes its gradient to each input unchanged.
+        # An addition passes the gradient of its result unchanged to each input.
         def __add__(self, other: "Value") -> "Value":
             out = Value(self.data + other.data, (self, other), "+")
 
@@ -397,8 +409,10 @@ AUTOGRAD2_SOURCE = source_file(
 
             return out
 
-        # TODO: Finish the two lines of backward_step, so a * b hands each input
-        #   the result's gradient times the other input's data.
+        # TODO: Finish the two lines of backward_step, so a * b gives each input
+        #   the gradient of the result times the data of the other input.
+        #   Example: for c = Value(2.0) * Value(-3.0) with c.grad = 1.0, the
+        #   step adds -3.0 to the first input's grad and 2.0 to the second's.
         def __mul__(self, other: "Value") -> "Value":
             out = Value(self.data * other.data, (self, other), "*")
 
@@ -411,9 +425,11 @@ AUTOGRAD2_SOURCE = source_file(
             return out
 
 
-    # TODO: Finish the walk backward. L's step has run, so q has its gradient.
-    #   Call the backward steps of q and p, in the order that gives each one
-    #   all of its gradient before it passes it on.
+    # TODO: Finish going backward through the graph. L's step has already run,
+    #   so q has its gradient. Call the backward steps of q and p, in an order
+    #   where each value has its whole gradient before its step passes it on.
+    #   Example: when a, b, c and r are Values holding 2.0, -3.0, 10.0 and
+    #   -2.0, walk_backward(a, b, c, r) returns (6.0, -4.0, -2.0, 4.0).
     def walk_backward(
         a: Value,
         b: Value,
@@ -476,7 +492,7 @@ AUTOGRAD2_SOLUTION = source_file(
             return out
 
 
-    # q is made from p, so q's step must run first to hand p its gradient.
+    # q is made from p, so q's step must run first to give p its gradient.
     def walk_backward(
         a: Value,
         b: Value,
@@ -561,7 +577,7 @@ AUTOGRAD2 = Exercise(
     solution=AUTOGRAD2_SOLUTION,
     hints={
         "Value.__mul__": "self gets other.data times out.grad, and other gets self.data times out.grad. Keep the +=, "
-        "so a * a gets both parts.",
+        "so that in a * a both parts are added to a.grad.",
         "walk_backward": "p is a child of q, so p only has its whole gradient after q's step has run.",
     },
     introduces=(),
@@ -575,14 +591,15 @@ AUTOGRAD2 = Exercise(
 
 AUTOGRAD3_LESSON = prose(
     """
-    autograd2 ran each step by hand, in an order you picked, so that every
-    value had its whole gradient before passing it on. A program has to find
-    that order by itself.
+    In autograd2 you ran each step by hand, in an order you picked so that
+    every value had its whole gradient before passing it on. An autograd
+    program has to find that order on its own.
 
-    A value is ready to pass its gradient on once every parent, every value
-    made from it, has run its step. So list the values with each one after its children,
-    then run the steps from the end of the list back to the start. A list
-    with every value after its children is a **topological order**.
+    A value is ready to pass its gradient on once all its parents have run
+    their steps. Its parents are the values made from it. So put the values in
+    a list where each value comes after its children. Then run the steps from
+    the end of the list back to the start. A list where every value comes
+    after its children is called a **topological order**.
 
     Take this graph.
 
@@ -592,17 +609,18 @@ AUTOGRAD3_LESSON = prose(
     L = q * r
     ```
 
-    One topological order is `a, b, p, c, q, r, L`. Read backward, it runs
-    `L`, then `r`, then `q`, before `p`, so `p` has its whole gradient when its
-    turn comes. Values with no children, like `a`, run a step that does
-    nothing.
+    One topological order is `a, b, p, c, q, r, L`. Read backward, the list is
+    `L, r, q, c, p, b, a`, so the step of `q` runs before the step of `p`. That
+    means `p` already has its whole gradient when its step runs. Values with
+    no children, like `a`, have a step that does nothing.
 
-    A recursive walk finds the order. It visits a value's children first, and
-    adds the value to the list only after them. A set of values already seen
-    stops the walk from adding a value twice when it is used twice.
+    A recursive function finds this order. It visits a value's children
+    first, and adds the value to the list only after all of them. It also
+    keeps a set of the values it has already visited. That set stops it from
+    adding a value twice when the value is used twice.
 
-    `backward` then sets the last value's gradient to 1, the way chain3 began,
-    and runs every step in reverse topological order.
+    Then `backward` sets the gradient of the last value to 1, the way chain3
+    began. After that, it runs every step in reverse topological order.
     """,
 )
 
@@ -612,7 +630,8 @@ AUTOGRAD3_SOURCE = source_file(
 
 
     # TODO: Finish the line in the loop, so every child of a value is visited,
-    #   and so added to order, before the value itself.
+    #   and therefore added to order, before the value itself is added.
+    #   Example: for c = a + b, topological_order(c) returns [a, b, c].
     def topological_order(root: "Value") -> list["Value"]:
         order = []
         seen = set()
@@ -672,7 +691,7 @@ AUTOGRAD3_SOURCE = source_file(
 
         # TODO: This runs the steps in the wrong order, so values pass their
         #   gradient on before they have all of it. Read the lesson, then fix
-        #   the loop. It needs topological_order, above, finished first.
+        #   the loop. Finish topological_order above first, since this uses it.
         def backward(self) -> None:
             order = topological_order(self)
             self.grad = 1.0
@@ -843,8 +862,8 @@ AUTOGRAD3 = Exercise(
     source=AUTOGRAD3_SOURCE,
     solution=AUTOGRAD3_SOLUTION,
     hints={
-        "topological_order": "visit calls itself on each child. When it returns, that child and everything under it "
-        "are in order.",
+        "topological_order": "visit calls itself on each child. When that call returns, the child and every value "
+        "below it are already in order.",
         "Value.backward": "order lists every child before its parents. Loop over it from the end with reversed(order), "
         "so every parent runs its step before its children do.",
     },
@@ -859,11 +878,11 @@ AUTOGRAD3 = Exercise(
 
 AUTOGRAD4_LESSON = prose(
     """
-    PyTorch has the same machinery built in. Give a tensor
+    PyTorch has the same machinery built in. Create a tensor with
     `requires_grad=True`, and every operation on it records how its result was
-    made. `.backward()` on the final value fills `.grad` on each tensor you
-    made with `requires_grad=True`. The results of operations, like `L` below,
-    get no `.grad` of their own.
+    made. Calling `.backward()` on the final value fills in `.grad` on each
+    tensor you created with `requires_grad=True`. The results of operations,
+    like `L` below, do not get a `.grad` of their own.
 
     ```python
     a = torch.tensor(2.0, requires_grad=True)
@@ -873,15 +892,15 @@ AUTOGRAD4_LESSON = prose(
     a.grad, b.grad    # (tensor(6.), tensor(-4.))
     ```
 
-    The numbers match chain3 and your own `Value`. A tensor made by an
-    operation keeps the step that made it in `.grad_fn`, much as your `Value`
-    keeps `backward_step`. `.item()` turns a tensor that holds one number into
-    a plain Python number.
+    These numbers match chain3 and your own `Value`. A tensor made by an
+    operation stores the backward step of that operation in `.grad_fn`, much
+    like your `Value` stores `backward_step`. `.item()` turns a tensor that
+    holds one number into a plain Python number.
 
-    `.backward()` works on whole tensors too, as long as the last value is a
-    single number. The gradient has the shape of its tensor, one partial per
-    entry. `.requires_grad_()` switches recording on for a tensor you already
-    have.
+    `.backward()` works on whole tensors too, as long as the final value is a
+    single number. Each gradient has the same shape as its tensor, with one
+    partial derivative per entry. `.requires_grad_()` turns on recording for
+    a tensor that already exists.
 
     ```python
     v = torch.tensor([1.0, 2.0, 3.0])
@@ -890,18 +909,19 @@ AUTOGRAD4_LESSON = prose(
     v.grad            # tensor([2., 4., 6.]), which is 2 * v
     ```
 
-    This is far faster and more exact than nudging. Take
-    `f(v) = ((X @ v) ** 2).mean()`, with `X` a random float32 matrix of shape
-    `(64, 10000)`. derivatives3's `numeric_gradient` calls `f` twice per entry,
-    20,000 calls, and took 0.25 to 0.31 seconds in three runs. One
-    `.backward()` took 0.03 to 0.04 milliseconds, over 7,000 times less. The
-    nudged gradient was also off by 1.0 to 1.3 percent of its largest entry,
-    and autograd's by under 5 in 10 million.
+    Autograd is much faster and more accurate than nudging. Take
+    `f(v) = ((X @ v) ** 2).mean()`, where `X` is a random float32 matrix of
+    shape `(64, 10000)`. The `numeric_gradient` from derivatives3 calls `f`
+    twice per entry of `v`, which is 20,000 calls. It took 0.25 to 0.31
+    seconds in three runs. One `.backward()` took 0.03 to 0.04 milliseconds,
+    over 7,000 times less time. The nudged gradient also had an error of 1.0
+    to 1.3 percent of its largest entry. The error of autograd's gradient was
+    under 5 in 10 million.
 
-    PyTorch's gradients add up across calls, as your `+=` does. A second
-    `.backward()` adds onto the `.grad` already there. That is a trap when two
-    separate calculations each call `.backward()`, as the last TODO shows.
-    Clear the gradient in between with `v.grad = None`.
+    PyTorch adds gradients up across calls, the way your `+=` does. A second
+    `.backward()` adds its gradient to the `.grad` that is already there. This
+    causes a bug when two separate calculations each call `.backward()`, as
+    the last TODO shows. Clear the gradient in between with `v.grad = None`.
     """,
 )
 
@@ -922,7 +942,9 @@ AUTOGRAD4_SOURCE = source_file(
 
 
     # TODO: Finish the two middle lines, so this returns the derivative of f at
-    #   x from PyTorch's autograd, with no nudging.
+    #   x, computed by PyTorch's autograd instead of nudging. f takes a tensor
+    #   that holds one number and returns a tensor that holds one number.
+    #   Example: autograd_slope(lambda t: t ** 2, 3.0) returns 6.0.
     def autograd_slope(
         f: Callable[[Tensor], Tensor],
         x: float,
@@ -935,7 +957,10 @@ AUTOGRAD4_SOURCE = source_file(
 
 
     # TODO: Finish the middle line, so this returns the gradient of f at v, a
-    #   tensor with the shape of v. f gives a single number.
+    #   tensor with the same shape as v. f returns a tensor that holds a single
+    #   number.
+    #   Example: for f(v) = (v ** 2).sum() and v = torch.tensor([1.0, 2.0]),
+    #   autograd_gradient(f, v) returns tensor([2., 4.]).
     def autograd_gradient(
         f: Callable[[Tensor], Tensor],
         v: Tensor,
@@ -947,7 +972,8 @@ AUTOGRAD4_SOURCE = source_file(
 
 
     # TODO: This should return the derivative of the second calculation alone,
-    #   which is 2 * x for x ** 2, but it returns more. Fix it.
+    #   which is 2 * x for x ** 2, but it returns more than that. Fix it.
+    #   Example: second_gradient(3.0) should return 6.0, but it returns 33.0.
     def second_gradient(x: float) -> float:
         t = torch.tensor(x, requires_grad=True)
 
@@ -998,7 +1024,7 @@ AUTOGRAD4_SOLUTION = source_file(
         return v.grad
 
 
-    # The first backward leaves 3 * x ** 2 in t.grad, and the second adds onto it.
+    # The first .backward() leaves 3 * x ** 2 in t.grad, and the second adds to it.
     def second_gradient(x: float) -> float:
         t = torch.tensor(x, requires_grad=True)
 
@@ -1091,7 +1117,7 @@ AUTOGRAD4 = Exercise(
     solution=AUTOGRAD4_SOLUTION,
     hints={
         "autograd_slope": "Call f on t to get the result, then call .backward() on the result.",
-        "autograd_gradient": "Call f on v, then call .backward() on what it gives.",
+        "autograd_gradient": "Call f on v, then call .backward() on the result.",
         "second_gradient": "The first .backward() leaves its gradient in t.grad. Clear t.grad before the second "
         "calculation runs its .backward().",
     },
