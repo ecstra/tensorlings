@@ -31,12 +31,13 @@ DATA_QUALITY = Chapter(
         """
         # Training data
 
-        A model learns whatever its text holds, repeats and junk included,
-        and a test set it has already read measures memory, not skill. This
-        chapter removes exact and near duplicates, filters text with rules
-        like those behind Gopher, and finds test text that leaked into the
-        training set. The measurements run on the Shakespeare of Section 7,
-        downloaded once from the project folder.
+        A model learns whatever its training text contains, including
+        repeats and junk. And if a model has already read its test set, the
+        test measures memory instead of skill. This chapter removes exact and
+        near duplicates, and filters text with rules like those used for
+        Gopher. It also finds test text that leaked into the training set.
+        The measurements use the Shakespeare text from Section 7. Download it
+        once by running this from the project folder.
 
         ```bash
         .venv/bin/python run.py data shakespeare
@@ -282,15 +283,17 @@ def measure_memorization(
 
 DATA1_LESSON = prose(
     """
-    Text gathered from the web repeats itself. Lee and colleagues found one
-    61 word sentence repeated over 60,000 times in C4, a common training set.
-    Models trained on their deduplicated data gave out memorized text about
+    Text collected from the web contains many repeats. Lee and colleagues
+    found one 61 word sentence repeated over 60,000 times in C4, a common
+    training set. They removed the repeats, which is called deduplicating.
+    Models trained on their deduplicated data produced memorized text about
     ten times less often.
 
-    A small model does the same. scaling3's GPT, 2 blocks of width 128,
-    trained 3,000 steps on the first 90% of the play. Twenty later speeches
-    went in too, never, once or 20 times each. Here is its loss per character
-    on them and on 20 speeches it never saw, over three seeds.
+    A small model memorizes repeats too. scaling3's GPT, with 2 blocks of
+    width 128, trained for 3,000 steps on the first 90% of the play. Twenty
+    speeches from the rest of the play were added to its training text, 0
+    times, once or 20 times each. Here is its loss per character on those 20
+    speeches, and on 20 speeches it never saw, over three seeds.
 
     | Copies of the 20 in training | Loss on the 20 | Loss on 20 never seen |
     |---|---|---|
@@ -298,13 +301,16 @@ DATA1_LESSON = prose(
     | One | 1.47 to 1.55 | 1.47 to 1.58 |
     | 20 | 0.94 to 1.00 | 1.49 to 1.57 |
 
-    Twenty copies cut the loss by more than a third, while unseen speeches
-    barely moved. One copy lowered it by 0.05 to 0.10 in each seed, more than
-    the unseen ones moved. That is why data2 checks test sets for leaks.
+    Twenty copies cut the loss on those speeches by more than a third, while
+    the loss on unseen speeches barely changed. Even one copy lowered the
+    loss by 0.05 to 0.10 in each seed, more than the loss on unseen speeches
+    changed. That is why data2 checks test sets for leaks.
 
-    Exact copies are the easy part. Bring every document to one plain form,
-    lowercase with only letters, digits and single spaces, and keep the first
-    document of each form. A Python `set` answers "seen this before?" at once.
+    Exact copies are easy to find. First normalize every document, which
+    means converting it to one plain form, lowercase with only letters,
+    digits and single spaces. Then keep only the first document with each
+    normalized form. A Python `set` tells you quickly whether you have seen a
+    form before.
 
     ```python
     "Speak, speak!".lower()              # 'speak, speak!'
@@ -312,12 +318,13 @@ DATA1_LESSON = prose(
     seen = {"a b"}; "a b" in seen        # True
     ```
 
-    The play repeats itself too. 19 of its 7,097 speeches match an earlier
-    one, like `CATESBY: My lord?`. Near copies differ by a few words, so no
-    plain form catches them. Cut each document into **shingles**, every run
-    of n words. Then compare the sets with Jaccard similarity, the size of
-    their overlap over the size of their union. It is 1 for equal sets and 0
-    for sets with nothing shared.
+    The play has repeats too. 19 of its 7,097 speeches match an earlier one,
+    like `CATESBY: My lord?`. Near copies differ by a few words, so
+    normalizing does not catch them. Instead, cut each document into
+    **shingles**, which are all its runs of n consecutive words. Then compare
+    two documents' sets of shingles with the Jaccard similarity. That is the
+    size of their intersection divided by the size of their union. It is 1
+    for equal sets and 0 for sets with nothing in common.
 
     ```python
     words = "to be or not".split()
@@ -325,10 +332,11 @@ DATA1_LESSON = prose(
     len({1, 2, 3} & {2, 3, 4}) / len({1, 2, 3} | {2, 3, 4})    # 0.5
     ```
 
-    Here are 600 speeches of 30 words or more and 60 exact copies with their
-    case and spacing changed. With them go 60 near copies, one word in 25
-    swapped. The exact pass drops all 60 copies. Then a document goes when it reaches
-    a similarity of 0.8 with one already kept.
+    To test this, take 600 speeches of 30 words or more. Add 60 exact copies
+    with their case and spacing changed, and 60 near copies with one word in
+    25 swapped. Removing exact copies drops all 60 of them. Then a document
+    is dropped when its similarity with a document already kept is 0.8 or
+    more.
 
     | n | Near copies dropped | Their median similarity | Other speeches dropped |
     |---|---|---|---|
@@ -337,13 +345,16 @@ DATA1_LESSON = prose(
     | 8 | 6 of 60 | 0.64 | 0 |
     | 13 | 6 of 60 | 0.47 | 0 |
 
-    One swapped word breaks every shingle that holds it, n of them. Gopher
-    used 13 word shingles on web text. Speeches of a few dozen words need
-    shorter ones. Comparing every pair grows with the square of the
-    documents. Broder's MinHash keeps each set's smallest hash under a few
-    hundred hash functions. Two sets share a smallest hash with a chance
-    equal to their similarity, so these short signatures estimate it
-    cheaply. Locality sensitive hashing then lets only likely pairs meet.
+    One swapped word changes every shingle that contains it, and n shingles
+    contain it. Gopher used shingles of 13 words on web text, but speeches of
+    a few dozen words need shorter ones. The time to compare every pair of
+    documents grows with the square of the number of documents. Broder's
+    MinHash avoids that. It hashes each set's shingles with a few hundred
+    hash functions, and keeps the smallest hash from each function. Two sets
+    get the same smallest hash with a probability equal to their Jaccard
+    similarity. So these short signatures estimate the similarity cheaply.
+    Locality sensitive hashing then compares only the pairs that are likely
+    to be similar.
     """,
 )
 
@@ -358,22 +369,28 @@ DATA1_SOURCE = source_file(
     overlap = len({1, 2, 3} & {2, 3, 4}) / len({1, 2, 3} | {2, 3, 4})    # 0.5
 
 
-    # TODO: Return text lowercased, with every character that is not a letter,
+    # TODO: Return text in lowercase, with every character that is not a letter,
     #   a digit or whitespace removed, and the words joined by single spaces.
-    #   str.isalnum() and str.isspace() test one character.
+    #   str.isalnum() and str.isspace() test a single character.
+    #   Example: normalize("Speak, SPEAK!\\n  you") returns 'speak speak you'.
     def normalize(text: str) -> str:
         ...
 
 
-    # TODO: Return documents without exact copies. A document is a copy when
-    #   its normalized form matches an earlier document's. Keep the first of
-    #   each, in their order.
+    # TODO: Return documents without exact copies. A document is a copy when its
+    #   normalized form equals the normalized form of an earlier document.
+    #   Keep the first document of each form, in the original order.
+    #   Example: drop_exact(["b", "a", "B.", "c", "A!", "a"]) returns
+    #   ['b', 'a', 'c'].
     def drop_exact(documents: list[str]) -> list[str]:
         ...
 
 
-    # TODO: Return the set of every run of n words of the normalized text, each
-    #   a tuple of words. A text of fewer than n words has none.
+    # TODO: Return the set of all runs of n consecutive words in the normalized
+    #   text, each run as a tuple of words. A text with fewer than n words has
+    #   no shingles, so return an empty set.
+    #   Example: shingles("To be, or not", 2) returns
+    #   {('to', 'be'), ('be', 'or'), ('or', 'not')}.
     def shingles(
         text: str,
         n: int,
@@ -381,8 +398,10 @@ DATA1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the Jaccard similarity of a and b, the size of their
-    #   overlap over the size of their union, or 0.0 when both are empty.
+    # TODO: Return the Jaccard similarity of the sets a and b, which is the size
+    #   of their intersection divided by the size of their union. Return 0.0
+    #   when both sets are empty.
+    #   Example: jaccard({("a",), ("b",)}, {("b",)}) returns 0.5.
     def jaccard(
         a: set[tuple[str, ...]],
         b: set[tuple[str, ...]],
@@ -390,9 +409,10 @@ DATA1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return documents without near copies. Go through them in order and
-    #   keep a document unless the similarity of its shingles of n words with
-    #   a kept document's is threshold or more.
+    # TODO: Return documents without near copies. Go through the documents in
+    #   order. Keep a document unless the Jaccard similarity between its
+    #   shingles of n words and the shingles of some kept document is
+    #   threshold or more.
     def drop_near(
         documents: list[str],
         n: int,
@@ -478,7 +498,7 @@ def check_data1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="shingles",
-        description="gives every run of n words",
+        description="returns every run of n words",
         inputs=(
             ("To be, or not to be: that is the question.", 2),
             ("To be, or not to be: that is the question.", 4),
@@ -492,7 +512,7 @@ def check_data1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="jaccard",
-        description="gives the overlap over the union",
+        description="divides the size of the intersection by the size of the union",
         inputs=(
             (shingles("a b c d e f", 2), shingles("a b c d e x", 2)),
             (shingles("one two three", 2), shingles("four five six", 2)),
@@ -505,7 +525,7 @@ def check_data1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="drop_near",
-        description="keeps a document unless it reaches threshold with a kept one",
+        description="keeps a document unless its similarity with a kept one reaches threshold",
         inputs=(
             (NEAR_DOCUMENTS, 2, 0.75),
             (NEAR_DOCUMENTS, 2, 0.6),
@@ -524,15 +544,15 @@ DATA1 = Exercise(
     source=DATA1_SOURCE,
     solution=DATA1_SOLUTION,
     hints={
-        "normalize": "Go through text.lower() a character at a time and keep the ones that pass isalnum() or "
-        "isspace(). Join them into a string, then split it and join the words with one space.",
+        "normalize": "Go through text.lower() one character at a time, and keep the characters for which isalnum() "
+        "or isspace() is True. Join them into a string, then split it and join the words with single spaces.",
         "drop_exact": "Keep a set of the normalized forms seen so far. Skip a document whose form is in it, "
         "otherwise add its form and keep the document.",
-        "shingles": "Split the normalized text into words. For every start from 0 to len(words) - n, take "
+        "shingles": "Split the normalized text into words. For every start from 0 to len(words) - n, put "
         "tuple(words[start : start + n]) into a set.",
-        "jaccard": "Return 0.0 first when both are empty. Then len(a & b) over len(a | b).",
-        "drop_near": "Keep the shingles of every kept document in a list. A new document goes when jaccard of its "
-        "shingles with any of them is threshold or more.",
+        "jaccard": "First return 0.0 when both sets are empty. Otherwise divide len(a & b) by len(a | b).",
+        "drop_near": "Store the shingles of every kept document in a list. Drop a new document when the jaccard of "
+        "its shingles with any of them is threshold or more.",
     },
     introduces=("shingle",),
     check=check_data1,
@@ -731,19 +751,20 @@ def measure_junk(seed: int = 0) -> dict[str, object]:
 
 DATA2_LESSON = prose(
     """
-    Rae and colleagues cleaned the web text behind Gopher with plain rules
-    anyone can read. A document stays when all of these hold.
+    Rae and colleagues cleaned the web text used to train Gopher with simple
+    rules that anyone can read. A document is kept only when all of these
+    rules hold.
 
     - It has 50 to 100,000 words.
     - Its mean word length is 3 to 10 characters.
     - It has no more than one `#` and one `...` per 10 words.
-    - At least 80% of its words hold a letter.
-    - It holds at least 2 of the **stop words** the, be, to, of, and, that, have and with, the commonest words of English.
+    - At least 80% of its words contain a letter.
+    - It contains at least 2 of the **stop words** the, be, to, of, and, that, have and with, the most common English words.
 
-    They had more, on bullet points, lines ending in `...` and repeated
-    lines. To watch each rule work, here are 100 made up pages of each kind
-    of junk the rules aim at. Beside them sit the play's 1,080 speeches of
-    50 words or more. Words split on whitespace.
+    They had more rules too, about bullet points, lines ending in `...` and
+    repeated lines. To see each rule at work, here are 100 made up pages of
+    each kind of junk the rules target. Next to them are the play's 1,080
+    speeches of 50 words or more. Words are split on whitespace.
 
     | Documents | Like | The rule that drops them | Dropped |
     |---|---|---|---|
@@ -755,25 +776,26 @@ DATA2_LESSON = prose(
     | Fragments | under 50 words | 50 to 100,000 words | 100 of 100 |
     | The play's long speeches | | none | 0 of 1,080 |
 
-    Each kind breaks the one rule written for it, and the rules keep every
-    long speech. Three seeds of junk gave the same counts. Most of the
-    play's 7,097 speeches are short, so the length rule alone drops 84.8%
-    of them.
+    Each kind of junk breaks the one rule written for it, and the rules keep
+    every long speech. Junk made with three different seeds gave the same
+    counts. Most of the play's 7,097 speeches are short, so the length rule
+    alone drops 84.8% of them.
 
     ```python
     "a #b c#".count("#")                          # 2
     any(c.isalpha() for c in "3rd")                # True
     ```
 
-    A test set the model has read measures memory. GPT-3's authors flagged a
-    test example when a run of 13 of its words, lowercased and without
-    punctuation, also sat in the training data. For benchmarks of short
-    examples they used shorter runs, down to 8, since shorter ones matched
-    by chance.
+    If the model has already read a test set, the test measures memory.
+    GPT-3's authors lowercased the text and removed punctuation. Then they
+    flagged a test example as leaked when a run of 13 of its words also
+    appeared in the training data. For benchmarks with short examples they used shorter runs,
+    but not below 8 words, because even shorter runs match by chance.
 
-    Here the training text is the first 90% of the play, as gpt1 cut it. The
-    test is the 421 speeches of 13 words or more after it. Then 40 test
-    speeches go into the training text, one word in 25 swapped.
+    Here the training text is the first 90% of the play, split where gpt1
+    split it. The test set is the 421 speeches of 13 words or more that come
+    after it. Then 40 test speeches are copied into the training text, with
+    one word in 25 swapped.
 
     | n | Test speeches flagged, nothing planted | Planted speeches found |
     |---|---|---|
@@ -782,10 +804,10 @@ DATA2_LESSON = prose(
     | 8 | none | 40 of 40 |
     | 13 | none | 32 of 40 |
 
-    Runs of 3 words match phrases the whole play shares, and runs of 5 still
-    match by chance. Runs of 8 match nothing by chance here and find every
-    copy. Runs of 13 miss 8 short copies, where one swapped word leaves no
-    run of 13 whole.
+    Runs of 3 words match common phrases found all over the play, and runs of
+    5 still match by chance. Runs of 8 match nothing by chance here, and they
+    find every copy. Runs of 13 miss 8 short copies, where the one swapped
+    word leaves no run of 13 words unchanged.
     """,
 )
 
@@ -806,34 +828,40 @@ DATA2_SOURCE = source_file(
 ''' + indented(SHINGLES_SOLUTION) + '''
 
 
-    # TODO: Return the mean length in characters of the words of text, split on
-    #   whitespace, or 0.0 when it has none.
+    # TODO: Split text on whitespace, and return the mean length of its words in
+    #   characters. Return 0.0 when text has no words.
+    #   Example: mean_word_length("The tide, came in at 3!") returns 3.0.
     def mean_word_length(text: str) -> float:
         ...
 
 
-    # TODO: Return the share of the words of text, split on whitespace, that
-    #   hold at least one letter, or 0.0 when it has none.
+    # TODO: Split text on whitespace, and return the fraction of its words that
+    #   contain at least one letter. Return 0.0 when text has no words.
+    #   Example: alphabetic_share("#1 ... 42 is it") returns 0.4.
     def alphabetic_share(text: str) -> float:
         ...
 
 
-    # TODO: Return how many different words of STOP_WORDS the normalized text
-    #   holds.
+    # TODO: Return how many different words from STOP_WORDS appear in the
+    #   normalized text.
+    #   Example: stop_words("The ship and THE crew, with the cargo of gold.")
+    #   returns 4.
     def stop_words(text: str) -> int:
         ...
 
 
-    # TODO: Return True when text keeps every rule of the lesson. 50 to 100,000
-    #   words, a mean word length of 3 to 10, counts of # and of ... each no
-    #   more than 0.1 per word, at least 0.8 of words with a letter, and at
-    #   least 2 stop words.
+    # TODO: Return True when text passes every rule from the lesson, and False
+    #   otherwise. The rules are 50 to 100,000 words, a mean word length of 3
+    #   to 10, at most 0.1 # per word and at most 0.1 ... per word, at least
+    #   0.8 of the words with a letter, and at least 2 stop words.
     def passes_quality(text: str) -> bool:
         ...
 
 
-    # TODO: Return the positions of the test documents that share at least one
-    #   shingle of n words with any training document, in order.
+    # TODO: Return the positions in test of the documents that share at least
+    #   one shingle of n words with any training document, in increasing
+    #   order.
+    #   Example: leaked(["a b c", "d e f"], ["x a b c"], 2) returns [0].
     def leaked(
         test: list[str],
         train: list[str],
@@ -921,8 +949,8 @@ LEAK_TEST = [
 
 def check_data2(checker: Checker) -> None:
     for function, description in (
-        ("mean_word_length", "gives the mean characters per word"),
-        ("alphabetic_share", "gives the share of words with a letter"),
+        ("mean_word_length", "returns the mean number of characters per word"),
+        ("alphabetic_share", "returns the fraction of words with a letter"),
     ):
         check_on_inputs(
             checker=checker,
@@ -942,7 +970,7 @@ def check_data2(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="stop_words",
-        description="counts the different stop words the text holds",
+        description="counts the different stop words in the text",
         inputs=(
             ("The ship and THE crew, with the cargo of gold.",),
             ("Buy shoes online today",),
@@ -954,7 +982,7 @@ def check_data2(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="passes_quality",
-        description="keeps every rule at once",
+        description="checks every rule at once",
         inputs=tuple((document,) for document in QUALITY_DOCUMENTS),
         reference=FILTER_REFERENCE["passes_quality"],
         expect=expect_value,
@@ -981,15 +1009,16 @@ DATA2 = Exercise(
     source=DATA2_SOURCE,
     solution=DATA2_SOLUTION,
     hints={
-        "mean_word_length": "Split on whitespace. Return 0.0 for no words, otherwise the sum of len(word) over "
-        "the number of words.",
+        "mean_word_length": "Split on whitespace. Return 0.0 when there are no words. Otherwise divide the sum of "
+        "len(word) by the number of words.",
         "alphabetic_share": "For each word, any(character.isalpha() for character in word) is True or False, "
         "and summing them counts the Trues.",
-        "stop_words": "Take the set of the normalized words, and the size of its overlap with set(STOP_WORDS).",
+        "stop_words": "Make a set of the normalized words, and return the size of its intersection with "
+        "set(STOP_WORDS).",
         "passes_quality": "Count the words once. Return False at the first rule that fails, using the three "
         "functions above, and True at the end.",
-        "leaked": "Gather every training document's shingles into one set with |=. A test document leaked when "
-        "its own shingles overlap that set.",
+        "leaked": "Collect every training document's shingles into one set with |=. A test document leaked when "
+        "at least one of its own shingles is in that set.",
     },
     introduces=("stop word",),
     check=check_data2,
@@ -1002,17 +1031,18 @@ DATA2 = Exercise(
 
 QUIZ15_LESSON = prose(
     """
-    This quiz has no examples and no new tools. Each function combines moves
-    from Section 12. If a step is unclear, the exercise in the table shows it.
+    This quiz has no examples and no new tools. Each function combines steps
+    from Section 12. If a step is unclear, the exercise listed in the table
+    shows how to do it.
 
-    | Function | Moves | Shown in |
+    | Function | Steps | Shown in |
     |---|---|---|
-    | `budget_tokens` | a model's parameters counted once each, then 6 FLOPs per parameter per token | cost1, cost2 |
-    | `linear_bound` | a Linear's FLOPs and the bytes it reads and writes, then whichever takes longer | cost1, profile2 |
-    | `cache_bytes_for` | a key and a value per layer for every token, times the bytes of one number | kvcache2, precision1 |
-    | `roundtrip_error` | a scale per row, rounded to whole numbers and back, then the relative error | quant1, quant2 |
-    | `fit_and_predict` | a straight line fitted to the logs, then the power law it gives, followed out | scaling1 |
-    | `near_duplicate` | each text's word shingles, then their Jaccard similarity against a threshold | data1 |
+    | `budget_tokens` | count each parameter once, then divide by 6 FLOPs per parameter per token | cost1, cost2 |
+    | `linear_bound` | count a Linear's FLOPs and the bytes it reads and writes, then pick whichever takes longer | cost1, profile2 |
+    | `cache_bytes_for` | count a key and a value per layer for every token, times the bytes of one number | kvcache2, precision1 |
+    | `roundtrip_error` | quantize with a scale per row, turn back into floats, then compute the relative error | quant1, quant2 |
+    | `fit_and_predict` | fit a straight line to the logs, then evaluate the power law it gives at a new size | scaling1 |
+    | `near_duplicate` | build each text's word shingles, then compare their Jaccard similarity with a threshold | data1 |
     """,
 )
 
@@ -1020,7 +1050,7 @@ QUIZ15_SOURCE = source_file(
     '''
     # quiz15.py
     #
-    # No examples and no new tools. Each function combines moves from Section 12.
+    # No examples and no new tools. Each function combines steps from Section 12.
 
     import math
 
@@ -1029,9 +1059,9 @@ QUIZ15_SOURCE = source_file(
     from torch import Tensor
 
 
-    # TODO: Return how many tokens a training budget of flops buys for model, at
-    #   6 FLOPs per parameter per token, rounded down to a whole number. Count
-    #   each parameter of model once.
+    # TODO: Return how many tokens model can train on with a budget of flops
+    #   FLOPs, at 6 FLOPs per parameter per token, rounded down to a whole
+    #   number. Count each parameter of model only once.
     def budget_tokens(
         model: nn.Module,
         flops: float,
@@ -1040,9 +1070,10 @@ QUIZ15_SOURCE = source_file(
 
 
     # TODO: Return "memory" or "compute", whichever takes longer for linear's
-    #   forward pass on rows rows. Each multiply and add is 2 FLOPs. It reads
-    #   its input and its weight and writes its output, bytes_per_number bytes
-    #   a number. Leave the bias out. Return "compute" when the two are equal.
+    #   forward pass on a batch of rows inputs. A multiply and an add together
+    #   count as 2 FLOPs. The pass reads its input and its weight and writes
+    #   its output, at bytes_per_number bytes per number. Leave the bias out.
+    #   Return "compute" when the two times are equal.
     def linear_bound(
         linear: nn.Linear,
         rows: int,
@@ -1053,9 +1084,9 @@ QUIZ15_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the bytes a KV cache holds for one text of tokens tokens. Each
-    #   of layers layers keeps a key and a value of width numbers for every
-    #   token, each number of type dtype.
+    # TODO: Return how many bytes a KV cache holds for one text of tokens tokens.
+    #   Each of the layers layers stores a key and a value of width numbers for
+    #   every token, and each number has type dtype.
     def cache_bytes_for(
         layers: int,
         width: int,
@@ -1065,9 +1096,9 @@ QUIZ15_SOURCE = source_file(
         ...
 
 
-    # TODO: Quantize weights to bits bits with absmax and a scale per row, turn
-    #   them back into floats, and return the norm of the difference over the
-    #   norm of weights, as a plain number.
+    # TODO: Quantize weights to bits bits with absmax and a scale per row, then
+    #   turn them back into floats. Return the norm of the difference divided
+    #   by the norm of weights, as a plain number.
     def roundtrip_error(
         weights: Tensor,
         bits: int,
@@ -1075,8 +1106,9 @@ QUIZ15_SOURCE = source_file(
         ...
 
 
-    # TODO: Fit loss = scale * n ** -alpha by least squares on the logs, and
-    #   return the loss it gives at target, as a plain number.
+    # TODO: Fit loss = scale * n ** -alpha by least squares on the logs. Return
+    #   the loss that the fitted power law predicts at n = target, as a plain
+    #   number.
     def fit_and_predict(
         n: Tensor,
         loss: Tensor,
@@ -1086,8 +1118,8 @@ QUIZ15_SOURCE = source_file(
 
 
     # TODO: Return whether a and b are near duplicates, which is when the
-    #   Jaccard similarity of their sets of n word shingles is at least
-    #   threshold. Take the words from text.lower().split(), and take the
+    #   Jaccard similarity of their sets of shingles of n words is at least
+    #   threshold. Get each text's words with text.lower().split(). Treat the
     #   similarity as 0 when both sets are empty.
     def near_duplicate(
         a: str,
@@ -1268,7 +1300,7 @@ def check_quiz15(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="roundtrip_error",
-        description="quantizes with a scale per row and measures what is lost",
+        description="quantizes with a scale per row and returns the relative error",
         inputs=(
             (rows_of_scales(992, [0.1, 1.0, 5.0], 6), 8),
             (rows_of_scales(993, [2.0, 0.05, 0.5, 1.0], 5), 4),
@@ -1279,7 +1311,7 @@ def check_quiz15(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="fit_and_predict",
-        description="fits a power law on the logs and follows it out",
+        description="fits a power law on the logs and predicts the loss at target",
         inputs=(
             (*power_law_points(994, 6.0, 0.12), 1e7),
             (*power_law_points(995, 2.5, 0.3), 1e6),
@@ -1315,16 +1347,17 @@ QUIZ15 = Exercise(
     source=QUIZ15_SOURCE,
     solution=QUIZ15_SOLUTION,
     hints={
-        "budget_tokens": "model.parameters() lists a shared tensor once. Add up numel(), then floor divide flops by 6 "
-        "times that count.",
+        "budget_tokens": "model.parameters() lists a shared tensor only once. Add up numel(), then floor divide flops "
+        "by 6 times that count.",
         "linear_bound": "The FLOPs are 2 * rows * in_features * out_features. The numbers moved are the input, the "
-        "weight and the output added up. Compare bytes over bytes_per_second with FLOPs over flops_per_second.",
-        "cache_bytes_for": "2 for the key and the value, times layers, tokens and width, times the element_size() of "
-        "an empty tensor of that dtype.",
-        "roundtrip_error": "Each row's largest absolute value over 2 ** (bits - 1) - 1 is its scale. Divide, round, "
-        "multiply back, then compare the norms.",
+        "weight and the output added up. Compare the bytes divided by bytes_per_second with the FLOPs divided by "
+        "flops_per_second.",
+        "cache_bytes_for": "Multiply 2, for the key and the value, by layers, tokens and width. Then multiply by the "
+        "element_size() of an empty tensor of that dtype.",
+        "roundtrip_error": "Each row's scale is its largest absolute value divided by 2 ** (bits - 1) - 1. Divide by "
+        "the scales, round, multiply back, then compare the norms.",
         "fit_and_predict": "Stack log(n) with a column of ones and solve for log(loss) with torch.linalg.lstsq. The "
-        "slope is minus alpha and the exponent of the intercept is the scale.",
+        "slope is -alpha, and math.exp of the intercept is the scale.",
         "near_duplicate": "Build a set of word tuples for each text. The similarity is the size of the overlap over "
         "the size of the union.",
     },

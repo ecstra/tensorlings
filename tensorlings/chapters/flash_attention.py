@@ -36,11 +36,12 @@ FLASH_ATTENTION = Chapter(
         """
         # FlashAttention
 
-        Attention written plainly builds every score of every query against
-        every key before its softmax. This chapter first reads a softmax's row
-        in one pass, with a running largest score and total, then uses that
-        to compute attention a block of keys at a time, the way FlashAttention
-        does, and measures what plain PyTorch makes of it.
+        The plain way to compute attention builds the score of every query
+        against every key before it takes the softmax. This chapter first
+        computes the softmax of a row in a single pass, keeping a running
+        largest score and a running total. Then it uses that idea to compute
+        attention one block of keys at a time, the way FlashAttention does.
+        Finally it measures how well this works in plain PyTorch.
 
         ## Further reading
 
@@ -85,7 +86,7 @@ def update(
 '''
 
 RUNNING_PART = '''
-# Walks along the last dimension of scores once, a score at a time.
+# Goes along the last dimension of scores once, one score at a time.
 def running_max_and_total(scores: Tensor) -> tuple[Tensor, Tensor]:
     largest = torch.full(scores.shape[:-1], float("-inf"))
     total = torch.zeros(scores.shape[:-1])
@@ -119,40 +120,46 @@ ONLINE_REFERENCE = namespace_of(UPDATE_SOLUTION + RUNNING_PART + SOFTMAX_SOLUTIO
 
 FLASH1_LESSON = prose(
     """
-    softmax2 took each row's largest score away before the exp, so no exp
-    could overflow. That safe softmax reads the scores three times, once for
-    the largest, once for the total of exps, and once to divide.
+    softmax2 subtracted each row's largest score from every score before
+    taking the exp, so that no exp could overflow. This safe softmax goes
+    over the scores three times. The first pass finds the largest score, the
+    second adds up the exps, and the third divides each exp by that total.
 
-    Milakov and Gimelshein folded the first two reads into one. Walk along
-    the scores, keeping a running largest `m` and a running total `d` of exps
-    measured from it. When a new score beats `m`, every exp counted so far was
-    measured from too low a mark. So the total shrinks first, then the new
-    score's exp joins it.
+    Milakov and Gimelshein combined the first two passes into one. Go along
+    the scores one at a time, and keep two running values. `m` is the largest
+    score seen so far, and `d` is the total of `exp(x - m)` over the scores
+    seen so far. When a new score is larger than `m`, every exp already in
+    `d` was computed with an `m` that is now too small. So you first multiply
+    `d` by `exp(m_old - m_new)` to correct it, then add the new score's exp.
 
     ```text
     m_new = max(m_old, x)
     d_new = d_old * exp(m_old - m_new) + exp(x - m_new)
     ```
 
-    Start with `m` at minus infinity and `d` at 0. The first score's shrink
-    is `exp(-inf)`, which is 0. At the end, `d` is the total of `exp(x - m)`
-    over the row, the same total the safe softmax finds.
+    Start with `m` at minus infinity and `d` at 0. For the first score, the
+    correction factor is `exp(-inf)`, which is 0. At the end, `d` is the
+    total of `exp(x - m)` over the row, the same total that the safe softmax
+    finds.
 
-    Their paper counts memory traffic per score. The safe softmax reads or
-    writes each score 4 times, and the online one 3. On a GPU, where moving
-    numbers costs more than the math, that ran up to 1.3 times faster.
+    Their paper counts memory accesses per score. The safe softmax reads or
+    writes each score 4 times, and the online softmax 3 times. On a GPU,
+    where moving numbers costs more than the arithmetic, the online softmax
+    ran up to 1.3 times faster.
 
-    The same rule joins two parts of a row. Each part brings its own `m` and
-    `d`, the whole row's `m` is the larger one, and each `d` shrinks to it.
+    The same rule combines two parts of a row. Each part has its own `m` and
+    `d`. The whole row's `m` is the larger of the two, and each part's `d` is
+    corrected to that `m`.
 
     ```text
     m = max(m_a, m_b)
     d = d_a * exp(m_a - m) + d_b * exp(m_b - m)
     ```
 
-    So a row can be read in blocks, and the blocks joined afterwards. That is
-    the step flash2 builds attention on. `update` is this join with a part of
-    a single score, whose total is `exp(0)`, 1.
+    So you can read a row in blocks, and combine the blocks afterwards. flash2
+    builds attention on this step. `update` is the same combination, where
+    the second part is a single score `x`. That part's `m` is `x`, and its
+    `d` is `exp(0)`, which is 1.
     """,
 )
 
@@ -167,11 +174,12 @@ FLASH1_SOURCE = source_file(
     nothing = torch.exp(torch.tensor(float("-inf")))                              # tensor(0.)
 
 
-    # TODO: Return the running largest and total after one more score. Each
-    #   of largest, total and score holds one number per row. The new largest
-    #   is the larger of largest and score. The old total shrinks by the exp of
-    #   the old largest minus the new one, then the exp of score minus the new
-    #   largest joins it.
+    # TODO: Return the running largest and total after one more score, as a
+    #   tuple. largest, total and score each hold one number per row. The new
+    #   largest is the elementwise max of largest and score. The new total is
+    #   total * exp(largest - new_largest) + exp(score - new_largest).
+    #   Example: update(torch.tensor([1.0]), torch.tensor([1.0]),
+    #   torch.tensor([2.0])) returns (tensor([2.]), tensor([1.3679])).
     def update(
         largest: Tensor,
         total: Tensor,
@@ -183,16 +191,23 @@ FLASH1_SOURCE = source_file(
 ''' + indented(RUNNING_PART) + '''
 
 
-    # TODO: Return the softmax of scores along the last dimension. Take the
-    #   largest and total from running_max_and_total, then make one more pass,
-    #   the exp of each score minus its row's largest over its row's total.
+    # TODO: Return the softmax of scores along the last dimension. Get each
+    #   row's largest and total from running_max_and_total. Then make one more
+    #   pass, dividing exp(score - largest) by total for each score in the row.
+    #   Example: online_softmax(torch.tensor([[0.0, 1.0]])) returns
+    #   tensor([[0.2689, 0.7311]]).
     def online_softmax(scores: Tensor) -> Tensor:
         ...
 
 
-    # TODO: Return the largest and the total of two parts of the same rows
-    #   together. The largest is the larger of the two, and each part's total
-    #   shrinks by the exp of its own largest minus that one before they add.
+    # TODO: Combine the running largest and total of two parts of the same
+    #   rows, and return the largest and total of the whole rows as a tuple.
+    #   The new largest is the elementwise max of largest_a and largest_b.
+    #   Multiply each part's total by exp(its own largest - new largest), then
+    #   add the two totals.
+    #   Example: merge(torch.tensor([0.0]), torch.tensor([2.0]),
+    #   torch.tensor([1.0]), torch.tensor([1.0])) returns
+    #   (tensor([1.]), tensor([1.7358])).
     def merge(
         largest_a: Tensor,
         total_a: Tensor,
@@ -282,9 +297,10 @@ def check_online_softmax(found: object) -> None:
 
             if not isinstance(actual, Tensor) or not torch.allclose(actual.double(), followed.double(), atol=1e-6):
                 raise Mismatch(
-                    "online_softmax should use the very largest and total that running_max_and_total gives. The "
-                    "check's stand in gave a largest 1 too high and a total twice too large, and the result did not "
-                    "follow them. Build the softmax from those two, not from torch.softmax or a max or sum of your own.",
+                    "online_softmax should use the exact largest and total that running_max_and_total returns. The "
+                    "check replaced it with a version that returns a largest 1 too high and a total twice too large, "
+                    "and your result did not change to match. Build the softmax from those two values, not from "
+                    "torch.softmax or from a max or sum of your own.",
                 )
     finally:
         if original is None:
@@ -297,7 +313,7 @@ def check_flash1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="update",
-        description="raises the largest and shrinks the total before adding",
+        description="updates the largest, and rescales the total before adding the new exp",
         inputs=(
             (torch.full((2,), MINUS_INFINITY), torch.zeros(2), torch.tensor([2.0, -1.0])),
             (torch.tensor([1.0, 3.0, 0.5]), torch.tensor([2.0, 1.5, 3.0]), torch.tensor([2.5, -1.0, 0.5])),
@@ -313,7 +329,7 @@ def check_flash1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="merge",
-        description="joins two parts of a row, each total shrunk to the larger mark",
+        description="combines two parts of a row, rescaling each total to the new largest",
         inputs=(
             merge_inputs(small_tensor(871, 3, 7), 3),
             merge_inputs(small_tensor(872, 2, 5) * 4, 4),
@@ -332,12 +348,12 @@ FLASH1 = Exercise(
     source=FLASH1_SOURCE,
     solution=FLASH1_SOLUTION,
     hints={
-        "update": "torch.maximum(largest, score) is the new largest. Multiply total by torch.exp of largest minus it, "
-        "then add torch.exp of score minus it.",
-        "online_softmax": "Give largest and total an end dimension with .unsqueeze(-1), so they line up with each "
-        "row. Then take torch.exp of scores minus largest, and divide by total.",
-        "merge": "torch.maximum of the two largests first. Each total times torch.exp of its own largest minus that, "
-        "added together.",
+        "update": "torch.maximum(largest, score) gives the new largest. Multiply total by torch.exp of the old "
+        "largest minus the new largest. Then add torch.exp of score minus the new largest.",
+        "online_softmax": "Add a last dimension to largest and total with .unsqueeze(-1), so they broadcast against "
+        "each row of scores. Then take torch.exp of scores minus largest, and divide by total.",
+        "merge": "First take torch.maximum of the two largests. Then multiply each total by torch.exp of its own "
+        "largest minus that maximum, and add the two results.",
     },
     introduces=(),
     check=check_flash1,
@@ -441,40 +457,44 @@ TILED_START = '''
 
 FLASH2_LESSON = prose(
     """
-    attention5 computed `softmax(q kᵀ / √d) v`. Written that way, it builds
-    every score first, steps by steps numbers for each head. At 4,096 steps
-    that is 16.8 million, written out to memory and read back.
+    attention5 computed `softmax(q kᵀ / √d) v`. Computed that way, it first
+    builds every score, a (steps, steps) matrix for each head, where steps is
+    the sequence length. At 4,096 steps that is 16.8 million numbers, written
+    out to memory and then read back.
 
-    FlashAttention, from Dao and colleagues, never builds them all. It cuts
-    the keys and values into blocks and reads one block at a time, as flash1
-    read a row in parts. Each query keeps its largest score `m`, its total of
-    exps `d`, and its output so far, a sum of values weighted by exps.
+    FlashAttention, from Dao and colleagues, never builds the full matrix of
+    scores. It cuts the keys and values into blocks and reads one block at a
+    time, the way flash1 read a row in parts. For each query it keeps the
+    largest score so far `m` and the total of exps `d`. It also keeps the
+    output so far, which is a sum of values weighted by their exps.
 
-    When a block raises `m`, the old total and the old output were measured
-    from too low a mark, so both shrink by `exp(m_old - m_new)`. Then the
-    block's exps join the total, and its exps times its values join the
-    output. At the end, the output over the total is attention's output. The
-    method is exact, not an estimate.
+    Sometimes a block holds a score larger than `m`. Then the old total and
+    the old output were computed with an `m` that is now too small. So both
+    are multiplied by `exp(m_old - m_new)`. Then the block's exps are added to
+    the total, and the block's values weighted by those exps are added to
+    the output. At the end, dividing the output by the total gives
+    attention's output. The result is exact, not an estimate.
 
-    `tiled_attention` keeps a block of queries in the outer loop and walks
-    the key blocks inside it. That is FlashAttention-2's order, and the first
-    paper looped the other way round.
+    `tiled_attention` loops over blocks of queries in its outer loop, and
+    over blocks of keys in its inner loop. That is the order FlashAttention-2
+    uses. The first FlashAttention paper nested the loops the other way round.
 
-    A causal model skips more. A block of queries never reads the key blocks
-    after its own, which the mask would hide entirely, so nearly half the
-    blocks go unread.
+    A causal model can skip more work. A block of queries never needs the key
+    blocks that come after it, because the causal mask would hide all of
+    their scores. So nearly half the blocks are never read.
 
-    The speed comes from where the blocks live. An A100 GPU has 40 to 80 GB of
-    main memory, read at 1.5 to 2.0 TB/s. Beside each of its 108 compute units
-    sit 192 KB of fast memory, read at about 19 TB/s. FlashAttention-2's
-    kernel keeps a block of queries, with its `m`, `d` and output, in that
-    fast memory. It writes back only the output and one number per row. The
-    first paper reports GPT-2 training 3 to 3.5 times faster than Hugging
-    Face's version at 1,024 tokens.
+    The speed comes from where the blocks are stored. An A100 GPU has 40 to
+    80 GB of main memory, read at 1.5 to 2.0 TB/s. Each of its 108 compute
+    units also has 192 KB of fast memory beside it, read at about 19 TB/s.
+    FlashAttention-2's kernel keeps a block of queries, with its `m`, `d` and
+    output, in that fast memory. It writes back to main memory only the
+    output and one number per row. The first paper reports that GPT-2 trained
+    3 to 3.5 times faster than Hugging Face's implementation at 1,024 tokens.
 
-    Here is the peak memory one call added on this Mac's CPU, for 4 heads of
-    size 64. Each call ran in a fresh process, over three runs. SDPA is
-    `F.scaled_dot_product_attention`.
+    Here is how much one call raised peak memory on this Mac's CPU, for 4
+    heads of size 64. Each call ran in a fresh process, and the ranges come
+    from three runs. "Softmax written out" is the plain version that builds
+    the whole matrix of scores. SDPA is `F.scaled_dot_product_attention`.
 
     | Steps | Softmax written out | Tiled, blocks of 1,024 | Tiled, blocks of 128 | SDPA |
     |---|---|---|---|---|
@@ -482,27 +502,29 @@ FLASH2_LESSON = prose(
     | 4,096 | 517 to 518 MiB | 75 to 79 MiB | 9 to 11 MiB | 7 MiB |
     | 8,192 | 2,057 to 2,058 MiB | 87 to 88 MiB | 18 to 19 MiB | 11 MiB |
 
-    Each doubling of the steps made the written out softmax 4 times bigger,
-    since it holds every score. The tiled version holds one block of scores
-    at a time, so its memory grew no faster than the steps. At 8,192 steps,
-    blocks of 1,024 needed 24 times less. The paper measured up to 20 times
-    less than exact attention, growing linearly with the steps.
+    Each time the steps doubled, the written out softmax needed 4 times as
+    much memory, because it holds every score. The tiled version holds one
+    block of scores at a time, so its memory grew no faster than the steps.
+    At 8,192 steps, blocks of 1,024 needed 24 times less memory. The paper
+    measured up to 20 times less memory than standard exact attention, with
+    memory growing linearly in the steps.
 
     On the CPU, SDPA runs PyTorch's own FlashAttention kernel, written in C++.
-    Here are the times on 4 threads, over three runs.
+    Here are the times with 4 threads, over three runs.
 
     | Steps | Softmax written out | Tiled, blocks of 1,024 | SDPA |
     |---|---|---|---|
     | 4,096 | 87 to 92 ms | 109 to 118 ms | 54 to 74 ms |
     | 8,192 | 329 to 414 ms | 426 to 494 ms | 198 to 205 ms |
 
-    The kernel beat the softmax written out in every run, in 50 to 80 percent
-    of its time. It does every step for a block in one pass, while the block
-    sits in the CPU's cache. Your version runs each line as its own job
-    through main memory, so it took 1.2 to 1.4 times as long.
+    The kernel was faster than the written out softmax in every run, taking
+    50 to 80 percent of its time. The kernel does every step for a block in
+    one pass, while the block is in the CPU's cache. Your version runs each
+    line as a separate operation that goes through main memory. So it took
+    1.2 to 1.4 times as long as the written out softmax.
 
     On CUDA, `F.scaled_dot_product_attention` can call a FlashAttention-2
-    kernel, so a model gets the method without any of this code.
+    kernel, so a model can use the method without any of this code.
     """,
 )
 
@@ -516,24 +538,28 @@ FLASH2_SOURCE = source_file(
     import torch.nn.functional as F
     from torch import Tensor
 
-    starts = list(range(0, 10, 4))                # [0, 4, 8], the last block holds 2
-    last = torch.arange(10.0)[8 : 8 + 4]          # tensor([8., 9.]), a slice stops at the end
+    starts = list(range(0, 10, 4))                # [0, 4, 8], and the last block holds only 2
+    last = torch.arange(10.0)[8 : 8 + 4]          # tensor([8., 9.]), because a slice stops at the end
 
 
-    # TODO: Finish the inner loop, attention of q, k and v, each of shape (...,
-    #   steps, size), one block of keys at a time. The block's scores are rows
-    #   times keys transposed, times scale. Raise largest to the block's largest
-    #   score in each row. Shrink total and out by the exp of the old largest
-    #   minus the new, then add the block's exps to total, and its exps times
+    # TODO: Finish the inner loop, so this computes attention of q, k and v one
+    #   block of keys at a time. q, k and v each have shape (..., steps, size).
+    #   The block's scores are rows times keys transposed, times scale.
+    #   new_largest is the larger of largest and each row's largest score in
+    #   the block. shrink is exp(largest - new_largest), and weights is the
+    #   exp of each score minus its row's new_largest. Multiply total and out
+    #   by shrink, then add the weights' row sums to total and weights times
     #   values to out. Never build the scores against every key at once.
 ''' + TILED_START.strip("\n") + '''
 
 
-    # TODO: Return how many blocks of keys tiled_attention reads in all, for
-    #   steps queries and keys cut into blocks of block. Every block of queries
-    #   reads every block of keys. With causal, count what a causal version of
-    #   tiled_attention would read, each block of queries only the key blocks up
-    #   to its own, since the mask hides the ones after it.
+    # TODO: Return how many blocks of keys tiled_attention reads in total, when
+    #   steps queries and steps keys are cut into blocks of size block. Every
+    #   block of queries reads every block of keys. When causal is True, count
+    #   what a causal version would read instead. There, query block i reads
+    #   only key blocks 0 to i, because the mask hides the blocks after it.
+    #   Example: blocks_read(10, 4, False) returns 9, and
+    #   blocks_read(10, 4, True) returns 6.
     def blocks_read(
         steps: int,
         block: int,
@@ -542,9 +568,12 @@ FLASH2_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the most scores one head holds at once. Written out, that
-    #   is every query against every key. Tiled, it is one block of queries
-    #   against one block of keys, and a block holds at most steps.
+    # TODO: Return the largest number of scores one head holds at once. When
+    #   tiled is False, the softmax is written out, so that is every query
+    #   against every key. When tiled is True, it is one block of queries
+    #   against one block of keys, and a block never holds more than steps
+    #   positions.
+    #   Example: scores_held(4096, 128, True) returns 16384.
     def scores_held(
         steps: int,
         block: int,
@@ -616,8 +645,8 @@ def check_no_full_scores(found: object) -> None:
 
         if shape[-1] == 10 and shape[-2] not in (1, 3):
             raise Mismatch(
-                f"tiled_attention built a tensor of shape {shape}, scores against all 10 keys at once. Take the "
-                "scores one block of keys at a time.",
+                f"tiled_attention built a tensor of shape {shape}, which holds scores against all 10 keys at once. "
+                "Compute the scores one block of keys at a time.",
             )
 
 
@@ -632,8 +661,8 @@ def check_far_apart_blocks(found: object) -> None:
 
     if isinstance(actual, Tensor) and actual.shape == expected.shape and not torch.isfinite(actual).all():
         raise Mismatch(
-            "tiled_attention gave nan when an early block of keys scored far above a later one. Raise largest to "
-            "torch.maximum of the old largest and the block's largest, so no exp overflows.",
+            "tiled_attention returned nan when an early block of keys scored far above a later one. Set new_largest "
+            "to torch.maximum of the old largest and the block's largest, so no exp overflows.",
         )
 
     expect_tensor(
@@ -688,7 +717,7 @@ def check_flash2(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="blocks_read",
-        description="counts every block, or the ones up to the diagonal",
+        description="counts every block, or only the blocks up to the diagonal when causal",
         inputs=(
             (1024, 128, False),
             (1024, 128, True),
@@ -721,13 +750,13 @@ FLASH2 = Exercise(
     solution=FLASH2_SOLUTION,
     hints={
         "tiled_attention": "scores is rows @ keys.transpose(-2, -1) * scale. new_largest is torch.maximum of largest "
-        "and scores.amax(dim=-1), shrink is torch.exp(largest - new_largest), and weights is torch.exp of scores "
-        "minus new_largest with .unsqueeze(-1). total adds weights.sum(dim=-1), and out adds weights @ values, each "
-        "after its shrink.",
-        "blocks_read": "math.ceil(steps / block) blocks each way. Query block i reads key blocks 0 to i when causal, "
-        "which adds up to blocks * (blocks + 1) // 2.",
-        "scores_held": "Written out, the whole grid of scores is steps wide and steps tall. Tiled, a block is "
-        "min(block, steps) wide, squared.",
+        "and scores.amax(dim=-1). shrink is torch.exp(largest - new_largest). weights is torch.exp of scores minus "
+        "new_largest with .unsqueeze(-1). Multiply total by shrink and add weights.sum(dim=-1). Multiply out by "
+        "shrink with .unsqueeze(-1) and add weights @ values.",
+        "blocks_read": "There are math.ceil(steps / block) blocks of queries, and as many blocks of keys. When "
+        "causal, query block i reads key blocks 0 to i, which adds up to blocks * (blocks + 1) // 2.",
+        "scores_held": "Written out, the whole matrix of scores is steps by steps. Tiled, one block of scores is "
+        "min(block, steps) by min(block, steps).",
     },
     introduces=(),
     check=check_flash2,

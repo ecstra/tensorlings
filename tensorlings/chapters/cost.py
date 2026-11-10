@@ -27,12 +27,13 @@ COST = Chapter(
         """
         # Counting cost
 
-        Section 12 is about running models fast and small. It starts by
-        counting, before anything runs. This chapter counts the FLOPs of a
-        matrix multiply, a Linear and attention, the bytes of the parameters,
-        and the bytes backward needs kept. Then it checks Kaplan and
-        colleagues' rule that training costs about six FLOPs per parameter
-        per token.
+        Section 12 is about making models run faster and use less memory. It
+        starts by counting costs before anything runs. This chapter counts the
+        FLOPs of a matrix multiply, a Linear layer and attention. It also
+        counts the bytes the parameters take, and the bytes that backward
+        needs kept in memory. Then it checks the rule from Kaplan and
+        colleagues that training costs about six FLOPs per parameter per
+        token.
 
         ## Further reading
 
@@ -97,35 +98,42 @@ def expect_int(
 
 COST1_LESSON = prose(
     """
-    What a model costs can be counted before it runs. Compute is counted in
-    FLOPs, floating point operations, each one add or one multiply.
+    You can work out what a model costs before you run it. Compute is counted
+    in FLOPs, short for floating point operations. One FLOP is one addition
+    or one multiplication.
 
-    Multiplying an (m, k) matrix by a (k, n) one makes m times n outputs.
-    Each is a dot product of k multiplies and k adds, so the product takes
-    2mkn FLOPs.
+    Multiplying an (m, k) matrix by a (k, n) matrix gives an (m, n) result,
+    which has `m * n` numbers. Each of those numbers is a dot product of
+    length k, which takes k multiplications and k additions. So the whole
+    product takes 2mkn FLOPs, which is `2 * k` for each of the `m * n`
+    outputs.
 
     ```python
     a, b = torch.randn(32, 64), torch.randn(64, 16)
-    product = a @ b    # 32 * 16 outputs of 64 multiplies and 64 adds, 65,536 FLOPs
+    product = a @ b    # 32 * 16 outputs, each 64 multiplies and 64 adds, so 65,536 FLOPs
     ```
 
-    A Linear layer on a batch is one such product, the batch's rows times
-    the weight. Its bias adds one add per output. Kaplan and colleagues leave
-    biases out of their counts, as too small to matter, and so does this
-    chapter.
+    A Linear layer applied to a batch is one such product. The batch, with
+    one input per row, is multiplied by the layer's weight. The bias adds one
+    more addition per output. Kaplan and colleagues leave biases out of their
+    counts because they are too small to matter, and this chapter does the
+    same.
 
-    Attention over T tokens of width d runs two products. The scores, Q
-    times K transposed, are (T, d) by (d, T). The weighted sum of the values
-    is (T, T) by (T, d). Both grow with T squared, while a Linear grows with
-    T.
+    Attention over T tokens, each a vector of d numbers, does two matrix
+    products. The scores `Q @ K.T` multiply a (T, d) matrix by a (d, T)
+    matrix. The weighted sum of the values multiplies the (T, T) weights by
+    the (T, d) values. The cost of both products grows with T squared, while
+    the cost of a Linear grows with T.
 
-    Memory starts with the parameters. Each number takes `element_size()`
-    bytes, 4 in float32 and 2 in float16. A weight two layers share, like
-    the tied head of gpt2, is stored once, and `parameters()` lists it once.
+    The first part of a model's memory is its parameters. Each number takes
+    `element_size()` bytes, which is 4 in float32 and 2 in float16. A weight
+    that two layers share, like the tied output head in gpt2, is stored only
+    once, and `parameters()` lists it only once.
 
-    PyTorch counts FLOPs too. Every product run inside `FlopCounterMode`,
-    from `torch.utils.flop_counter`, adds to its total. Here is the GPT that
-    gpt3 trains, on one sequence of 128 characters.
+    PyTorch can count FLOPs too. `FlopCounterMode`, from
+    `torch.utils.flop_counter`, adds the FLOPs of every matrix product run
+    inside it to a total. Here are its counts for the GPT that gpt3 trains,
+    run on one sequence of 128 characters.
 
     | Part | FLOPs |
     |---|---|
@@ -134,17 +142,20 @@ COST1_LESSON = prose(
     | Attention's two products, 4 blocks | 33,554,432 |
     | `FlopCounterMode`'s total | 203,456,512 |
 
-    The counter matches the Linears exactly but misses attention. On the CPU
-    this Torch runs attention as one fused kernel, and the counter has no
-    rule for it. A tool's count is worth checking by hand.
+    The counter's total is exactly the Linears plus the head, so it leaves
+    out attention. On the CPU, this version of PyTorch runs attention as one
+    fused kernel, which is a single combined operation. The counter has no
+    rule for counting it. So it is worth checking a tool's count by hand.
 
-    Per token, the blocks' Linears cost 1.57 million FLOPs, exactly twice
-    their 786,432 weights. Those are nearly all of the 793,344 parameters
-    outside the embeddings. That is Kaplan and colleagues' rule of 2N FLOPs
-    per token for a forward pass. They leave attention out while the width
-    is more than a twelfth of the context. The head reuses the embedding's
-    weight, so it sits outside N too. The GPT's 818,048 parameters take 3.27
-    MB in float32.
+    Per token, the Linears in the blocks cost 1.57 million FLOPs, which is
+    exactly twice their 786,432 weights. Those weights are nearly all of the
+    793,344 parameters outside the embeddings. This matches Kaplan and
+    colleagues' rule for a forward pass, about `2 * N` FLOPs per token. Here
+    N is the number of parameters outside the embeddings. The rule leaves
+    out attention's FLOPs, which is a fair approximation while the width is
+    more than a twelfth of the context length. The head reuses the
+    embedding's weight, so it is not counted in N either. All 818,048
+    parameters of the GPT take 3.27 MB in float32.
     """,
 )
 
@@ -155,14 +166,16 @@ COST1_SOURCE = source_file(
     import torch
     import torch.nn as nn
 
-    product_flops = 2 * 32 * 64 * 16                     # 65536, a (32, 64) matrix times a (64, 16) one
+    product_flops = 2 * 32 * 64 * 16                     # 65536, for a (32, 64) matrix times a (64, 16) matrix
     layer = nn.Linear(64, 16)
     layer_sizes = (layer.in_features, layer.out_features)  # (64, 16)
     half_size = torch.zeros(3, dtype=torch.float16).element_size()    # 2 bytes per number
 
 
-    # TODO: Return the FLOPs of multiplying an (m, k) matrix by a (k, n) one,
-    #   as a plain int. Each output takes k multiplies and k adds.
+    # TODO: Return the number of FLOPs it takes to multiply an (m, k) matrix by
+    #   a (k, n) matrix, as a plain int. Each of the m * n outputs takes k
+    #   multiplications and k additions.
+    #   Example: matmul_flops(32, 64, 16) returns 65536.
     def matmul_flops(
         m: int,
         k: int,
@@ -171,9 +184,10 @@ COST1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the FLOPs of linear on a batch, as a plain int, with
-    #   matmul_flops. The batch holds as many rows as the number rows says.
-    #   Leave the bias out.
+    # TODO: Return the FLOPs of applying linear to a batch of rows inputs, as a
+    #   plain int. The batch has shape (rows, in_features). Use matmul_flops,
+    #   and leave the bias out.
+    #   Example: linear_flops(nn.Linear(64, 16), 32) returns 65536.
     def linear_flops(
         linear: nn.Linear,
         rows: int,
@@ -181,9 +195,11 @@ COST1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the FLOPs of attention's two products, the scores and the
-    #   weighted sum of the values, as a plain int, with matmul_flops. The
-    #   sequence is tokens long, and each position holds width numbers.
+    # TODO: Return the FLOPs of attention's two matrix products, the scores and
+    #   the weighted sum of the values, as a plain int. Use matmul_flops. The
+    #   sequence has tokens positions, and each position is a vector of width
+    #   numbers.
+    #   Example: attention_flops(128, 128) returns 8388608.
     def attention_flops(
         tokens: int,
         width: int,
@@ -191,8 +207,10 @@ COST1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the bytes model's parameters take, as a plain int, each
-    #   parameter counted once, with its own element_size.
+    # TODO: Return how many bytes model's parameters take, as a plain int.
+    #   Count each parameter only once, and use its own element_size() for the
+    #   bytes per number.
+    #   Example: parameter_bytes(nn.Linear(10, 4)) returns 176.
     def parameter_bytes(
         model: nn.Module,
     ) -> int:
@@ -249,7 +267,7 @@ def check_cost1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="matmul_flops",
-        description="counts a multiply and an add for each of k terms of every output",
+        description="counts one multiply and one add for each of the k terms of every output",
         inputs=(
             (3, 5, 7),
             (1, 1, 1),
@@ -261,7 +279,7 @@ def check_cost1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="linear_flops",
-        description="counts the product of the rows and the weight",
+        description="counts the matrix product of the batch and the weight",
         inputs=(
             (Described(nn.Linear(10, 4), "nn.Linear(10, 4)"), 3),
             (Described(nn.Linear(7, 5, bias=False), "nn.Linear(7, 5, bias=False)"), 2),
@@ -283,7 +301,7 @@ def check_cost1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="parameter_bytes",
-        description="counts every parameter once at its own size",
+        description="counts every parameter once, at its own element size",
         inputs=(
             (Described(nn.Linear(10, 4), "nn.Linear(10, 4)"),),
             (Described(nn.Linear(10, 4).half(), "nn.Linear(10, 4).half()"),),
@@ -302,10 +320,12 @@ COST1 = Exercise(
     source=COST1_SOURCE,
     solution=COST1_SOLUTION,
     hints={
-        "matmul_flops": "Two FLOPs for each of the k terms of each of the m times n outputs.",
-        "linear_flops": "The batch is (rows, in_features) and the weight acts as (in_features, out_features).",
-        "attention_flops": "The scores are (tokens, width) by (width, tokens). The weighted sum is (tokens, tokens) by "
-        "(tokens, width), which costs the same.",
+        "matmul_flops": "Each of the m * n outputs has k terms, and each term costs two FLOPs, one multiply and one "
+        "add.",
+        "linear_flops": "The batch has shape (rows, in_features), and the weight acts as an (in_features, "
+        "out_features) matrix.",
+        "attention_flops": "The scores multiply a (tokens, width) matrix by a (width, tokens) matrix. The weighted sum "
+        "multiplies (tokens, tokens) by (tokens, width), which costs the same.",
         "parameter_bytes": "Add up parameter.numel() * parameter.element_size() over model.parameters().",
     },
     introduces=(),
@@ -319,13 +339,15 @@ COST1 = Exercise(
 
 COST2_LESSON = prose(
     """
-    Training needs memory beyond the parameters. Backward works out each
-    gradient from numbers the forward pass made. A Linear's weight gradient
-    needs its input, so the input is kept until backward reaches it.
+    Training needs memory for more than the parameters. The backward pass
+    computes each gradient from numbers that the forward pass produced. For
+    example, a Linear's weight gradient needs the Linear's input. So that
+    input stays in memory until backward reaches the Linear.
 
-    Autograd keeps these saved tensors with the graph.
-    `torch.autograd.graph.saved_tensors_hooks(pack, unpack)` runs pack on
-    every tensor saved inside it, and unpack when backward reads one back.
+    Autograd stores these saved tensors in the computation graph. Inside a
+    `with torch.autograd.graph.saved_tensors_hooks(pack, unpack)` block,
+    autograd calls `pack` on every tensor it saves. Later, when backward
+    reads a saved tensor back, autograd calls `unpack` on it.
 
     ```python
     def note(tensor):
@@ -336,39 +358,44 @@ COST2_LESSON = prose(
         squares = torch.ones(3, 4, requires_grad=True) ** 2    # shapes gets (3, 4)
     ```
 
-    Saved tensors can share one block of memory, a storage. A ReLU keeps its
-    output, and the next Linear keeps the same numbers as its input.
-    `untyped_storage()` gives a tensor's storage, whose `data_ptr()` says
-    where it starts and `nbytes()` how big it is.
+    Several saved tensors can share one block of memory, called a storage.
+    For example, a ReLU saves its output, and the next Linear saves those same
+    numbers as its input. `tensor.untyped_storage()` returns a tensor's
+    storage. The storage's `data_ptr()` is the memory address where it
+    starts, and its `nbytes()` is its size in bytes.
 
-    Here is the GPT that gpt3 trains, whose parameters take 3.27 MB.
+    Here is how much the GPT that gpt3 trains saves for backward. Its
+    parameters take 3.27 MB.
 
     | Sequences of 128 in a batch | 1 | 8 | 64 |
     |---|---|---|---|
     | Saved for backward | 4.34 MB | 34.75 MB | 278.00 MB |
 
-    The parameters stay put while the saved tensors grow with the batch. At
-    64 sequences they take 85 times the parameters. Inside `torch.no_grad()`
-    nothing is saved, which is why evaluating takes less memory than
-    training.
+    The memory for the parameters stays the same, while the saved tensors
+    grow with the batch size. At 64 sequences, the saved tensors take 85
+    times as much memory as the parameters. Inside `torch.no_grad()` nothing
+    is saved, which is why evaluating a model takes less memory than
+    training it.
 
     Compute follows a rule from Kaplan and colleagues. A forward pass costs
-    about 2 FLOPs per parameter per token, a multiply and an add. Backward
-    costs about twice that. Each Linear works out two gradients, for its
-    weight and for its input, each a product as big as the forward one. So
-    training costs about 6 FLOPs per parameter per token.
+    about 2 FLOPs per parameter per token, one multiply and one add. The
+    backward pass costs about twice as much. That is because each Linear
+    computes two gradients, one for its weight and one for its input. Each of
+    those is a matrix product as big as the forward one. So training costs
+    about 6 FLOPs per parameter per token.
 
     `FlopCounterMode` counts 610,369,536 FLOPs for the GPT's forward and
-    backward on one sequence. That is 3 times its forward, and within 0.2% of
-    6 times its 793,344 parameters times 128 tokens. The match leaves out
-    attention, which the counter misses here, as cost1 showed. Run as plain
-    products the counter can read, attention brings the total to 711,032,832,
-    about 17% above the rule.
+    backward passes on one sequence. That is 3 times its count for the
+    forward pass alone. It is also within 0.2% of the rule's count,
+    `6 * 793,344 * 128` for 793,344 parameters and 128 tokens. But this
+    count leaves out attention, which the counter misses here, as cost1
+    showed. If attention runs as plain matrix products that the counter can
+    read, the total becomes 711,032,832. That is about 17% above the rule.
 
-    The first Linear skips the gradient for its input when the input needs
-    none. Take an MLP from 64 to 128 to 32 on 10 rows. The counter gives
-    573,440 FLOPs for plain inputs and 737,280 for inputs that need a
-    gradient.
+    The first Linear skips computing the gradient for its input when the
+    input does not need one. Take an MLP with layer sizes 64, 128 and 32, run
+    on 10 rows. The counter gives 573,440 FLOPs when the input does not need
+    a gradient, and 737,280 when it does.
     """,
 )
 
@@ -382,20 +409,22 @@ COST2_SOURCE = source_file(
     from torch.utils.flop_counter import FlopCounterMode
 
     grid = torch.zeros(4, 8)
-    storage_bytes = grid.untyped_storage().nbytes()      # 128, 32 float32 numbers
-    shared = grid.view(32).untyped_storage().data_ptr() == grid.untyped_storage().data_ptr()    # True, a view shares it
-    flops = 6 * 1000 * 50                                # 300000, a model of 1,000 parameters on 50 tokens
+    storage_bytes = grid.untyped_storage().nbytes()      # 128 bytes, for 32 float32 numbers
+    shared = grid.view(32).untyped_storage().data_ptr() == grid.untyped_storage().data_ptr()    # True, a view shares the storage
+    flops = 6 * 1000 * 50                                # 300000, for 1,000 parameters trained on 50 tokens
 
-    with FlopCounterMode(display=False) as counter:      # display=False keeps its table off the screen
+    with FlopCounterMode(display=False) as counter:      # display=False stops it printing a table
         torch.ones(2, 3) @ torch.ones(3, 4)
     counted = counter.get_total_flops()                  # 48, 2 * 2 * 3 * 4
 
 
-    # TODO: Return the bytes autograd saves for backward while model runs on x,
-    #   as a plain int. Inside torch.autograd.graph.saved_tensors_hooks, note
-    #   the untyped storage of every tensor packed. Count each storage's
-    #   nbytes() once, by its data_ptr(), and leave out the storages of the
-    #   parameters.
+    # TODO: Return how many bytes autograd saves for backward while model runs
+    #   on x, as a plain int. Run the model inside
+    #   torch.autograd.graph.saved_tensors_hooks, with a pack function that
+    #   records the untyped storage of every tensor it receives. Count each
+    #   storage's nbytes() only once, using its data_ptr() to tell storages
+    #   apart. Leave out the storages that belong to the parameters.
+    #   Example: saved_bytes(nn.Linear(6, 3), torch.randn(4, 6)) returns 96.
     def saved_bytes(
         model: nn.Module,
         x: Tensor,
@@ -403,9 +432,10 @@ COST2_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the FLOPs of training, as a plain int, by the rule of 6 per
-    #   parameter per token. parameters counts the model's parameters, and
-    #   tokens the tokens it trains on.
+    # TODO: Return the FLOPs of training, as a plain int, using the rule of 6
+    #   FLOPs per parameter per token. parameters is the number of parameters
+    #   in the model, and tokens is the number of tokens it trains on.
+    #   Example: training_flops(1000, 50) returns 300000.
     def training_flops(
         parameters: int,
         tokens: int,
@@ -413,9 +443,11 @@ COST2_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the FLOPs FlopCounterMode(display=False) counts for model's
-    #   forward pass on x and the backward pass of the output's sum, as a plain
-    #   int, from its get_total_flops().
+    # TODO: Return the FLOPs that FlopCounterMode(display=False) counts while
+    #   model runs a forward pass on x and then a backward pass from the sum of
+    #   the output. Return it as a plain int, from the counter's
+    #   get_total_flops().
+    #   Example: for nn.Linear(3, 4) and x = torch.ones(2, 3), it returns 96.
     def counted_training_flops(
         model: nn.Module,
         x: Tensor,
@@ -501,8 +533,8 @@ def expect_saved_bytes(
     except Mismatch as mismatch:
         if isinstance(actual, int) and actual < expected:
             raise Mismatch(
-                f"{mismatch} Too few can mean the pack function gives nothing back. Autograd then lets go of each "
-                "tensor, its memory is used again, and a later storage starts at the same data_ptr().",
+                f"{mismatch} A count that is too low can mean the pack function returns nothing. Then autograd does "
+                "not keep the tensor, its memory gets reused, and a later storage starts at the same data_ptr().",
             ) from None
 
         raise
@@ -512,7 +544,7 @@ def check_cost2(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="saved_bytes",
-        description="adds up each saved storage once, the parameters left out",
+        description="adds up each saved storage once, leaving out the parameters",
         inputs=(
             (Described(seeded_mlp((6, 8, 3), 841), "an MLP from 6 to 8 to 3"), Described(torch.randn(4, 6), "x of shape (4, 6)")),
             (Described(seeded_mlp((6, 8, 3), 842), "an MLP from 6 to 8 to 3"), Described(torch.randn(9, 6), "x of shape (9, 6)")),
@@ -562,13 +594,12 @@ COST2 = Exercise(
     source=COST2_SOURCE,
     solution=COST2_SOLUTION,
     hints={
-        "saved_bytes": "Make a set of the parameters' untyped_storage().data_ptr() first. The pack function records "
-        "storage.data_ptr() against storage.nbytes() in a dict and gives the tensor back. Sum the sizes whose start "
-        "is not a parameter's.",
-        "training_flops": "Six times the parameters times the tokens.",
+        "saved_bytes": "First make a set of the parameters' untyped_storage().data_ptr() values. The pack function "
+        "stores storage.nbytes() in a dict under the key storage.data_ptr(), then returns the tensor. At the end, "
+        "sum the sizes whose key is not in the parameter set.",
+        "training_flops": "Multiply 6 by parameters and by tokens.",
         "counted_training_flops": "Inside the with block, run the model on x, sum the output and call backward on "
-        "that. Then read "
-        "counter.get_total_flops().",
+        "that sum. Then read counter.get_total_flops().",
     },
     introduces=(),
     check=check_cost2,

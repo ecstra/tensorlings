@@ -37,10 +37,12 @@ PROFILING = Chapter(
         """
         # Profiling
 
-        Counting says what a model should cost. Timing says what it does
-        cost, and timing a GPU has traps of its own. This chapter times work
-        the right way, breaks a run down with `torch.profiler`, and finds
-        whether an operation waits on the chip's arithmetic or on its memory.
+        Counting tells you what a model should cost. Timing tells you what it
+        actually costs, and timing work on a GPU has traps of its own. This
+        chapter shows how to time work correctly, and how to break a run down
+        by operation with `torch.profiler`. It also shows how to tell whether
+        an operation is limited by the chip's arithmetic speed or by its
+        memory speed.
 
         ## Further reading
 
@@ -108,25 +110,26 @@ def namespace_of(code: str) -> dict[str, object]:
 
 PROFILE1_LESSON = prose(
     """
-    Timing code on a GPU has two traps. The first is that PyTorch hands the
-    GPU its work and returns at once. The call only queues the work, and
-    Python moves on while the GPU runs it.
+    Timing code on a GPU has two traps. The first is that a PyTorch call on
+    the GPU returns before the work is done. The call only adds the work to a
+    queue, and Python moves on to the next line while the GPU runs it.
 
-    So a clock read right after the call times the queueing. Waiting for
-    the queue to empty first is called synchronizing.
+    So if you read the clock right after the call, you measure only the time
+    it took to queue the work. You have to wait until the queue is empty
+    before you read the clock, and that wait is called synchronizing.
     `torch.mps.synchronize()` waits for a Mac's GPU, and
-    `torch.cuda.synchronize()` for an Nvidia one. The CPU finishes each call
-    before it returns, so it needs no wait.
+    `torch.cuda.synchronize()` waits for an Nvidia GPU. On the CPU, each call
+    finishes its work before it returns, so there is nothing to wait for.
 
-    The second trap is the first call. It sets up memory and the GPU's
-    program for the operation, and runs far slower than later ones. A few
-    warmup calls, left untimed, get that out of the way. That program the
-    GPU runs for one operation is called a kernel, another sense of the word
-    than conv1's sliding weights.
+    The second trap is the first call. It sets up memory and the program the
+    GPU runs for the operation, so it is far slower than later calls. A few
+    warmup calls that you do not time get that setup out of the way. The
+    program the GPU runs for one operation is called a kernel. That is a
+    different meaning of the word from the sliding weights in conv1.
 
-    Here is a 2,048 by 2,048 matrix multiply in float32 on this Mac's GPU,
-    an Apple M5. This chapter's functions timed it in three fresh runs, with
-    little else running.
+    Here are timings of a 2,048 by 2,048 matrix multiply in float32 on this
+    Mac's GPU, an Apple M5. This exercise's functions timed it in three fresh
+    runs, with little else running on the machine.
 
     | How it was timed | Milliseconds |
     |---|---|
@@ -134,26 +137,29 @@ PROFILE1_LESSON = prose(
     | After warmup, with a synchronize | 6.4 to 7.9 |
     | The first call of the run, with a synchronize | 25 to 27 |
 
-    Timings wobble from run to run, since other programs share the machine.
-    The median of several timed calls, the middle one once sorted, shrugs
-    off an odd slow one. `torch.utils.benchmark` reports the median too.
+    Timings vary from run to run, because other programs share the machine.
+    So time several calls and take the median, the middle value after
+    sorting. One unusually slow call barely changes the median.
+    `torch.utils.benchmark` also reports the median.
 
-    `torch.profiler` breaks a run down by operation. Inside
-    `profile(activities=[ProfilerActivity.CPU])` it records each operation.
+    `torch.profiler` breaks a run down by operation. Inside a
+    `with profile(activities=[ProfilerActivity.CPU])` block, it records every
+    operation that runs.
 
     ```python
     with profile(activities=[ProfilerActivity.CPU]) as profiler:
         torch.ones(4, 4) @ torch.ones(4, 4)
-    rows = profiler.key_averages()    # one row per kind, aten::mm among them
+    rows = profiler.key_averages()    # one row per kind of operation, including aten::mm
     ```
 
-    Each row has the operation's name as `key`, its calls as `count`, and
-    its times. A key that starts with `aten::` names one of PyTorch's own
-    operations.
+    Each row holds the operation's name in `key`, the number of times it was
+    called in `count`, and its times. A key that starts with `aten::` names
+    one of PyTorch's own operations.
 
-    Here is a forward pass of the GPT that gpt3 trains, on the CPU on 4
-    threads. The shares are of the CPU's own time over 10 passes, in three
-    runs.
+    Here is a profile of a forward pass of the GPT that gpt3 trains, run on
+    the CPU with 4 threads. Each share is the operation's fraction of the
+    CPU time over 10 passes, counting only time spent in the operation
+    itself. The ranges come from three runs.
 
     | Operation | Calls | Share of CPU time |
     |---|---|---|
@@ -162,11 +168,12 @@ PROFILE1_LESSON = prose(
     | attention, one kernel for all its steps | 4 | 23% to 24% |
     | `aten::copy_`, copies into new memory | 16 | 5% to 6% |
 
-    The calls never change. The 4 GELUs work on 2.1 million numbers, a few
-    FLOPs each, while the 16 Linears do 1.6 billion FLOPs. Yet the GELUs took
-    98% to 107% of the Linears' time. On 1 thread they took 47% of the
-    time, and on 10 threads 27% to 28%. `torch.profiler` has no activity for
-    a Mac's GPU, so on MPS its times would show only the CPU queueing the work.
+    The call counts are the same in every run. The 4 GELUs do a few FLOPs on
+    each of 2.1 million numbers, while the 16 Linears do 1.6 billion FLOPs.
+    Yet the GELUs took 98% to 107% as long as the Linears. With 1 thread,
+    GELU took 47% of the time, and with 10 threads it took 27% to 28%.
+    `torch.profiler` cannot record work on a Mac's GPU. So on MPS, its times
+    would show only the CPU queueing the work.
     """,
 )
 
@@ -181,26 +188,27 @@ PROFILE1_SOURCE = source_file(
     import torch
     from torch.profiler import ProfilerActivity, profile
 
-    kind = torch.device("mps").type                      # "mps", and "cuda" or "cpu" for the others
-    middle = statistics.median([0.3, 0.1, 0.9])          # 0.3, the middle one once sorted
-    start = time.perf_counter()                          # seconds from a fixed point, so two readings give a gap
+    kind = torch.device("mps").type                      # "mps", or "cuda" or "cpu" for those devices
+    middle = statistics.median([0.3, 0.1, 0.9])          # 0.3, the middle value after sorting
+    start = time.perf_counter()                          # seconds since a fixed point, so subtract two readings for a duration
     rows = [("aten::mm", 3), ("aten::relu", 3)]
     relu_calls = next((count for key, count in rows if key == "aten::relu"), 0)    # 3
 
 
-    # TODO: Wait until every job queued on device is done. Call
+    # TODO: Wait until all the work queued on device is done. Call
     #   torch.cuda.synchronize() for a "cuda" device and torch.mps.synchronize()
-    #   for an "mps" one. Do nothing for the CPU, which never queues.
+    #   for an "mps" device. Do nothing for the CPU, which never queues work.
     def synchronize(
         device: torch.device,
     ) -> None:
         ...
 
 
-    # TODO: Return the median seconds run takes on device, as a plain float.
-    #   Call run warmup times untimed, then synchronize. Then time it repeats
-    #   times, reading time.perf_counter() before the call and again after a
-    #   synchronize.
+    # TODO: Return the median number of seconds one call of run takes on
+    #   device, as a plain float. First call run warmup times without timing
+    #   it, then synchronize. Then time repeats calls. For each one, read
+    #   time.perf_counter() before the call, and read it again after the call
+    #   and a synchronize.
     def time_call(
         run: Callable[[], object],
         device: torch.device,
@@ -210,11 +218,13 @@ PROFILE1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return how many times run calls the operation called name, like
-    #   "aten::mm", as a plain int. Run it inside profile with
-    #   activities=[ProfilerActivity.CPU]. Once the with block ends, find the
-    #   row of key_averages() whose key is name and give its count, or 0 when
-    #   no row has it.
+    # TODO: Return how many times run calls the operation named name, like
+    #   "aten::mm", as a plain int. Call run inside a profile block with
+    #   activities=[ProfilerActivity.CPU]. After the with block ends, find the
+    #   row of key_averages() whose key equals name, and return its count.
+    #   Return 0 when no row has that key.
+    #   Example: calls_of(lambda: torch.ones(4, 4) @ torch.ones(4, 4), "aten::mm")
+    #   returns 1.
     def calls_of(
         run: Callable[[], object],
         name: str,
@@ -400,7 +410,7 @@ def check_time_call(
     runs = events.count("run")
 
     if runs != warmup + repeats:
-        raise Mismatch(f"{call} called run {runs} times, but it should call it {warmup + repeats} times, warmup and repeats together.")
+        raise Mismatch(f"{call} called run {runs} times, but it should call it {warmup + repeats} times, warmup plus repeats.")
 
     clocks = [position for position, event in enumerate(events) if event == "clock"]
 
@@ -528,7 +538,7 @@ def check_profile1(checker: Checker) -> None:
     for device, expected in (("mps", ["mps"]), ("cuda", ["cuda"]), ("cpu", [])):
         checker.test(
             function="synchronize",
-            description="waits on the device's own backend, and on nothing for the CPU",
+            description="waits on the device's own backend, and does nothing for the CPU",
             run=lambda found, device=device, expected=expected: check_synchronize(
                 found=found,
                 device=torch.device(device),
@@ -539,7 +549,7 @@ def check_profile1(checker: Checker) -> None:
     for warmup, gaps in ((3, [0.5, 0.2, 0.9, 0.3, 0.4]), (0, [0.7, 0.1, 0.2]), (1, [0.25])):
         checker.test(
             function="time_call",
-            description="warms up, synchronizes around each timed call and gives the median",
+            description="warms up, synchronizes around each timed call and returns the median",
             run=lambda found, warmup=warmup, gaps=gaps: check_time_call(
                 found=found,
                 warmup=warmup,
@@ -568,11 +578,11 @@ PROFILE1 = Exercise(
     solution=PROFILE1_SOLUTION,
     hints={
         "synchronize": 'Compare device.type with "cuda" and with "mps".',
-        "time_call": "A loop of warmup calls, then synchronize(device). In the timed loop, read the clock, call run, "
-        "synchronize, read the clock again, and keep the difference. Then statistics.median.",
-        "calls_of": "Call run() inside a with block over profile, its activities a list holding ProfilerActivity.CPU, "
-        "named profiler. After the block, loop over "
-        "profiler.key_averages() and compare each row.key with name.",
+        "time_call": "Make the warmup calls in a loop, then call synchronize(device). In the timed loop, read the "
+        "clock, call run, synchronize, read the clock again, and keep the difference. Return statistics.median of the "
+        "differences.",
+        "calls_of": "Open the profile block the way the lesson's example does, and call run() inside it. After the "
+        "block, loop over profiler.key_averages() and compare each row.key with name.",
     },
     introduces=(),
     check=check_profile1,
@@ -585,17 +595,19 @@ PROFILE1 = Exercise(
 
 PROFILE2_LESSON = prose(
     """
-    An operation can wait on two things, the chip's arithmetic or its
-    memory. Every input comes in from memory and every output goes back,
-    and memory moves bytes at a fixed rate, called its bandwidth.
+    An operation can be held back by two things, the chip's arithmetic or
+    its memory. Every input has to be read from memory, and every output has
+    to be written back. Memory moves bytes at a fixed maximum rate, called
+    its bandwidth.
 
-    The arithmetic intensity of an operation is its FLOPs per byte moved.
-    Doubling a float32 tensor does 1 FLOP per 8 bytes, 4 read and 4
-    written. An n by n matrix multiply does 2n³ FLOPs on 3n² numbers, so
-    its intensity grows with n.
+    The arithmetic intensity of an operation is the number of FLOPs it does
+    per byte it moves. Doubling a float32 tensor does 1 FLOP per 8 bytes,
+    because each number is 4 bytes read and 4 bytes written. An n by n matrix
+    multiply does 2n³ FLOPs but moves only 3n² numbers, for the two inputs and
+    the output. So its intensity grows with n.
 
-    Here is each one on this Mac's GPU, timed with profile1's `time_call`
-    in three runs with little else running.
+    Here are both kinds of operation on this Mac's GPU, timed with profile1's
+    `time_call`. Each range comes from three runs with little else running.
 
     | Operation, in float32 | FLOPs per byte | Speed |
     |---|---|---|
@@ -606,41 +618,48 @@ PROFILE2_LESSON = prose(
     | 4,096 by 4,096 matrix multiply | 683 | 2,007 to 2,598 GFLOP/s |
 
     The roofline model of Williams, Waterman and Patterson turns this into a
-    rule. An operation takes at least its FLOPs over the peak FLOP rate, and
-    at least its bytes over the memory's rate. The larger of the two bounds
-    it. The best rates measured here, about 2.6 trillion FLOPs and 129 GB a
-    second, stand in for the peaks. The ridge is where the two bounds meet,
-    the peak FLOP rate over the bandwidth, here near 20 FLOPs per byte. Below
-    it, memory sets the pace.
+    rule. An operation takes at least `flops / peak_flops_per_second`
+    seconds, because the chip cannot compute any faster. It also takes at
+    least `bytes / bandwidth` seconds, because memory cannot move bytes any
+    faster. The larger of these two lower bounds is the roofline's time for
+    the operation.
 
-    The small multiply falls far short of its roofline. Its 34 million FLOPs
-    take less time than launching a kernel and waiting for it. Horace He
-    calls this third limit overhead.
+    Here the best rates measured, about 2.6 trillion FLOPs a second and 129
+    GB a second, stand in for the peaks. The ridge point is the intensity at
+    which the two bounds are equal, which is the peak FLOP rate divided by
+    the bandwidth. Here that is near 20 FLOPs per byte. An operation whose
+    intensity is below the ridge is limited by memory.
 
-    Elementwise operations sit far below the ridge, so their time is the
-    traffic. A chain of them, each a kernel of its own, reads and writes the
-    whole tensor at every step. Fusing the chain into one kernel reads the
-    input once and writes the result once.
+    The 256 by 256 multiply runs far slower than its roofline. Its 34 million
+    FLOPs take less time than the fixed cost of launching a kernel and
+    waiting for it to finish. Horace He calls this third limit overhead.
 
-    The tanh form of GELU makes a good test.
+    Elementwise operations have an intensity far below the ridge, so their
+    time is the time it takes to move their bytes. A chain of elementwise
+    operations, each run as its own kernel, reads and writes the whole tensor
+    at every step. Fusing the chain means running it as one kernel, which
+    reads the input once and writes the result once.
+
+    The tanh form of GELU is a good test of this.
 
     ```text
     gelu(x) = 0.5 x (1 + tanh(sqrt(2 / pi) (x + 0.044715 x³)))
     ```
 
-    Written as separate PyTorch steps, it runs 8 operations, each a kernel
-    of its own. `F.gelu(x, approximate="tanh")` runs the same formula as one
-    kernel.
+    Written as separate PyTorch operations, the formula runs 8 operations,
+    each as its own kernel. `F.gelu(x, approximate="tanh")` computes the same
+    formula in one kernel.
 
     | GELU of 16.8 million numbers | Bytes moved | Roofline at 129 GB/s | Measured |
     |---|---|---|---|
     | 8 separate steps | 1.21 GB | 9.4 ms | 9.7 to 10.8 ms |
     | `F.gelu`, one kernel | 134 MB | 1.0 ms | 1.2 ms |
 
-    The 8 steps read 10 tensors and write 8, so they pass over memory 18
-    times against the kernel's 2. Both measured times sit within a fifth of
-    their rooflines, so the gap between them is memory traffic. Horace He names fusion the most important job
-    of a deep learning compiler.
+    The 8 separate steps read 10 tensors and write 8, so a whole tensor goes
+    through memory 18 times. With the single kernel it goes through only 2
+    times. Both measured times are within a fifth of their rooflines, so the
+    difference between them comes from memory traffic. Horace He calls fusion
+    the most important optimization that a deep learning compiler does.
     """,
 )
 
@@ -654,15 +673,16 @@ PROFILE2_SOURCE = source_file(
     import torch.nn.functional as F
     from torch import Tensor
 
-    intensity = 100 / 800                                # 0.125 FLOPs per byte, 100 FLOPs on 800 bytes
+    intensity = 100 / 800                                # 0.125 FLOPs per byte, for 100 FLOPs on 800 bytes
     slowest = max(2.0, 3.5)                              # 3.5, the larger of two lower bounds
     root = math.sqrt(2 / math.pi)                        # 0.7978845608028654
     curve = torch.tanh(torch.tensor([0.0, 1.0]))         # tensor([0.0000, 0.7616])
 
 
-    # TODO: Return the FLOPs and the bytes of an n by n matrix multiply, as a
-    #   pair of plain ints, with bytes_per_number bytes for each number of the
-    #   two inputs and the output.
+    # TODO: Return the FLOPs and the bytes moved for multiplying two n by n
+    #   matrices, as a tuple of two plain ints, (flops, bytes). Each number in
+    #   the two inputs and the output takes bytes_per_number bytes.
+    #   Example: matmul_cost(4, 4) returns (128, 192).
     def matmul_cost(
         n: int,
         bytes_per_number: int,
@@ -670,9 +690,10 @@ PROFILE2_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the roofline's time for an operation, as a plain float, the
-    #   larger of its FLOPs over flops_per_second and its bytes over
-    #   bytes_per_second.
+    # TODO: Return the roofline's time for an operation in seconds, as a plain
+    #   float. That is the larger of two lower bounds, flops / flops_per_second
+    #   and bytes_moved / bytes_per_second.
+    #   Example: roofline_seconds(100, 100, 10.0, 1000.0) returns 10.0.
     def roofline_seconds(
         flops: int,
         bytes_moved: int,
@@ -682,8 +703,9 @@ PROFILE2_SOURCE = source_file(
         ...
 
 
-    # TODO: Return "memory" when moving the bytes takes longer than the FLOPs
-    #   would, and "compute" otherwise.
+    # TODO: Return "memory" when bytes_moved / bytes_per_second is larger than
+    #   flops / flops_per_second, which means moving the bytes takes longer
+    #   than doing the FLOPs. Return "compute" otherwise.
     def bound_by(
         flops: int,
         bytes_moved: int,
@@ -693,8 +715,10 @@ PROFILE2_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the tanh form of GELU of x, written as separate steps of
-    #   torch, without F.gelu.
+    # TODO: Return the tanh form of GELU applied to x, using the formula from
+    #   the lesson. Write it as separate torch operations, without F.gelu.
+    #   Example: gelu_by_steps(torch.tensor([1.0])) returns about
+    #   tensor([0.8412]).
     def gelu_by_steps(
         x: Tensor,
     ) -> Tensor:
@@ -786,7 +810,7 @@ def check_gelu_by_steps(
     try:
         actual = found(x.clone())
     except GeluCalled:
-        raise Mismatch("gelu_by_steps called PyTorch's own GELU. Write the formula out in steps of torch, as the lesson does.") from None
+        raise Mismatch("gelu_by_steps called PyTorch's own GELU. Write the formula out as separate torch operations, as the lesson shows.") from None
     finally:
         torch.nn.functional.gelu = original
 
@@ -831,7 +855,7 @@ def check_profile2(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="matmul_cost",
-        description="counts 2n³ FLOPs and three n by n matrices of bytes",
+        description="counts 2n³ FLOPs and the bytes of three n by n matrices",
         inputs=(
             (4096, 4),
             (3, 2),
@@ -859,7 +883,7 @@ def check_profile2(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="bound_by",
-        description="names the slower of the two",
+        description="names whichever of the two bounds takes longer",
         inputs=(
             (*big_matmul, *rates),
             (*doubling, *rates),
@@ -888,11 +912,12 @@ PROFILE2 = Exercise(
     source=PROFILE2_SOURCE,
     solution=PROFILE2_SOLUTION,
     hints={
-        "matmul_cost": "Two FLOPs for each of n times n times n terms. Three matrices of n * n numbers move.",
-        "roofline_seconds": "max of the two divisions.",
-        "bound_by": "Compare the two times, bytes over its rate and FLOPs over its rate.",
-        "gelu_by_steps": "Build the inside first, math.sqrt(2 / math.pi) times x plus 0.044715 times x cubed, then "
-        "take torch.tanh of it.",
+        "matmul_cost": "There are n * n outputs with n terms each, and each term costs two FLOPs. Three matrices of "
+        "n * n numbers move through memory.",
+        "roofline_seconds": "Take the max of the two divisions.",
+        "bound_by": "Compare the two times, bytes_moved divided by its rate and flops divided by its rate.",
+        "gelu_by_steps": "First compute the part inside tanh, which is math.sqrt(2 / math.pi) times the sum of x and "
+        "0.044715 times x cubed. Then apply torch.tanh to it and finish the formula.",
     },
     introduces=(),
     check=check_profile2,

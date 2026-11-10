@@ -34,10 +34,11 @@ PRECISION = Chapter(
         """
         # Precision
 
-        Every number so far has been a float32. Half as many bits halve the
-        memory and the traffic, and GPUs multiply them faster. This chapter
-        compares float32, float16 and bfloat16, then trains in float16 the
-        way mixed precision does, with autocast and loss scaling.
+        Every number in the course so far has been a float32. A 16 bit float
+        uses half as many bits, so it halves the memory and the bytes moved,
+        and GPUs multiply 16 bit floats faster. This chapter compares
+        float32, float16 and bfloat16. Then it trains in float16 the way
+        mixed precision training does, with autocast and loss scaling.
 
         ## Further reading
 
@@ -69,8 +70,8 @@ def dtype_text(dtype: torch.dtype) -> Described:
 PRECISION1_LESSON = prose(
     """
     A float32 takes 32 bits, 1 for the sign, 8 for the exponent and 23 for
-    the digits. float16 and bfloat16 take 16 bits, so they halve the memory
-    and the traffic, and they split those bits in different ways.
+    the digits. float16 and bfloat16 each take 16 bits, so they halve the
+    memory and the bytes moved. They split those 16 bits in different ways.
 
     | Type | Exponent bits | Digit bits | Largest | Step after 1 |
     |---|---|---|---|---|
@@ -78,10 +79,13 @@ PRECISION1_LESSON = prose(
     | float16 | 5 | 10 | 65,504 | 0.00098 |
     | bfloat16 | 8 | 7 | 3.4e38 | 0.0078 |
 
-    The exponent sets the range and the digits set the precision. float16
-    keeps more digits but runs out past 65,504. bfloat16 keeps float32's
-    range with fewer digits. `torch.finfo(dtype)` holds these numbers, its
-    `max` the largest and its `eps` the step from 1 to the next number up.
+    The exponent bits set the range, which is how large a number can be. The
+    digit bits set the precision, which is how close together neighboring
+    numbers are. float16 keeps more digits than bfloat16, but it cannot hold
+    anything above 65,504. bfloat16 has the same range as float32, with fewer
+    digits. `torch.finfo(dtype)` holds these facts about a type. Its `max` is
+    the largest number, and its `eps` is the step from 1 to the next larger
+    number the type can hold.
 
     ```python
     torch.finfo(torch.float16).max              # 65504.0
@@ -89,16 +93,19 @@ PRECISION1_LESSON = prose(
     torch.tensor(1 / 3).to(torch.bfloat16)      # tensor(0.3340, dtype=torch.bfloat16)
     ```
 
-    A number between two steps rounds to the nearer one, so its relative
-    error is at most half the step. On a million draws from a normal
-    distribution, the worst was 0.00049 in float16 and 0.0039 in bfloat16.
-    That holds above float16's smallest full precision number, 6.1e-5.
-    Below it float16 keeps fewer digits, and a draw of 4.3e-6 came out 0.67%
-    off.
+    A number that falls between two numbers the type can hold rounds to the
+    nearer one. So its relative error, the error divided by the number's
+    size, is at most half of `eps`. On a million draws from a normal
+    distribution, the worst relative error was 0.00049 in float16 and 0.0039
+    in bfloat16. That bound holds only above 6.1e-5, the smallest float16
+    number with full precision. Below it, float16 keeps fewer digits, and a
+    draw of 4.3e-6 came out 0.67% off.
 
-    Low precision hurts most when adding many small numbers. Once a total
-    is large, a small number is less than half its step, and adding it
-    changes nothing. Here is 0.0001 added 10,000 times, which should give 1.
+    Low precision hurts most when you add up many small numbers. Once the
+    running total is large, the gap from the total to the next number the
+    type can hold is large too. If the small number is less than half that
+    gap, the sum rounds back to the old total, so adding it changes nothing.
+    Here is 0.0001 added 10,000 times, which should give 1.
 
     | Type | Total |
     |---|---|
@@ -106,10 +113,11 @@ PRECISION1_LESSON = prose(
     | float16 | 0.25 |
     | bfloat16 | 0.03125 |
 
-    float16 stalls at 0.25, where its step grows to 0.000244. Micikevicius
-    and colleagues found some float16 models fell short unless dot products
-    added up in float32. The GPUs they used can multiply in float16 and keep
-    those sums in float32.
+    float16 gets stuck at 0.25, because there the gap to the next float16
+    number is 0.000244, and half of that is more than 0.0001. Micikevicius
+    and colleagues found that some models trained in float16 were less
+    accurate unless their dot products added up in float32. The GPUs they
+    used can multiply in float16 and keep the running sums in float32.
     """,
 )
 
@@ -120,29 +128,34 @@ PRECISION1_SOURCE = source_file(
     import torch
 
     biggest = torch.finfo(torch.float16).max             # 65504.0
-    rounded = torch.tensor(1 / 3).to(torch.float16).float()    # tensor(0.3333), 0.333251953125 underneath
-    error = ((rounded - 1 / 3) / (1 / 3)).abs()          # tensor(0.0002), the error as a share of the number
+    rounded = torch.tensor(1 / 3).to(torch.float16).float()    # tensor(0.3333), but the stored value is 0.333251953125
+    error = ((rounded - 1 / 3) / (1 / 3)).abs()          # tensor(0.0002), the error divided by the number's size
     total = torch.zeros((), dtype=torch.float16) + torch.tensor(0.5, dtype=torch.float16)    # adds in float16
 
 
-    # TODO: Return the largest number dtype holds, as a plain float.
+    # TODO: Return the largest number that dtype can hold, as a plain float.
+    #   Example: largest(torch.float16) returns 65504.0.
     def largest(
         dtype: torch.dtype,
     ) -> float:
         ...
 
 
-    # TODO: Return the step from 1 to the next number dtype holds, as a plain
-    #   float.
+    # TODO: Return the gap between 1 and the next larger number that dtype can
+    #   hold, as a plain float.
+    #   Example: step_after_one(torch.float16) returns 0.0009765625.
     def step_after_one(
         dtype: torch.dtype,
     ) -> float:
         ...
 
 
-    # TODO: Return the worst relative error of rounding x, a float32 tensor
-    #   with no zeros, to dtype, as a plain float. Round with .to(dtype), come
-    #   back with .float(), and divide each error by the size of its number.
+    # TODO: Return the largest relative error from rounding x to dtype, as a
+    #   plain float. x is a float32 tensor with no zeros. Round with
+    #   .to(dtype) and convert back with .float(). Then divide each entry's
+    #   error by the absolute value of that entry, and take the largest.
+    #   Example: worst_relative_error(torch.tensor([1 / 3]), torch.float16)
+    #   returns about 0.000244.
     def worst_relative_error(
         x: torch.Tensor,
         dtype: torch.dtype,
@@ -150,8 +163,10 @@ PRECISION1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the total of value added count times, one at a time, with
-    #   the total and value both kept in dtype, as a plain float.
+    # TODO: Start a total at 0 and add value to it count times, one addition at
+    #   a time. Keep both the total and value as tensors of dtype. Return the
+    #   final total as a plain float.
+    #   Example: running_sum(0.0001, 10000, torch.float16) returns 0.25.
     def running_sum(
         value: float,
         count: int,
@@ -224,7 +239,7 @@ def check_precision1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="worst_relative_error",
-        description="divides each rounding error by its own number",
+        description="divides each rounding error by the size of its own entry",
         inputs=(
             (torch.tensor([1 / 3, 1000.1, -0.007, 2.0]), dtype_text(torch.float16)),
             (torch.tensor([1 / 3, 1000.1, -0.007, 2.0]), dtype_text(torch.bfloat16)),
@@ -236,7 +251,7 @@ def check_precision1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="running_sum",
-        description="adds one at a time in the type given",
+        description="adds one value at a time in the given type",
         inputs=(
             (0.0001, 10000, dtype_text(torch.float16)),
             (0.01, 300, dtype_text(torch.bfloat16)),
@@ -255,12 +270,12 @@ PRECISION1 = Exercise(
     source=PRECISION1_SOURCE,
     solution=PRECISION1_SOLUTION,
     hints={
-        "largest": "torch.finfo(dtype) holds it, as its max.",
-        "step_after_one": "torch.finfo(dtype) holds it, as its eps.",
-        "worst_relative_error": "The error is x.to(dtype).float() minus x. Divide its size by x.abs(), take the largest, "
-        "then .item().",
-        "running_sum": "Make the total torch.zeros((), dtype=dtype) and value a tensor of dtype, then add in a loop and "
-        "end with .item().",
+        "largest": "torch.finfo(dtype) holds this number in its max attribute.",
+        "step_after_one": "torch.finfo(dtype) holds this number in its eps attribute.",
+        "worst_relative_error": "The error is x.to(dtype).float() minus x. Divide its absolute value by x.abs(), take "
+        "the max, then call .item().",
+        "running_sum": "Start the total as torch.zeros((), dtype=dtype), and turn value into a tensor of dtype. Then "
+        "add in a loop, and finish with .item().",
     },
     introduces=(),
     check=check_precision1,
@@ -274,10 +289,12 @@ PRECISION1 = Exercise(
 
 PRECISION2_LESSON = prose(
     """
-    Mixed precision runs each operation in float16 where that is safe and
-    in float32 where it is not. `torch.autocast(device_type, dtype=...)`
-    makes the choice. Inside it, each operation runs in the type PyTorch
-    lists for it. Here is what this Mac gives, with Torch 2.14.1.
+    Mixed precision training runs each operation in float16 where that is
+    safe, and in float32 where it is not.
+    `torch.autocast(device_type, dtype=...)` makes that choice for you.
+    Inside a `with torch.autocast(...)` block, each operation runs in the
+    type that PyTorch's own list assigns to it. Here are the types this Mac
+    gives, with PyTorch 2.14.1.
 
     | Inside autocast to float16 | On MPS | On the CPU |
     |---|---|---|
@@ -286,29 +303,32 @@ PRECISION2_LESSON = prose(
     | `F.cross_entropy` | float32 | float32 |
     | The Linear's weight | float32 | float32 |
 
-    The weights stay float32. Micikevicius and colleagues keep this master
-    copy since an update, a gradient times the learning rate, is often too
-    small for float16.
+    The weights stay in float32. Micikevicius and colleagues call this the
+    master copy of the weights. They keep it in float32 because an update, a
+    gradient times the learning rate, is often too small to change a weight
+    stored in float16.
 
-    Backward has a problem of its own. Gradients are often tiny, and
-    float16's smallest number above 0 is about 6e-8. A gradient under half
-    of that becomes 0. Loss scaling multiplies
-    the loss by a large scale before backward, so every gradient comes out
-    that much larger. Dividing the gradients by the scale afterwards gives
-    the true ones back, for the optimizer step.
+    The backward pass has a problem of its own. Gradients are often tiny,
+    and the smallest float16 number above 0 is about 6e-8. A gradient smaller
+    than half of that becomes 0. Loss scaling fixes this by multiplying the
+    loss by a large number, called the scale, before backward. Then every
+    gradient comes out that many times larger. Dividing the gradients by the
+    scale afterwards gives back the true gradients for the optimizer step.
 
-    Too large a scale overflows past 65,504 into inf. Then the step is
-    skipped and the scale halved. After a run of good steps, the scale
-    doubles again. That is `torch.amp.GradScaler`, which starts at 65,536
-    and doubles after 2,000 good steps.
+    If the scale is too large, some gradients go past 65,504 and become inf.
+    When that happens, the optimizer step is skipped and the scale is halved.
+    After a run of good steps in a row, the scale is doubled again.
+    `torch.amp.GradScaler` does exactly this. It starts at a scale of 65,536
+    and doubles it after 2,000 good steps.
 
-    Large models average each step's loss over millions of tokens, GPT-3
-    over 3.2 million. So each token's gradients come out that much smaller.
-    The table plays that part with gpt3's trained GPT on one batch of 4,096
-    characters of Shakespeare, on the CPU. It divides the loss by 64 and by
-    1,024, as a batch 64 or 1,024 times bigger would. The gradients come from
-    a backward pass under autocast to float16, unscaled after, against
-    float32's.
+    Large models average each step's loss over millions of tokens, 3.2
+    million for GPT-3. So the gradient from each token comes out that many
+    times smaller. The table below imitates this with gpt3's trained GPT, on
+    one batch of 4,096 characters of Shakespeare, on the CPU. It divides the
+    loss by 64 and by 1,024, which is what a batch 64 or 1,024 times bigger
+    would do. The gradients come from a backward pass under autocast to
+    float16, and are divided by the scale afterwards. They are compared with
+    the gradients from float32.
 
     | Loss divided by | Scale | Lost to 0 at the blocks' outputs | Error in the weights' gradients |
     |---|---|---|---|
@@ -317,16 +337,22 @@ PRECISION2_LESSON = prose(
     | 1,024 | 1 | 30% | 138% |
     | 1, 64 or 1,024 | 65,536 | none | 0.37% to 0.38% |
 
-    Unscaled, the smaller the loss, the more of its gradients float16
-    rounds to 0. At 1,024 the weights' gradients are off by more than their
-    own size. A scale of 65,536 brings every one back. Micikevicius and
-    colleagues' SSD detector diverged in float16 until they scaled the loss
-    by 8.
+    The third column is the share of the gradients at the outputs of the
+    blocks that became 0. The last column is how far the weight gradients
+    are from float32's, relative to their size.
 
-    Too large a scale fails the other way. At 16,777,216, 69% of the
-    gradients turned inf or nan. Autocast to bfloat16, with float32's range,
-    lost none at any of the three losses. Its coarser rounding left each
-    2.8% off.
+    Without scaling, the smaller the loss, the more of its gradients float16
+    rounds to 0. When the loss is divided by 1,024, the error in the weight
+    gradients is larger than the gradients themselves. A scale of 65,536
+    keeps every gradient from becoming 0. Micikevicius and colleagues found
+    that training their SSD object detector in float16 diverged until they
+    scaled the loss by 8.
+
+    A scale that is too large fails in the other direction. At a scale of
+    16,777,216, 69% of the gradients became inf or nan. Autocast to bfloat16
+    lost no gradients to 0 at any of the three losses, because bfloat16 has
+    float32's range. But its coarser rounding left the weight gradients
+    about 2.8% off in each case.
     """,
 )
 
@@ -339,14 +365,17 @@ PRECISION2_SOURCE = source_file(
     import torch.nn.functional as F
     from torch import Tensor
 
-    tiny = torch.tensor([1e-8, 1e-3]).to(torch.float16).float()    # tensor([0.0000, 0.0010]), 1e-8 is lost
+    tiny = torch.tensor([1e-8, 1e-3]).to(torch.float16).float()    # tensor([0.0000, 0.0010]), so 1e-8 became 0
     kept = (torch.tensor([1e-8, 1e-3]) * 1024).to(torch.float16).float() / 1024    # tensor([1.0012e-08, 1.0004e-03])
     finite = bool(torch.isfinite(torch.tensor([1.0, float("inf")])).all())    # False
     halved, doubled = 65536.0 * 0.5, 65536.0 * 2         # (32768.0, 131072.0)
 
 
-    # TODO: Return the share of the nonzero entries of gradients that become 0
-    #   once multiplied by scale and turned into dtype, as a plain float.
+    # TODO: Take the nonzero entries of gradients, multiply them by scale and
+    #   convert them to dtype. Return the fraction of them that became 0, as a
+    #   plain float.
+    #   Example: lost_to_zero(torch.tensor([1e-8, 1e-3]), 1.0, torch.float16)
+    #   returns 0.5.
     def lost_to_zero(
         gradients: Tensor,
         scale: float,
@@ -355,9 +384,9 @@ PRECISION2_SOURCE = source_file(
         ...
 
 
-    # TODO: Divide the gradient of every parameter of model that has one by
-    #   scale, in place. Return True when every gradient is finite afterwards,
-    #   and False when any holds an inf or a nan.
+    # TODO: Divide the gradient of every parameter of model by scale, in place.
+    #   Skip parameters whose grad is None. Return True when every gradient is
+    #   finite afterwards, and False when any gradient holds an inf or a nan.
     def unscale_(
         model: nn.Module,
         scale: float,
@@ -365,10 +394,12 @@ PRECISION2_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the next scale and the count of good steps in a row, as a
-    #   pair. After a step with an inf, halve the scale and start the count
-    #   again at 0. After a good one, add 1 to the count, and once it reaches
-    #   growth_interval, double the scale and start the count again.
+    # TODO: Return the next scale and the new count of good steps in a row, as
+    #   a tuple (scale, good_steps). After a step that found an inf, halve the
+    #   scale and reset the count to 0. After a good step, add 1 to the count.
+    #   If the count then reaches growth_interval, double the scale and reset
+    #   the count to 0.
+    #   Example: update_scale(8.0, False, 2, 3) returns (16.0, 0).
     def update_scale(
         scale: float,
         found_inf: bool,
@@ -378,11 +409,12 @@ PRECISION2_SOURCE = source_file(
         ...
 
 
-    # TODO: Take one training step of model on x and labels y, and return
-    #   whether it stepped. Inside torch.autocast for x's device type with
-    #   dtype=torch.float16, work out F.cross_entropy of model(x) and y. Then
-    #   call backward on the loss times scale, unscale_ the gradients, step
-    #   the optimizer only when they are finite, and zero the gradients.
+    # TODO: Take one training step of model on inputs x and labels y. Inside
+    #   torch.autocast for x's device type with dtype=torch.float16, compute
+    #   the loss, F.cross_entropy of model(x) and y. Then call backward on the
+    #   loss times scale, and unscale_ the gradients. Step the optimizer only
+    #   if the gradients are finite, and zero the gradients either way. Return
+    #   True if the optimizer stepped and False if it did not.
     def mixed_step(
         model: nn.Module,
         optimizer: torch.optim.Optimizer,
@@ -629,7 +661,7 @@ def check_autocast_device(found: Callable[..., object]) -> None:
 
     if device_types[0] != "meta":
         raise Mismatch(
-            f'mixed_step called torch.autocast for "{device_types[0]}", but x sat on another device. Use '
+            f'mixed_step called torch.autocast for "{device_types[0]}", but x was on another device. Use '
             "x.device.type, so the step runs in float16 on a GPU too.",
         )
 
@@ -660,8 +692,8 @@ def check_loss_in_autocast(found: Callable[..., object]) -> None:
 
     if inside and not all(inside):
         raise Mismatch(
-            "mixed_step worked out F.cross_entropy outside the autocast block, where it runs on the float16 scores "
-            "in float16. Work it out inside the block, where autocast runs it in float32.",
+            "mixed_step computed F.cross_entropy outside the autocast block, so it ran in float16 on the float16 "
+            "scores. Compute it inside the block, where autocast runs it in float32.",
         )
 
 
@@ -673,7 +705,7 @@ def check_precision2(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="lost_to_zero",
-        description="gives the share of nonzero gradients that round to 0",
+        description="returns the fraction of nonzero gradients that round to 0",
         inputs=(
             (Described(gradients, "200 gradients from 1e-10 to 1e-2, some of them 0"), 1.0, dtype_text(torch.float16)),
             (Described(gradients, "200 gradients from 1e-10 to 1e-2, some of them 0"), 1024.0, dtype_text(torch.float16)),
@@ -686,7 +718,7 @@ def check_precision2(checker: Checker) -> None:
     for seed, scale, poison in ((863, 64.0, None), (864, 1024.0, float("inf")), (866, 32.0, float("nan")), (865, 8.0, None)):
         checker.test(
             function="unscale_",
-            description="divides every gradient by the scale and says whether all are finite",
+            description="divides every gradient by the scale and returns whether all are finite",
             run=lambda found, seed=seed, scale=scale, poison=poison: check_unscale(
                 found=found,
                 seed=seed,
@@ -727,7 +759,7 @@ def check_precision2(checker: Checker) -> None:
     )
     checker.test(
         function="mixed_step",
-        description="works out the loss inside autocast",
+        description="computes the loss inside autocast",
         run=check_loss_in_autocast,
     )
 
@@ -740,11 +772,12 @@ PRECISION2 = Exercise(
     source=PRECISION2_SOURCE,
     solution=PRECISION2_SOLUTION,
     hints={
-        "lost_to_zero": "Keep the entries of gradients that are not 0. Multiply them by scale, turn them into dtype, "
-        "and find the share that equals 0.",
+        "lost_to_zero": "Keep the entries of gradients that are not 0. Multiply them by scale, convert them to dtype, "
+        "and find the fraction that equals 0.",
         "unscale_": "Loop over model.parameters(), skip a grad of None, and divide the rest in place with .div_. "
-        "torch.isfinite(...).all() says whether one is finite.",
-        "update_scale": "Three cases, an inf, a good step that completes growth_interval, and any other good step.",
+        "torch.isfinite(...).all() tells you whether one gradient is all finite.",
+        "update_scale": "There are three cases. The step found an inf. The step was good and completes "
+        "growth_interval good steps. The step was good and the count is still short.",
         "mixed_step": "Only the forward pass and the loss go inside the with block. Backward on loss * scale comes "
         "after it, then unscale_, then optimizer.step() when finite. Last, clear the gradients with the optimizer's "
         "zero_grad.",

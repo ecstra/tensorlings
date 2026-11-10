@@ -32,12 +32,12 @@ SCALING = Chapter(
         """
         # Scaling laws
 
-        A model's loss falls in a smooth curve as its parameters, its data
-        and its compute grow, smooth enough to fit with a formula and to
-        plan the next run with. This chapter fits power laws in log space,
-        splits a compute budget between parameters and tokens the way
-        Chinchilla did, and finds the best size for a budget with a sweep of
-        your own small GPTs.
+        As a model's parameters, data and compute grow, its loss falls along
+        a smooth curve. The curve is smooth enough to fit with a formula, and
+        that formula can plan the next training run. This chapter fits power
+        laws in log space. It splits a compute budget between parameters and
+        tokens the way the Chinchilla paper did. Then it finds the best model
+        size for a budget with a sweep of your own small GPTs.
 
         ## Further reading
 
@@ -94,7 +94,7 @@ def expect_relative_pair(*names: str) -> Callable[..., None]:
             raise Mismatch(f"{call} is None, which usually means it is not written yet.")
 
         if not isinstance(actual, (tuple, list)) or len(actual) != len(names):
-            raise Mismatch(f"{call} should give 2 things, {names[0]} and {names[1]}, but it gives {actual!r}.")
+            raise Mismatch(f"{call} should return 2 things, {names[0]} and {names[1]}, but it returns {actual!r}.")
 
         for name, part, wanted in zip(names, actual, expected):
             expect_fit(
@@ -190,39 +190,42 @@ def measure_floor_fit() -> list[tuple[float, float, float, float]]:
 
 SCALING1_LESSON = prose(
     """
-    Kaplan and colleagues trained language models from 768 to 1.5 billion
-    parameters and measured each one's test loss. The loss fell along a
-    smooth curve. They counted N as the parameters outside the embeddings and
-    fitted the curve with one formula.
+    Kaplan and colleagues trained language models with 768 to 1.5 billion
+    parameters, and measured each one's test loss. The loss fell along a
+    smooth curve as the models grew. They let N be the number of parameters
+    outside the embeddings, and fitted the curve with one formula.
 
     ```text
     L(N) = (N_c / N) ** alpha        alpha about 0.076, N_c about 8.8e13
     ```
 
-    That is a **power law**, a number raised to a fixed power. Ten times the
-    parameters multiplies the loss by `10 ** -0.076`, about 0.84, wherever on
-    the curve you start.
+    This is a **power law**, a formula where the input is raised to a fixed
+    power and multiplied by a constant. Multiplying the parameters by 10
+    multiplies the loss by `10 ** -0.076`, about 0.84, wherever you start on
+    the curve.
 
-    Take the log of both sides and it turns into a line.
+    If you take the log of both sides, the formula becomes the equation of a
+    line.
 
     ```text
     log L = -alpha * log N + alpha * log N_c
     ```
 
-    So log L against log N is a line with slope minus alpha. Fitting a power
-    law is fitting that line, with linreg3's least squares, then undoing the
-    logs with `math.exp`.
+    So log L plotted against log N is a straight line with slope `-alpha`. To
+    fit a power law, fit that line by least squares, as in linreg3. Then turn
+    the intercept back into the constant with `math.exp`.
 
     ```python
     torch.log(torch.tensor([10.0, 100.0]))    # tensor([2.3026, 4.6052])
-    torch.tensor([3.0, 4.0]).tolist()         # [3.0, 4.0], plain numbers
+    torch.tensor([3.0, 4.0]).tolist()         # [3.0, 4.0], a list of plain floats
     ```
 
-    A power law falls forever, but no model's loss falls below the entropy
-    of the text itself. Hoffmann and colleagues, in the Chinchilla paper,
-    fitted that floor in. With unlimited data their law is `1.69 + 406.4 / N
-    ** 0.34`. Here are two fits to that law between 10 million and 1 billion
-    parameters, then followed further out.
+    A power law keeps falling forever, but no model's loss can fall below the
+    entropy of the text itself. Hoffmann and colleagues, in the Chinchilla
+    paper, included that floor in their fit. With unlimited data, their law
+    is `1.69 + 406.4 / N ** 0.34`. Here are two fits to that law, both made
+    from points between 10 million and 1 billion parameters. The table then
+    follows them out to larger sizes.
 
     | N | The law | A pure power law | A power law above 1.69 |
     |---|---|---|---|
@@ -232,9 +235,10 @@ SCALING1_LESSON = prose(
     | 100 billion | 1.764 | 1.194 | 1.764 |
     | 1 trillion | 1.724 | 0.930 | 1.724 |
 
-    The pure fit has alpha 0.109, where the law has 0.34. It runs below 1.69,
-    a loss the law says no model reaches. Take the floor off first and what
-    remains is a power law again, so the fit follows it.
+    The pure power law fits an alpha of 0.109, while the law has 0.34.
+    Further out, it goes below 1.69, a loss the law says no model can reach.
+    If you subtract the floor first, what remains is a pure power law again.
+    So the fit above 1.69 matches the law.
     """,
 )
 
@@ -249,11 +253,13 @@ SCALING1_SOURCE = source_file(
 
     sizes = torch.tensor([1e6, 1e7, 1e8])
     logs = torch.log(sizes)                                  # tensor([13.8155, 16.1181, 18.4207])
-    with_ones = torch.stack([logs, torch.ones(3)], dim=1)    # shape (3, 2), as linreg3 built it
+    with_ones = torch.stack([logs, torch.ones(3)], dim=1)    # shape (3, 2), built the same way as in linreg3
     back = math.exp(2.0)                                     # 7.389..., the number whose log is 2.0
 
 
     # TODO: Return scale * n ** -alpha for every size in n.
+    #   Example: power_law(torch.tensor([1.0, 100.0]), 2.0, 0.5) returns
+    #   tensor([2.0000, 0.2000]).
     def power_law(
         n: Tensor,
         scale: float,
@@ -262,9 +268,12 @@ SCALING1_SOURCE = source_file(
         ...
 
 
-    # TODO: Fit loss = scale * n ** -alpha with least squares on the logs, as
-    #   linreg3 fitted a line. log loss against log n has slope -alpha and
-    #   intercept log scale. Return scale and alpha as plain numbers.
+    # TODO: Fit loss = scale * n ** -alpha by least squares on the logs, the
+    #   way linreg3 fitted a line. A line through log loss against log n has
+    #   slope -alpha and intercept log(scale). Return scale and alpha as a
+    #   tuple of plain floats.
+    #   Example: for n = torch.tensor([1.0, 10.0, 100.0]) and
+    #   loss = 2 * n ** -0.5, fit_power_law returns about (2.0, 0.5).
     def fit_power_law(
         n: Tensor,
         loss: Tensor,
@@ -272,9 +281,9 @@ SCALING1_SOURCE = source_file(
         ...
 
 
-    # TODO: Fit loss = floor + scale * n ** -alpha for a known floor. Fit a
-    #   power law to what each loss holds above the floor, and return its
-    #   scale and alpha.
+    # TODO: Fit loss = floor + scale * n ** -alpha, where floor is known.
+    #   Subtract floor from each loss, fit a power law to what remains, and
+    #   return that power law's scale and alpha.
     def fit_above_floor(
         n: Tensor,
         loss: Tensor,
@@ -335,7 +344,7 @@ def check_scaling1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="power_law",
-        description="gives scale * n ** -alpha",
+        description="returns scale * n ** -alpha",
         inputs=(
             (torch.tensor([1.0, 10.0, 100.0, 1000.0]), 2.0, 0.5),
             (torch.tensor([3.0, 7.0, 50.0]), 8.8, 0.076),
@@ -346,7 +355,7 @@ def check_scaling1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="fit_power_law",
-        description="fits a line to the logs and gives scale and alpha",
+        description="fits a line to the logs and returns scale and alpha",
         inputs=POWER_DATA,
         reference=FIT_REFERENCE["fit_power_law"],
         expect=expect_relative_pair("scale", "alpha"),
@@ -354,7 +363,7 @@ def check_scaling1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="fit_above_floor",
-        description="fits a power law to what lies above the floor",
+        description="fits a power law to the losses minus the floor",
         inputs=FLOOR_DATA,
         reference=FIT_REFERENCE["fit_above_floor"],
         expect=expect_relative_pair("scale", "alpha"),
@@ -369,11 +378,11 @@ SCALING1 = Exercise(
     source=SCALING1_SOURCE,
     solution=SCALING1_SOLUTION,
     hints={
-        "power_law": "n ** -alpha works on every entry of n at once. Multiply it by scale.",
+        "power_law": "n ** -alpha applies to every entry of n at once. Multiply the result by scale.",
         "fit_power_law": "Stack torch.log(n) and torch.ones_like(n) as columns with dim=1, and solve against "
         "torch.log(loss) with torch.linalg.lstsq. .solution.tolist() gives the slope and the intercept. Return "
         "math.exp of the intercept and minus the slope.",
-        "fit_above_floor": "Hand fit_power_law the losses with floor taken off each one.",
+        "fit_above_floor": "Call fit_power_law with floor subtracted from each loss.",
     },
     introduces=("power law",),
     check=check_scaling1,
@@ -455,39 +464,42 @@ def measure_budgets() -> list[tuple[float, float, float, float, float]]:
 
 SCALING2_LESSON = prose(
     """
-    cost2's `training_flops` charged training 6 FLOPs for every parameter and
-    every token, 2 going forward and 4 going back. Your file has it, given.
-    So a budget of C FLOPs buys any split with `6 * N * D = C`, N parameters
-    trained on D tokens.
+    cost2's `training_flops` counted 6 FLOPs of training for every parameter
+    and every token, 2 for the forward pass and 4 for the backward pass. Your
+    file already has it. So with a budget of C FLOPs, you can train N
+    parameters on D tokens for any N and D with `6 * N * D = C`.
 
-    A bigger model on fewer tokens, or a smaller one on more? Hoffmann and
-    colleagues trained over 400 models and fitted the loss to both.
+    Is it better to train a bigger model on fewer tokens, or a smaller model
+    on more tokens? Hoffmann and colleagues trained over 400 models,
+    and fitted the loss as a function of both N and D.
 
     ```text
     L(N, D) = E + A / N ** alpha + B / D ** beta
     ```
 
-    E is the floor of scaling1. The second term is what a model of N
-    parameters can't learn, and the third is what D tokens of training
-    haven't taught it yet. Fix the budget, give each size N its `C / (6 * N)`
-    tokens, and the loss dips to a lowest point. That size is **compute
-    optimal** for the budget.
+    E is the floor from scaling1. The second term is the extra loss from
+    having only N parameters. The third term is the extra loss from training
+    on only D tokens. Now fix the budget C, and give each size N the
+    `C / (6 * N)` tokens that the budget allows. As N grows, the loss first
+    falls and then rises, so one size has the lowest loss. That size is
+    **compute optimal** for the budget.
 
     ```python
     torch.logspace(7, 9, 3)                      # tensor([1.0000e+07, 1.0000e+08, 1.0000e+09])
-    torch.tensor([3.0, 1.0, 2.0]).argmin()       # tensor(1), where the smallest sits
+    torch.tensor([3.0, 1.0, 2.0]).argmin()       # tensor(1), the index of the smallest value
     ```
 
-    Gopher had 280 billion parameters and saw 300 billion tokens. Chinchilla
-    spent the same compute on 70 billion parameters and 1.4 trillion tokens,
-    and beat Gopher on a large range of tasks. That is 20 tokens for every
-    parameter, close to the ratio of the paper's Table 3 of compute optimal
-    sizes.
+    Gopher had 280 billion parameters and was trained on 300 billion tokens.
+    Chinchilla spent the same compute on 70 billion parameters and 1.4
+    trillion tokens, and beat Gopher on a large range of tasks. That is 20
+    tokens for every parameter, close to the ratio in the paper's Table 3 of
+    compute optimal sizes.
 
-    The fit's printed constants disagree with that. In 2024 Besiroglu and
-    colleagues refitted data read off the paper's plots. They found the
-    printed fit disagreed with the paper's other two methods. Here are both
-    fits, on a grid of sizes.
+    But the constants printed for this fit disagree with that ratio. In 2024
+    Besiroglu and colleagues read the data points off the paper's plots and
+    fitted the formula again. They found that the printed fit also disagreed
+    with the paper's other two methods. Here are the best sizes under both
+    fits, searched over a grid of sizes.
 
     | Budget in FLOPs | Printed fit, best N | Its tokens per parameter | Refit, best N | Its tokens per parameter |
     |---|---|---|---|---|
@@ -495,8 +507,9 @@ SCALING2_LESSON = prose(
     | 1e22 | 5.19 billion | 62 | 9.02 billion | 20.5 |
     | 5.76e23, Gopher's | 32.4 billion | 92 | 72.4 billion | 18.3 |
 
-    The refit lands on Chinchilla's own size. A fitted law is worth what its
-    data and its fit are worth, so check it against runs you trust.
+    At Gopher's budget the refit picks 72.4 billion parameters, close to
+    Chinchilla's own 70 billion. A fitted law is only as good as its data
+    and its fitting, so check it against training runs you trust.
     """,
 )
 
@@ -520,8 +533,11 @@ SCALING2_SOURCE = source_file(
 ''' + indented(TRAINING_FLOPS_PART) + '''
 
 
-    # TODO: Return fit's loss for each pair of a size in parameters and a count
-    #   in tokens. fit holds E, A, B, alpha and beta in that order.
+    # TODO: Return the loss that fit predicts, E + A / N ** alpha + B / D ** beta,
+    #   for each pair of a size N from parameters and a token count D from
+    #   tokens. fit holds E, A, B, alpha and beta, in that order.
+    #   Example: chinchilla_loss(torch.tensor([7e10]), torch.tensor([1.4e12]),
+    #   PRINTED) returns about tensor([1.9366]).
     def chinchilla_loss(
         parameters: Tensor,
         tokens: Tensor,
@@ -530,8 +546,9 @@ SCALING2_SOURCE = source_file(
         ...
 
 
-    # TODO: Give every size in sizes the tokens that budget buys it, and return
-    #   the size with the lowest loss under fit, as a plain number.
+    # TODO: For every size N in sizes, compute the tokens that budget allows,
+    #   budget / (6 * N). Return the size whose loss under fit is lowest, as a
+    #   plain float.
     def best_size(
         budget: float,
         sizes: Tensor,
@@ -540,7 +557,8 @@ SCALING2_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the tokens the best size gets for budget, divided by that size.
+    # TODO: Find the best size for budget with best_size. Return the tokens
+    #   that size gets from budget, divided by the size.
     def tokens_per_parameter(
         budget: float,
         sizes: Tensor,
@@ -592,7 +610,7 @@ def check_scaling2(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="chinchilla_loss",
-        description="gives E + A / N ** alpha + B / D ** beta",
+        description="returns E + A / N ** alpha + B / D ** beta",
         inputs=(
             (torch.tensor([1e8, 1e9, 7e10], dtype=torch.float64), torch.tensor([2e9, 2e10, 1.4e12], dtype=torch.float64), PRINTED),
             (torch.tensor([5e6, 3e9], dtype=torch.float64), torch.tensor([1e11, 4e9], dtype=torch.float64), OTHER_FIT),
@@ -633,8 +651,8 @@ SCALING2 = Exercise(
     source=SCALING2_SOURCE,
     solution=SCALING2_SOLUTION,
     hints={
-        "chinchilla_loss": "Unpack fit into five names first. Then E plus A over parameters ** alpha plus B over "
-        "tokens ** beta, on whole tensors at once.",
+        "chinchilla_loss": "First unpack fit into five names. Then compute E plus A over parameters ** alpha plus B "
+        "over tokens ** beta, on whole tensors at once.",
         "best_size": "Each size gets budget / (6 * sizes) tokens. Score them all with chinchilla_loss, then index "
         "sizes with the argmin and take .item().",
         "tokens_per_parameter": "Get the size from best_size. Its tokens are budget / (6 * size), then divide by "
@@ -910,25 +928,25 @@ def size_exponent(
 
 SCALING3_LESSON = prose(
     """
-    scaling2's best sizes come from fits to hundreds of runs. Here is the
-    method behind one such fit, Chinchilla's second approach, at a size
-    this laptop trains.
+    scaling2's best sizes come from fits to hundreds of training runs. This
+    exercise runs the method behind one such fit, Chinchilla's second
+    approach, at sizes this laptop can train.
 
     - Fix a budget of FLOPs.
-    - Train models of several sizes, each on the tokens the budget buys it, with a cosine schedule that ends with the run.
-    - Loss against log N makes a valley. Fit a parabola to it, and its bottom is the compute optimal size.
+    - Train models of several sizes, each on the tokens the budget allows, with a cosine learning rate schedule that ends when the run ends.
+    - Plot loss against log N, which makes a valley. Fit a parabola to the valley. The size at its bottom is the compute optimal size.
 
-    N counts every parameter, as Chinchilla counted. Each run is charged the
-    FLOPs it really spends, close to Chinchilla's appendix F. Going forward,
-    one token costs
+    N counts every parameter, as Chinchilla did. Each run is charged the
+    FLOPs it actually spends, close to the count in Chinchilla's appendix F.
+    In the forward pass, one token costs
 
     - 2 FLOPs per parameter outside the embeddings `wte` and `wpe`,
-    - 2 FLOPs per number in the head, which reuses `wte`'s table of `VOCABULARY * width`,
-    - and `4 * BLOCK * width` in each block's attention, against `BLOCK` keys and values.
+    - 2 FLOPs per number in the head, which reuses `wte`'s table of `VOCABULARY * width` numbers,
+    - and `4 * BLOCK * width` FLOPs in each block's attention, which compares the token with `BLOCK` keys and values.
 
-    Appendix F also charges the input embedding as a multiply. Here looking a
-    token up in `wte` or `wpe` costs nothing. Going back costs twice going
-    forward, so training costs 3 times the forward pass.
+    Appendix F also counts the input embedding as a matrix multiply. Here,
+    looking a token up in `wte` or `wpe` counts as free. The backward pass
+    costs twice the forward pass, so training costs 3 times the forward pass.
 
     ```python
     layer = nn.Linear(2, 3)
@@ -938,14 +956,15 @@ SCALING3_LESSON = prose(
     round(2.5), round(3.7)                                          # (2, 4)
     ```
 
-    `named_parameters()` gives each parameter with its name. Each step trains
-    on `BATCH * BLOCK` tokens, so a budget C buys `C / (F * BATCH * BLOCK)`
-    steps of a model that costs F FLOPs a token.
+    `named_parameters()` gives each parameter together with its name. Each
+    step trains on `BATCH * BLOCK` tokens. So for a model that costs F FLOPs
+    per token, a budget of C FLOPs pays for `C / (F * BATCH * BLOCK)` steps.
 
-    The parabola is `a * x ** 2 + b * x + c` with `x = log N`, a least
-    squares fit on the columns `x ** 2`, `x` and 1. Its bottom sits at `x =
-    -b / (2 * a)`. A parabola only fits near its bottom, so each budget tried
-    four or five widths around its valley, 2 blocks each.
+    The parabola is `a * x ** 2 + b * x + c` with `x = log N`. Fit it by
+    least squares on the columns `x ** 2`, `x` and 1. Its bottom is at
+    `x = -b / (2 * a)`. A parabola only fits a valley near its bottom. So
+    each budget tried four or five widths around its valley, each model with
+    2 blocks.
 
     | Budget in FLOPs | Widths | Lowest loss, at width | Best N, to 2 figures | Tokens per parameter |
     |---|---|---|---|---|
@@ -955,27 +974,32 @@ SCALING3_LESSON = prose(
     | 1e12 | 16 to 64 | 1.927 at 32 | 29,000 | 161 |
     | 3e12 | 24 to 96 | 1.747 at 48 | 61,000 | 115 |
 
-    The best size grows with the budget, as scaling2 said. scaling1's power
-    law fitted to the five grows N as C to the 0.61, and a second seed gives
-    0.65. Chinchilla's fits put it
-    near 0.5, which holds tokens per parameter near 20 at every budget. Here
-    they fall from 263 to 115.
+    The best size grows with the budget, as scaling2 predicted. Fitting
+    scaling1's power law to the five best sizes gives N growing as
+    `C ** 0.61`, and a second seed gives 0.65. Chinchilla's fits put the
+    exponent near 0.5, which keeps tokens per parameter near 20 at every
+    budget. Here tokens per parameter fall from 263 to 115.
 
-    Porian and colleagues found three things that lift a sweep's exponent
-    above 0.5. They are leaving the head's FLOPs out, a warmup too long for
-    small models, and one optimizer setting for every size. This sweep
-    charges the head and warms up for a twentieth of each run. Every width
-    above trains at one peak rate, 3e-3. Tuned instead, each point tried
-    peaks from 3e-3 to 1e-2, and 2e-2 up to width 24, and kept its best. Every
-    budget's lowest loss fell, 2.645 to 2.488 at 3e10. The exponent stayed at
-    0.62, and tokens per parameter still fell, from 192 to 106.
+    Porian and colleagues found three things that push a sweep's exponent
+    above 0.5. The first is leaving the head's FLOPs out of the count. The
+    second is a warmup that is too long for small models. The third is using
+    the same optimizer settings for every size. This sweep counts the head,
+    and warms up for a twentieth of each run. But every width above trains
+    at the same peak learning rate, 3e-3.
 
-    Kaplan and colleagues left the embeddings out of N and found 0.73. Fitted
-    with that N, this sweep's best size grows as C to the 0.68. Pearce and
-    Song traced much of the gap between the papers to this.
+    In a second sweep, the learning rate was tuned for each point. Each point
+    tried peak rates from 3e-3 to 1e-2, plus 2e-2 for widths up to 24, and
+    kept its best result. Every budget's lowest loss fell, for example from
+    2.645 to 2.488 at 3e10. The exponent came out at 0.62, still well above
+    0.5, and tokens per parameter still fell, from 192 to 106.
 
-    Your file's last lines run the first row's sweep at every check. Its
-    numbers show in the result.
+    Kaplan and colleagues left the embeddings out of N, and found an exponent
+    of 0.73. If this sweep's N also leaves out the embeddings, its best size
+    grows as `C ** 0.68`. Pearce and Song traced much of the difference
+    between the two papers to this choice of N.
+
+    The last lines of your file run the sweep from the table's first row
+    every time the file is checked. Its numbers appear in the result.
     """,
 )
 
@@ -1013,20 +1037,24 @@ SCALING3_SOURCE = source_file(
 ''' + indented(DATA_PART) + '''
 
 
-    # Small GPTs of 2 blocks, trained on the CPU with a cosine that ends with the run.
+    # Small GPTs with 2 blocks, trained on the CPU with a cosine schedule that ends with the run.
 ''' + indented(SWEEP_GIVEN) + '''
 
 
-    # TODO: Return how many numbers model's parameters hold, leaving out the
-    #   ones whose names start with wte or wpe.
+    # TODO: Return the total number of entries in model's parameters, leaving
+    #   out the parameters whose names start with wte or wpe.
+    #   Example: for GPT(65, 64, 24, 2, 1), non_embedding_parameters returns
+    #   14496.
     def non_embedding_parameters(model: nn.Module) -> int:
         ...
 
 
-    # TODO: Return the FLOPs one token costs a model to train, 3 times its
-    #   forward pass. Going forward it costs 2 FLOPs per non embedding
-    #   parameter, 2 per number in the head's VOCABULARY * width table, and
-    #   4 * BLOCK * width in each of the LAYERS blocks' attention.
+    # TODO: Return the FLOPs it costs to train a model on one token, which is 3
+    #   times the cost of the forward pass. The forward pass costs 2 FLOPs per
+    #   non embedding parameter, 2 FLOPs per number in the head's
+    #   VOCABULARY * width table, and 4 * BLOCK * width FLOPs in the attention
+    #   of each of the LAYERS blocks.
+    #   Example: flops_per_token(1032, 6) returns 17748.
     def flops_per_token(
         non_embedding: int,
         width: int,
@@ -1034,9 +1062,10 @@ SCALING3_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the steps budget FLOPs buy a model that costs flops FLOPs
-    #   a token, at BATCH * BLOCK tokens a step. Round to the nearest whole
-    #   step, and give at least 1.
+    # TODO: Return how many training steps budget FLOPs pay for, for a model
+    #   that costs flops FLOPs per token. Each step trains on BATCH * BLOCK
+    #   tokens. Round to the nearest whole step, and return at least 1.
+    #   Example: steps_for_budget(3e10, 25968) returns 564.
     def steps_for_budget(
         budget: float,
         flops: int,
@@ -1044,10 +1073,10 @@ SCALING3_SOURCE = source_file(
         ...
 
 
-    # TODO: Finish isoflop_point. Set flops to what one token costs this model,
-    #   with flops_per_token. Then call train on it for the steps budget buys
-    #   at flops a token, with batches from train_data and a generator seeded
-    #   with 0.
+    # TODO: Finish isoflop_point. Set flops to the training cost of one token
+    #   for this model, using flops_per_token. Then call train on the model for
+    #   the number of steps that budget pays for at that cost, with batches
+    #   from train_data and a generator seeded with 0.
     def isoflop_point(
         width: int,
         budget: float,
@@ -1063,15 +1092,15 @@ SCALING3_SOURCE = source_file(
         return parameters, validation_score(model, validation_data)
 
 
-    # TODO: Fit loss = a * x ** 2 + b * x + c to points, pairs of a size and a
-    #   loss, with x the log of the size, by least squares. Return the size at
-    #   the parabola's bottom as a plain number.
+    # TODO: points is a list of (size, loss) pairs. Let x be the log of each
+    #   size, and fit loss = a * x ** 2 + b * x + c by least squares. Return
+    #   the size at the bottom of the parabola, as a plain float.
     def fit_parabola(points: list[tuple[int, float]]) -> float:
         ...
 
 
-    # Your own sweep, the lesson's first row. It trains four models each time
-    # the file is checked.
+    # Your own sweep, the first row of the lesson's table. It trains four
+    # models every time the file is checked.
     characters, train_data, validation_data = shakespeare_splits()
     WIDTHS = [6, 8, 12, 16]
     points = [isoflop_point(width, 3e10, train_data, validation_data) for width in WIDTHS]
@@ -1192,7 +1221,7 @@ def check_isoflop_point(found: object) -> None:
             raise Mismatch(f"{call} is None, which usually means it is not written yet.")
 
         if not isinstance(actual, (tuple, list)) or len(actual) != 2:
-            raise Mismatch(f"{call} should give 2 things, the parameters and the loss, but it gives {actual!r}.")
+            raise Mismatch(f"{call} should return 2 things, the parameters and the loss, but it returns {actual!r}.")
 
         expect_value(
             call=f"the parameters from {call}",
@@ -1205,7 +1234,7 @@ def check_isoflop_point(found: object) -> None:
         if isinstance(actual[1], float) and abs(actual[1] - untrained) < 1e-6:
             raise Mismatch(
                 f"The loss from {call} is the model's loss before any training, so isoflop_point is not written yet. "
-                "Train it with train before it is scored.",
+                "Train the model with train before it is scored.",
             )
 
         # Both sides train the same model with the same seeds on the CPU, so a right loss matches closely.
@@ -1249,7 +1278,7 @@ def check_points(value: object) -> None:
         )
 
         if not isinstance(point[1], float) or not 0.5 < point[1] < 5.0:
-            raise Mismatch(f"The loss of width {width} is {point[1]!r}, but a validation loss here sits between 0.5 and 5.")
+            raise Mismatch(f"The loss of width {width} is {point[1]!r}, but a validation loss here should be between 0.5 and 5.")
 
 
 def check_best(
@@ -1259,7 +1288,7 @@ def check_best(
     try:
         check_points(points)
     except Mismatch:
-        raise Mismatch("best is fitted to points, which isn't right yet. Fix points first.") from None
+        raise Mismatch("best is fitted to points, and points is not right yet. Fix points first.") from None
 
     expected = SWEEP_REFERENCE["fit_parabola"](points)
 
@@ -1273,7 +1302,7 @@ def check_best(
         # Rounded far coarser than the check's tolerance, so a number copied from the message fails.
         rounded = float(f"{expected:.2g}")
         raise Mismatch(
-            f"best is {value_text(value)}, but it should be the bottom of the parabola through your points, "
+            f"best is {value_text(value)}, but it should be the size at the bottom of the parabola fitted to your points, "
             f"about {rounded:,.0f}. Set it with fit_parabola(points).",
         ) from None
 
@@ -1293,7 +1322,7 @@ def check_scaling3(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="flops_per_token",
-        description="charges a token the blocks, the head and attention, 3 times over",
+        description="counts the blocks, the head and attention for one token, times 3",
         inputs=(
             (1032, 6),
             (25472, 32),
@@ -1305,7 +1334,7 @@ def check_scaling3(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="steps_for_budget",
-        description="gives the steps a budget buys, rounded and at least 1",
+        description="returns the steps a budget pays for, rounded and at least 1",
         inputs=(
             (1e12, 214464),
             (3e10, 25968),
@@ -1316,13 +1345,13 @@ def check_scaling3(checker: Checker) -> None:
     )
     checker.test(
         function="isoflop_point",
-        description="trains one size on its share of the budget and scores it",
+        description="trains one size on the budget and scores it",
         run=check_isoflop_point,
     )
     check_on_inputs(
         checker=checker,
         function="fit_parabola",
-        description="gives the size at the bottom of a parabola in log size",
+        description="returns the size at the bottom of a parabola in log size",
         inputs=(
             (parabola_points(20000.0, 0.08, (5000.0, 10000.0, 20000.0, 40000.0, 80000.0), 933),),
             (parabola_points(3000.0, 0.15, (1700.0, 3800.0, 6600.0, 14500.0), 934),),
@@ -1337,7 +1366,7 @@ def check_scaling3(checker: Checker) -> None:
     )
     checker.check_name(
         name="best",
-        description="is the bottom of the parabola through your points",
+        description="is the size at the bottom of the parabola fitted to your points",
         run=lambda value: check_best(
             value=value,
             points=getattr(checker.module, "points", None),
@@ -1355,14 +1384,15 @@ SCALING3 = Exercise(
     hints={
         "non_embedding_parameters": "Sum parameter.numel() over model.named_parameters(), skipping the names "
         "that start with wte or wpe.",
-        "flops_per_token": "Going forward, a token costs 2 per non embedding parameter and 2 per number of the "
-        "VOCABULARY by width head. Each of the LAYERS blocks adds 4 * BLOCK * width. Multiply that whole sum by 3.",
+        "flops_per_token": "In the forward pass, a token costs 2 FLOPs per non embedding parameter and 2 per number in "
+        "the VOCABULARY by width head. Each of the LAYERS blocks adds 4 * BLOCK * width. Multiply the whole sum by 3.",
         "steps_for_budget": "Divide budget by flops * BLOCK * BATCH, round it, and take the max of that and 1.",
-        "isoflop_point": "flops_per_token wants the model's non_embedding_parameters and its width. train wants the "
-        "model, the steps that steps_for_budget gives for budget and flops, train_data, and a new generator "
+        "isoflop_point": "flops_per_token takes the model's non_embedding_parameters and its width. train takes the "
+        "model, the steps that steps_for_budget returns for budget and flops, train_data, and a new generator "
         "seeded with 0.",
-        "fit_parabola": "Make float64 tensors of torch.log of the sizes and of the losses. Stack x ** 2, x and "
-        "ones as columns, solve with torch.linalg.lstsq, and turn -b / (2 * a) back with math.exp.",
+        "fit_parabola": "Make a float64 tensor x of torch.log of the sizes, and a float64 tensor of the losses. Stack "
+        "x ** 2, x and ones as columns, and solve with torch.linalg.lstsq. Then turn -b / (2 * a) back into a size "
+        "with math.exp.",
         "points": "Write the four functions above first. This line only calls isoflop_point once per width.",
         "best": "This line calls fit_parabola on points.",
     },

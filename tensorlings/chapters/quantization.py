@@ -46,10 +46,11 @@ QUANTIZATION = Chapter(
         """
         # Quantization
 
-        A trained model's weights don't need 32 bits each. This chapter
-        stores them as 8 bit whole numbers with a scale, measures what that
-        costs, gives each row its own scale so one large weight can't spoil
-        the rest, and runs your GPT from gpt3 in int8.
+        A trained model's weights do not need 32 bits each. This chapter
+        stores them as 8 bit integers with a scale, and measures how much
+        accuracy that loses. It gives each row of a weight its own scale, so
+        that one large weight cannot ruin the precision of all the others.
+        Then it runs your GPT from gpt3 in int8.
 
         ## Further reading
 
@@ -205,14 +206,14 @@ def expect_quantized(
     )
 
     if not isinstance(actual, (tuple, list)) or len(actual) != 2:
-        raise Mismatch(f"{call} should give two things, the whole numbers and the scale, but it gives {value_text(actual)}.")
+        raise Mismatch(f"{call} should return two things, the integers and the scale, but it returns {value_text(actual)}.")
 
     quantized, scale = actual
 
     if isinstance(quantized, Tensor) and quantized.dtype != torch.int8:
         raise Mismatch(
-            f"The whole numbers from {call} are {quantized.dtype}, but they should be torch.int8, one byte each. "
-            "Turn them into it with .to(torch.int8) after rounding.",
+            f"The integers from {call} have dtype {quantized.dtype}, but they should be torch.int8, one byte each. "
+            "Convert them with .to(torch.int8) after rounding.",
         )
 
     # The scale first, since a scale of the wrong shape explains every whole number that is off.
@@ -222,7 +223,7 @@ def expect_quantized(
         expected=expected[1],
     )
     expect_tensor(
-        call=f"the whole numbers from {call}",
+        call=f"the integers from {call}",
         actual=quantized,
         expected=expected[0],
     )
@@ -235,14 +236,16 @@ def expect_quantized(
 QUANT1_LESSON = prose(
     """
     A float32 number takes 4 bytes. gpt3's model holds 818,048 of them, about
-    3.3 MB. **Quantization** stores each weight in fewer bits. Here that is a
-    whole number from -127 to 127 in one byte, which PyTorch calls
-    `torch.int8`.
+    3.3 MB. **Quantization** stores each weight in fewer bits. In this
+    chapter, each weight becomes an integer from -127 to 127, stored in one
+    byte. PyTorch calls that type `torch.int8`.
 
-    Absmax quantization uses one scale for the whole tensor, its largest size
-    over 127. Each weight over the scale, rounded, is its whole number, and
-    the largest weight lands on 127 or -127. Times the scale, a whole number
-    gives its weight back, off by at most half a scale.
+    Absmax quantization uses one scale for the whole tensor. The scale is the
+    largest absolute value in the tensor divided by 127. Each weight is
+    divided by the scale and rounded to get its integer. So the weight with
+    the largest absolute value becomes 127 or -127. To get a weight back,
+    multiply its integer by the scale. Because of the rounding, the result is
+    off by at most half the scale.
 
     ```python
     weights = torch.tensor([0.5, -1.27, 0.031])
@@ -250,25 +253,28 @@ QUANT1_LESSON = prose(
     (weights / scale).round()            # tensor([  50., -127.,    3.])
     ```
 
-    The last weight comes back as 0.03, off by 0.001. Fewer bits give fewer
-    levels, 2 ** (bits - 1) - 1 on each side of 0. 4 bits give 7, and 2 bits
-    only 1.
+    The last weight comes back as `3 * 0.01 = 0.03`, which is off by 0.001.
+    The levels are the integers available on each side of 0. With fewer bits
+    there are fewer levels, `2 ** (bits - 1) - 1` on each side. So 4 bits
+    give 7 levels, and 2 bits give only 1.
 
-    Here is block 0's `c_fc` weight from the run behind gpt3, 65,536 numbers
-    whose largest size is 0.121. The error column is the norm of all the
-    errors over the norm of the weights, the size clipping1 measured.
+    Here are the results for block 0's `c_fc` weight from the training run
+    behind gpt3. It has 65,536 numbers, and its largest absolute value is
+    0.121. The relative error is the norm of the errors divided by the norm
+    of the weights. The norm is the size measure from clipping1.
 
-    | Bits | Levels each side | Largest error | Error | Rounded to 0 |
+    | Bits | Levels each side | Largest error | Relative error | Rounded to 0 |
     |---|---|---|---|---|
     | 8 | 127 | 0.00048 | 1.2% | 1.8% |
     | 4 | 7 | 0.0087 | 22% | 31% |
     | 2 | 1 | 0.061 | 98% | 99% |
 
-    At 8 bits the largest error is half the scale, 0.121 / 127 / 2. At 2 bits
-    nearly every weight rounds to 0, since most sit far below the largest.
+    At 8 bits the largest error is half the scale, `0.121 / 127 / 2`. At 2
+    bits nearly every weight rounds to 0, because most weights are far
+    smaller than the largest one.
 
-    int8 holds -128 too. Absmax leaves it out, so the levels sit evenly around
-    0, as many on each side.
+    int8 can also hold -128. Absmax does not use it, so there are the same
+    number of levels on each side of 0.
     """,
 )
 
@@ -283,9 +289,12 @@ QUANT1_SOURCE = source_file(
     whole = torch.tensor([1.6, -2.4]).round().to(torch.int8)       # tensor([ 2, -2], dtype=torch.int8)
 
 
-    # TODO: Return weights as whole numbers stored as torch.int8, and the scale,
-    #   a tensor of one number. The scale is the largest size in weights over
-    #   levels. Each weight divided by the scale and rounded is its whole number.
+    # TODO: Quantize weights with absmax. Return the integers as a torch.int8
+    #   tensor, and the scale, a tensor holding one number. The scale is the
+    #   largest absolute value in weights divided by levels. Each weight's
+    #   integer is the weight divided by the scale, then rounded.
+    #   Example: absmax_quantize(torch.tensor([0.5, -1.27, 0.031]), 8) returns
+    #   (tensor([  50, -127,    3], dtype=torch.int8), tensor(0.0100)).
     def absmax_quantize(
         weights: Tensor,
         bits: int,
@@ -294,7 +303,10 @@ QUANT1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the floats the whole numbers stand for, each one times scale.
+    # TODO: Return the float weights that the integers in quantized stand for,
+    #   which is each integer times scale.
+    #   Example: dequantize(torch.tensor([50, -127, 3], dtype=torch.int8),
+    #   torch.tensor(0.01)) returns tensor([ 0.5000, -1.2700,  0.0300]).
     def dequantize(
         quantized: Tensor,
         scale: Tensor,
@@ -302,8 +314,9 @@ QUANT1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return, as a plain number, the largest size of the difference between
-    #   weights and their round trip through absmax_quantize and dequantize.
+    # TODO: Quantize weights with absmax_quantize, then turn the result back
+    #   into floats with dequantize. Return the largest absolute difference
+    #   between those floats and weights, as a plain number.
     def largest_error(
         weights: Tensor,
         bits: int,
@@ -338,7 +351,7 @@ def check_quant1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="absmax_quantize",
-        description="rounds each weight to a whole number of steps of one scale",
+        description="rounds each weight to an integer multiple of one scale",
         inputs=(
             (seeded_weights(890, 2, 4), 8),
             (seeded_weights(891, 3, 3), 4),
@@ -350,7 +363,7 @@ def check_quant1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="dequantize",
-        description="gives back the floats the whole numbers stand for",
+        description="returns the floats the integers stand for",
         inputs=(
             (torch.tensor([50, -127, 3], dtype=torch.int8), torch.tensor(0.01)),
             (torch.tensor([[7, -2], [0, 5]], dtype=torch.int8), torch.tensor(0.3)),
@@ -361,7 +374,7 @@ def check_quant1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="largest_error",
-        description="gives the largest error of the round trip",
+        description="returns the largest error after quantizing and dequantizing",
         inputs=(
             (seeded_weights(893, 4, 6), 8),
             (seeded_weights(894, 3, 5), 4),
@@ -387,7 +400,7 @@ QUANT1 = Exercise(
         "absmax_quantize": "The scale is weights.abs().max() / levels. Divide weights by it, .round(), then "
         ".to(torch.int8), and return both.",
         "dequantize": "Turn quantized into floats with .float(), then multiply by scale.",
-        "largest_error": "Quantize, dequantize, subtract weights, then take .abs().max().item().",
+        "largest_error": "Quantize, dequantize, subtract weights from the result, then take .abs().max().item().",
     },
     introduces=(),
     check=check_quant1,
@@ -400,55 +413,58 @@ QUANT1 = Exercise(
 
 QUANT2_LESSON = prose(
     """
-    One scale per tensor lets its largest weight set the step for all the
-    rest. A Linear's weight has a row per output, and in gpt3's blocks a row's
-    largest size runs from 0.032 to 0.27. Giving each row its own scale, **per
-    channel**, keeps a small row's step small.
+    With one scale per tensor, the largest weight sets the step size for
+    every other weight. A Linear's weight has one row per output. In gpt3's
+    blocks, the largest absolute value in a row ranges from 0.032 to 0.27.
+    Giving each row its own scale is called **per channel** quantization. It
+    keeps the step small for a row of small weights.
 
     ```python
     rows = torch.tensor([[0.1, -0.2], [10.0, 5.0]])
     rows.abs().amax(dim=1, keepdim=True)    # tensor([[ 0.2000], [10.0000]])
     ```
 
-    `keepdim=True` keeps the scales a column of shape (2, 1), which divides
-    each row by its own. Here is the average over the 16 Linear weights of
-    gpt3's blocks.
+    `keepdim=True` keeps the result as a column of shape (2, 1). Through
+    broadcasting, dividing by that column divides each row by its own scale.
+    Here is the average over the 16 Linear weights in gpt3's blocks.
 
-    | Scales | Bits | Error | Rounded to 0 |
+    | Scales | Bits | Relative error | Rounded to 0 |
     |---|---|---|---|
     | One per tensor | 8 | 1.25% | 1.9% |
     | One per row | 8 | 0.71% | 1.1% |
     | One per tensor | 4 | 22.7% | 33.7% |
     | One per row | 4 | 12.9% | 18.7% |
 
-    An **outlier** is one number far larger than the rest. Below, one weight
-    of block 0's `c_fc` was set to 20 times its largest. The error is on the
-    other 65,535 weights.
+    An **outlier** is a number far larger than the rest. In the table below,
+    one weight of block 0's `c_fc` was set to 20 times the largest weight.
+    The errors are measured on the other 65,535 weights.
 
-    | Weights | Scales | Error | Rounded to 0 |
+    | Weights | Scales | Relative error | Rounded to 0 |
     |---|---|---|---|
     | No outlier | One per tensor | 1.21% | 1.8% |
     | Outlier | One per tensor | 24.3% | 33.7% |
     | Outlier | One per row | 1.29% | 1.0% |
 
-    One scale lets the outlier spoil every weight. With one per row only its
-    own row suffers, and the other rows stay at 0.65%.
+    With one scale per tensor, the outlier makes the step large for every
+    weight, so the error grows for all of them. With one scale per row, only
+    the outlier's own row suffers. The other rows keep an error of 0.65%.
 
     Dettmers and colleagues found outliers in large language models, in the
-    hidden states that go into each Linear. Their LLM.int8() rounds those
-    hidden states to int8 too, so both sides of each multiply are whole
-    numbers. From around 6.7B weights, a few dimensions, at most 7, grow up
-    to 20 times larger than the rest. Plain int8 then rounds many small
-    hidden values to 0, and the models get worse.
+    hidden states that go into each Linear. Their method, LLM.int8(), rounds
+    those hidden states to int8 too, so both inputs of each matrix multiply
+    are integers. In models with around 6.7 billion weights or more, a few
+    dimensions, at most 7, grow up to 20 times larger than the rest. Plain
+    int8 quantization then rounds many small hidden values to 0, and the
+    models get worse.
 
-    Such a dimension is a column of the hidden states, one row per token, so
-    it runs through nearly every row. A scale per row can't fence it in, and
-    the paper found row by row scales fall short there. So LLM.int8() keeps
-    those columns in 16 bits and multiplies more than 99.9% of the values in
-    8 bits.
+    The hidden states have one row per token, and such a dimension is a
+    column. So the outlier appears in nearly every row, and a scale per row
+    cannot isolate it. The paper found that row by row scales are not enough
+    in this case. So LLM.int8() keeps those few columns in 16 bits, and
+    multiplies more than 99.9% of the values in 8 bits.
 
-    Weights alone in int8, as quant3 stores them, leave the hidden states in
-    float, so these outliers never get rounded.
+    quant3 stores only the weights in int8 and leaves the hidden states as
+    floats. So these outliers are never rounded.
     """,
 )
 
@@ -471,9 +487,13 @@ QUANT2_SOURCE = source_file(
 ''' + indented(DEQUANTIZE_PART) + '''
 
 
-    # TODO: Return weights as torch.int8 whole numbers with one scale per row,
-    #   and the scales as a column of shape (rows, 1). A row's scale is its
-    #   largest size over levels, so each row is divided by its own.
+    # TODO: Quantize weights with one scale per row. Return the integers as a
+    #   torch.int8 tensor, and the scales as a column of shape (rows, 1). A
+    #   row's scale is the largest absolute value in that row divided by
+    #   levels. Divide each row by its own scale, then round.
+    #   Example: for weights torch.tensor([[0.1, -0.2], [10.0, 5.0]]) and 8
+    #   bits, the integers are [[64, -127], [127, 64]] and the scales are
+    #   about [[0.0016], [0.0787]].
     def per_channel_quantize(
         weights: Tensor,
         bits: int,
@@ -482,8 +502,10 @@ QUANT2_SOURCE = source_file(
         ...
 
 
-    # TODO: Return, as a plain number, the norm of weights - approximation over
-    #   the norm of weights.
+    # TODO: Return the relative error of approximation, as a plain number. That
+    #   is the norm of weights - approximation divided by the norm of weights.
+    #   Example: for weights [[3.0, 0.0], [0.0, 4.0]] and approximation
+    #   [[3.0, 1.0], [0.0, 4.0]], relative_error returns about 0.2.
     def relative_error(
         weights: Tensor,
         approximation: Tensor,
@@ -491,7 +513,10 @@ QUANT2_SOURCE = source_file(
         ...
 
 
-    # TODO: Return, as a plain number, the share of the whole numbers that are 0.
+    # TODO: Return the fraction of the integers in quantized that are 0, as a
+    #   plain number.
+    #   Example: zero_share(torch.tensor([0, 3, 0, -1, 0], dtype=torch.int8))
+    #   returns about 0.6.
     def zero_share(quantized: Tensor) -> float:
         ...
     ''',
@@ -551,7 +576,7 @@ def check_quant2(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="relative_error",
-        description="gives the error's norm over the weights' norm",
+        description="divides the error's norm by the weights' norm",
         inputs=(
             (torch.tensor([[3.0, 0.0], [0.0, 4.0]]), torch.tensor([[3.0, 1.0], [0.0, 4.0]])),
             (seeded_weights(897, 3, 4), seeded_weights(898, 3, 4)),
@@ -562,7 +587,7 @@ def check_quant2(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="zero_share",
-        description="gives the share of whole numbers rounded to 0",
+        description="returns the fraction of integers that are 0",
         inputs=(
             (torch.tensor([0, 3, 0, -1, 0], dtype=torch.int8),),
             (torch.tensor([[0, 0, 5], [1, 7, -2]], dtype=torch.int8),),
@@ -581,8 +606,8 @@ QUANT2 = Exercise(
     solution=QUANT2_SOLUTION,
     hints={
         "per_channel_quantize": "weights.abs().amax(dim=1, keepdim=True) / levels gives the column of scales. "
-        "Divide, round and turn into torch.int8 as absmax_quantize does.",
-        "relative_error": "(weights - approximation).norm() divided by weights.norm(), then .item().",
+        "Divide, round and convert to torch.int8, as absmax_quantize does.",
+        "relative_error": "Divide (weights - approximation).norm() by weights.norm(), then call .item().",
         "zero_share": "Compare quantized with 0, turn the result into floats, and take .mean().item().",
     },
     introduces=(),
@@ -596,11 +621,12 @@ QUANT2 = Exercise(
 
 QUANT3_LESSON = prose(
     """
-    Now the whole model. `Int8Linear` takes a trained `nn.Linear` and keeps its
-    weight as int8 whole numbers with a scale per row. Both are **buffers**,
-    tensors a module keeps that no gradient trains, as batchnorm2's running
-    averages were. `.to(device)` and `state_dict()` take buffers along, as
-    they take the parameters.
+    Now for the whole model. `Int8Linear` takes a trained `nn.Linear` and
+    stores its weight as int8 integers with one scale per row. Both the
+    integers and the scales are **buffers**. A buffer is a tensor that a
+    module stores but no gradient trains, like the running averages in
+    batchnorm2. `.to(device)` and `state_dict()` include buffers, the same
+    way they include parameters.
 
     ```python
     counter = nn.Module()
@@ -608,31 +634,33 @@ QUANT3_LESSON = prose(
     dict(counter.named_buffers())    # {'counts': tensor([0., 0.])}
     ```
 
-    Its forward turns the whole numbers back into a float weight and runs
-    `F.linear`, the function behind every `nn.Linear`. That saves memory, not
-    time. Each call builds the whole float32 weight again, so it moves more
-    bytes than a float32 Linear does. Fast kernels such as gpt-fast's turn
-    each whole number into a float inside the multiply, so they read only the
-    int8 bytes. fast_gpt measures one.
+    Its forward turns the integers back into a float weight and calls
+    `F.linear`, the function that every `nn.Linear` uses. This saves memory
+    but not time. Each call builds the whole float32 weight again, so it
+    moves more bytes than a float32 Linear does. Fast kernels such as
+    gpt-fast's convert each integer to a float inside the matrix multiply, so
+    they read only the int8 bytes from memory. fast_gpt measures one of these
+    kernels.
 
     `module.named_children()` gives a module's direct children with their
-    names, and `setattr(module, name, new)` swaps one. A function that calls
-    itself on every other child reaches every depth.
+    names. `setattr(module, name, new)` replaces one child with a new module.
+    A function that also calls itself on every child that is not a Linear
+    reaches the Linears at every depth.
 
-    Only the blocks get quantized. `lm_head` shares its weight with `wte`, and
-    that table stays in float32 for both. `model.parameters()` lists a shared
-    tensor once.
+    Only the blocks are quantized. `lm_head` shares its weight with the
+    embedding table `wte`, and that weight stays in float32 for both.
+    `model.parameters()` lists a shared tensor only once.
 
-    At 4 bits two numbers share each byte, one in the low half and one in the
-    high half.
+    At 4 bits, two numbers share each byte, one in the low 4 bits and one in
+    the high 4 bits.
 
     ```python
     byte = 3 | (12 << 4)    # 195, the numbers 3 and 12 in one byte
     byte & 15, byte >> 4    # (3, 12)
     ```
 
-    Here is the GPT from the run behind gpt3, on the 20 validation batches its
-    check used.
+    Here are the results for the GPT from the training run behind gpt3, on
+    the 20 validation batches that gpt3's check used.
 
     | Blocks' weights | Bytes | Validation loss |
     |---|---|---|
@@ -643,12 +671,12 @@ QUANT3_LESSON = prose(
     | 4 bits, two to a byte, a scale per 32 weights | 617,984 | 1.5658 |
     | 2 bits, four to a byte, a scale per 32 weights | 421,376 | 3.5942 |
 
-    int8 made the model 3.5 times smaller and moved its loss in the fourth
-    decimal. Packed 4 bits take 6 times fewer bytes than float32. A scale per
-    group of 32 weights along each row adds 79,872 bytes, about 15% more, and
-    brings the loss from 1.5833 to 1.5658. GPTQ quantizes groups this way, and
-    gpt-fast's 4 bit models use groups of 32. At 2 bits even groups of 32
-    break the model.
+    int8 made the model 3.5 times smaller and changed its loss only in the
+    fourth decimal place. Packed 4 bit weights take 6 times fewer bytes than
+    float32. Giving each group of 32 weights along a row its own scale adds
+    79,872 bytes, about 15% more. It also brings the loss down from 1.5833 to
+    1.5658. GPTQ quantizes groups this way, and gpt-fast's 4 bit models use
+    groups of 32. At 2 bits, the model breaks even with groups of 32.
     """,
 )
 
@@ -711,9 +739,9 @@ QUANT3_SOURCE = source_file(
 
 
     # TODO: Finish Int8Linear. __init__ quantizes weight per channel to 8 bits
-    #   and keeps the whole numbers and the scales as buffers named quantized
-    #   and scales. forward runs F.linear on x with the dequantized weight and
-    #   the bias.
+    #   with per_channel_quantize. It stores the integers and the scales as
+    #   buffers named quantized and scales. forward calls F.linear on x with
+    #   the dequantized weight and the bias.
     class Int8Linear(nn.Module):
         def __init__(self, linear: nn.Linear) -> None:
             super().__init__()
@@ -732,13 +760,14 @@ QUANT3_SOURCE = source_file(
 
 
     # TODO: Return how many bytes model's parameters and buffers take, as a
-    #   plain number. A tensor shared by two layers counts once.
+    #   plain int. A tensor shared by two layers counts only once.
     def model_bytes(model: nn.Module) -> int:
         ...
 
 ''' + QUANT3_MEASURES + '''
-    # TODO: Set int8_bytes and int8_loss, the size and the validation loss of the
-    #   quantized model, measured as float_bytes and float_loss were.
+    # TODO: Set int8_bytes to the size in bytes of the quantized model, and
+    #   int8_loss to its validation loss. Measure them the same way as
+    #   float_bytes and float_loss above.
     int8_bytes = ...
     int8_loss = ...
     ''',
@@ -810,10 +839,10 @@ def quantized_buffers(
         if isinstance(getattr(module, name, None), Tensor):
             raise Mismatch(
                 f"{call} keeps {name} as a plain attribute, not a buffer, so .to(device) and state_dict() would "
-                f"leave it out. Keep it with self.register_buffer(\"{name}\", ...).",
+                f"leave it out. Store it with self.register_buffer(\"{name}\", ...).",
             )
 
-        raise Mismatch(f"{call} has no buffer named {name}. Keep it with self.register_buffer(\"{name}\", ...).")
+        raise Mismatch(f"{call} has no buffer named {name}. Store it with self.register_buffer(\"{name}\", ...).")
 
     return buffers["quantized"], buffers["scales"]
 
@@ -882,7 +911,7 @@ def swap_with_reference(
     if left and left == linears:
         raise Mismatch(
             f"quantize_linears_ of {described} left every nn.Linear in place. Swap each one with setattr(module, name, "
-            "new). Giving the loop's name a new value changes nothing inside module.",
+            "new). Assigning a new value to the loop variable changes nothing inside module.",
         )
 
     if left:
@@ -914,7 +943,7 @@ def check_quantize_linears(found: object) -> None:
     if kinds != wanted:
         raise Mismatch(
             f"After quantize_linears_ of a GPT2Block, its layers are {', '.join(kinds)}, but they should be "
-            f"{', '.join(wanted)}. Swap only the nn.Linear layers.",
+            f"{', '.join(wanted)}. Replace only the nn.Linear layers.",
         )
 
     x = torch.randn(2, 5, 16, generator=torch.Generator().manual_seed(904))
@@ -977,23 +1006,23 @@ def expect_loss(
     """A loss measured on the learner's own model. The message rounds the expected loss coarser than the
     tolerance, so a number copied from it fails."""
     if isinstance(actual, Tensor):
-        raise Mismatch(f"{call} is {value_text(actual)}, a tensor, but it should be a plain number, as validation_loss gives.")
+        raise Mismatch(f"{call} is {value_text(actual)}, a tensor, but it should be a plain number, as validation_loss returns.")
 
     if isinstance(actual, bool) or not isinstance(actual, (int, float)):
-        raise Mismatch(f"{call} is {value_text(actual)}, but it should be the plain number validation_loss gives.")
+        raise Mismatch(f"{call} is {value_text(actual)}, but it should be the plain number validation_loss returns.")
 
     # Written this way round so a nan fails too.
     if not abs(actual - expected) <= LOSS_TOLERANCE:
         raise Mismatch(
-            f"{call} is {actual:.6g}, but it should be within {LOSS_TOLERANCE:g} of what validation_loss gives "
-            f"your model here, about {expected:.3g}.",
+            f"{call} is {actual:.6g}, but it should be within {LOSS_TOLERANCE:g} of what validation_loss returns "
+            f"for your model here, about {expected:.3g}.",
         )
 
 
 def check_measure(name: str) -> Callable[[object], None]:
     def check(value: object) -> None:
         if value is None and name.endswith("_bytes"):
-            raise Mismatch(f"{name} is None, since model_bytes gives None. Write model_bytes first.")
+            raise Mismatch(f"{name} is None, because model_bytes returns None. Write model_bytes first.")
 
         expected = reference_measures()[name]
 
@@ -1020,18 +1049,18 @@ def check_quant3(checker: Checker) -> None:
     checker.test_method(
         class_name="Int8Linear",
         method="__init__",
-        description="keeps the weight as int8 with a scale per row",
+        description="stores the weight as int8 with a scale per row",
         run=check_int8_init,
     )
     checker.test_method(
         class_name="Int8Linear",
         method="forward",
-        description="runs the dequantized weight",
+        description="multiplies by the dequantized weight",
         run=check_int8_forward,
     )
     checker.test(
         function="quantize_linears_",
-        description="swaps every Linear for an Int8Linear",
+        description="replaces every Linear with an Int8Linear",
         run=check_quantize_linears,
     )
     checker.test(
@@ -1061,16 +1090,17 @@ QUANT3 = Exercise(
     source=QUANT3_SOURCE,
     solution=QUANT3_SOLUTION,
     hints={
-        "Int8Linear.__init__": "per_channel_quantize(weight, 8) gives both, then self.register_buffer(\"quantized\", "
-        "...) and the same for scales.",
+        "Int8Linear.__init__": "per_channel_quantize(weight, 8) returns the integers and the scales. Store each one "
+        "with self.register_buffer(\"quantized\", ...) and the same for scales.",
         "Int8Linear.forward": "F.linear takes x, a weight and a bias. dequantize(self.quantized, self.scales) is the "
         "weight.",
         "quantize_linears_": "Loop over module.named_children(). Swap an nn.Linear child for Int8Linear of it with "
         "setattr under the same name. Any other child gets quantize_linears_ called on it.",
         "model_bytes": "model.parameters() lists a shared tensor once. Add numel() * element_size() over it and "
         "over model.buffers().",
-        "int8_bytes": "model_bytes(model), now that the blocks are quantized.",
-        "int8_loss": "validation_loss with the same data, 20 batches, a generator seeded with 1 and cpu.",
+        "int8_bytes": "Call model_bytes(model) again, now that the blocks are quantized.",
+        "int8_loss": "Call validation_loss the same way as for float_loss, with the same data, 20 batches, a "
+        "generator seeded with 1, and cpu.",
     },
     introduces=(),
     check=check_quant3,
