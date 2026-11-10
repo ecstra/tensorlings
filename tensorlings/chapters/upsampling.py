@@ -27,11 +27,12 @@ UPSAMPLING = Chapter(
         """
         # Upsampling and U-Net
 
-        A model that answers with an image, like a mask of which pixels belong
-        to an object, has to grow its small maps back to full size. This
-        chapter builds nearest and bilinear upsampling and the transposed
-        convolution, then the U-Net, whose skip connections carry the fine
-        detail across.
+        Some models output an image, such as a mask that marks which pixels
+        belong to an object. Such a model makes its maps smaller on the way in,
+        so it has to make them full size again on the way out. This chapter
+        builds nearest and bilinear upsampling and the transposed convolution.
+        Then it builds the U-Net, whose skip connections pass fine detail from
+        the early layers to the late ones.
 
         ## Further reading
 
@@ -89,30 +90,37 @@ class ReferenceUNet(nn.Module):
 
 UPSAMPLE1_LESSON = prose(
     """
-    Some models answer with an image, like a mask that says which pixels
-    belong to a cell or a road. Their maps shrink on the way in, so on the way
-    out they have to grow back. That is **upsampling**.
+    Some models output an image, such as a mask that says which pixels belong
+    to a cell or a road. The maps inside such a model get smaller in the early
+    layers, so the later layers have to make them bigger again. Making a map
+    bigger is called **upsampling**.
 
-    Nearest upsampling by `s` repeats every pixel `s` times down and across.
-    Linear interpolation blends instead. A point a quarter of the way from `a`
-    to `b` gets `0.75 * a + 0.25 * b`. Bilinear does that along the rows,
-    then along the columns.
+    Nearest upsampling by a factor `s` repeats every pixel `s` times
+    vertically and `s` times horizontally. So each pixel becomes an `s` by `s`
+    square of copies. Linear interpolation takes a weighted average of the two
+    nearest inputs instead. A point a quarter of the way from value `a` to
+    value `b` gets `0.75 * a + 0.25 * b`. Bilinear upsampling does linear
+    interpolation along the rows, then along the columns.
+
+    `repeat_interleave(n)` repeats each entry `n` times in a row.
 
     ```python
     torch.tensor([1, 2]).repeat_interleave(3)    # tensor([1, 1, 1, 2, 2, 2])
     ```
 
-    `F.interpolate(x, scale_factor=2, mode="bilinear")` takes `x` of shape
-    `(batch, channels, h, w)`. Its `mode="nearest"` repeats instead.
+    `F.interpolate(x, scale_factor=2, mode="bilinear")` does bilinear
+    upsampling by 2. It expects `x` of shape `(batch, channels, h, w)`. With
+    `mode="nearest"` it repeats pixels instead.
 
-    `align_corners=True` puts the first and last outputs exactly on the first
-    and last inputs. Ask it for `(n - 1) * s + 1` outputs with `size=`, and
-    output `j` then sits at input position `j / s`. With `scale_factor=s` it
-    gives `n * s` outputs instead, packed a little closer. Left at its
-    default, `align_corners` is `False`.
+    With `align_corners=True`, the first output lands exactly on the first
+    input, and the last output exactly on the last input. Say you also pass
+    `size=(n - 1) * s + 1` for `n` inputs. Then output `j` is the value
+    interpolated at position `j / s` along the input. With `scale_factor=s`
+    instead, it gives `n * s` outputs, spaced a little closer together. The
+    default for `align_corners` is `False`.
 
-    `.floor()` rounds down and `.long()` makes whole numbers usable as
-    positions.
+    In `linear_1d` below, `.floor()` rounds each position down. `.long()` then
+    turns the result into integers, so it can index a tensor.
     """,
 )
 
@@ -127,8 +135,11 @@ UPSAMPLE1_SOURCE = source_file(
     repeated = torch.tensor([1, 2]).repeat_interleave(3)    # tensor([1, 1, 1, 2, 2, 2])
 
 
-    # TODO: Return image, of shape (h, w), grown s times down and across by
-    #   repeating every pixel.
+    # TODO: Return image upsampled by a factor of s with nearest upsampling, by
+    #   repeating every pixel s times along each dimension. image has shape
+    #   (h, w), and the result has shape (h * s, w * s).
+    #   Example: nearest(torch.tensor([[1., 2.], [3., 4.]]), 2) returns a 4 by 4
+    #   tensor whose first row is [1., 1., 2., 2.].
     def nearest(
         image: Tensor,
         s: int,
@@ -136,9 +147,10 @@ UPSAMPLE1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return x, of shape (batch, channels, h, w), grown s times with
-    #   bilinear upsampling, using F.interpolate with align_corners left at its
-    #   default.
+    # TODO: Return x upsampled by a factor of s with bilinear upsampling. Use
+    #   F.interpolate and leave align_corners at its default. x has shape
+    #   (batch, channels, h, w), and the result has shape
+    #   (batch, channels, h * s, w * s).
     def bilinear(
         x: Tensor,
         s: int,
@@ -146,9 +158,12 @@ UPSAMPLE1_SOURCE = source_file(
         ...
 
 
-    # TODO: Finish the last line, so this returns x grown s times by linear
-    #   interpolation, with the ends on the ends. Each output blends the input
-    #   at left and the one after it, by fraction.
+    # TODO: Finish the last line, so this returns the 1D tensor x upsampled by
+    #   a factor of s with linear interpolation and aligned corners. Output j is
+    #   a weighted average of x[left[j]] and the input after it. The input
+    #   after it gets weight fraction[j], and x[left[j]] gets 1 - fraction[j].
+    #   Example: linear_1d(torch.tensor([0., 4., 2.]), 2) returns
+    #   tensor([0., 2., 4., 3., 2.]).
     def linear_1d(
         x: Tensor,
         s: int,
@@ -245,8 +260,9 @@ UPSAMPLE1 = Exercise(
     hints={
         "nearest": "Use .repeat_interleave(s, dim=0) for the rows, then .repeat_interleave(s, dim=1) for the "
         "columns.",
-        "bilinear": "F.interpolate with scale_factor=s and mode=\"bilinear\".",
-        "linear_1d": "Blend x[left] and x[left + 1], weighting the second by fraction and the first by 1 - fraction.",
+        "bilinear": "Call F.interpolate with scale_factor=s and mode=\"bilinear\".",
+        "linear_1d": "Take a weighted average of x[left] and x[left + 1], with weight fraction on the second and "
+        "1 - fraction on the first.",
     },
     introduces=(),
     check=check_upsample1,
@@ -259,10 +275,12 @@ UPSAMPLE1 = Exercise(
 
 TRANSPOSED1_LESSON = prose(
     """
-    A **transposed convolution** grows a map with learned weights. Each input
-    value stamps a copy of the kernel, scaled by that value, into the output.
-    The stamp for input `i` starts at position `i * s`, and where stamps
-    overlap they add up. The output ends where the last stamp ends.
+    A **transposed convolution** makes a map bigger using learned weights. For
+    each input value, it multiplies the kernel by that value and adds the
+    result into the output. This scaled copy of the kernel is called a stamp
+    here. With stride `s`, the stamp for input `i` starts at output position
+    `i * s`. Where stamps overlap, their values add up. The output ends where
+    the last stamp ends.
 
     ```python
     # x = [1, 2], w = [1, 1, 1], s = 2
@@ -271,19 +289,24 @@ TRANSPOSED1_LESSON = prose(
     # sum:             [1, 1, 3, 2, 2]
     ```
 
-    It is the backward pass of a convolution. Each convolution output read
-    `k` inputs, so its gradient flows back to those same `k` inputs, weighted
-    by the kernel. That is the stamp. Some call it deconvolution, though it
-    undoes nothing.
+    A transposed convolution computes the same thing as the backward pass of a
+    convolution. In a convolution, each output is computed from `k` inputs. So
+    in the backward pass, the gradient of each output flows back to those same
+    `k` inputs, multiplied by the kernel's weights. That pattern is exactly the
+    stamp. Some people call a transposed convolution a deconvolution, but it
+    does not undo a convolution.
 
-    To hand a chosen gradient `g` to outputs `y`, call `.backward()` on
-    `(y * g).sum()`. The derivative of that sum by each output is its entry of
-    `g`, so exactly `g` flows back from the outputs.
+    Sometimes you want the backward pass to start from a chosen gradient `g`
+    for the outputs `y`, instead of from a loss. To do that, call `.backward()`
+    on `(y * g).sum()`. The derivative of that sum with respect to each `y[i]`
+    is `g[i]`. So the gradient that flows back from the outputs is exactly
+    `g`.
 
-    `nn.ConvTranspose2d(in, out, k, stride=2)` is the layer. With a kernel
-    that the stride doesn't divide, like 3 at stride 2, the stamps overlap
-    unevenly. With all ones in and all ones as weights, each output counts
-    the stamps that land on it.
+    `nn.ConvTranspose2d(in, out, k, stride=2)` is the layer version. When the
+    kernel size is not a multiple of the stride, like kernel 3 at stride 2,
+    the stamps overlap unevenly. You can see this by using all ones as both
+    the input and the kernel. Then each output equals the number of stamps
+    that cover it.
 
     ```python
     ones = torch.ones(1, 1, 6)
@@ -293,10 +316,11 @@ TRANSPOSED1_LESSON = prose(
     F.conv1d(grown, torch.ones(1, 1, 3), padding=1)            # 2 3 3 3 3 3 3 3 3 3 3 2
     ```
 
-    Kernel 3 jumps between 1 and 2 at every step, and in 2D that makes a
-    checkerboard. Kernel 4 covers the middle evenly. Growing with
-    interpolation, then a plain convolution, is even everywhere but the
-    padded ends. Odena and others advised that last way.
+    With kernel 3, the output alternates between 1 and 2. In 2D that pattern
+    shows up as a checkerboard. Kernel 4 covers the middle evenly. Upsampling
+    with interpolation and then applying a plain convolution gives an even
+    result everywhere except the padded ends. Odena and others recommended
+    this last approach.
     """,
 )
 
@@ -314,6 +338,7 @@ TRANSPOSED1_SOURCE = source_file(
 
     # TODO: Return how many outputs a transposed convolution with kernel size k
     #   and stride s gives for n inputs.
+    #   Example: transposed_size(2, 3, 2) returns 5.
     def transposed_size(
         n: int,
         k: int,
@@ -322,8 +347,11 @@ TRANSPOSED1_SOURCE = source_file(
         ...
 
 
-    # TODO: Finish the line in the loop, so each input stamps w, scaled by its
-    #   value, into output from position i * s, adding where stamps overlap.
+    # TODO: Finish the line in the loop. For each input i, add w times x[i] into
+    #   output, starting at position i * s and covering k positions. Where
+    #   stamps overlap, their values add up.
+    #   Example: for x = [1., 2.], w = [1., 1., 1.] and s = 2, transposed_1d
+    #   returns tensor([1., 1., 3., 2., 2.]).
     def transposed_1d(
         x: Tensor,
         w: Tensor,
@@ -338,9 +366,10 @@ TRANSPOSED1_SOURCE = source_file(
         return output
 
 
-    # TODO: Return the gradient of a convolution of x with w, at stride 1, with
-    #   respect to x, when the gradient handed down to the outputs is grad.
-    #   Work it out with autograd and the sum the lesson shows.
+    # TODO: Return the gradient with respect to x of a stride 1 convolution of
+    #   x with w, when grad is the gradient arriving at the convolution's
+    #   outputs. x, w and grad are 1D, and grad has one entry per output. Use
+    #   autograd and the (y * g).sum() trick from the lesson.
     def conv_input_gradient(
         x: Tensor,
         w: Tensor,
@@ -384,7 +413,7 @@ TRANSPOSED1_SOLUTION = source_file(
         return output
 
 
-    # The gradient handed down, times the outputs, summed, gives that gradient back through .backward().
+    # Calling .backward() on (outputs * grad).sum() sends exactly grad back into the outputs.
     def conv_input_gradient(
         x: Tensor,
         w: Tensor,
@@ -445,10 +474,12 @@ TRANSPOSED1 = Exercise(
     source=TRANSPOSED1_SOURCE,
     solution=TRANSPOSED1_SOLUTION,
     hints={
-        "transposed_size": "The last stamp starts at (n - 1) * s and is k long.",
-        "transposed_1d": "Add x[i] * w to output[i * s:i * s + k], as the line that sets output does.",
-        "conv_input_gradient": "Clone x and make it require a gradient. Run F.conv1d on it with the shapes of conv2, "
-        "multiply the flat outputs by grad, sum, call .backward(), and return x's .grad.",
+        "transposed_size": "The last stamp starts at position (n - 1) * s and is k positions long.",
+        "transposed_1d": "Add x[i] * w to the slice output[i * s:i * s + k]. The example at the top of the file adds "
+        "into output[2:5] the same way.",
+        "conv_input_gradient": "Clone x and make it require a gradient. Run F.conv1d on it, with x and w reshaped to "
+        "(1, 1, length) as in conv2. Flatten the outputs, multiply them by grad, sum, and call .backward(). Then "
+        "return the .grad of the clone.",
     },
     introduces=(),
     check=check_transposed1,
@@ -461,29 +492,36 @@ TRANSPOSED1 = Exercise(
 
 UNET1_LESSON = prose(
     """
-    U-Net, from Ronneberger, Fischer and Brox in 2015, segments cells in
-    microscope images. It has two halves, drawn as the two arms of a U.
+    U-Net, from Ronneberger, Fischer and Brox in 2015, was built to segment
+    cells in microscope images. To segment an image means to label every pixel
+    with the class it belongs to. The network has two halves, usually drawn as
+    the two arms of a U.
 
     - the way down: blocks of two 3 by 3 convolutions, each block followed by a max pool of 2.
-    - the way up: upsampling by 2, then a block, back to full size. A 1 by 1 convolution then scores each pixel for each class.
-    - the skips: each level's maps on the way down are joined onto the same level's maps on the way up.
+    - the way up: upsampling by 2, each time followed by a block, until the maps are full size again.
+    - the skips: the maps from each level of the way down are joined onto the maps of the same size on the way up.
 
-    The way down learns what is in the image but loses where exactly. The
-    skips hand the exact places back to the way up.
+    At the end, a 1 by 1 convolution gives each pixel a score for each class.
+    The way down learns what is in the image, but pooling throws away exactly
+    where things are. The skips pass the earlier maps, which still have that
+    detail, to the way up.
 
-    Joining is concatenating along the channels, so an upsampled map of 32
-    channels and a skip of 16 give 48. `torch.cat([upsampled, skip], dim=1)`
-    does that for tensors of shape `(batch, channels, h, w)`, the upsampled
-    channels first. The order matters, since the next block's weights expect
-    each channel in its place.
+    Joining means concatenating along the channel dimension. So an upsampled
+    map with 32 channels and a skip with 16 channels give a map with 48
+    channels. For tensors of shape `(batch, channels, h, w)`,
+    `torch.cat([upsampled, skip], dim=1)` does this, with the upsampled
+    channels first. The order matters, because each weight in the next block
+    applies to one particular input channel.
 
-    The paper used convolutions without padding, so its maps shrank a little
-    in each block. A skip's map was then larger than the map it joined, and
-    was cut down to the middle part first. Most versions now pad instead.
+    The paper used convolutions without padding, so its maps got a little
+    smaller in each block. That made each skip's map larger than the map it
+    was joined to. So the paper first cropped the skip's map to its middle
+    part. Most U-Nets today use padding instead.
 
     The paper also followed each upsampling with a 2 by 2 convolution that
-    halved the channels. `TinyUNet` below leaves that out. It marks one kind
-    of object, so it gives one score per pixel.
+    halved the number of channels. `TinyUNet` below leaves that out.
+    `TinyUNet` marks only one kind of object, so it outputs one score per
+    pixel.
     """,
 )
 
@@ -501,9 +539,12 @@ UNET1_SOURCE = source_file(
     joined = torch.cat([upsampled, skip], dim=1)     # shape (1, 48, 8, 8), the upsampled channels first
 
 
-    # TODO: Return the middle size by size part of x, of shape
-    #   (batch, channels, h, w), the way the paper cut its skips. Assume h - size
-    #   and w - size are even.
+    # TODO: Return the middle size by size square of x, the way the paper
+    #   cropped its skips. x has shape (batch, channels, h, w), and the result
+    #   has shape (batch, channels, size, size). Assume h - size and w - size
+    #   are even.
+    #   Example: for h = w = 6 and size = 2, it keeps rows 2 and 3 and columns
+    #   2 and 3.
     def center_crop(
         x: Tensor,
         size: int,
@@ -523,11 +564,14 @@ UNET1_SOURCE = source_file(
         )
 
 
-    # TODO: Finish forward. a is down1 of x. b is down2 of a after a max pool of
-    #   2, and c is bottom of b after another. The way up upsamples c by 2 with
-    #   F.interpolate in its default nearest mode, joins b after it with
-    #   torch.cat([upsampled, b], dim=1), and runs up2. It then upsamples that
-    #   the same way, joins a after it, runs up1, and returns out of it.
+    # TODO: Finish forward. On the way down, a is down1(x). b is down2 applied
+    #   to a after a max pool of 2, and c is bottom applied to b after another
+    #   max pool of 2. On the way up, upsample c by 2 with F.interpolate in its
+    #   default nearest mode. Join b after it with torch.cat([upsampled, b],
+    #   dim=1), and pass the result through up2. Then upsample up2's output the
+    #   same way, join a after it, and pass the result through up1. Return out
+    #   applied to up1's output. x has shape (batch, 1, h, w), and so does the
+    #   result.
     class TinyUNet(nn.Module):
         def __init__(self) -> None:
             super().__init__()
@@ -648,8 +692,9 @@ UNET1 = Exercise(
     hints={
         "center_crop": "The crop starts (h - size) // 2 rows down and (w - size) // 2 columns in. Slice the last two "
         "dimensions from there.",
-        "TinyUNet.forward": "a, b and c come from down1, down2 and bottom with F.max_pool2d(..., 2) between. Then "
-        "self.up2(torch.cat([F.interpolate(c, scale_factor=2), b], dim=1)), and the same with up1 and a.",
+        "TinyUNet.forward": "Compute a, b and c with down1, down2 and bottom, with F.max_pool2d(..., 2) between them. "
+        "Then compute self.up2(torch.cat([F.interpolate(c, scale_factor=2), b], dim=1)), and do the same with up1 "
+        "and a.",
     },
     introduces=(),
     check=check_unet1,
@@ -662,31 +707,37 @@ UNET1 = Exercise(
 
 UNET2_LESSON = prose(
     """
-    Here two models learned to mark made up shapes, circles and squares on
-    noisy images of 32 by 32. Each trained 400 steps on 1000 examples, over
-    three seeds, and was scored on 500 new ones. One was unet1's U-Net. The
-    other was the same with no skips, its way up fed only from below.
+    For the table below, two models learned to mark made up shapes, circles
+    and squares, in noisy images of 32 by 32. One model was unet1's U-Net. The
+    other was the same network with no skips, so its way up gets input only
+    from the layer below it. Each model trained for 400 steps on 1000
+    examples, with three different seeds. Each was then scored on 500 new
+    examples.
 
-    **IoU**, intersection over union, scores a mask. It is the count of pixels
-    both masks mark, divided by the count of pixels either marks, 1 for a
-    perfect match. `&` and `|` are and and or on tensors of `True` and
-    `False`.
+    **IoU**, short for intersection over union, measures how well a predicted
+    mask matches the true mask. It is the number of pixels that both masks
+    mark, divided by the number of pixels that at least one of them marks. A
+    perfect match gives 1. On tensors of `True` and `False`, `&` computes and,
+    and `|` computes or, entry by entry.
 
-    | Model | Pixels right | Pixels on an edge right | IoU |
+    | Model | Pixels correct | Edge pixels correct | IoU |
     |---|---|---|---|
     | no skips | 97.5% to 97.6% | 81.8% to 82.5% | 0.885 to 0.892 |
     | U-Net | 98.7% to 99.0% | 90.0% to 92.3% | 0.936 to 0.950 |
 
-    Most pixels are easy, far inside or far outside a shape, so the share of
-    all pixels right hides the gap. On the pixels next to an edge the skips
-    win by 7.6 to 9.8 points, on every seed. The way down shrank the maps to
-    8 by 8. Without skips, the way up has to guess where each edge falls
-    inside a block of 4 by 4.
+    Most pixels are easy because they are far inside or far outside a shape.
+    So the fraction of all pixels correct hides the difference between the
+    models. On the pixels next to an edge, the U-Net does 7.6 to 9.8 points
+    better on every seed. The way down shrank the maps to 8 by 8, so each
+    value there covers a 4 by 4 block of the image. Without skips, the way up
+    has to guess where inside that 4 by 4 block each edge falls.
 
-    `F.max_pool2d(mask, 3, stride=1, padding=1)` grows a mask by one pixel all
-    around, since a pixel next to a marked one becomes marked. Minus the max
-    pool of minus the mask shrinks it the same way. The pixels where the grown
-    and the shrunk masks differ are the edge.
+    `F.max_pool2d(mask, 3, stride=1, padding=1)` grows a mask by one pixel in
+    every direction. Each output pixel is the maximum of the 3 by 3 square
+    around it, so any pixel next to a marked one becomes marked. Negating the
+    mask, taking the same max pool and negating the result gives the minimum
+    instead. That shrinks the mask by one pixel in every direction. The edge
+    is the set of pixels where the grown mask and the shrunk mask differ.
     """,
 )
 
@@ -701,7 +752,7 @@ UNET2_SOURCE = source_file(
 
     mask = torch.zeros(1, 1, 5, 5)
     mask[0, 0, 2, 2] = 1.0
-    grown = F.max_pool2d(mask, 3, stride=1, padding=1)    # the middle 3 by 3 marked
+    grown = F.max_pool2d(mask, 3, stride=1, padding=1)    # now the middle 3 by 3 square is marked
 
 
     def block(
@@ -716,9 +767,11 @@ UNET2_SOURCE = source_file(
         )
 
 
-    # TODO: Finish forward like TinyUNet's in unet1, with no skips. The way up
-    #   upsamples c by 2 with F.interpolate in its default nearest mode and runs
-    #   up2, then upsamples that the same way and runs up1. Nothing is joined on.
+    # TODO: Finish forward like TinyUNet's in unet1, but with no skips. The way
+    #   down is the same. On the way up, upsample c by 2 with F.interpolate in
+    #   its default nearest mode and pass it through up2. Then upsample up2's
+    #   output the same way and pass it through up1. Return out applied to
+    #   up1's output. Nothing is concatenated.
     class NoSkipUNet(nn.Module):
         def __init__(self) -> None:
             super().__init__()
@@ -733,9 +786,13 @@ UNET2_SOURCE = source_file(
             ...
 
 
-    # TODO: Return the IoU of the mask the model marks, where logits are above 0,
-    #   against masks of 0 and 1, as a plain number. Count the pixels over the
+    # TODO: Return the IoU between the model's predicted mask and the true
+    #   masks, as a Python float. The predicted mask marks the pixels where
+    #   logits is above 0. masks holds 1 for marked pixels and 0 for the rest.
+    #   Both tensors have shape (batch, 1, h, w). Count the pixels over the
     #   whole batch at once, not image by image.
+    #   Example: if the model marks all 9 pixels of a 3 by 3 image and the true
+    #   mask marks 3 of them, iou returns about 0.3333.
     def iou(
         logits: Tensor,
         masks: Tensor,
@@ -743,9 +800,10 @@ UNET2_SOURCE = source_file(
         ...
 
 
-    # TODO: Return a tensor of True and False, the same shape as masks, of shape
-    #   (batch, 1, h, w), True on the pixels where the grown and the shrunk masks
-    #   differ.
+    # TODO: Return a tensor of True and False with the same shape as masks,
+    #   which is (batch, 1, h, w). An entry is True where the mask grown by one
+    #   pixel and the mask shrunk by one pixel differ. Those are the edge
+    #   pixels.
     def edge_pixels(masks: Tensor) -> Tensor:
         ...
     ''',
@@ -873,7 +931,7 @@ def check_unet2(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="iou",
-        description="divides the overlap by what either marks",
+        description="divides the overlap by the pixels either mask marks",
         inputs=(
             (small_tensor(832, 2, 1, 6, 6), square_masks()),
             (torch.ones(1, 1, 3, 3), torch.tensor([[[[1.0, 0.0, 0.0], [1.0, 1.0, 0.0], [0.0, 0.0, 0.0]]]])),
@@ -902,16 +960,17 @@ def check_unet2(checker: Checker) -> None:
 UNET2 = Exercise(
     name="unet2",
     chapter=UPSAMPLING,
-    title="Why the skips",
+    title="Why U-Net's skips help",
     lesson=UNET2_LESSON,
     source=UNET2_SOURCE,
     solution=UNET2_SOLUTION,
     hints={
-        "NoSkipUNet.forward": "The same a, b and c as TinyUNet. Then self.up2(F.interpolate(c, scale_factor=2)), "
-        "the same with up1, and self.out at the end.",
-        "iou": "Take logits > 0 and masks > 0.5. Divide the sum of their & by the sum of their |, and use .item().",
-        "edge_pixels": "Grow with F.max_pool2d(masks, 3, stride=1, padding=1), shrink with minus that of -masks, "
-        "and compare the two with !=.",
+        "NoSkipUNet.forward": "Compute a, b and c as in TinyUNet. Then compute self.up2(F.interpolate(c, "
+        "scale_factor=2)), do the same with up1, and apply self.out at the end.",
+        "iou": "Compute logits > 0 and masks > 0.5. Divide the sum of their & by the sum of their |, then call "
+        ".item() to get a float.",
+        "edge_pixels": "Grow the masks with F.max_pool2d(masks, 3, stride=1, padding=1). Shrink them by negating "
+        "the same max pool of -masks. Compare the two results with !=.",
     },
     introduces=(),
     check=check_unet2,

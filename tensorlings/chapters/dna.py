@@ -37,13 +37,14 @@ DNA = Chapter(
         """
         # Project: DNA motifs
 
-        Section 5's project. A gene's DNA holds stretches the cell keeps,
-        exons, and stretches it cuts out, introns. You train a small 1D conv
-        net to tell, from 60 bases of primate DNA, whether an exon ends there,
-        an intron ends there, or neither. Then you read its kernels back and
-        find the patterns biologists found by hand. The training runs outside
-        the app, on the fastest device the machine has. Download the data once
-        from the project folder.
+        This is Section 5's project. A gene's DNA has stretches that the cell
+        keeps, called exons, and stretches that it cuts out, called introns.
+        You train a small 1D conv net on windows of 60 bases of primate DNA.
+        For each window, the net predicts whether an exon ends at its middle,
+        an intron ends there, or neither. Then you read the net's kernels and
+        find the same patterns that biologists found by hand. The training
+        runs outside the app, on the fastest device the machine has. Download
+        the data once, from the project folder.
 
         ```bash
         .venv/bin/python run.py data splice
@@ -167,51 +168,58 @@ def clean_windows() -> tuple[Tensor, Tensor]:
 DNA1_LESSON = prose(
     """
     This is Section 5's project. DNA is a string of four letters, the bases A,
-    C, G and T. A gene holds stretches the cell keeps, exons, and stretches it
-    cuts out, introns. Here a conv net learns to find where one meets the other.
+    C, G and T. A gene has stretches that the cell keeps, called exons, and
+    stretches that it cuts out, called introns. In this project a conv net
+    learns to find the places where an exon meets an intron.
 
-    Each window is 60 bases of primate DNA from GenBank, gathered by
-    Noordewier, Towell and Shavlik in 1991. The place in question sits between
-    the 30th and the 31st base, and the label says what happens there.
+    The data is a set of windows. Each window is 60 bases of primate DNA from
+    GenBank, collected by Noordewier, Towell and Shavlik in 1991. Each window
+    is centred on one possible cut point, between its 30th and 31st bases.
+    The window's label says what happens at that point.
 
     - exon to intron: an exon ends and an intron begins.
     - intron to exon: an intron ends and an exon begins.
     - neither: nothing is cut there.
 
-    Download the data once, about 160 KB, from the project folder with
-    `.venv/bin/python run.py data splice`.
+    To download the data, about 160 KB, run
+    `.venv/bin/python run.py data splice` once from the project folder.
 
-    Clean it first. 15 windows hold D, N, R or S, letters for a base the
-    sequencing couldn't settle. 185 more repeat an earlier window exactly, one
-    of them with another label. A window in both the training and the test set
-    would let the score count memory as skill. So `clean` keeps each window
-    once, which leaves 2,990, with 674, 670 and 1,646 per label.
+    Clean the data first. 15 windows contain D, N, R or S. These letters mark
+    a base that the sequencing could not identify for sure. 185 more windows
+    repeat an earlier window exactly, and one of those repeats has a different
+    label. A window in both the training set and the test set inflates the
+    test score, because the model can get it right from memory. So `clean`
+    drops the windows with other letters and keeps only the first copy of each
+    window. That leaves 2,990 windows, with 674, 670 and 1,646 per label.
 
-    A conv net reads channels, as an image has red, green and blue. One hot
-    gives DNA four, one per base, so a window becomes a tensor of shape (4, 60).
-    `F.one_hot` puts the four last, and `.transpose(1, 2)` swaps dimensions 1
-    and 2.
+    A conv net expects its input to have channels, the way an image has red,
+    green and blue channels. One hot encoding gives DNA four channels, one per
+    base. So a window becomes a tensor of shape (4, 60). `F.one_hot` puts the
+    four channels in the last dimension. `.transpose(1, 2)` swaps dimensions 1
+    and 2, which moves the channels in front of the positions.
 
     ```python
     torch.zeros(2, 60, 4).transpose(1, 2).shape    # torch.Size([2, 4, 60])
     ```
 
-    Look at the data before training on it, the first step of Karpathy's
-    recipe. `base_frequencies` gives the share of each base at each place, over
-    one label's windows.
+    Look at the data before training on it. That is the first step of
+    Karpathy's recipe for training neural nets. `base_frequencies` takes the
+    windows with one label and gives, for each position, the fraction of them
+    that have each base there.
 
-    | Windows | Places | Bases there |
+    | Windows | Positions | Bases there |
     |---|---|---|
     | exon to intron | 31st and 32nd | G in 99.9%, then T in 99.0% |
     | intron to exon | 29th and 30th | A in 99.6%, then G in 99.7% |
     | neither | 29th to 32nd | each base in 23% to 28% |
 
-    An intron almost always begins with GT and ends with AG. Textbooks call it
-    the GU-AG rule, with U in RNA where DNA has T. The windows with neither show
-    no such pattern at the middle.
+    So an intron almost always begins with GT and ends with AG. Textbooks call
+    this the GU-AG rule, because RNA has U where DNA has T. The windows
+    labeled neither show no such pattern at the middle.
 
-    `split` keeps 600 windows for the test set and 400 for validation, and
-    trains on the other 1,990. The test set waits until dna3.
+    `split` puts 600 windows in the test set and 400 in the validation set.
+    The other 1,990 windows are for training. You will not use the test set
+    until dna3.
     """,
 )
 
@@ -238,9 +246,12 @@ DNA1_SOURCE = source_file(
     hot = F.one_hot(torch.tensor([0, 2]), 4)   # tensor([[1, 0, 0, 0], [0, 0, 1, 0]])
 
 
-    # TODO: Return the windows of sequences, and their labels as a tensor, that
-    #   hold only the letters of BASES, keeping each window the first time it
-    #   comes and dropping every repeat of it after.
+    # TODO: Clean the data. Keep only the windows of sequences that contain
+    #   nothing but the letters of BASES. Keep each window the first time it
+    #   appears, and drop every later copy of it. Return the kept windows as a
+    #   list and their labels as a tensor.
+    #   Example: from ["ACGT", "ACNT", "ACGT"], clean keeps only the first
+    #   "ACGT".
     def clean(
         sequences: list[str],
         labels: Tensor,
@@ -248,14 +259,19 @@ DNA1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return sequences one hot, as floats of shape (count, 4, length), with
-    #   one channel per letter of BASES in that order.
+    # TODO: Return sequences one hot encoded, as a float tensor of shape
+    #   (count, 4, length). Channel i is 1 where the base is BASES[i] and 0
+    #   elsewhere, so the channels are A, C, G and T in that order.
+    #   Example: one_hot(["AC"]) returns
+    #   tensor([[[1., 0.], [0., 1.], [0., 0.], [0., 0.]]]).
     def one_hot(sequences: list[str]) -> Tensor:
         ...
 
 
-    # TODO: Return the share of each base at each place over the windows of x
-    #   with the given label, of shape (4, length).
+    # TODO: Take the windows of x whose label is label, and return the fraction
+    #   of them that have each base at each position. x has shape
+    #   (count, 4, length), labels has shape (count,), and the result has shape
+    #   (4, length).
     def base_frequencies(
         x: Tensor,
         labels: Tensor,
@@ -264,9 +280,10 @@ DNA1_SOURCE = source_file(
         ...
 
 
-    # TODO: Finish the middle lines. The first test_size shuffled positions are
-    #   the test set, the next validation_size the validation set, and the rest
-    #   the training set.
+    # TODO: Finish the middle lines. order is a random shuffle of the indices of
+    #   x. Its first test_size indices are the test set, the next
+    #   validation_size indices are the validation set, and the rest are the
+    #   training set.
     def split(
         x: Tensor,
         labels: Tensor,
@@ -285,12 +302,14 @@ DNA1_SOURCE = source_file(
     kept, y = clean(sequences, labels)
     x = one_hot(kept)
 
-    # TODO: Set after_exon to the share of each base at the 31st and 32nd places,
-    #   right after the middle, of the windows where an exon ends, of shape (4, 2).
+    # TODO: Set after_exon to the base frequencies at the 31st and 32nd
+    #   positions (indices 30 and 31), right after the middle, over the windows
+    #   where an exon ends. after_exon has shape (4, 2).
     after_exon = ...
 
-    # TODO: Set before_exon the same way, at the 29th and 30th places, right
-    #   before the middle, of the windows where an intron ends.
+    # TODO: Set before_exon the same way, at the 29th and 30th positions
+    #   (indices 28 and 29), right before the middle, over the windows where an
+    #   intron ends.
     before_exon = ...
     ''',
 )
@@ -440,7 +459,7 @@ def check_dna1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="base_frequencies",
-        description="gives the share of each base at each place for one label",
+        description="gives the fraction of each base at each position for one label",
         inputs=(
             (Described(small_windows(370, 9, 6)[0], "9 windows of 6 bases"), small_windows(370, 9, 6)[1], 1),
             (Described(small_windows(371, 12, 5)[0], "12 windows of 5 bases"), small_windows(371, 12, 5)[1], 2),
@@ -481,13 +500,16 @@ DNA1 = Exercise(
     hints={
         "clean": "Keep a set of the windows seen so far. A window stays when set(window) <= set(BASES) and it is not "
         "in that set yet. Index labels with the list of kept positions.",
-        "one_hot": "Turn each letter into its place in BASES with BASES.index, then F.one_hot(ids, 4). That gives "
-        "(count, length, 4), so swap the last two dimensions with .transpose and call .float().",
-        "base_frequencies": "x[labels == label] keeps one label's windows. Their mean over the first dimension is "
-        "the share of each base at each place.",
-        "split": "test is order[:test_size], validation the next validation_size positions, train the rest.",
-        "after_exon": "Exons ending is label 0. Take base_frequencies of x and y for it, then the columns 30:32.",
-        "before_exon": "Introns ending is label 1. Take the columns 28:30 of its base_frequencies.",
+        "one_hot": "Turn each letter into its index in BASES with BASES.index, then call F.one_hot(ids, 4). That "
+        "gives shape (count, length, 4), so swap the last two dimensions with .transpose and call .float().",
+        "base_frequencies": "x[labels == label] keeps the windows with that label. Their mean over the first "
+        "dimension is the fraction of windows with each base at each position.",
+        "split": "test is order[:test_size]. validation is the next validation_size indices of order, and train is "
+        "the rest.",
+        "after_exon": "Windows where an exon ends have label 0. Take base_frequencies of x and y for label 0, then "
+        "keep the columns 30:32.",
+        "before_exon": "Windows where an intron ends have label 1. Keep the columns 28:30 of base_frequencies for "
+        "label 1.",
     },
     introduces=(),
     check=check_dna1,
@@ -606,48 +628,53 @@ DNA2_MAIN = '''
 
 DNA2_LESSON = prose(
     """
-    `DnaNet` reads each window with 32 kernels of 7 bases, the same kernels at
-    every place, as conv4's detector did with `nn.Conv1d`. One kernel that
-    learns GT finds it wherever it sits. A Linear layer over all 240 numbers
-    would need its own weight for every base at every place.
+    `DnaNet` starts with an `nn.Conv1d` of 32 kernels, each 7 bases wide, like
+    conv4's detector. Each kernel slides along the window, so the same weights
+    are used at every position. A kernel that learns to detect GT finds it
+    wherever it appears. A Linear layer over all 240 numbers of a window would
+    need a separate weight for every base at every position.
 
-    Then comes resnet1's basic block in one dimension, and a max pool that
-    halves the 60 places to 30. The head flattens what is left, so it knows
-    where each pattern was. That matters here, since the junction always sits
-    in the middle, and pooling2 showed a global pool would throw it away.
-    Dropout before the head, from dropout1, keeps it from leaning on any one
-    feature.
+    Next comes resnet1's basic block in one dimension, then a max pool that
+    halves the 60 positions to 30. The head flattens the result instead of
+    pooling it away, so it still knows where each pattern was found. That
+    matters here, because the junction is always in the middle of the window.
+    As pooling2 showed, a global pool would throw that position away. Dropout
+    before the head, from dropout1, stops the head from relying too much on
+    any one feature.
 
-    This step trains outside the app. Once every check above the last one
-    passes, train from the project folder with
-    `.venv/bin/python run.py train dna2`. That runs the file's `main()`, which
-    trains for 32 epochs with AdamW and saves `checkpoints/dna2.pt`. The last
-    check here reads it back.
+    This step trains outside the app. When every check except the last one
+    passes, run `.venv/bin/python run.py train dna2` from the project folder.
+    That runs the file's `main()`, which trains for 32 epochs with AdamW and
+    saves the model to `checkpoints/dna2.pt`. The last check loads that file
+    and tests the model.
 
-    It trains on the fastest device the machine has, which `best_device()`
-    picks. That is an NVIDIA GPU through CUDA, Apple silicon's GPU through MPS,
-    or the CPU when there is neither. A model and every batch it sees must sit
-    on the same device, and `.to(device)` moves either one.
+    Training runs on the fastest device the machine has, which `best_device()`
+    picks. That is an NVIDIA GPU through CUDA, or Apple silicon's GPU through
+    MPS, or the CPU when there is neither. A model and every batch it
+    processes must be on the same device. `.to(device)` moves a model or a
+    tensor to a device.
 
     ```python
-    model = model.to(device)             # every weight moves
-    scores = model(windows.to(device))   # the batch moves to meet it
-    scores.argmax(dim=1).cpu()           # and the answer comes back
+    model = model.to(device)             # moves every weight to device
+    scores = model(windows.to(device))   # moves the batch to the same device
+    scores.argmax(dim=1).cpu()           # brings the predictions back to the CPU
     ```
 
-    The shuffle comes from a generator on the CPU, so each batch is picked
-    there and then moved. Measuring runs in batches with the model in eval
-    mode, so BatchNorm uses its running statistics and dropout switches off.
-    `model.train()` switches both back afterwards.
+    The shuffle uses a random generator on the CPU. So each batch is chosen on
+    the CPU, then moved to the device. Evaluation runs in batches with the
+    model in eval mode, so BatchNorm uses its running statistics and dropout
+    is turned off. Afterwards, `model.train()` turns both back to their
+    training behaviour.
 
-    Here is the final validation accuracy of `main()`'s training on MPS, with
-    its seed and with four others.
+    The table shows the final validation accuracy after `main()` trained on
+    MPS, with its own seed 0 and with four other seeds.
 
     | Seed | 0 | 1 | 2 | 3 | 4 |
     |---|---|---|---|---|---|
     | Validation accuracy | 95.0% | 97.5% | 97.75% | 97.5% | 97.5% |
 
-    One run takes about 10 seconds here. The check asks for more than 93%.
+    One run took about 10 seconds on the machine that made this table. The
+    last check requires more than 93%.
     """,
 )
 
@@ -678,12 +705,14 @@ DNA2_SOURCE = source_file(
 ''' + indented(BLOCK_PART) + '''
 
 
-    # TODO: Finish DnaNet. The stem is an nn.Sequential of an nn.Conv1d from 4
-    #   to 32 channels with kernels of 7 and padding 3, then a ReLU. block is
-    #   Block1d(32), pool an nn.MaxPool1d(2), drop an nn.Dropout(0.3), and the
-    #   head a Linear from 32 * 30 to 3. forward runs the stem, the block and
-    #   the pool, flattens each window's features into one row, then runs drop
-    #   and the head.
+    # TODO: Finish DnaNet. self.stem is an nn.Sequential of an nn.Conv1d from 4
+    #   to 32 channels with kernel size 7 and padding 3, followed by an
+    #   nn.ReLU. self.block is Block1d(32), self.pool is an nn.MaxPool1d(2),
+    #   self.drop is an nn.Dropout(0.3), and self.head is an nn.Linear from
+    #   32 * 30 to 3. forward passes x through the stem, the block and the
+    #   pool. Then it flattens each window's features into one row and passes
+    #   them through drop and the head. x has shape (batch, 4, 60), and
+    #   forward returns scores of shape (batch, 3).
     class DnaNet(nn.Module):
         def __init__(self) -> None:
             super().__init__()
@@ -697,10 +726,11 @@ DNA2_SOURCE = source_file(
             ...
 
 
-    # TODO: Return the share of x that model labels right, as a plain number.
-    #   Go through x in batches of batch_size, each moved to device, in eval
-    #   mode and without recording for autograd. Then put model back in
-    #   training mode.
+    # TODO: Return the fraction of the windows in x that model labels
+    #   correctly, as a Python float. Put model in eval mode and turn off
+    #   gradient tracking. Go through x in batches of batch_size, and move each
+    #   batch to device. The predicted label is the index of the highest score.
+    #   Afterwards, put model back in training mode.
     def evaluate(
         model: nn.Module,
         x: Tensor,
@@ -711,9 +741,10 @@ DNA2_SOURCE = source_file(
         ...
 
 
-    # TODO: Finish the loop. For each batch, move its windows and its labels to
-    #   device, take the cross entropy of the model's scores, and take a step of
-    #   optimizer. It returns the last batch's loss.
+    # TODO: Finish the loop. For each batch, move its windows x[batch] and its
+    #   labels y[batch] to device. Compute the cross entropy loss between the
+    #   model's scores and the labels, then take one optimizer step. The
+    #   function returns the last batch's loss.
     def train_epoch(
         model: nn.Module,
         optimizer: torch.optim.Optimizer,
@@ -857,8 +888,8 @@ def check_evaluate(found: object) -> None:
         function="evaluate",
         run=lambda: found(recorder, x, y, torch.device("meta"), 25),
         recorders=[recorder],
-        advice="Move each batch of windows to device. Then compare on one device, the predictions brought back "
-        "with .cpu() or the labels moved to device too.",
+        advice="Move each batch of windows to device. Then compare predictions and labels on one device, either "
+        "by bringing the predictions back with .cpu() or by moving the labels to device too.",
     )
 
 
@@ -940,7 +971,7 @@ def check_trained_model(found: type) -> None:
     accuracy = REFERENCE["evaluate"](model, fresh_copy(validation_x), fresh_copy(validation_y), torch.device("cpu"))
 
     if accuracy < TRAINED_BAR:
-        raise Mismatch(f"The trained model labels {accuracy:.1%} of the validation set right, but it should pass {TRAINED_BAR:.0%}.")
+        raise Mismatch(f"The trained model labels {accuracy:.1%} of the validation set correctly, but it should get more than {TRAINED_BAR:.0%}.")
 
 
 def check_dna2(checker: Checker) -> None:
@@ -952,18 +983,18 @@ def check_dna2(checker: Checker) -> None:
     )
     checker.test(
         function="evaluate",
-        description="measures in eval mode, in batches, then switches back",
+        description="measures accuracy in eval mode and in batches, then switches back to training mode",
         run=check_evaluate,
     )
     checker.test(
         function="train_epoch",
-        description="moves each batch to the device and steps the optimizer",
+        description="moves each batch to the device and takes an optimizer step",
         run=check_train_epoch,
     )
     checker.test_method(
         class_name="DnaNet",
         method="forward",
-        description=f"trained, passes {TRAINED_BAR:.0%} on the validation set",
+        description=f"after training, scores over {TRAINED_BAR:.0%} on the validation set",
         run=check_trained_model,
     )
 
@@ -976,12 +1007,12 @@ DNA2 = Exercise(
     source=DNA2_SOURCE,
     solution=DNA2_SOLUTION,
     hints={
-        "DnaNet.forward": "Run self.stem, self.block and self.pool. Then .flatten(1) gives one row per window, and "
-        "self.drop and self.head finish it.",
-        "evaluate": "Call model.eval(), and inside torch.no_grad() loop over range(0, len(x), batch_size). Compare "
-        "each batch's argmax, moved back with .cpu(), to its labels, and count the matches.",
+        "DnaNet.forward": "Pass x through self.stem, self.block and self.pool. Then .flatten(1) gives one row per "
+        "window. Pass that through self.drop and then self.head.",
+        "evaluate": "Call model.eval(). Inside torch.no_grad(), loop over range(0, len(x), batch_size). For each "
+        "batch, take the argmax of the scores, move it back with .cpu(), and count how many match the labels.",
         "train_epoch": "The loss is F.cross_entropy of model(x[batch].to(device)) and y[batch].to(device). Then zero "
-        "the gradients, call backward and optimizer.step().",
+        "the gradients, call loss.backward() and call optimizer.step().",
     },
     introduces=(),
     check=check_dna2,
@@ -1027,15 +1058,17 @@ def kernel_for(
 
 DNA3_LESSON = prose(
     """
-    The test set gets used once, at the very end. Every choice is made by now,
-    so its number is a fair guess at how the model does on DNA it has never
-    seen. The run behind this project labels 96.3% of the test set right.
+    The test set is used only once, at the very end. By now every choice about
+    the model has been made. So the test accuracy is a fair estimate of how
+    the model does on DNA it has never seen. The model trained for this
+    project labels 96.3% of the test set correctly.
 
-    Biologists score a site with a position weight matrix, one weight for every
-    base at every place. That is a single Linear layer over the one hot window.
-    An MLP adds a hidden layer to it. Here are both against `DnaNet`, trained
-    the same way on the first windows of the training set, over three seeds,
-    measured on validation.
+    Biologists score a possible site with a position weight matrix, which has
+    one weight for every base at every position. That is the same as a single
+    Linear layer over the one hot window. An MLP adds a hidden layer to it.
+    The table compares both with `DnaNet`. All three were trained the same way
+    on the first windows of the training set, with three seeds each. The
+    numbers are validation accuracies.
 
     | Training windows | DnaNet | Position weights | MLP |
     |---|---|---|---|
@@ -1043,30 +1076,35 @@ DNA3_LESSON = prose(
     | 1,000 | 95.3% to 97.0% | 93.8% to 94.3% | 92.2% to 92.7% |
     | 1,990 | 97.0% to 97.8% | 95.0% to 95.3% | 93.5% to 93.8% |
 
-    `DnaNet` wins at every size and every seed. With all the data it makes
-    about half the mistakes of the position weights. Its stem holds 928 weights,
-    32 detectors of 7 bases, each shared by all 60 places. The MLP holds 31,235 and
-    trails the position weights from 1,000 windows on, since it must learn each
-    pattern again at every place.
+    `DnaNet` is the most accurate at every size and every seed. With all the
+    data, it makes about half as many mistakes as the position weights. Its
+    stem has only 928 parameters, for 32 kernels of 7 bases, and all 60
+    positions share them. The MLP has 31,235 parameters. From 1,000 windows
+    on, the MLP does worse than the position weights, because it must learn
+    each pattern separately at every position.
 
-    Sharing pays off a second way. Each kernel is a pattern of 7 bases you can
-    read. `kernel_motif` takes the strongest base at each place, and
-    `kernel_for` finds the kernel that fires most on one label beyond the rest.
-    Handed `base_frequencies`, `kernel_motif` also reads the commonest bases of
-    the data itself.
+    Sharing weights has a second benefit. Each kernel is a pattern of 7 bases
+    that you can read. `kernel_motif` picks the base with the largest weight at
+    each position of a kernel. `kernel_for` finds the kernel that responds most
+    strongly to windows of one label, compared with the other windows. Given
+    the output of `base_frequencies` instead of a kernel, `kernel_motif` gives
+    the most common base at each position in the data.
 
-    | Windows | Its kernel in the run behind this project | Commonest bases around the middle |
+    | Windows | Its kernel in this project's trained model | Most common bases around the middle |
     |---|---|---|
-    | exon to intron | AGGTGAG | AGGTAAG, the 29th to 35th places |
-    | intron to exon | CTCCGTT | CCCTCCAG, the 23rd to 30th places |
+    | exon to intron | AGGTGAG | AGGTAAG, the 29th to 35th positions |
+    | intron to exon | CTCCGTT | CCCTCCAG, the 23rd to 30th positions |
 
-    The first kernel matches the data at 6 of 7 places, the GT where an intron
-    begins with its neighbours. The second found the run of C and T before an
-    intron ends, which biologists call the polypyrimidine tract. Nobody told
-    the net either one, and each came out of training on labels alone.
+    The first kernel matches the data at 6 of 7 positions. It found the GT
+    where an intron begins, along with the bases next to it. The second kernel
+    found the run of C and T right before an intron ends, which biologists call
+    the polypyrimidine tract. Nobody told the net about either pattern. It
+    learned both from the labels alone.
 
-    `.argmax(dim=0)` gives the strongest base's number at each place, and
-    `.amax(dim=2)` the largest response over the places, as pooling2 did.
+    `.argmax(dim=0)` gives the index of the largest value in each column. For
+    a kernel, that is the strongest base at each position. `.amax(dim=2)`
+    gives the largest value along dimension 2. For the stem's output, that is
+    each kernel's largest response over all positions, as in pooling2.
     """,
 )
 
@@ -1083,7 +1121,7 @@ DNA3_SOURCE = source_file(
     from tensorlings.training import load_checkpoint
 
     kernel = torch.tensor([[0.9, 0.1], [0.0, 0.2], [0.3, 0.1], [0.1, 0.8]])
-    places = kernel.argmax(dim=0)              # tensor([0, 3]), the strongest base at each place
+    places = kernel.argmax(dim=0)              # tensor([0, 3]), the strongest base's index at each position
     strongest = torch.tensor([[1.0, 4.0, 2.0], [3.0, 0.5, 2.5]]).amax(dim=1)    # tensor([4., 3.])
 
 
@@ -1097,9 +1135,10 @@ DNA3_SOURCE = source_file(
 ''' + indented(DNA_NET_SOLUTION) + '''
 
 
-    # TODO: Return model's predicted label for every window of x, going through
-    #   x in batches of batch_size, in eval mode and without recording for
-    #   autograd.
+    # TODO: Return model's predicted label for every window of x, as one tensor
+    #   of shape (count,). Put model in eval mode, turn off gradient tracking,
+    #   and go through x in batches of batch_size. The predicted label is the
+    #   index of the highest score.
     def predictions(
         model: nn.Module,
         x: Tensor,
@@ -1108,17 +1147,21 @@ DNA3_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the strongest base at each place of kernel, of shape
-    #   (4, places), as one string, such as "AT" for the kernel above.
+    # TODO: Return the strongest base at each position of kernel, as one
+    #   string. kernel has shape (4, positions), with one row per base of BASES.
+    #   The strongest base at a position is the one with the largest value
+    #   there. Example: for the kernel above, kernel_motif returns "AT".
     def kernel_motif(kernel: Tensor) -> str:
         ...
 
 
-    # TODO: Return the number of the stem's kernel that fires most on the
-    #   windows of x with label, beyond how it fires on the other windows, as a
-    #   plain int. Run model.stem on x without recording for autograd, take
-    #   each kernel's largest response over the places of each window, and
-    #   compare its mean over the windows with label to its mean over the rest.
+    # TODO: Return the index, as a Python int, of the stem kernel that responds
+    #   most strongly to the windows of x with label label, compared with the
+    #   other windows. Run model.stem on x with gradient tracking turned off.
+    #   For each window and each kernel, take the largest response over all
+    #   positions. Average that over the windows with label label, subtract
+    #   its average over the other windows, and return the kernel index with
+    #   the largest difference.
     def kernel_for(
         model: nn.Module,
         x: Tensor,
@@ -1134,14 +1177,15 @@ DNA3_SOURCE = source_file(
     model = load_checkpoint(DnaNet(), "dna2")
     model.eval()
 
-    # TODO: Set test_accuracy to the share of the test set that model labels
-    #   right, as a plain number, from predictions.
+    # TODO: Set test_accuracy to the fraction of the test set that model labels
+    #   correctly, as a Python float. Use predictions.
     test_accuracy = ...
 
-    # TODO: Set exon_end_motif to the motif of the stem kernel that fires most
-    #   where an exon ends, label 0, found on the validation set, and
-    #   exon_start_motif the same for label 1. model.stem[0].weight holds the
-    #   kernels, of shape (32, 4, 7).
+    # TODO: Set exon_end_motif to the motif of the stem kernel that responds
+    #   most to windows where an exon ends, which have label 0. Find that
+    #   kernel with kernel_for on the validation set. Set exon_start_motif the
+    #   same way for label 1. model.stem[0].weight holds the kernels, in a
+    #   tensor of shape (32, 4, 7).
     exon_end_motif = ...
     exon_start_motif = ...
     ''',
@@ -1220,7 +1264,7 @@ def expect_int(
     expected: int,
 ) -> None:
     if isinstance(actual, Tensor):
-        raise Mismatch(f"{call} is {actual}, a tensor, but it should be the plain int {expected}. Use .item().")
+        raise Mismatch(f"{call} is {actual}, a tensor, but it should be the Python int {expected}. Use .item().")
 
     expect_value(
         call=call,
@@ -1272,7 +1316,7 @@ def check_dna3(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="kernel_motif",
-        description="reads the strongest base at each place",
+        description="reads the strongest base at each position",
         inputs=(
             (torch.tensor([[0.9, 0.1, -0.2], [0.0, 0.2, 0.7], [0.3, 0.1, 0.1], [0.1, 0.8, 0.0]]),),
             (torch.tensor([[-1.0, 0.5, 0.2, 0.0, 0.1], [0.2, 0.1, 0.9, 0.3, 0.0], [0.4, 0.0, 0.1, 0.8, 0.0], [0.1, 0.3, 0.0, 0.2, 0.6]]),),
@@ -1285,7 +1329,7 @@ def check_dna3(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="kernel_for",
-        description="finds the kernel that fires most on one label",
+        description="finds the kernel that responds most to one label",
         inputs=(
             (Described(StemOnly(383), "a stem of 5 kernels"), Described(first_x, "30 windows"), first_y, 0),
             (Described(StemOnly(384), "a stem of 5 kernels"), Described(second_x, "40 windows"), second_y, 2),
@@ -1295,7 +1339,7 @@ def check_dna3(checker: Checker) -> None:
     )
     checker.check_name(
         name="test_accuracy",
-        description="is the share of the test set labelled right",
+        description="is the fraction of the test set labeled correctly",
         run=check_test_accuracy,
     )
     checker.check_name(
@@ -1318,18 +1362,18 @@ DNA3 = Exercise(
     source=DNA3_SOURCE,
     solution=DNA3_SOLUTION,
     hints={
-        "predictions": "model.eval(), then inside torch.no_grad() take model(...).argmax(dim=1) of each batch and "
-        "torch.cat them.",
-        "kernel_motif": "kernel.argmax(dim=0) gives the strongest base's number at each place. Look each one up in "
-        "BASES and join the letters.",
+        "predictions": "Call model.eval(). Then, inside torch.no_grad(), compute model(...).argmax(dim=1) for each "
+        "batch and join the results with torch.cat.",
+        "kernel_motif": "kernel.argmax(dim=0) gives the index of the strongest base at each position. Look each "
+        "index up in BASES and join the letters into one string.",
         "kernel_for": "Run x through model.stem and take .amax over dim 2, the positions. That leaves one row per "
-        "window and one column per kernel. Take the mean of its rows with y == label, take away the mean of the "
-        "rest, and give the argmax as an int.",
+        "window and one column per kernel. Average the rows where y == label, subtract the average of the other "
+        "rows, and return the argmax as an int.",
         "test_accuracy": "Compare predictions(model, test_x) with test_y, take the mean of the matches as floats, "
-        "then .item().",
-        "exon_end_motif": "kernel_for(model, validation_x, validation_y, 0) gives a kernel's number. Hand "
-        "model.stem[0].weight at that number to kernel_motif.",
-        "exon_start_motif": "The same, with label 1.",
+        "then call .item().",
+        "exon_end_motif": "kernel_for(model, validation_x, validation_y, 0) gives a kernel's index. Pass "
+        "model.stem[0].weight at that index to kernel_motif.",
+        "exon_start_motif": "Do the same as for exon_end_motif, with label 1.",
     },
     introduces=(),
     check=check_dna3,

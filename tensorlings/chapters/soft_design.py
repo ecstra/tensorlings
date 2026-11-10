@@ -27,11 +27,12 @@ SOFT_DESIGN = Chapter(
         """
         # Designing with soft steps
 
-        Section 6 is about sequences, and its models, like Section 7's, are
-        built from soft steps. This chapter shows the method behind them on
-        two small tasks, before the named blocks arrive. You write the exact
-        algorithm, find its hard steps, swap each one for a soft step, and
-        train the model that results.
+        Section 6 is about sequences. Its models, like Section 7's, are built
+        from soft steps, which are smooth versions of hard decisions that a
+        gradient can pass through. This chapter shows the method behind those
+        models on two small tasks, before you meet the named blocks. You write
+        the exact algorithm and find its hard steps. Then you replace each hard
+        step with a soft step and train the resulting model.
 
         ## Further reading
 
@@ -81,33 +82,36 @@ def lookup_sequences(
 DERIVE1_LESSON = prose(
     """
     Section 6 is about sequences, and its blocks are built from soft steps.
-    This chapter shows the method behind them, on two small tasks, before the
-    named blocks arrive. The method has four moves.
+    This chapter shows the method behind those blocks on two small tasks,
+    before you meet the blocks themselves. The method has four steps.
 
     1. Write the exact algorithm by hand, in plain Python.
-    2. Find its hard steps, the comparisons, `if`s and picks that pass no gradient, as soft1 showed.
-    3. Swap each one for a soft step.
-    4. Let the model compute what the soft step needs, and train it.
+    2. Find its hard steps. These are the comparisons, `if`s and choices of one item that pass no gradient, as soft1 showed.
+    3. Replace each hard step with a soft step.
+    4. Let the model compute the numbers the soft step needs, and train the model.
 
-    The first task reads a sequence of pairs, each a value and a mark of 0 or
-    1. It gives back the last value that was marked. By hand it is a loop with
-    one `if`, which you write first.
+    In the first task, the input is a sequence of pairs. Each pair is a value
+    and a mark that is 0 or 1. The output is the last value whose mark is 1.
+    The exact algorithm is a loop with one `if`, and you write it first.
 
-    The `if` is the hard step. Without it, the same update reads
+    The `if` is the hard step. Here is the same update written without an
+    `if`.
 
     ```text
     memory = mark * value + (1 - mark) * memory
     ```
 
-    With a mark of exactly 0 or 1, this is the same algorithm. Put any number
-    from 0 to 1 in the mark's place and it blends the new value into the
-    memory instead. That number is a **gate**. A gate of 0.9 keeps mostly the
-    new value, and 0.1 keeps mostly the memory.
+    When the mark is exactly 0 or 1, this computes the same thing as the `if`.
+    Now put any number between 0 and 1 in place of the mark. Then the update
+    gives a weighted average of the new value and the old memory. That number
+    is called a **gate**. With a gate of 0.9, the result is mostly the new
+    value. With a gate of 0.1, it is mostly the old memory.
 
-    The model has to decide each gate itself, from that step's input. Here an
-    `nn.Linear(2, 1)` scores the value and the mark, and a sigmoid turns the
-    score into the gate. Trained for 300 steps on random sequences of 10, it
-    gives this.
+    The model has to compute each gate itself, from that step's input. Here
+    an `nn.Linear(2, 1)` computes a score from the value and the mark. A
+    sigmoid then turns the score into a gate between 0 and 1. The table shows
+    the results after training for 300 steps on random sequences of length
+    10.
 
     | Model | Mean squared error on new sequences |
     |---|---|
@@ -115,16 +119,18 @@ DERIVE1_LESSON = prose(
     | the gated memory, untrained | 0.699 |
     | the gated memory, trained | 0.012 |
 
-    The trained Linear puts a weight of 6.8 on the mark, about 0 on the value,
-    and a bias of -3.8. So a marked step gets a gate of 0.95 and an unmarked
-    one 0.02. It found the `if`, as a soft one.
+    The trained Linear has a weight of 6.8 on the mark, a weight of about 0 on
+    the value, and a bias of -3.8. So a marked step gets a gate of about
+    `sigmoid(6.8 - 3.8) = 0.95`, and an unmarked step gets about
+    `sigmoid(-3.8) = 0.02`. Training found the `if` again, in soft form.
 
-    With `(score > 0).float()` as the gate instead, `loss.backward()` fails
-    with "element 0 of tensors does not require grad". Nothing in the model
-    gets any gradient at all.
+    If you use `(score > 0).float()` as the gate instead, `loss.backward()`
+    fails with the error "element 0 of tensors does not require grad". The
+    comparison passes no gradient, so nothing in the model gets any gradient
+    at all.
 
-    A gate computed from the input is the heart of the LSTM and the GRU in
-    41_gated_rnns.
+    A gate computed from the input is the central idea of the LSTM and the
+    GRU, which you build in 41_gated_rnns.
     """,
 )
 
@@ -140,8 +146,10 @@ DERIVE1_SOURCE = source_file(
     blended = gate * 5.0 + (1 - gate) * 2.0    # tensor(4.7000), mostly the new 5
 
 
-    # TODO: Return the last value whose mark is 1, or 0.0 when none is, with a
+    # TODO: Return the last value whose mark is 1, or 0.0 if no mark is 1. Use a
     #   plain loop and an if. values and marks are lists of the same length.
+    #   Example: keep_last_marked([0.5, -1.0, 2.0, 3.0], [1, 0, 1, 0]) returns
+    #   2.0.
     def keep_last_marked(
         values: list[float],
         marks: list[int],
@@ -149,9 +157,10 @@ DERIVE1_SOURCE = source_file(
         ...
 
 
-    # TODO: Run the memory along values, of shape (batch, steps), starting from
-    #   0. At step t, gates[:, t] blends values[:, t] into the memory, as in the
-    #   lesson. Return the memory at the end, of shape (batch,).
+    # TODO: Run the lesson's gated memory update along values, and return the
+    #   final memory. The memory starts at 0 for each sequence. At step t, use
+    #   gates[:, t] in place of the mark and values[:, t] as the value. values
+    #   and gates have shape (batch, steps), and the result has shape (batch,).
     def gated_memory(
         values: Tensor,
         gates: Tensor,
@@ -159,9 +168,10 @@ DERIVE1_SOURCE = source_file(
         ...
 
 
-    # TODO: Finish forward. x has shape (batch, steps, 2), each step a value and
-    #   its mark. Compute every step's gate with self.gate and a sigmoid, then
-    #   return gated_memory of the values with those gates.
+    # TODO: Finish forward. x has shape (batch, steps, 2), and each step holds a
+    #   value and its mark. Compute every step's gate by passing x through
+    #   self.gate and then a sigmoid. Return gated_memory of the values with
+    #   those gates, which has shape (batch,).
     class GatedMemory(nn.Module):
         def __init__(self) -> None:
             super().__init__()
@@ -214,7 +224,7 @@ DERIVE1_SOLUTION = source_file(
             super().__init__()
             self.gate = nn.Linear(2, 1)
 
-        # The Linear works on the last dimension, so one call scores every step of every sequence.
+        # nn.Linear acts on the last dimension, so one call computes a score for every step of every sequence.
         def forward(self, x: Tensor) -> Tensor:
             gates = torch.sigmoid(self.gate(x)).squeeze(2)
 
@@ -346,8 +356,8 @@ DERIVE1 = Exercise(
         "to the value.",
         "gated_memory": "Start from torch.zeros(len(values)). For each t in range(values.shape[1]), set memory to "
         "gates[:, t] * values[:, t] plus (1 - gates[:, t]) * memory.",
-        "GatedMemory.forward": "torch.sigmoid(self.gate(x)) has shape (batch, steps, 1), so .squeeze(2) it. The "
-        "values are x[:, :, 0].",
+        "GatedMemory.forward": "torch.sigmoid(self.gate(x)) has shape (batch, steps, 1), so remove the last "
+        "dimension with .squeeze(2). The values are x[:, :, 0].",
     },
     introduces=(),
     check=check_derive1,
@@ -362,42 +372,44 @@ DERIVE1 = Exercise(
 
 DERIVE2_LESSON = prose(
     """
-    The second task is a lookup. A sequence holds pairs of a key and a value,
-    then a query, and the answer is the value paired with the query's key. By
-    hand it is a loop that compares each key with the query, which you write
-    first.
+    The second task is a lookup. The input is a sequence of pairs, each a key
+    and a value, plus a query. The query equals one of the keys, and the
+    answer is the value paired with that key. The exact algorithm is a loop
+    that compares each key with the query, and you write it first.
 
-    It has two hard steps, the comparison `key == query` and returning the one
-    value it picked. soft2's soft lookup swaps both. A score says how well each
-    key matches the query, and a softmax turns the scores into weights. The
-    answer is the weighted sum of the values.
+    The lookup has two hard steps. One is the comparison `key == query`, and
+    the other is returning only the one value that matched. soft2's soft
+    lookup replaces both. A score says how well each key matches the query,
+    and a softmax turns the scores into weights that sum to 1. The answer is
+    the weighted sum of the values.
 
     The model has to learn what "matches" means. Here each key id gets a row
-    of 4 numbers from one `nn.Embedding`, and each query id a row from a
-    second, separate one. The score is the dot product of the two rows. Both
-    tables start out random, so at first a query matches its own key no better
-    than any other.
+    of 4 numbers from one `nn.Embedding`. Each query id gets a row from a
+    second, separate `nn.Embedding`. The score for a pair is the dot product
+    of the key's row and the query's row. Both tables start out random. So at
+    first, a query's score with its own key is no higher than with any other
+    key.
 
-    One shared table would match equal ids from the start, since a row's dot
-    product with itself is large. Two tables leave "match" for training to
-    define, which is what later lets a query match something other than an
-    equal id.
+    With one shared table, equal ids would match from the start, because a
+    row's dot product with itself is large. Two separate tables let training
+    decide what counts as a match. That is what later lets a query match
+    something other than an equal id.
 
-    Trained for 300 steps on sequences of 6 pairs, with ids from 0 to 9, it
-    gives this.
+    The table shows the results after training for 300 steps on sequences of
+    6 pairs, with ids from 0 to 9.
 
     | | Untrained | Trained |
     |---|---|---|
     | Mean squared error on new sequences | 1.133 | 0.0002 |
-    | Weight on the right key | 0.139 | 0.989 |
+    | Weight on the correct key | 0.139 | 0.989 |
 
-    Training made each query row score high with its own key's row and low
-    with every other. The `==` became a learned match, sharp enough to act
-    almost like the exact one.
+    Training made each query's row score high with its own key's row and low
+    with every other key's row. The `==` became a learned match. That match is
+    sharp enough to act almost like the exact comparison.
 
-    Notice what the model is. It scores every pair against the query, and
-    takes a weighted sum of the values. Section 7's main block does exactly
-    this, with the rows computed from the input itself.
+    Look at what this model does. It scores every pair against the query,
+    then takes a weighted sum of the values. Section 7's main block does
+    exactly this, except that it computes the rows from the input itself.
     """,
 )
 
@@ -414,8 +426,9 @@ DERIVE2_SOURCE = source_file(
     scores = rows @ query.unsqueeze(2)    # shape (2, 6, 1), one dot product per pair
 
 
-    # TODO: Return the value paired with query, with a plain loop and an if.
+    # TODO: Return the value paired with query. Use a plain loop and an if.
     #   keys and values are lists of the same length, and query is one of keys.
+    #   Example: exact_lookup([3, 7, 1], [0.5, -2.0, 4.0], 7) returns -2.0.
     def exact_lookup(
         keys: list[int],
         values: list[float],
@@ -424,10 +437,11 @@ DERIVE2_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the weights of a soft lookup, a softmax over the pairs of how
-    #   well each key row matches the query row by the dot product. key_rows
-    #   has shape (batch, pairs, size) and query_rows (batch, size). The result
-    #   has shape (batch, pairs).
+    # TODO: Return the weights of a soft lookup. The score of each pair is the
+    #   dot product of its key row with the query row, and the weights are a
+    #   softmax of those scores over the pairs. key_rows has shape
+    #   (batch, pairs, size), and query_rows has shape (batch, size). The
+    #   result has shape (batch, pairs).
     def match_weights(
         key_rows: Tensor,
         query_rows: Tensor,
@@ -435,10 +449,11 @@ DERIVE2_SOURCE = source_file(
         ...
 
 
-    # TODO: Finish forward. keys and values have shape (batch, pairs) and query
-    #   (batch,), with the keys and the query as ids. Look the key rows up in
-    #   self.keys and the query rows in self.queries, then return the values
-    #   summed with match_weights, of shape (batch,).
+    # TODO: Finish forward. keys and values have shape (batch, pairs), and query
+    #   has shape (batch,). The keys and the query are ids. Look up the key rows
+    #   in self.keys and the query rows in self.queries. Then return the
+    #   weighted sum of the values, with match_weights as the weights. The
+    #   result has shape (batch,).
     class SoftLookup(nn.Module):
         def __init__(
             self,
@@ -597,7 +612,7 @@ def check_derive2(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="match_weights",
-        description="gives a softmax over the pairs of each dot product",
+        description="gives a softmax over the pairs of the dot product scores",
         inputs=(
             (Described(small_tensor(391, 2, 3, 4) / 2, "key rows of shape (2, 3, 4)"), small_tensor(392, 2, 4) / 2),
             (Described(small_tensor(393, 3, 5, 2) / 2, "key rows of shape (3, 5, 2)"), small_tensor(394, 3, 2) / 2),
@@ -628,10 +643,10 @@ DERIVE2 = Exercise(
     solution=DERIVE2_SOLUTION,
     hints={
         "exact_lookup": "Loop over zip(keys, values), and return the value when the key equals query.",
-        "match_weights": "query_rows.unsqueeze(2) has shape (batch, size, 1), so key_rows @ it gives (batch, pairs, "
-        "1). Take .squeeze(2), then torch.softmax with dim=1.",
-        "SoftLookup.forward": "self.keys(keys) gives the key rows and self.queries(query) the query rows. Multiply "
-        "match_weights of them by values and sum over dim=1.",
+        "match_weights": "query_rows.unsqueeze(2) has shape (batch, size, 1), so key_rows @ it gives shape "
+        "(batch, pairs, 1). Remove the last dimension with .squeeze(2), then apply torch.softmax with dim=1.",
+        "SoftLookup.forward": "self.keys(keys) gives the key rows, and self.queries(query) gives the query rows. "
+        "Multiply match_weights of those rows by values, and sum over dim=1.",
     },
     introduces=(),
     check=check_derive2,

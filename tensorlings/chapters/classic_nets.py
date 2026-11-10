@@ -35,12 +35,13 @@ CLASSIC_NETS = Chapter(
         """
         # Classic convolutional nets
 
-        Three papers set the shape of image models. LeNet-5 put convolutions,
-        pooling and Linear layers in a row. VGG built everything from 3 by 3
-        convolutions. ResNet added the residual connection, and used it with
-        BatchNorm, which came out the same year, so the stack could go deep.
-        This chapter builds each from its paper and shows why ResNet's block
-        lets depth help.
+        Three papers set the design that most image models still follow.
+        LeNet-5 put convolutions, pooling and Linear layers in a row. VGG built
+        the whole network from 3 by 3 convolutions. ResNet added the residual
+        connection and combined it with BatchNorm, which was published the same
+        year. Together they let a network have many more layers and still train
+        well. This chapter builds each network from its paper. It also shows
+        why ResNet's block makes extra layers help instead of hurt.
 
         ## Further reading
 
@@ -111,9 +112,10 @@ def reference_train_lenet(
 LENET1_LESSON = prose(
     """
     LeNet-5, from LeCun and others in 1998, read handwritten digits on bank
-    cheques. Its shape is the one image models kept. Convolutions and pooling
-    shrink the image while adding channels, and Linear layers at the end turn
-    what is left into scores.
+    cheques. Its layout is the one that image models kept using. Convolutions
+    and pooling make the image smaller while giving it more channels. Then
+    Linear layers at the end turn the remaining numbers into one score per
+    class.
 
     | Layer | Output shape |
     |---|---|
@@ -125,14 +127,17 @@ LENET1_LESSON = prose(
     | Linear to 84, tanh | `(84,)` |
     | Linear to 10 | `(10,)` |
 
-    The paper padded each digit to 32 by 32. The padding of 2 in the first
-    layer does the same. The paper's pooling had a learned scale. Its second
-    convolution connected each kernel to only some of the 6 maps, and its
-    output layer was a special one. This version keeps tanh and average pooling,
-    connects everything and ends with a plain Linear, 61,706 weights in all.
+    The paper padded each 28 by 28 digit to 32 by 32. The padding of 2 in the
+    first layer has the same effect. The paper's version differs from this one
+    in a few ways. Its pooling multiplied by a learned scale. Its second
+    convolution connected each kernel to only some of the 6 maps that the
+    first convolution makes. Its output layer was a special kind of layer. This
+    version keeps tanh and average pooling. It connects every kernel to all 6
+    maps and ends with a plain Linear. It has 61,706 weights and biases in all.
 
-    Trained with Adam at 0.001 on minibatches of 64, it reached 92.4% on
-    MNIST's validation images after 300 steps and 97.2% after 1500.
+    Trained with Adam at a learning rate of 0.001 on minibatches of 64 images,
+    it got 92.4% of MNIST's validation images right after 300 steps. After
+    1500 steps it got 97.2% right.
     """,
 )
 
@@ -146,9 +151,11 @@ LENET1_SOURCE = source_file(
     from torch import Tensor
 
 
-    # TODO: Finish forward, following the table in the lesson. Each convolution
-    #   is followed by tanh and an average pool of 2, then the maps are
-    #   flattened into fc1, fc2 and fc3, with tanh after fc1 and fc2.
+    # TODO: Finish forward, following the table in the lesson. Pass x through
+    #   conv1, then tanh, then an average pool of 2, and do the same with
+    #   conv2. Flatten the result to shape (batch, 400) and pass it through
+    #   fc1, fc2 and fc3, with tanh after fc1 and after fc2. x has shape
+    #   (batch, 1, 28, 28), and forward returns scores of shape (batch, 10).
     class LeNet(nn.Module):
         def __init__(self) -> None:
             super().__init__()
@@ -162,15 +169,17 @@ LENET1_SOURCE = source_file(
             ...
 
 
-    # TODO: Return how many numbers LeNet learns when fc3 gives classes scores
-    #   in place of 10, worked out from its layer sizes, weights and biases.
-    #   lenet_parameters(10) is the LeNet above.
+    # TODO: Return how many numbers LeNet learns, counting every weight and
+    #   bias, when fc3 outputs classes scores instead of 10. Work it out from
+    #   the layer sizes. lenet_parameters(10) counts the LeNet above.
+    #   Example: lenet_parameters(10) returns 61706.
     def lenet_parameters(classes: int) -> int:
         ...
 
 
     # TODO: Finish the line that sets loss, so each step trains on 64 random
-    #   images of x with their labels y.
+    #   images. batch holds 64 random indices into x. loss is the cross entropy
+    #   between the model's scores for x[batch] and the labels y[batch].
     def train_lenet(
         model: nn.Module,
         x: Tensor,
@@ -220,7 +229,7 @@ LENET1_SOLUTION = source_file(
             return self.fc3(x)
 
 
-    # The two convolutions, then the three Linear layers, the last with one output per class.
+    # Count the two convolutions, then the three Linear layers. fc3 has one output per class.
     def lenet_parameters(classes: int) -> int:
         convolutions = (6 * 1 * 5 * 5 + 6) + (16 * 6 * 5 * 5 + 16)
         linears = (400 * 120 + 120) + (120 * 84 + 84) + (84 * classes + classes)
@@ -307,7 +316,7 @@ def check_lenet1(checker: Checker) -> None:
     checker.test_method(
         class_name="LeNet",
         method="forward",
-        description="follows the paper's layers",
+        description="follows the layers in the lesson's table",
         run=check_lenet_forward,
     )
     # 47 is EMNIST's balanced set of letters and digits, so a count typed in from the lesson fails.
@@ -343,10 +352,10 @@ LENET1 = Exercise(
     solution=LENET1_SOLUTION,
     hints={
         "LeNet.forward": "Pass x through conv1, then torch.tanh, then F.avg_pool2d with a window of 2. Do the same "
-        "with conv2, then x.flatten(1) through fc1 and fc2 with tanh, and fc3 at the end.",
+        "with conv2. Then pass x.flatten(1) through fc1 and fc2, each followed by torch.tanh, and finish with fc3.",
         "lenet_parameters": "A convolution has out * in * k * k weights and out biases, as channels1 counted. A "
-        "Linear has in * out weights and out biases, and fc3 has classes outputs.",
-        "train_lenet": "F.cross_entropy of model(x[batch]) against y[batch].",
+        "Linear layer has in * out weights and out biases. fc3 has classes outputs.",
+        "train_lenet": "Use F.cross_entropy on the scores model(x[batch]) and the labels y[batch].",
     },
     introduces=(),
     check=check_lenet1,
@@ -361,26 +370,31 @@ LENET1 = Exercise(
 
 VGG1_LESSON = prose(
     """
-    VGG-16, from Simonyan and Zisserman in 2014, used one kernel size only, 3
-    by 3. Two of them stacked see a 5 by 5 patch, as dilation1 counted, and
-    three see 7 by 7.
+    VGG-16, from Simonyan and Zisserman in 2014, uses only one kernel size, 3
+    by 3. Two stacked 3 by 3 convolutions have a receptive field of 5 by 5, as
+    dilation1 counted. That means each output of the second layer depends on a
+    5 by 5 patch of the input. Three stacked 3 by 3 convolutions have a
+    receptive field of 7 by 7.
 
-    A stack is cheaper than one big kernel. With `c` channels in and out,
-    three 3 by 3 layers learn `27 * c * c` weights, where one 7 by 7 layer
-    learns `49 * c * c`. The stack also puts a ReLU between each pair, so it
-    can bend more.
+    A stack of small kernels needs fewer weights than one big kernel with the
+    same receptive field. With `c` channels in and out, three 3 by 3 layers
+    learn `3 * 9 * c * c = 27 * c * c` weights. One 7 by 7 layer learns
+    `49 * c * c`. The stack also has a ReLU after each layer, so it can compute
+    more complicated functions than a single convolution can.
 
-    Simonyan and Zisserman measured it on ImageNet, over a million photos of
-    1,000 kinds. They swapped each pair of 3 by 3 layers in one of their nets
-    for a single 5 by 5. That net's error, the share of photos whose top guess
-    was wrong, came out 7% higher.
+    Simonyan and Zisserman tested this on ImageNet, a dataset of over a million
+    photos in 1,000 classes. In one of their nets, they replaced each pair of
+    3 by 3 layers with a single 5 by 5 layer. That net's error, the fraction of
+    photos whose top guess was wrong, came out 7% higher.
 
-    VGG-16 is built of blocks. Each block is two or three 3 by 3 convolutions
-    with padding 1 and ReLU, then a max pool of 2 that halves the size. The
-    channels go 64, 128, 256, 512 and 512, then three Linear layers give the
-    scores. It has 138 million weights, most of them in those Linear layers.
+    VGG-16 is built from blocks. Each block is two or three 3 by 3 convolutions
+    with padding 1, each followed by a ReLU. A max pool of 2 at the end of the
+    block halves the height and the width. The five blocks have 64, 128, 256,
+    512 and 512 channels. After them, three Linear layers turn the result into
+    class scores. VGG-16 has 138 million weights, and most of them are in
+    those Linear layers.
 
-    `nn.MaxPool2d(2)` is max pooling as a module.
+    `nn.MaxPool2d(2)` is max pooling with a window of 2, written as a module.
     """,
 )
 
@@ -394,16 +408,18 @@ VGG1_SOURCE = source_file(
     pool = nn.MaxPool2d(2)                           # halves the height and the width
 
 
-    # TODO: Return the receptive field of a stack of 3 by 3 convolutions at
-    #   stride 1. layers says how many convolutions the stack has.
+    # TODO: Return the receptive field, as a width in pixels, of a stack of
+    #   3 by 3 convolutions at stride 1. layers is the number of convolutions in
+    #   the stack. Example: stack_view(2) returns 5.
     def stack_view(layers: int) -> int:
         ...
 
 
-    # TODO: Return two counts, both without biases. First, the weights of a
-    #   stack of 3 by 3 convolutions from c channels to c channels, layers of
-    #   them. Second, the weights of one convolution from c to c with the same
-    #   receptive field.
+    # TODO: Return two weight counts, both without biases. The first is the
+    #   number of weights in a stack of layers 3 by 3 convolutions, each from c
+    #   channels to c channels. The second is the number of weights in a single
+    #   convolution from c to c channels with the same receptive field as the
+    #   stack. Example: weights_compared(64, 3) returns (110592, 200704).
     def weights_compared(
         c: int,
         layers: int,
@@ -411,10 +427,10 @@ VGG1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return a VGG block as an nn.Sequential. It holds 3 by 3
-    #   convolutions with padding 1, as many as convs says, each followed by a
-    #   ReLU, then a max pool of 2. The first convolution goes from in_channels
-    #   to out_channels, the rest from out_channels to out_channels.
+    # TODO: Return a VGG block as an nn.Sequential. It holds convs 3 by 3
+    #   convolutions with padding 1, each followed by a ReLU, and then a max
+    #   pool of 2. The first convolution goes from in_channels to out_channels,
+    #   and the rest go from out_channels to out_channels.
     def vgg_block(
         in_channels: int,
         out_channels: int,
@@ -559,7 +575,7 @@ def check_vgg1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="stack_view",
-        description="gives what stacked 3 by 3 layers see",
+        description="gives the receptive field of stacked 3 by 3 layers",
         inputs=(
             (1,),
             (2,),
@@ -571,7 +587,7 @@ def check_vgg1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="weights_compared",
-        description="counts the stack's weights and the big kernel's",
+        description="counts the weights of the stack and of one big kernel",
         inputs=(
             (64, 3),
             (10, 2),
@@ -600,11 +616,12 @@ VGG1 = Exercise(
     source=VGG1_SOURCE,
     solution=VGG1_SOLUTION,
     hints={
-        "stack_view": "Each 3 by 3 layer adds 2 to what the one before saw, starting from 1.",
-        "weights_compared": "Each 3 by 3 layer learns 9 * c * c. The single kernel is stack_view(layers) wide and "
-        "tall.",
-        "vgg_block": "Loop convs times, adding a Conv2d with kernel 3 and padding=1 and an nn.ReLU() each time, "
-        "then add nn.MaxPool2d(2).",
+        "stack_view": "With no layers the receptive field is 1 pixel. Each 3 by 3 layer adds 2 to the receptive field "
+        "of the layers before it.",
+        "weights_compared": "Each 3 by 3 layer learns 9 * c * c weights. The single big kernel is stack_view(layers) "
+        "pixels wide and tall.",
+        "vgg_block": "Loop convs times. Each time, add a Conv2d with kernel size 3 and padding=1, then an nn.ReLU(). "
+        "After the loop, add nn.MaxPool2d(2).",
     },
     introduces=(),
     check=check_vgg1,
@@ -617,26 +634,28 @@ VGG1 = Exercise(
 
 RESNET1_LESSON = prose(
     """
-    ResNet's basic block, from He and others in 2015, is the residual block of
-    Section 3 made of convolutions. Its branch is a 3 by 3 convolution,
-    BatchNorm and ReLU, then another 3 by 3 convolution and BatchNorm. The
-    block adds its input back, then takes a ReLU. ResNet-18 and ResNet-34 are
-    stacks of it.
+    ResNet's basic block, from He and others in 2015, is the residual block
+    from Section 3, built from convolutions. Its branch is a 3 by 3
+    convolution, BatchNorm and ReLU, followed by another 3 by 3 convolution and
+    BatchNorm. The block then adds its input to the branch's output and applies
+    a ReLU to the sum. ResNet-18 and ResNet-34 are stacks of this block.
 
     ```text
     out = relu(bn2(conv2(relu(bn1(conv1(x))))) + shortcut(x))
     ```
 
-    Where the image shrinks, the first convolution has stride 2 and more
-    channels out. Then `x` no longer fits what the branch gives. For its
-    ImageNet nets the paper uses the projection shortcut. It sends `x` through
-    a 1 by 1 convolution with the same stride and the new channels, then
-    BatchNorm. Where nothing changes, the shortcut hands `x` on as it is,
-    with `nn.Identity()`.
+    In a block that makes the image smaller, the first convolution has stride
+    2 and more output channels. Then the branch's output has a different shape
+    from `x`, so the two cannot be added. For its ImageNet nets the paper fixes
+    this with a projection shortcut. The projection shortcut passes `x` through
+    a 1 by 1 convolution with the same stride and the new number of channels,
+    then through BatchNorm. In a block where the shape stays the same, the
+    shortcut returns `x` unchanged, using `nn.Identity()`.
 
-    A convolution right before BatchNorm needs no bias, since BatchNorm takes
-    the mean away, so ResNet uses `bias=False`. `nn.BatchNorm2d(c)` is
-    BatchNorm for images, with one mean and spread per channel.
+    A convolution right before BatchNorm needs no bias. BatchNorm subtracts the
+    mean, which would cancel any bias, so ResNet uses `bias=False`.
+    `nn.BatchNorm2d(c)` is BatchNorm for images. It computes one mean and one
+    standard deviation for each of the `c` channels.
     """,
 )
 
@@ -652,10 +671,12 @@ RESNET1_SOURCE = source_file(
     same = shortcut(torch.ones(2))                   # tensor([1., 1.])
 
 
-    # TODO: Two things to finish. In __init__, set self.shortcut to nn.Identity()
-    #   when stride is 1 and the channels stay the same. Otherwise make it an
-    #   nn.Sequential of a 1 by 1 nn.Conv2d with that stride and no bias, then
-    #   an nn.BatchNorm2d. forward follows the formula in the lesson.
+    # TODO: Finish two things. In __init__, set self.shortcut to nn.Identity()
+    #   when stride is 1 and in_channels equals out_channels. Otherwise make it
+    #   an nn.Sequential of a 1 by 1 nn.Conv2d from in_channels to out_channels,
+    #   with the block's stride and no bias, followed by an nn.BatchNorm2d.
+    #   Then finish forward so it computes and returns the formula in the
+    #   lesson.
     class BasicBlock(nn.Module):
         def __init__(
             self,
@@ -801,7 +822,7 @@ def check_resnet1(checker: Checker) -> None:
     checker.test_method(
         class_name="BasicBlock",
         method="forward",
-        description="adds the shortcut to the branch, then takes a ReLU",
+        description="adds the shortcut to the branch, then applies a ReLU",
         run=check_block_forward,
     )
 
@@ -814,11 +835,11 @@ RESNET1 = Exercise(
     source=RESNET1_SOURCE,
     solution=RESNET1_SOLUTION,
     hints={
-        "BasicBlock.__init__": "An if on stride == 1 and in_channels == out_channels. The other case is an "
-        "nn.Sequential. It holds a 1 by 1 nn.Conv2d from in_channels to out_channels, with the block's stride and no "
-        "bias, then an nn.BatchNorm2d.",
-        "BasicBlock.forward": "Work out the branch in two lines, conv1, bn1 and a ReLU, then conv2 and bn2. Return the "
-        "ReLU of that plus self.shortcut(x).",
+        "BasicBlock.__init__": "Use an if that tests stride == 1 and in_channels == out_channels. In the other case, "
+        "build an nn.Sequential. It holds a 1 by 1 nn.Conv2d from in_channels to out_channels, with the block's "
+        "stride and no bias, then an nn.BatchNorm2d.",
+        "BasicBlock.forward": "Compute the branch in two lines. The first applies conv1, bn1 and a ReLU, and the "
+        "second applies conv2 and bn2. Return the ReLU of the branch's output plus self.shortcut(x).",
     },
     introduces=(),
     check=check_resnet1,
@@ -831,44 +852,59 @@ RESNET1 = Exercise(
 
 RESNET2_LESSON = prose(
     """
-    He and others found something odd about depth. CIFAR-10 is 60,000 colour
-    photos of 32 by 32 in 10 classes, like planes and ships. On it, a plain
-    net of 56 layers, one with no residual connections, had a higher test
-    error than one of 20, BatchNorm and all. The training error was worse too,
-    so it was not overfitting. They called it degradation.
+    He and others found something surprising about depth, which is the number
+    of layers in a net. CIFAR-10 is a dataset of 60,000 colour photos, each 32
+    by 32, in 10 classes such as planes and ships. A plain net is one with no
+    residual connections. On CIFAR-10, a plain net of 56 layers had a higher
+    test error than a plain net of 20 layers, even with BatchNorm. The deeper
+    net's training error was higher too, so the problem was not overfitting.
+    They called this degradation.
 
-    Here are the paper's CIFAR-10 nets, trained briefly. A 3 by 3 convolution
-    leads into three stages of width 16, 32 and 64, each new stage halving the
-    image. An average pool and a Linear end it. The ResNet fills each stage
-    with basic blocks, as `residual_stack` does. Its plain twin swaps each
-    block for two of `plain_stack`'s layers.
+    The table below comes from the paper's CIFAR-10 nets, trained for a short
+    time. Each net starts with a 3 by 3 convolution. Then come three stages
+    with 16, 32 and 64 channels, and each new stage halves the height and the
+    width of the image. An average pool and a Linear layer finish the net. The
+    ResNet fills each stage with basic blocks, as `residual_stack` does. The
+    plain net of the same depth replaces each block with two of the layers
+    that `plain_stack` makes.
 
-    Each net trained 1,000 steps of SGD with momentum, far fewer than the
-    paper's 64,000. A batch held 128 photos, half of them mirrored left to
-    right. Five seeds each were scored on 5,000 validation photos.
+    Each net trained for 1,000 steps of SGD with momentum, far fewer than the
+    paper's 64,000. Each batch held 128 photos, and a random half of them were
+    flipped left to right. Each kind of net was trained with five different
+    random seeds. Every run was then scored on 5,000 validation photos.
 
-    | Layers | Plain, training loss | Plain, validation | ResNet, training loss | ResNet, validation |
+    | Layers | Plain, training loss | Plain, validation accuracy | ResNet, training loss | ResNet, validation accuracy |
     |---|---|---|---|---|
     | 20 | 0.79 to 0.88 | 66.3% to 70.4% | 0.66 to 0.70 | 73.3% to 74.6% |
     | 32 | 1.19 to 1.31 | 50.6% to 54.3% | 0.63 to 0.66 | 74.5% to 75.6% |
 
-    Twelve more layers cost the plain net 13 to 18 points on each seed, and
-    its training loss rose too. That is degradation. On every seed the same
-    twelve layers lowered the ResNet's training loss and raised its score, by
-    0.3 to 2.1 points. The paper's own ResNets went from 8.75% test error at
-    20 layers to 6.61% at 110, the average of five runs.
+    Going from 20 to 32 layers lowered the plain net's validation accuracy by
+    13 to 18 percentage points on each seed. Its training loss went up too,
+    and that is degradation. For the ResNet, the same twelve extra layers
+    lowered the training loss on every seed. They also raised its validation
+    accuracy by 0.3 to 2.1 points. In the paper, ResNets went from 8.75% test
+    error at 20 layers to 6.61% at 110 layers, averaged over five runs.
 
-    The 32 layer plain net could copy the 20 layer one, its extra layers
-    handing their input on. Training doesn't find that. A residual block hands
-    its input on as soon as its own branch gives 0, which is far easier to
-    reach, so depth stops hurting.
+    In principle the 32 layer plain net could do as well as the 20 layer one.
+    Its twelve extra layers would only need to pass their input through
+    unchanged. In practice, training does not find weights that do this. A
+    residual block passes its input through unchanged as soon as its branch
+    outputs 0. Training finds weights like that far more often, so extra depth
+    stops hurting.
 
-    These ResNet blocks also had the scale of their second BatchNorm set to 0,
-    which Goyal and others use. Then each branch starts out giving 0. A block
-    whose shortcut is `nn.Identity()` starts as `relu(x)`, handing its input
-    on from the first step. With the default start a fresh block of width 16
-    changes its input by about 1.1 times the input's own size. The skip makes
-    handing on possible, and the zero scale makes it the starting point.
+    In these ResNets, the learned scale of each block's second BatchNorm also
+    started at 0, a trick that Goyal and others use. BatchNorm multiplies its
+    normalized output by this scale, then adds a learned shift that starts at
+    0. So each branch starts out outputting 0. A block whose shortcut is
+    `nn.Identity()` then starts out computing `relu(x)`. The block's input came
+    out of a ReLU and has no negative values, so `relu(x)` equals `x`. The
+    block passes its input through unchanged from the first step.
+
+    With PyTorch's default starting values instead, a new block with 16
+    channels changes its input a lot. The ratio
+    `(block(x) - x).norm() / x.norm()` comes out about 1.1. So the shortcut
+    makes passing the input through possible, and the zero scale makes it the
+    starting point.
     """,
 )
 
@@ -914,9 +950,11 @@ RESNET2_SOURCE = source_file(
     scale = norm.weight                              # the learned scale, starting at 1
 
 
-    # TODO: Return an nn.Sequential of plain layers, as many as layers says.
-    #   Each is a 3 by 3 nn.Conv2d from channels to channels with padding 1 and
-    #   no bias, an nn.BatchNorm2d and a ReLU.
+    # TODO: Return an nn.Sequential that holds a number of plain layers given
+    #   by layers. Each plain layer is a 3 by 3 nn.Conv2d from channels to
+    #   channels with padding 1 and no bias, followed by an nn.BatchNorm2d and
+    #   an nn.ReLU, as three separate modules in the Sequential.
+    #   Example: plain_stack(8, 2) holds 6 modules.
     def plain_stack(
         channels: int,
         layers: int,
@@ -924,8 +962,8 @@ RESNET2_SOURCE = source_file(
         ...
 
 
-    # TODO: Return an nn.Sequential of BasicBlocks, as many as blocks says,
-    #   each from channels to channels at stride 1.
+    # TODO: Return an nn.Sequential that holds a number of BasicBlocks given by
+    #   blocks. Each block goes from channels to channels at stride 1.
     def residual_stack(
         channels: int,
         blocks: int,
@@ -933,8 +971,10 @@ RESNET2_SOURCE = source_file(
         ...
 
 
-    # TODO: Set the scale of bn2 in every BasicBlock inside model to 0, in place,
-    #   so each block's branch starts out giving 0.
+    # TODO: In every BasicBlock inside model, set the learned scale of bn2,
+    #   which is bn2.weight, to 0. Change the weights in place and return
+    #   nothing. model can hold BasicBlocks at any depth, inside other modules.
+    #   With the scale at 0, each block's branch starts out outputting 0.
     def zero_last_norms_(model: nn.Module) -> None:
         ...
     ''',
@@ -1115,14 +1155,15 @@ def check_resnet2(checker: Checker) -> None:
 RESNET2 = Exercise(
     name="resnet2",
     chapter=CLASSIC_NETS,
-    title="Why ResNet's blocks",
+    title="Why ResNet's blocks help",
     lesson=RESNET2_LESSON,
     source=RESNET2_SOURCE,
     solution=RESNET2_SOLUTION,
     hints={
-        "plain_stack": "Loop layers times, adding the Conv2d, the BatchNorm2d and an nn.ReLU() each time, then pass "
-        "the list to nn.Sequential with *.",
-        "residual_stack": "nn.Sequential of a list of BasicBlock(channels, channels, 1), one per block, spread with *.",
+        "plain_stack": "Loop layers times, adding the Conv2d, the BatchNorm2d and an nn.ReLU() to a list each time. "
+        "Then pass the list to nn.Sequential, unpacked with *.",
+        "residual_stack": "Build a list with one BasicBlock(channels, channels, 1) per block, and pass it to "
+        "nn.Sequential unpacked with *.",
         "zero_last_norms_": "Inside a with torch.no_grad() block, loop over model.modules(). For each module that "
         "isinstance says is a BasicBlock, call .zero_() on module.bn2.weight.",
     },

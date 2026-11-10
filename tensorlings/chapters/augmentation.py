@@ -25,11 +25,12 @@ AUGMENTATION = Chapter(
         """
         # Data augmentation
 
-        A model learns more from a small set of images when it sees them
-        changed in ways that keep their labels, shifted a little or flipped.
-        This chapter writes those changes as tensor operations, measures what
-        they buy, and sorts the changes that keep a label from the ones that
-        break it.
+        A model learns more from a small set of images when it also sees
+        changed versions of them, such as images shifted a few pixels or
+        flipped. A change like this must not change what the image shows, so
+        that its label stays correct. This chapter writes those changes as
+        tensor operations and measures how much they improve accuracy. It also
+        shows which changes keep a label correct and which ones make it wrong.
 
         ## Further reading
 
@@ -69,18 +70,20 @@ def reference_random_shifts(
 
 AUGMENT1_LESSON = prose(
     """
-    **Data augmentation** makes new training examples by changing old ones in
-    ways that keep their labels. A cat shifted a few pixels is still a cat,
-    and so is a cat seen in a mirror. The changes are drawn fresh at every
-    step, so the model rarely sees the same version of an image twice.
+    **Data augmentation** makes new training examples by changing existing
+    ones in ways that keep their labels correct. A photo of a cat shifted a few
+    pixels still shows a cat, and so does its mirror image. The changes are
+    chosen at random again at every training step. So the model rarely sees
+    the same version of an image twice.
 
     - a flip: the image mirrored left to right. `.flip(-1)` reverses the last dimension, the width.
-    - a padded crop: zeros added around, then a crop of the original size taken from a random place in it.
+    - a padded crop: zeros are added around the image, then a crop of the original size is cut out at a random place.
 
-    A padded crop shifts the image by up to `pad` pixels each way. With a
-    padding of `pad`, the crop's top row can start anywhere from 0 to
-    `2 * pad`, and `pad` gives the image back unshifted. CIFAR-10 models
-    usually pad by 4 and crop back to 32 by 32.
+    A padded crop shifts the image by up to `pad` pixels in each direction.
+    With a padding of `pad`, the crop's top row can be any row from 0 to
+    `2 * pad` of the padded image. Starting the crop at row `pad` and column
+    `pad` gives back the original image, unshifted. CIFAR-10 models usually
+    pad by 4 and crop back to 32 by 32.
 
     ```python
     image = torch.arange(1.0, 5.0).reshape(1, 2, 2)    # one channel, 2 by 2
@@ -88,8 +91,8 @@ AUGMENT1_LESSON = prose(
     padded[:, 0:2, 0:2]    # tensor([[[0., 0.], [0., 1.]]]), shifted down and right by one
     ```
 
-    `torchvision` holds these as ready made transforms. Here they are plain
-    tensor operations, so every step is visible.
+    The `torchvision` library provides these as ready made transforms. Here
+    you write them as plain tensor operations, so you can see every step.
     """,
 )
 
@@ -106,14 +109,16 @@ AUGMENT1_SOURCE = source_file(
     mirrored = image.flip(-1)                        # tensor([[[2., 1.], [4., 3.]]])
 
 
-    # TODO: Return images, of shape (batch, channels, h, w), mirrored left to
-    #   right.
+    # TODO: Return images mirrored left to right. images has shape
+    #   (batch, channels, h, w), and so does the result.
     def horizontal_flip(images: Tensor) -> Tensor:
         ...
 
 
-    # TODO: Return image, of shape (channels, h, w), padded by pad zeros on every
-    #   side, then cropped back to h by w starting at row top and column left.
+    # TODO: Pad image with pad zeros on every side, then crop it back to h by w,
+    #   starting at row top and column left of the padded image. image has
+    #   shape (channels, h, w), and so does the result.
+    #   Example: padded_crop(image, 1, 1, 1) returns image unchanged.
     def padded_crop(
         image: Tensor,
         pad: int,
@@ -123,8 +128,9 @@ AUGMENT1_SOURCE = source_file(
         ...
 
 
-    # TODO: Finish the last line, so every image gets its own padded crop, at the
-    #   top and left drawn for it.
+    # TODO: Finish the last line, so every image gets its own padded crop.
+    #   Image i uses tops[i] as its top and lefts[i] as its left. images has
+    #   shape (batch, channels, h, w), and so does the result.
     def random_shifts(
         images: Tensor,
         pad: int,
@@ -205,7 +211,7 @@ def check_augment1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="random_shifts",
-        description="crops each image at its own drawn place",
+        description="crops each image at its own random place",
         inputs=(
             (small_tensor(845, 4, 1, 3, 3), 1, seeded(846)),
             (small_tensor(847, 3, 2, 4, 4), 2, seeded(848)),
@@ -226,8 +232,8 @@ AUGMENT1 = Exercise(
         "horizontal_flip": "Flip the last dimension, the width, with .flip(-1).",
         "padded_crop": "Take h and w from image.shape. Pad with F.pad(image, (pad, pad, pad, pad)), then slice rows "
         "top up to top + h and columns left up to left + w.",
-        "random_shifts": "torch.stack a list of padded_crop(image, pad, int(top), int(left)), looping over images, "
-        "tops and lefts together with zip.",
+        "random_shifts": "Build a list of padded_crop(image, pad, int(top), int(left)), looping over images, tops "
+        "and lefts together with zip. Then combine the list into one tensor with torch.stack.",
     },
     introduces=(),
     check=check_augment1,
@@ -240,11 +246,13 @@ AUGMENT1 = Exercise(
 
 AUGMENT2_LESSON = prose(
     """
-    Here two nets learned from little data, on minibatches of 64 with Adam,
-    over three seeds. lenet1's LeNet learned 500 MNIST digits in 600 steps,
-    with shifts of up to 2 pixels. A small net of five convolutions learned
-    5,000 CIFAR-10 photos in 4,000 steps, with shifts of up to 4. Its rate
-    fell along a cosine.
+    For the table below, two nets were trained on small datasets with Adam,
+    on minibatches of 64, with three seeds each. lenet1's LeNet trained for
+    600 steps on 500 MNIST digits, with shifts of up to 2 pixels. A small net
+    of five convolutions trained for 4,000 steps on 5,000 CIFAR-10 photos,
+    with shifts of up to 4 pixels. Its learning rate went down during training
+    along a cosine curve. The table gives the accuracy on the training images
+    and on the validation images.
 
     | Augmentation | Digits, training | Digits, validation | Photos, training | Photos, validation |
     |---|---|---|---|---|
@@ -252,23 +260,28 @@ AUGMENT2_LESSON = prose(
     | shifts | 98.6% to 98.8% | 90.9% to 91.2% | 96.9% | 69.7% to 71.5% |
     | shifts and left to right flips | 93.8% to 96.6% | 83.9% to 85.9% | 90.4% to 90.6% | 71.6% to 72.5% |
 
-    With no augmentation both nets learned their images by heart. Shifts made
-    every step show a slightly different set, and validation rose on both.
+    With no augmentation, both nets memorized their training images and got
+    100% of them right. With shifts, every step showed slightly different
+    images, and validation accuracy went up for both nets.
 
-    Flips split them. On photos they helped again, on every seed, since a car
-    or a horse looks as natural mirrored. On digits they cost about 6 points.
-    A flipped 2 or 7 is not a 2 or 7, and a 3 turns backwards, so the model
-    learned from wrong pictures.
+    Flips helped one net and hurt the other. On photos they raised validation
+    accuracy again, on every seed, because a mirrored car or horse still looks
+    natural. On digits they lowered validation accuracy by about 6 points. A
+    flipped 2 or 7 no longer looks like a 2 or 7, and a flipped 3 is
+    backwards. So the model learned from images whose labels were wrong.
 
-    So a change has to keep the label for the data at hand. Rotating a 6 by
-    half a turn makes a 9. Shifting colours suits photos, but a grey digit has
-    no colours to shift. He and others trained their CIFAR-10 ResNets with these very two,
-    shifts of up to 4 pixels and flips.
+    So a change must keep the label correct for the data you have. Rotating a
+    6 by half a turn makes a 9. Changing colours works for photos, but a grey
+    digit has no colours to change. He and others trained their CIFAR-10
+    ResNets with exactly these two changes, shifts of up to 4 pixels and
+    flips.
 
-    Augmentation helps most when data is scarce and the model can memorize.
+    Augmentation helps most when there is little data and the model is big
+    enough to memorize it.
 
-    `torch.where(condition, a, b)` takes `a` where the condition is `True`
-    and `b` elsewhere, broadcasting all three.
+    `torch.where(condition, a, b)` returns a tensor that takes its values from
+    `a` where `condition` is `True`, and from `b` everywhere else. The three
+    tensors are broadcast to one shape first.
     """,
 )
 
@@ -299,10 +312,11 @@ AUGMENT2_SOURCE = source_file(
         return torch.stack([padded[i, :, top:top + h, left:left + w] for i, (top, left) in enumerate(zip(tops, lefts))])
 
 
-    # TODO: Finish the line that flips, so this shifts every image by up to 2
-    #   pixels, then, when flip is True, mirrors each image whose draw from
-    #   torch.rand with generator is below 0.5. Draw one number per image,
-    #   shaped (batch, 1, 1, 1).
+    # TODO: Finish the line that flips. The function already shifts every image
+    #   by up to 2 pixels. When flip is True, it should also mirror about half
+    #   the images left to right. Draw one random number per image with
+    #   torch.rand and generator, in a tensor of shape (batch, 1, 1, 1). Mirror
+    #   each image whose number is below 0.5, and leave the others unchanged.
     def augment_batch(
         images: Tensor,
         generator: torch.Generator,
@@ -316,8 +330,10 @@ AUGMENT2_SOURCE = source_file(
         return images
 
 
-    # TODO: Finish the line that sets loss, so each step trains on 64 random
-    #   images of x, augmented with augment_batch, against their labels.
+    # TODO: Finish the line that sets loss. Augment the 64 images x[batch] with
+    #   augment_batch, passing generator and flip. loss is the cross entropy
+    #   between the model's scores for the augmented images and the labels
+    #   y[batch].
     def train_with_augment(
         model: nn.Module,
         x: Tensor,
@@ -481,14 +497,14 @@ def check_augment2(checker: Checker) -> None:
 AUGMENT2 = Exercise(
     name="augment2",
     chapter=AUGMENTATION,
-    title="What augmentation buys",
+    title="How much augmentation helps",
     lesson=AUGMENT2_LESSON,
     source=AUGMENT2_SOURCE,
     solution=AUGMENT2_SOLUTION,
     hints={
-        "augment_batch": "torch.where of torch.rand(len(images), 1, 1, 1, generator=generator) < 0.5, then "
-        "images.flip(-1), then images.",
-        "train_with_augment": "F.cross_entropy of model(augment_batch(x[batch], generator, flip)) against y[batch].",
+        "augment_batch": "Call torch.where with three arguments. The condition is torch.rand(len(images), 1, 1, 1, "
+        "generator=generator) < 0.5, and the other two are images.flip(-1) and images.",
+        "train_with_augment": "Use F.cross_entropy on model(augment_batch(x[batch], generator, flip)) and y[batch].",
     },
     introduces=(),
     check=check_augment2,

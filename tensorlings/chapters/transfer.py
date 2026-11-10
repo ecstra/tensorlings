@@ -33,11 +33,13 @@ TRANSFER = Chapter(
         """
         # Transfer learning
 
-        A model trained on one big task has learned features, like edges and
-        strokes, that help with others. Transfer learning reuses its body and
-        trains a new head for the new task. This chapter loads weights,
-        freezes the body, trains the head, and measures what that buys when
-        only a hundred labeled images exist.
+        A model trained on one big task has learned features, such as edges
+        and strokes, that are useful for other tasks too. Transfer learning
+        reuses the model's body, which is every layer except the last. It
+        trains a new head, a new last layer, for the new task. This chapter
+        loads saved weights, freezes the body and trains the head. Then it
+        measures how much this improves accuracy when only a hundred labeled
+        images are available.
 
         ## Further reading
 
@@ -73,26 +75,32 @@ class ReferenceNet(nn.Module):
 
 TRANSFER1_LESSON = prose(
     """
-    The first layers of an image model learn edges and strokes, which most
-    image tasks share. **Transfer learning** takes a model trained on one task
-    and reuses its body for another, with a new head for the new classes.
+    The first layers of an image model learn to detect edges and strokes,
+    which are useful for most image tasks. **Transfer learning** takes a model
+    trained on one task and reuses most of it for another task. A model's
+    **body** is every layer except the last. Its **head** is the last layer,
+    which gives the class scores. Transfer learning keeps the trained body and
+    gives it a new head for the new classes.
 
-    A model's weights are saved and loaded as a state dict, a dict from each
-    parameter's name to its tensor. `torch.save(model.state_dict(), path)`
-    writes one to a file, and `model.load_state_dict(torch.load(path))` reads
-    it back into a model of the same shape. A part of a model has a state dict
-    of its own, so `target.body.load_state_dict(source.body.state_dict())`
-    copies only the body.
+    A model's weights are saved and loaded as a state dict. A state dict is a
+    Python dict that maps each parameter's name to its tensor.
+    `torch.save(model.state_dict(), path)` writes a state dict to a file.
+    `model.load_state_dict(torch.load(path))` reads it back into a model with
+    the same layers and shapes. Each part of a model has its own state dict
+    too. So `target.body.load_state_dict(source.body.state_dict())` copies
+    only the body's weights from `source` into `target`.
 
-    Freezing a part stops it training. `parameter.requires_grad_(False)` tells
-    autograd to leave that parameter out, so it gets no gradient and no step.
-    Only the new head learns. Fine tuning goes one step further, training
-    everything afterwards at a small learning rate.
+    Freezing a part of a model stops training from changing it.
+    `parameter.requires_grad_(False)` tells autograd not to compute a gradient
+    for that parameter, so the optimizer never changes it. When the body is
+    frozen, only the new head learns. Fine tuning goes one step further. After
+    the head has trained, fine tuning trains all the layers, usually at a
+    small learning rate.
 
-    A frozen parameter never gets a `.grad`, so an optimizer leaves it alone
-    even when it is handed every parameter. Handing it only the ones that
-    train, with a filter on `.requires_grad`, saves it keeping state for
-    weights that never move.
+    A frozen parameter never gets a `.grad`, so an optimizer skips it even if
+    you pass it every parameter. You can still pass only the parameters that
+    train, by filtering on `.requires_grad`. Then the optimizer does not store
+    state, like Adam's running averages, for weights that never change.
     """,
 )
 
@@ -126,19 +134,22 @@ TRANSFER1_SOURCE = source_file(
             return self.head(self.body(x))
 
 
-    # TODO: Stop every parameter of module training, in place.
+    # TODO: Freeze every parameter of module in place, so that none of them gets
+    #   a gradient or changes during training. Return nothing.
     def freeze_(module: nn.Module) -> None:
         ...
 
 
-    # TODO: Return how many numbers of model still train, counting only the
-    #   parameters that require a gradient.
+    # TODO: Return the total number of values in the parameters of model that
+    #   still train. Count only the parameters whose requires_grad is True.
+    #   Example: for a fresh Net(10), trainable_count returns 20490.
     def trainable_count(model: nn.Module) -> int:
         ...
 
 
-    # TODO: Return a new Net for classes classes whose body holds a copy of
-    #   source's body weights and is frozen. Its head is new and trains.
+    # TODO: Return a new Net with classes outputs. Copy the weights of source's
+    #   body into the new Net's body, then freeze that body. The new head keeps
+    #   its fresh random weights and still trains. Leave source unchanged.
     def transfer(
         source: nn.Module,
         classes: int,
@@ -268,7 +279,7 @@ def check_transfer1(checker: Checker) -> None:
     )
     checker.test(
         function="trainable_count",
-        description="counts only what still trains",
+        description="counts only the parameters that still train",
         run=check_trainable_count,
     )
     checker.test(
@@ -288,8 +299,8 @@ TRANSFER1 = Exercise(
     hints={
         "freeze_": "Loop over module.parameters() and call .requires_grad_(False) on each.",
         "trainable_count": "Add up .numel() of the parameters whose .requires_grad is True.",
-        "transfer": "Make Net(classes), load source.body.state_dict() into its body, freeze_ the body, and return "
-        "it.",
+        "transfer": "Make a Net(classes) and load source.body.state_dict() into its body. Then call freeze_ on that "
+        "body and return the new Net.",
     },
     introduces=(),
     check=check_transfer1,
@@ -302,41 +313,50 @@ TRANSFER1 = Exercise(
 
 TRANSFER2_LESSON = prose(
     """
-    Here a small net learned digits 0 to 4 from 20,000 MNIST images and
-    reached 99.3% on them. The new task was digits 5 to 9, from only 100
-    labeled images. The same test ran on photos too. CIFAR-10's first five
-    classes, planes to deer, trained a body of convolutions with BatchNorm to
-    85.6%. The new task was its other five, dogs to trucks.
+    For the table below, a small net first learned to classify the digits 0
+    to 4 from 20,000 MNIST images. It reached 99.3% accuracy on validation
+    images of those digits. The new task was to classify the digits 5 to 9,
+    with only 100 labeled images. The same experiment ran on photos too. A net
+    of convolutions with BatchNorm learned CIFAR-10's first five classes,
+    planes to deer, and reached 85.6%. Its new task was the other five
+    classes, dogs to trucks.
 
-    Each start then trained 300 steps on the few labels, over three draws of
-    them, and was scored on the new classes' validation images. Photos were
-    flipped at random, as in augment2, here and while the body trained.
+    Each starting point in the table then trained for 300 steps on the few
+    labeled images. This was repeated for three different random draws of
+    those images. Each run was scored on the validation images of the new
+    classes. Photos were flipped at random, as in augment2, both here and when
+    the body was first trained.
 
     | Start | 100 digits | 100 photos | 1,000 photos |
     |---|---|---|---|
     | from scratch | 87.1% to 88.4% | 63.5% to 66.7% | 64.5% to 75.0% |
     | the trained body, frozen, with a new head | 89.6% to 92.5% | 72.3% to 73.3% | 74.7% to 75.3% |
-    | the trained body, everything at one rate | 88.2% to 91.2% | 73.8% to 76.6% | 78.4% to 84.0% |
+    | the trained body, all layers at one rate | 88.2% to 91.2% | 73.8% to 76.6% | 78.4% to 84.0% |
     | the trained body at a tenth of the head's rate | 89.4% to 92.3% | 72.9% to 76.9% | 81.4% to 83.4% |
 
-    The trained body helped every time, and most where learning from scratch
-    was hardest. Frozen, it added 2.6 to 4.2 points on digits, whose strokes
-    are easy to learn from a few. On photos it added 5.8 to 9.8, since 100
-    photos are far too few to learn edges and textures. That is why most image
-    work starts from a body trained on ImageNet.
+    Starting from the trained body helped every time. It helped most where
+    learning from scratch was hardest. The frozen body added 2.6 to 4.2 points
+    on digits, because strokes can be learned from a few examples anyway. On
+    photos it added 5.8 to 9.8 points, because 100 photos are far too few to
+    learn edges and textures from. That is why most work on images starts from
+    a body trained on ImageNet.
 
-    A frozen body runs in eval mode while the head trains, so its BatchNorm
-    averages stay the ones it learned.
+    While the head trains, the frozen body runs in eval mode. That way its
+    BatchNorm layers keep the running averages they learned on the first task.
 
-    With 1,000 photos the frozen body fell behind, since features for planes
-    and deer don't fit trucks exactly. Training everything let them adapt.
-    `fine_tune_optimizer`'s smaller body rate scored highest on average, 82.6%
-    against 80.7%, and varied least. Yosinski and others found the same boost,
-    one that lingers even after fine tuning. Howard and Ruder's ULMFiT, a
-    recipe for fine tuning language models, goes further. It divides the rate
-    by 2.6 for each layer down.
+    With 1,000 photos, the frozen body fell behind, because features learned
+    for planes and deer do not fit trucks exactly. Training all the layers let
+    those features adapt to the new classes. The best setup gave the body a
+    tenth of the head's learning rate, as `fine_tune_optimizer` does. It
+    scored 82.6% on average, against 80.7% for one shared rate. Its scores
+    also varied less from draw to draw. Yosinski and others also found that a
+    trained body helps, and that the gain remains even after fine tuning.
+    Howard and Ruder's ULMFiT, a recipe for fine tuning language models, goes
+    further. It divides the learning rate by 2.6 for each layer closer to the
+    input.
 
-    An optimizer takes one rate per group, as in adamw2.
+    An optimizer can take groups of parameters, each with its own learning
+    rate, as in adamw2.
     """,
 )
 
@@ -350,12 +370,15 @@ TRANSFER2_SOURCE = source_file(
 
     y = torch.tensor([3, 7, 5, 0])
     below = y < 5                                    # tensor([ True, False, False,  True])
-    rest = ~below                                    # tensor([False,  True,  True, False]), ~ flips each one
+    rest = ~below                                    # tensor([False,  True,  True, False]), ~ negates each entry
 
 
-    # TODO: Split x and y into the examples whose label is below low and the
-    #   rest. Return x and y of the first, then x and y of the second with low
-    #   taken off its labels, so they count from 0.
+    # TODO: Split x and y into two parts. The first part has the examples whose
+    #   label is below low, and the second part has the rest. Return four
+    #   tensors, x and y of the first part, then x and y of the second part.
+    #   Subtract low from the second part's labels, so they count from 0.
+    #   Example: for y = [3, 7, 5, 0] and low = 5, the two label tensors
+    #   returned are tensor([3, 0]) and tensor([2, 0]).
     def split_by_label(
         x: Tensor,
         y: Tensor,
@@ -364,8 +387,9 @@ TRANSFER2_SOURCE = source_file(
         ...
 
 
-    # TODO: Return count examples of x and y picked at random without repeats,
-    #   with the first count positions of torch.randperm from generator.
+    # TODO: Return count examples of x and their labels in y, picked at random
+    #   without repeats. Shuffle the indices of x with torch.randperm and
+    #   generator, and keep the first count of them.
     def few_labels(
         x: Tensor,
         y: Tensor,
@@ -375,8 +399,9 @@ TRANSFER2_SOURCE = source_file(
         ...
 
 
-    # TODO: Return Adam with two groups, model.body's parameters at body_lr and
-    #   model.head's at head_lr.
+    # TODO: Return an Adam optimizer with two parameter groups. The first group
+    #   holds model.body's parameters with learning rate body_lr. The second
+    #   holds model.head's parameters with learning rate head_lr.
     def fine_tune_optimizer(
         model: nn.Module,
         body_lr: float,
@@ -479,7 +504,7 @@ def check_transfer2(checker: Checker) -> None:
     )
     checker.test(
         function="fine_tune_optimizer",
-        description="gives the body and the head rates of their own",
+        description="gives the body and the head their own learning rates",
         run=check_fine_tune_optimizer,
     )
 
@@ -487,16 +512,17 @@ def check_transfer2(checker: Checker) -> None:
 TRANSFER2 = Exercise(
     name="transfer2",
     chapter=TRANSFER,
-    title="What a trained body buys",
+    title="How much a trained body helps",
     lesson=TRANSFER2_LESSON,
     source=TRANSFER2_SOURCE,
     solution=TRANSFER2_SOLUTION,
     hints={
-        "split_by_label": "below = y < low picks the first part, and ~below the rest. Take low off the second "
-        "part's labels.",
-        "few_labels": "torch.randperm(len(x), generator=generator)[:count] gives the positions. Index x and y with "
-        "them.",
-        "fine_tune_optimizer": "torch.optim.Adam of a list of two dicts, each with \"params\" and \"lr\".",
+        "split_by_label": "The mask below = y < low selects the first part, and ~below selects the rest. Subtract "
+        "low from the second part's labels.",
+        "few_labels": "torch.randperm(len(x), generator=generator)[:count] gives the indices to keep. Index x and y "
+        "with them.",
+        "fine_tune_optimizer": "Pass torch.optim.Adam a list of two dicts, each with a \"params\" key and an \"lr\" "
+        "key.",
     },
     introduces=(),
     check=check_transfer2,
@@ -510,15 +536,16 @@ TRANSFER2 = Exercise(
 
 QUIZ7_LESSON = prose(
     """
-    This quiz has no examples and no new tools. Each function combines moves
-    from Section 5. If a step is unclear, the exercise in the table shows it.
+    This quiz has no examples and teaches no new tools. Each function combines
+    steps you learned in Section 5. If a step is unclear, the exercises listed
+    in the table show how it works.
 
-    | Function | Moves | Shown in |
+    | Function | Steps | Shown in |
     |---|---|---|
-    | `head_inputs` | the output size formula followed through the layers for height and width, then the flattened count | stride1, conv5, pooling2, lenet1 |
-    | `halving_stack` | 3 by 3 convolutions at stride 2 with no bias, BatchNorm and ReLU, channels chained layer to layer | stride1, resnet2, vgg1 |
+    | `head_inputs` | the output size formula applied layer by layer to height and width, then the count after flattening | stride1, conv5, pooling2, lenet1 |
+    | `halving_stack` | 3 by 3 convolutions at stride 2 without bias, then BatchNorm and ReLU, each taking the previous layer's channels | stride1, resnet2, vgg1 |
     | `pooled_scores` | global average pooling of feature maps, then a Linear head | pooling1, lenet1 |
-    | `flip_and_normalize` | a random flip per image, then each channel's mean taken away and divided by its spread | augment2, resnet1, broadcasting1 |
+    | `flip_and_normalize` | a random flip for each image, then subtracting each channel's mean and dividing by its standard deviation | augment2, resnet1, broadcasting1 |
     """,
 )
 
@@ -526,7 +553,8 @@ QUIZ7_SOURCE = source_file(
     '''
     # quiz7.py
     #
-    # No examples and no new tools. Each function combines moves from Section 5.
+    # This quiz has no examples and no new tools. Each function combines steps
+    # from Section 5.
 
     import torch
     import torch.nn as nn
@@ -534,10 +562,13 @@ QUIZ7_SOURCE = source_file(
 
 
     # TODO: Return the in_features of the nn.Linear that follows nn.Flatten at
-    #   the end of a stack of convolutions, for images of h by w. Each layer of
-    #   layers is an (out_channels, k, s, p) tuple, for its output channels and
-    #   its square kernel, stride and padding, applied in turn. The count is
-    #   the last layer's channels times the final height times the final width.
+    #   the end of a stack of convolutions, for input images of h by w. Each
+    #   entry of layers is a tuple (out_channels, k, s, p). It gives one layer's
+    #   output channels, square kernel size, stride and padding, and the layers
+    #   are applied in order. The count is the last layer's channels times the
+    #   final height times the final width.
+    #   Example: head_inputs(32, 32, [(16, 3, 1, 1), (32, 3, 2, 1)]) returns
+    #   8192.
     def head_inputs(
         h: int,
         w: int,
@@ -546,11 +577,12 @@ QUIZ7_SOURCE = source_file(
         ...
 
 
-    # TODO: Return an nn.Sequential with one layer per entry of widths, each
-    #   halving the height and width. A layer is a 3 by 3 nn.Conv2d at stride 2
-    #   with padding 1 and no bias, to that width's channels, then an
-    #   nn.BatchNorm2d and an nn.ReLU. The first layer reads in_channels, and
-    #   each later one reads the width before it. Make every layer a new object.
+    # TODO: Return an nn.Sequential with one layer for each entry of widths,
+    #   where each layer halves the height and width. A layer is a 3 by 3
+    #   nn.Conv2d at stride 2 with padding 1 and no bias, whose output channels
+    #   are that entry of widths, followed by an nn.BatchNorm2d and an nn.ReLU.
+    #   The first layer takes in_channels as input, and each later layer takes
+    #   the previous entry of widths. Make every module a new object.
     def halving_stack(
         in_channels: int,
         widths: list[int],
@@ -558,8 +590,9 @@ QUIZ7_SOURCE = source_file(
         ...
 
 
-    # TODO: Return head's scores for features, of shape (batch, channels, h, w),
-    #   after global average pooling.
+    # TODO: Apply global average pooling to features, then return head's scores
+    #   for the pooled result. features has shape (batch, channels, h, w).
+    #   Pooling averages over h and w, which gives shape (batch, channels).
     def pooled_scores(
         features: Tensor,
         head: nn.Linear,
@@ -567,10 +600,11 @@ QUIZ7_SOURCE = source_file(
         ...
 
 
-    # TODO: Mirror each image of images, of shape (batch, channels, h, w), whose
-    #   draw from torch.rand with generator is below 0.5, one draw per image.
-    #   Then take each channel's mean away and divide by its spread, mean and
-    #   spread holding one number per channel.
+    # TODO: Draw one random number per image with torch.rand and generator, and
+    #   mirror each image whose number is below 0.5. images has shape
+    #   (batch, channels, h, w). Then subtract each channel's mean and divide
+    #   by that channel's standard deviation. mean and spread each hold one
+    #   number per channel, and spread is the standard deviation.
     def flip_and_normalize(
         images: Tensor,
         mean: Tensor,
@@ -732,7 +766,7 @@ def check_quiz7(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="head_inputs",
-        description="follows the height and width through the layers and counts what nn.Flatten gives",
+        description="tracks the height and width through the layers and counts the values nn.Flatten outputs",
         inputs=(
             (32, 32, [(16, 3, 1, 1), (32, 3, 2, 1), (64, 3, 2, 1)]),
             (28, 20, [(6, 5, 1, 2), (16, 5, 2, 0), (8, 3, 2, 1)]),
@@ -784,15 +818,14 @@ QUIZ7 = Exercise(
     source=QUIZ7_SOURCE,
     solution=QUIZ7_SOLUTION,
     hints={
-        "head_inputs": "Follow h and w through each layer with stride1's output size formula, as conv5's "
-        "sizes_through does. nn.Flatten lays each image's channels, rows and columns out in one row, so multiply "
-        "the three.",
+        "head_inputs": "Update h and w for each layer with stride1's output size formula, as conv5's sizes_through "
+        "does. nn.Flatten puts each image's channels, rows and columns into one row, so multiply the three counts.",
         "halving_stack": "Build a list, adding a convolution, a BatchNorm2d and a ReLU for each width, as resnet2's "
-        "plain_stack does. Each next convolution reads the width before it, as in vgg1's blocks. Unpack the list "
-        "into nn.Sequential with *.",
+        "plain_stack does. Each convolution after the first takes the previous width as its input channels, as in "
+        "vgg1's blocks. Unpack the list into nn.Sequential with *.",
         "pooled_scores": "Average over dim=(2, 3), then pass the result to head.",
-        "flip_and_normalize": "Flip as augment2's augment_batch does. Then give mean and spread the shape "
-        "(1, channels, 1, 1) with .view so they line up with the channels.",
+        "flip_and_normalize": "Flip the images the way augment2's augment_batch does. Then reshape mean and spread "
+        "to (1, channels, 1, 1) with .view, so they broadcast along the channel dimension.",
     },
     introduces=(),
     check=check_quiz7,
