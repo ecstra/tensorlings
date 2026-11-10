@@ -33,12 +33,13 @@ INTERPRETABILITY = Chapter(
         """
         # Interpretability
 
-        A model that works says nothing about how it works. This chapter
-        trains a small one, two layers of attention that copy from earlier in
-        a sequence, and opens it up. Hooks and probes read its hidden states,
-        attention patterns show the induction head that induction1 built by
-        hand, ablation and patching test what it uses, and attribution traces
-        an answer back to its inputs.
+        Knowing that a model works tells you nothing about how it works. This
+        chapter trains a small model and looks inside it. The model has two
+        layers of attention and learns to copy tokens from earlier in a
+        sequence. Hooks and probes read its hidden states. Its attention
+        patterns show the induction head that induction1 built by hand.
+        Ablation and activation patching test which parts it actually uses.
+        Attribution traces an answer back to the input tokens it came from.
 
         ## Further reading
 
@@ -56,8 +57,8 @@ VOCABULARY = 32
 STEPS = 24
 
 
-# Each row repeats a segment of 6 to 12 different tokens until it is 24 long. known marks the
-# positions whose next token an earlier copy gives away.
+# Each row repeats a segment of 6 to 12 different tokens until the row is 24 tokens long. known is
+# True at the positions whose next token can be read from an earlier copy of the segment.
 def repeated_sequences(
     count: int,
     generator: torch.Generator,
@@ -79,7 +80,7 @@ class Attention(nn.Module):
         self.value = nn.Linear(size, size, bias=False)
         self.out = nn.Linear(size, size, bias=False)
 
-    # Row t holds how much position t takes from each position up to t.
+    # Row t holds the attention weights of position t on each position up to t.
     def pattern(self, x: Tensor) -> Tensor:
         steps = x.shape[1]
         scores = self.query(x) @ self.key(x).transpose(-2, -1) / x.shape[-1] ** 0.5
@@ -151,7 +152,7 @@ def train_copier(
     return model.eval()
 
 
-# The share of the known positions whose next token model gets right.
+# The fraction of known positions where model predicts the next token correctly.
 def accuracy(
     model: nn.Module,
     ids: Tensor,
@@ -164,7 +165,7 @@ def accuracy(
 '''
 
 FIT_PROBE_PART = '''
-# topics2's linear probe, trained on the first half of the rows and scored on the second.
+# topics2's linear probe, trained on the first half of the rows and scored on the second half.
 def fit_probe(
     states: Tensor,
     targets: Tensor,
@@ -250,8 +251,9 @@ def induction_score(
 '''
 
 CORRUPT_PART = '''
-# Swaps the token right after the last token's first copy, so the right answer at the last position
-# changes. Gives the corrupted ids, the clean answers and the corrupted ones.
+# Finds the first copy of each row's last token and changes the token right after that copy, which
+# changes the right answer at the last position. Returns the corrupted ids, the clean answers and the
+# corrupted answers.
 def corrupt(ids: Tensor) -> tuple[Tensor, Tensor, Tensor]:
     rows = torch.arange(len(ids))
     place = (ids == ids[:, -1:]).float().argmax(dim=1) + 1
@@ -305,8 +307,8 @@ def logit_difference(
 '''
 
 ANSWER_PART = '''
-# The score of each row's answer at the last position, run from token vectors in place of
-# model.embed.tokens(ids), with the positions added as embed adds them.
+# The score of each row's answer at the last position. The model runs from token_vectors instead of
+# model.embed.tokens(ids), and adds the position embeddings as embed does.
 def answer_scores(
     model: Copier,
     token_vectors: Tensor,
@@ -320,7 +322,8 @@ def answer_scores(
     return model.head(x)[torch.arange(len(answers)), -1, answers]
 
 
-# Each row's answer, the token right after the last token's first copy, and that place.
+# Each row's answer, which is the token right after the first copy of its last token, and the position
+# of that answer.
 def copied_answers(ids: Tensor) -> tuple[Tensor, Tensor]:
     place = (ids == ids[:, -1:]).float().argmax(dim=1) + 1
 
@@ -469,42 +472,47 @@ def expect_close_tensor(
 
 INTERP1_LESSON = prose(
     """
-    This chapter opens up a trained model to see how it works. The model is
-    small on purpose. Two layers of attention read a row of tokens, and a
-    Linear head scores the next token at every position.
+    This chapter looks inside a trained model to see how it works. The model
+    is small on purpose. Two layers of attention read a row of tokens, and a
+    Linear head scores every possible next token at every position.
 
-    It learns from repeated rows. Each row repeats a segment of 6 to 12
-    different tokens until it is 24 long. Within the first copy, the next token
-    can't be known, and guessing gets 1 in 32. After that, an earlier copy
-    gives it away. `train_copier` trains one in a few seconds, and it gets
-    99.6% of those positions right.
+    It trains on repeated rows. Each row repeats a segment of 6 to 12
+    different tokens until the row is 24 tokens long. Within the first copy
+    of the segment, the next token cannot be predicted, and a guess is right
+    1 time in 32. After the first copy, the next token can be read from the
+    earlier copy. `train_copier` trains a model in a few seconds, and it
+    predicts 99.6% of those later positions correctly.
 
-    A forward hook reads a module's output while the model runs, with no
-    change to the model's code. PyTorch calls the hook with the module, its
-    inputs and its output each time the module runs. A handle takes it off.
+    A forward hook reads a module's output while the model runs, without
+    changing the model's code. Each time the module runs, PyTorch calls the
+    hook with the module, its inputs and its output. `register_forward_hook`
+    returns a handle, and `handle.remove()` takes the hook off again.
 
     ```python
     handle = model.head.register_forward_hook(lambda module, inputs, output: print(output.shape))
-    handle.remove()    # gone, so the next run prints nothing
+    handle.remove()    # the hook is gone, so the next run prints nothing
     ```
 
-    Each block adds its output to what came before. So the outputs of `embed`
-    and the two blocks show the model's state at three points. A probe, as
-    topics2 trained one, asks whether a Linear can read a fact from those
-    states. Here is what probes read from 500 new rows.
+    Each block adds its output to its input, so the hidden state builds up
+    from block to block. The outputs of `embed` and of the two blocks show
+    the hidden state at three points. A probe, like the one topics2 trained,
+    is a Linear layer trained to read one fact from those states. The table
+    shows how accurately probes read two facts on 500 new rows.
 
-    | Read from | The next token, where a copy gives it | The previous token, at positions 1 to 11 |
+    | Read from | The next token, where an earlier copy shows it | The previous token, at positions 1 to 11 |
     |---|---|---|
     | `embed` | 3.3% | 3.3% |
     | `blocks[0]` | 6.9% | 100% |
     | `blocks[1]` | 99.8% | 97.5% |
 
-    The answer shows up only after the second block. The first block writes
-    each position's previous token into it early in the row, where interp2
-    shows the second block needs it.
+    The next token can be read only after the second block. After the first
+    block, a probe reads each early position's previous token perfectly. So
+    the first block copies the previous token into each position early in
+    the row. interp2 shows that the second block needs it there.
 
-    A probe shows that a fact is there to read. It can't show that the model
-    uses it. interp3 tests that by changing the model and watching the answer.
+    A probe shows that a fact can be read from a hidden state. It cannot show
+    that the model uses that fact. interp3 tests what the model uses by
+    changing the model and watching how its answer changes.
     """,
 )
 
@@ -518,22 +526,23 @@ INTERP1_SOURCE = source_file(
     from torch import Tensor
 
     hooked = nn.Linear(2, 2)
-    handle = hooked.register_forward_hook(lambda module, inputs, output: None)    # runs after every call of hooked
-    handle.remove()                                                              # and now never again
+    handle = hooked.register_forward_hook(lambda module, inputs, output: None)    # the hook now runs after every call of hooked
+    handle.remove()                                                              # and now it never runs again
     picked = torch.arange(6).view(2, 3)[torch.tensor([[True, False, True], [False, True, False]])]    # tensor([0, 2, 4])
 
 
-    # The copier this chapter studies, and its training.
+    # The copier model this chapter studies, and the function that trains it.
 ''' + indented(COPIER_PART) + '''
 
 
 ''' + indented(FIT_PROBE_PART) + '''
 
 
-    # TODO: Return the output of each module in modules, in the order the
-    #   model runs them, from one run of model on ids. Put a forward hook on
-    #   each module that keeps its output, run the model without recording
-    #   for autograd, and take every hook off again, even when the run crashes.
+    # TODO: Run model on ids once and return the output of each module in
+    #   modules, as a list in the order the model runs them. Put a forward
+    #   hook on each module that saves its output. Run the model inside
+    #   torch.no_grad(). Remove every hook afterwards, even if the run raises
+    #   an error.
     def record_outputs(
         model: nn.Module,
         modules: list[nn.Module],
@@ -542,11 +551,11 @@ INTERP1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return how well a probe reads the next token from the outputs of
-    #   model.embed and of each block in model.blocks, as a list of plain
-    #   numbers. Read only the positions known marks. From outputs of shape
-    #   (batch, steps, size), the states are outputs[:, :-1][known] and the
-    #   targets ids[:, 1:][known]. Score each with fit_probe.
+    # TODO: Return how accurately a probe reads the next token from the outputs
+    #   of model.embed and of each block in model.blocks, as a list of Python
+    #   floats. Use only the positions where known is True. For an output of
+    #   shape (batch, steps, size), the states are output[:, :-1][known] and
+    #   the targets are ids[:, 1:][known]. Score each output with fit_probe.
     def probe_scores(
         model: Copier,
         ids: Tensor,
@@ -664,7 +673,7 @@ def check_learned_scores(value: object) -> None:
         raise Mismatch(f"scores is {value_text(value)}, but it should be a list of 3 plain numbers.")
 
     if value[2] < 0.9:
-        raise Mismatch(f"After the second block a probe reads {value[2]:.1%} of next tokens, but it should pass 90%.")
+        raise Mismatch(f"After the second block a probe reads {value[2]:.1%} of next tokens correctly, but it should read more than 90%.")
 
     if value[0] > 0.2:
         raise Mismatch(f"From embed a probe reads {value[0]:.1%} of next tokens, but it should stay near guessing, below 20%.")
@@ -673,12 +682,12 @@ def check_learned_scores(value: object) -> None:
 def check_interp1(checker: Checker) -> None:
     checker.test(
         function="record_outputs",
-        description="keeps each module's output with hooks, then takes them off",
+        description="saves each module's output with hooks, then removes them",
         run=check_record_outputs,
     )
     checker.test(
         function="record_outputs",
-        description="takes the hooks off even when the model crashes",
+        description="removes the hooks even when the model raises an error",
         run=check_hooks_come_off,
     )
     checker.test(
@@ -688,7 +697,7 @@ def check_interp1(checker: Checker) -> None:
     )
     checker.check_name(
         name="scores",
-        description="your copier's answer shows up only after the second block",
+        description="a probe reads your copier's answer only after the second block",
         run=check_learned_scores,
     )
 
@@ -701,11 +710,11 @@ INTERP1 = Exercise(
     source=INTERP1_SOURCE,
     solution=INTERP1_SOLUTION,
     hints={
-        "record_outputs": "Each hook can append its output argument to one list. Keep the handles that "
-        "register_forward_hook gives, run the model inside torch.no_grad() within try, and remove every "
-        "handle in finally.",
-        "probe_scores": "record_outputs with [model.embed, *model.blocks] gives the three outputs. For each, "
-        "pass fit_probe the states and targets the TODO names.",
+        "record_outputs": "Each hook can append its output argument to one shared list. Keep the handles that "
+        "register_forward_hook returns. Run the model inside torch.no_grad() in a try block, and remove every "
+        "handle in the finally block.",
+        "probe_scores": "Calling record_outputs with [model.embed, *model.blocks] gives the three outputs. For each "
+        "output, pass fit_probe the states and targets that the TODO describes.",
         "scores": "It comes from probe_scores. If it fails while probe_scores passes, rerun the file.",
     },
     introduces=(),
@@ -722,39 +731,43 @@ INTERP1 = Exercise(
 INTERP2_LESSON = prose(
     """
     induction1 built an induction head by hand. The first layer copies each
-    position's previous token into it. The second layer's query looks for the
-    current token among those copies, and takes the token that followed. Did
-    training find the same circuit? Attention patterns can show it.
+    position's previous token into that position. The second layer's query
+    looks for the current token among those copies, and takes the token that
+    followed it. Did training find the same circuit? Attention patterns can
+    show it.
 
-    `pattern(x)` in each block is the attention's weights, one row per
-    position. Row t says how much position t takes from each position up to
-    t. Two scores read a head.
+    `pattern(x)` in each block returns the attention weights, one row per
+    position. Row t holds how much weight position t puts on each position up
+    to t. Two scores describe what a head does.
 
-    - The previous token score: the average weight on the place right before, which `torch.diagonal` with `offset=-1` picks out.
-    - The induction score: on positions whose token showed up earlier, the weight on the place right after that earlier copy.
+    - The previous token score: the average weight each position puts on the position right before it. `torch.diagonal` with `offset=-1` picks those weights out.
+    - The induction score: at positions whose token appeared earlier, the weight on the position right after that earlier copy.
 
     Olsson and colleagues call the second one prefix matching.
 
-    Here are both scores for each block of the trained copier, on 500 new
-    rows, beside a copier with one block, trained the same way.
+    The table shows both scores for each block of the trained copier, on 500
+    new rows. It also shows a copier with only one block, trained the same
+    way.
 
-    | Model and block | Previous token score | Induction score | Right where a copy gives it |
+    | Model and block | Previous token score | Induction score | Right where a copy shows the answer |
     |---|---|---|---|
     | Two blocks, `blocks[0]` | 0.44 | 0.09 | 99.6% |
     | Two blocks, `blocks[1]` | 0.07 | 0.96 | |
     | One block | 0.06 | 0.16 | 36.9% |
 
     Training found induction1's circuit. The second block is an induction
-    head, and one block alone can't make one. Olsson and colleagues say the
-    same, since an induction head needs heads in two layers working together.
+    head, and a model with one block cannot form one. Olsson and colleagues
+    found the same, because an induction head needs heads in two layers
+    working together.
 
-    The first block's score of 0.44 is an average, and by position it splits
-    in two. Its weight on the place before is 0.99 or more at places 1 to 5
-    and 0.62 to 0.90 at places 6 to 11. From place 12 on it stays under 0.08.
-    Every token's first copy sits in the first segment, within the first 12
-    places. So the second block can always find its answer there, and
-    training put the previous token only where it is read. A pattern shows
-    how a circuit fits its data, which a final score never will.
+    The first block's score of 0.44 is an average, and it hides two different
+    behaviors. Its weight on the previous position is 0.99 or more at
+    positions 1 to 5, and 0.62 to 0.90 at positions 6 to 11. From position 12
+    on, it stays under 0.08. Every token's first copy lies in the first
+    segment, within the first 12 positions. So the second block always finds
+    its answer there. Training put the previous token only at the positions
+    where it gets read. A pattern shows how a circuit fits its data, which a
+    single final score never shows.
     """,
 )
 
@@ -768,19 +781,19 @@ INTERP2_SOURCE = source_file(
     from torch import Tensor
 
     weights = torch.full((1, 3, 3), 1 / 3)
-    before = torch.diagonal(weights, offset=-1, dim1=-2, dim2=-1)    # tensor([[0.3333, 0.3333]]), each row's weight on the place before
+    before = torch.diagonal(weights, offset=-1, dim1=-2, dim2=-1)    # tensor([[0.3333, 0.3333]]), each row's weight on the position before it
     tokens = torch.tensor([[5, 7, 5]])
-    same = tokens[:, :, None] == tokens[:, None, :]                   # same[0, 2, 0] is True, since places 2 and 0 hold token 5
+    same = tokens[:, :, None] == tokens[:, None, :]                   # same[0, 2, 0] is True, since positions 2 and 0 hold token 5
 
 
-    # The copier this chapter studies, and its training.
+    # The copier model this chapter studies, and the function that trains it.
 ''' + indented(COPIER_PART) + '''
 
 
-    # TODO: Return each block's attention pattern on ids, in order, from
-    #   block.attention.pattern of the block's own input. The first block reads
-    #   model.embed(ids), and each block's output is the next one's input.
-    #   Record nothing for autograd.
+    # TODO: Return each block's attention pattern on ids, as a list in block
+    #   order. A block's pattern is block.attention.pattern of that block's
+    #   input. The first block's input is model.embed(ids), and each block's
+    #   output is the next block's input. Work inside torch.no_grad().
     def patterns(
         model: Copier,
         ids: Tensor,
@@ -788,17 +801,21 @@ INTERP2_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the previous token score of pattern, of shape (batch, steps,
-    #   steps), as a plain number. It is the average weight each row puts on
-    #   the place right before its own.
+    # TODO: Return the previous token score of pattern, as a Python float.
+    #   pattern has shape (batch, steps, steps). The score is the average of
+    #   the weight that each row t puts on position t - 1, over every row that
+    #   has a previous position, in every sequence.
+    #   Example: previous_token_score(weights), with weights from the top of
+    #   this file, returns about 0.3333.
     def previous_token_score(pattern: Tensor) -> float:
         ...
 
 
-    # TODO: Return the induction score of pattern for ids, as a plain number.
-    #   A target of row t is the place s + 1, wherever ids holds the same token
-    #   at s and at t, with s before t. Sum each row's weight on its targets,
-    #   then average over the rows that have at least one target.
+    # TODO: Return the induction score of pattern for ids, as a Python float.
+    #   For row t, a target is position s + 1 wherever s < t and ids holds the
+    #   same token at s and at t. Sum each row's weights on its targets. Then
+    #   average those sums over all the rows, in every sequence, that have at
+    #   least one target.
     def induction_score(
         pattern: Tensor,
         ids: Tensor,
@@ -894,7 +911,7 @@ def check_interp2(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="previous_token_score",
-        description="averages the weight on the place before",
+        description="averages the weight on the previous position",
         inputs=(
             (Described(random_pattern(663, 2, 5), "a random pattern of shape (2, 5, 5)"),),
             (Described(random_pattern(664, 3, 4), "a random pattern of shape (3, 4, 4)"),),
@@ -906,7 +923,7 @@ def check_interp2(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="induction_score",
-        description="averages the weight on the place after an earlier copy",
+        description="averages the weight on the position after an earlier copy",
         inputs=(
             (Described(random_pattern(666, 3, 24), "a random pattern of shape (3, 24, 24)"), Described(ids, "3 repeated rows of 24 tokens")),
             (Described(random_pattern(667, 2, 6), "a random pattern of shape (2, 6, 6)"), repeat_with_doubles()),
@@ -940,13 +957,13 @@ INTERP2 = Exercise(
     source=INTERP2_SOURCE,
     solution=INTERP2_SOLUTION,
     hints={
-        "patterns": "Inside torch.no_grad(), start from the model's embed of ids. For each block, keep its "
-        "attention.pattern of the current x in a list, then run the block on x to move on.",
-        "previous_token_score": "The file's first lines show torch.diagonal with offset=-1. Average what it gives "
-        "and turn it into a plain number.",
-        "induction_score": "Compare every pair of places as the file's same line does, and keep the pairs with s "
-        "before t using torch.tril with diagonal=-1. Shift that mask one place along the last dimension to land on "
-        "s + 1, multiply by the pattern, and sum the last dimension.",
+        "patterns": "Inside torch.no_grad(), start with the model's embed of ids as x. For each block, keep the "
+        "pattern its attention gives for the current x, then run the block on x to get the next block's input.",
+        "previous_token_score": "The first lines of the file show torch.diagonal with offset=-1. Take the mean of "
+        "what it returns and convert it to a Python float with .item().",
+        "induction_score": "Compare every pair of positions as the line that sets same does. Keep only the pairs "
+        "with s before t, using a mask from torch.tril with diagonal=-1. Shift that mask one position along the last "
+        "dimension so it marks s + 1. Multiply it by the pattern and sum over the last dimension.",
         "scores": "It comes from the three functions. If it fails while they pass, rerun the file.",
     },
     introduces=(),
@@ -962,42 +979,46 @@ INTERP2 = Exercise(
 
 INTERP3_LESSON = prose(
     """
-    Probes show what a model holds, and patterns show where it looks. Neither
-    shows what it uses. For that, change the model and watch the answer.
+    Probes show what information a model holds, and attention patterns show
+    where it looks. Neither shows what the model actually uses. To find that
+    out, change the model and watch how its answer changes.
 
-    A forward hook that returns a tensor replaces the module's output with
-    it. Zero ablation returns zeros, so the module's work is gone and
-    everything after it runs as usual.
+    If a forward hook returns a tensor, that tensor replaces the module's
+    output. Zero ablation uses a hook that returns zeros. That removes the
+    module's contribution, and everything after it runs as usual.
 
     ```python
     torch.zeros_like(torch.ones(2, 3))    # tensor([[0., 0., 0.], [0., 0., 0.]])
     ```
 
-    With either block's attention zeroed, the trained copier gets this share
-    of the knowable next tokens right, on 500 new rows.
+    The table shows the trained copier's accuracy on 500 new rows, at the
+    positions where an earlier copy shows the next token. Each line of the
+    table zeroes the attention of a different block.
 
-    | Attention zeroed | Right where a copy gives it |
+    | Attention zeroed | Right where a copy shows the answer |
     |---|---|
     | None | 99.6% |
     | `blocks[0]` | 21.6% |
     | `blocks[1]` | 5.0% |
 
-    Both blocks matter. Zeros are far from anything the model saw in
-    training, though, so a large drop can come from the shock alone.
-    Replacing the output with its average over many rows, mean ablation, is
-    gentler. It gives 21.9% and 4.5% here, about the same, so the drops are
-    real.
+    Both blocks matter. But zeros are far from any output the model saw in
+    training, so a large drop could come from that unusual input alone. Mean
+    ablation is gentler. It replaces the output with its average over many
+    rows. Here it gives 21.9% and 4.5%, about the same as zero ablation, so
+    the drops are real.
 
     Activation patching asks a sharper question. Take a clean row and a
-    corrupted one that differs in one key token. Run the corrupted row, but
-    swap one module's output for its value from the clean run. If the clean
-    answer comes back, that module carries it. Heimersheim and Nanda call
-    this direction denoising.
+    corrupted row that differs from it in one important token. Run the
+    corrupted row, but replace one module's output with that module's output
+    from the clean run. If the clean answer comes back, that module carries
+    the information the answer needs. Heimersheim and Nanda call this
+    direction of patching denoising.
 
-    Here `corrupt` swaps the token after the last token's first copy, so the
-    right answer changes. The measure is the logit difference, the clean
-    answer's score minus the corrupted one's at the last position. Heimersheim
-    and Nanda trust it most among the measures they compare.
+    Here `corrupt` finds the first copy of the last token and changes the
+    token right after it, so the right answer changes. The measure is the
+    logit difference. It is the clean answer's score minus the corrupted
+    answer's score, at the last position. Heimersheim and Nanda recommend it
+    most among the measures they compare.
 
     | Run | Logit difference |
     |---|---|
@@ -1007,11 +1028,12 @@ INTERP3_LESSON = prose(
     | Corrupted, `blocks[1]` patched from clean | 10.92 |
 
     Patching the second block brings the clean answer back. Patching the
-    first does nothing, though zeroing it broke the model. The first block
-    does copy the swapped token one place forward, as the next position's
-    previous token. No answer reads it there. The second block reads the
-    swapped token straight from the embedding at its own place. So the path
-    that carries the answer skips the first block.
+    first block does almost nothing, even though zeroing it broke the model.
+    The first block does copy the changed token one position forward, as the
+    next position's previous token. But the answer is never read from there.
+    The second block reads the changed token directly from the embedding at
+    the token's own position. So the path that carries the answer skips the
+    first block.
     """,
 )
 
@@ -1025,10 +1047,10 @@ INTERP3_SOURCE = source_file(
     from torch import Tensor
 
     blank = torch.zeros_like(torch.ones(2, 3))    # tensor([[0., 0., 0.], [0., 0., 0.]])
-    replace = lambda module, inputs, output: blank    # as a forward hook, this swaps the output for blank
+    replace = lambda module, inputs, output: blank    # used as a forward hook, this replaces the module's output with blank
 
 
-    # The copier this chapter studies, and its training.
+    # The copier model this chapter studies, and the function that trains it.
 ''' + indented(COPIER_PART) + '''
 
 
@@ -1039,9 +1061,10 @@ INTERP3_SOURCE = source_file(
 ''' + indented(CORRUPT_PART) + '''
 
 
-    # TODO: Return accuracy of model on ids and known with the output of
-    #   module replaced by zeros of the same shape. Take the hook off again
-    #   afterwards, even when the run crashes.
+    # TODO: Return the accuracy of model on ids and known, from the given
+    #   accuracy function, while the output of module is replaced by zeros of
+    #   the same shape. Remove the hook afterwards, even if the run raises an
+    #   error.
     def ablated_accuracy(
         model: nn.Module,
         ids: Tensor,
@@ -1051,9 +1074,9 @@ INTERP3_SOURCE = source_file(
         ...
 
 
-    # TODO: Return model's scores on ids with the output of module replaced
-    #   by replacement. Record nothing for autograd, and take the hook off
-    #   again afterwards, even when the run crashes.
+    # TODO: Return model's scores on ids while the output of module is
+    #   replaced by replacement. Run the model inside torch.no_grad(). Remove
+    #   the hook afterwards, even if the run raises an error.
     def patched_scores(
         model: nn.Module,
         module: nn.Module,
@@ -1063,10 +1086,12 @@ INTERP3_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the logit difference as a plain number. At the last
-    #   position of scores, of shape (batch, steps, vocabulary), take each
-    #   row's score for its clean answer minus its score for its corrupted
-    #   answer, and average over the rows.
+    # TODO: Return the logit difference as a Python float. scores has shape
+    #   (batch, steps, vocabulary). At the last position, take each row's
+    #   score for its clean answer minus its score for its corrupted answer.
+    #   Return the mean over the rows.
+    #   Example: logit_difference(torch.tensor([[[0.0, 0.0], [1.0, 3.0]]]),
+    #   torch.tensor([1]), torch.tensor([0])) returns 2.0.
     def logit_difference(
         scores: Tensor,
         clean_answers: Tensor,
@@ -1209,19 +1234,19 @@ def check_interp3(checker: Checker) -> None:
     )
     checker.test(
         function="ablated_accuracy",
-        description="takes the hook off even when the model crashes",
+        description="removes the hook even when the model raises an error",
         run=check_ablation_hooks_come_off,
     )
     checker.test(
         function="patched_scores",
-        description="runs the model with one module's output swapped in",
+        description="runs the model with one module's output replaced",
         run=check_patched_scores,
     )
     scores = torch.randn(4, 5, 7, generator=torch.Generator().manual_seed(676))
     check_on_inputs(
         checker=checker,
         function="logit_difference",
-        description="averages the clean answer's lead at the last position",
+        description="averages the clean answer's score minus the corrupted answer's at the last position",
         inputs=(
             (Described(scores, "random scores of shape (4, 5, 7)"), torch.tensor([0, 3, 6, 2]), torch.tensor([1, 3, 0, 5])),
             (Described(scores[:2, :3], "random scores of shape (2, 3, 7)"), torch.tensor([4, 4]), torch.tensor([2, 6])),
@@ -1249,12 +1274,12 @@ INTERP3 = Exercise(
     source=INTERP3_SOURCE,
     solution=INTERP3_SOLUTION,
     hints={
-        "ablated_accuracy": "Register a forward hook on module that returns torch.zeros_like of its output, "
-        "return accuracy of the model inside try, and remove the handle in finally.",
-        "patched_scores": "The same shape as ablated_accuracy, with a hook that returns replacement, and the model "
-        "run inside torch.no_grad().",
-        "logit_difference": "scores[:, -1] holds the last position. Index it with torch.arange of the batch and each "
-        "set of answers, subtract, then .mean().item().",
+        "ablated_accuracy": "Register a forward hook on module that returns torch.zeros_like of its output. Return "
+        "the accuracy of the model inside a try block, and remove the handle in the finally block.",
+        "patched_scores": "Write it like ablated_accuracy, with a hook that returns replacement, and run the model "
+        "inside torch.no_grad().",
+        "logit_difference": "scores[:, -1] holds the scores at the last position. Index it with torch.arange of the "
+        "batch size and each set of answers, subtract, then call .mean().item().",
         "ablated": "It comes from ablated_accuracy. If it fails while the function passes, rerun the file.",
         "patched": "It comes from patched_scores and logit_difference. If it fails while they pass, rerun the file.",
     },
@@ -1271,35 +1296,39 @@ INTERP3 = Exercise(
 
 INTERP4_LESSON = prose(
     """
-    Attribution asks which inputs an answer came from. The plainest way is
-    the gradient. It says how far the output moves when an input moves a
-    little.
+    Attribution asks which inputs an answer came from. The simplest method
+    uses the gradient, which says how much the output changes when an input
+    changes a little.
 
-    Sundararajan and colleagues showed where that fails. Take f(x) = 1 -
-    ReLU(1 - x). From 0 to 2 the output climbs from 0 to 1, so x mattered.
-    But f is flat past 1, so the gradient at 2 is 0. Their first rule, which
-    they call sensitivity, says an input that changed the output needs some
-    credit.
+    Sundararajan and colleagues showed where the gradient fails. Take
+    `f(x) = 1 - relu(1 - x)`. As x goes from 0 to 2, the output rises from 0
+    to 1, so x matters. But f is flat for x above 1, so the gradient at 2 is
+    0. Their first rule, which they call sensitivity, says that an input
+    that changed the output must get some credit.
 
-    Integrated gradients average the gradient along the straight path from a
-    baseline to the input, then multiply by how far the input moved. Their
-    completeness property says the credits add up to f(input) - f(baseline).
-    With m steps, the average uses the points at k / m of the way, for k from
-    1 to m.
+    Integrated gradients fix this. They average the gradient along the
+    straight line from a baseline input to the real input. Then they multiply
+    that average by the input minus the baseline, which gives each input's
+    credit. Their completeness property says the credits add up to
+    `f(input) - f(baseline)`. With m steps, the average uses the points that
+    are k / m of the way along the line, for k from 1 to m.
 
     ```python
     torch.linspace(0, 2, 5)[1:]    # tensor([0.5000, 1.0000, 1.5000, 2.0000]), 4 steps from 0 to 2
     ```
 
-    The paper says 20 to 300 steps are enough, and to check that the credits
-    add up. On the toy, 20 steps give 0.9 and 300 give 0.993 of the change
-    of 1, so the check says when to add steps.
+    The paper says 20 to 300 steps are enough, and advises checking that the
+    credits add up. On the toy function, the output changes by 1. The credits
+    add up to 0.9 with 20 steps and to 0.993 with 300 steps. So checking the
+    sum tells you when to add more steps.
 
-    On the copier, the answer is the last position's score for the token
-    after the last token's first copy. The inputs are each position's token
-    vector, the baseline is no token at all, and each position's credit is
-    the sum over its vector. On 200 rows, the credits miss the score's change
-    by this much on average, out of a change of 10.19.
+    On the copier, the output is the score at the last position for the
+    right answer. The right answer is the token right after the first copy
+    of the last token. The inputs are the token vectors at each position, and
+    the baseline is all zeros, meaning no token at all. Each position's
+    credit is the sum of the credits over its vector. On 200 rows, the score
+    changes by 10.19 on average. The table shows how far the sum of the
+    credits is from that change, on average.
 
     | Steps | Credits miss the change by |
     |---|---|
@@ -1309,11 +1338,11 @@ INTERP4_LESSON = prose(
     | 50 | 0.13 |
     | 300 | 0.02 |
 
-    One step is the gradient at the input times the input, a common shortcut,
-    and it misses by a third. With 50 steps, 74% of the credit lands on three
-    places. They are the token after the copy with 28%, the copy itself with
-    24%, and the last token with 23%. Those are the places interp2's
-    induction head reads.
+    With one step, integrated gradients is the gradient at the input times
+    the input, a common shortcut. It misses by about a third. With 50 steps,
+    74% of the credit goes to three positions. They are the token after the
+    copy with 28%, the copy itself with 24%, and the last token with 23%.
+    Those are the positions that interp2's induction head reads.
     """,
 )
 
@@ -1333,7 +1362,7 @@ INTERP4_SOURCE = source_file(
     points = torch.linspace(0, 2, 5)[1:]              # tensor([0.5000, 1.0000, 1.5000, 2.0000]), 4 steps from 0 to 2
 
 
-    # The copier this chapter studies, and its training.
+    # The copier model this chapter studies, and the function that trains it.
 ''' + indented(COPIER_PART) + '''
 
 
@@ -1342,6 +1371,8 @@ INTERP4_SOURCE = source_file(
 
     # TODO: Return the gradient of f(x).sum() with respect to x, without
     #   changing x. Work on a detached copy of x that requires a gradient.
+    #   Example: gradient(lambda x: x ** 2, torch.tensor([3.0])) returns
+    #   tensor([6.]).
     def gradient(
         f: Callable[[Tensor], Tensor],
         x: Tensor,
@@ -1349,9 +1380,12 @@ INTERP4_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the integrated gradients of f at x from baseline, with steps
-    #   steps. Average gradient of f at the points baseline + k / steps * (x -
-    #   baseline), for k from 1 to steps, then multiply by x - baseline.
+    # TODO: Return the integrated gradients of f at x from baseline, using
+    #   `steps` steps. Average your gradient of f over the points
+    #   baseline + k / steps * (x - baseline), for k from 1 to steps. Then
+    #   multiply that average by x - baseline.
+    #   Example: integrated_gradients(lambda x: 1 - torch.relu(1 - x),
+    #   torch.tensor([2.0]), torch.zeros(1), 20) returns tensor([0.9000]).
     def integrated_gradients(
         f: Callable[[Tensor], Tensor],
         x: Tensor,
@@ -1361,10 +1395,12 @@ INTERP4_SOURCE = source_file(
         ...
 
 
-    # TODO: Return each position's credit for each row's answer score, of
-    #   shape (batch, steps). Take integrated_gradients of answer_scores over
-    #   the token vectors model.embed.tokens(ids), detached, from a baseline of
-    #   zeros, then sum each position's credits over its vector.
+    # TODO: Return each position's credit for each row's answer score, as a
+    #   tensor of shape (batch, STEPS), one credit per position. The inputs are
+    #   the token vectors model.embed.tokens(ids), detached. Take
+    #   integrated_gradients of answer_scores with respect to those vectors,
+    #   from a baseline of zeros, with `steps` steps. Then sum each position's
+    #   credits over its vector.
     def position_attributions(
         model: Copier,
         ids: Tensor,
@@ -1507,7 +1543,7 @@ def check_interp4(checker: Checker) -> None:
     )
     checker.test(
         function="integrated_gradients",
-        description="averages the gradient along the straight path",
+        description="averages the gradient along the straight line from the baseline",
         run=check_integrated_gradients,
     )
     checker.test(
@@ -1517,7 +1553,7 @@ def check_interp4(checker: Checker) -> None:
     )
     checker.check_name(
         name="toy",
-        description="integrated gradients give the toy the credit its gradient denies",
+        description="integrated gradients give the toy's input the credit its gradient misses",
         run=check_learned_toy,
     )
     checker.check_name(
@@ -1535,12 +1571,12 @@ INTERP4 = Exercise(
     source=INTERP4_SOURCE,
     solution=INTERP4_SOLUTION,
     hints={
-        "gradient": "Detach x, clone it, and turn on requires_grad_ so it is a fresh leaf autograd tracks. Call "
-        ".backward() on the sum of f of it, and return its .grad.",
-        "integrated_gradients": "Loop k over range(1, steps + 1), add up gradient at each point, divide by steps, "
-        "and multiply by x - baseline.",
-        "position_attributions": "Pass integrated_gradients a lambda that runs answer_scores on the vectors it gets, "
-        "torch.zeros_like of the vectors as the baseline, then .sum(dim=-1).",
+        "gradient": "Detach x, clone it, and call requires_grad_(True), so autograd tracks the copy as a new leaf "
+        "tensor. Call .backward() on the sum of f of the copy, and return the copy's .grad.",
+        "integrated_gradients": "Loop k over range(1, steps + 1) and add up gradient at each point. Divide the total "
+        "by steps, and multiply by x - baseline.",
+        "position_attributions": "Pass integrated_gradients a lambda that runs answer_scores on the vectors it "
+        "receives, and torch.zeros_like of the vectors as the baseline. Then take .sum(dim=-1) of the result.",
         "toy": "It comes from integrated_gradients. If it fails while the function passes, rerun the file.",
         "credits": "It comes from position_attributions. If it fails while the function passes, rerun the file.",
     },
@@ -1557,24 +1593,25 @@ INTERP4 = Exercise(
 
 QUIZ17_LESSON = prose(
     """
-    The course's last quiz. Each part names a problem and the property its
-    answer must keep. No part says which layer to use, and nothing in the file
-    shows one. Choosing it is the task.
+    This is the course's last quiz. Each part names a problem and a property
+    that your answer must have. No part says which layer to use, and nothing
+    in the file shows one. Choosing the layer is the task.
 
     | Name | Problem | What the check tests |
     |---|---|---|
     | `train_step` | one clipped step of training a classifier, in micro batches | the loss and the weights after two calls, against a reference step |
-    | `ZeroStartBlock` | a block for a deep stack | it starts as exactly its input, and every weight learns after one step |
-    | `LocalDetector` | a pattern on a ring of readings, wherever it sits | a turn of the ring turns the scores, and each score sees 5 steps |
+    | `ZeroStartBlock` | a block for a deep stack | it returns exactly its input at the start, and every weight gets a gradient after one step |
+    | `LocalDetector` | a pattern on a ring of readings, wherever it appears | rotating the ring rotates the scores, and each score depends on only 5 steps |
     | `ReadingsEncoder` | readings with some missing | a missing reading changes nothing |
-    | `SetCounter` | how many items in a set are marked | the items' order, any number of them, every item listed twice, and the count once trained |
-    | `TriangleScorer` | a triangle's shape and size | moving, turning or relisting its corners |
+    | `SetCounter` | how many items in a set are marked | the items' order, any number of items, every item listed twice, and the trained count |
+    | `TriangleScorer` | a triangle's shape and size | moving it, rotating it or listing its corners in another order |
     | `Recall` | the value stored with an asked key | the answer once trained, in sequences longer than any it trained on |
 
-    The check builds each module from fixed seeds and tests its property
-    directly, as design5 did. Every module holds weights to learn. Parts that
-    learn train with the check's own recipe, which their TODO names. A failing
-    part says which property broke and by how much.
+    The check builds each module with fixed seeds and tests its property
+    directly, as design5 did. Every module must have weights to learn. Parts
+    that need training are trained with the check's own recipe, which their
+    TODO describes. When a part fails, the message says which property broke
+    and by how much.
     """,
 )
 
@@ -1582,8 +1619,8 @@ QUIZ17_SOURCE = source_file(
     '''
     # quiz17.py
     #
-    # The course's last quiz. Each part names a problem and the property its
-    # answer keeps. Which layer fits is yours to choose.
+    # The course's last quiz. Each part names a problem and the property your
+    # answer must have. Choosing the layer that fits is up to you.
 
     import math
 
@@ -1593,13 +1630,13 @@ QUIZ17_SOURCE = source_file(
     from torch import Tensor
 
 
-    # TODO: Run one training step of model on x and its class labels y, split
-    #   into micro_batches equal pieces run one after another, as ddp2 did.
-    #   Backpropagate every piece's cross entropy divided by micro_batches,
-    #   so the gradients add up to the whole batch's. Then clip that whole
-    #   gradient to a total norm of max_norm and step the optimizer, once. No
-    #   gradient from an earlier call may carry over. Return the sum of the
-    #   divided losses as a plain number.
+    # TODO: Run one training step of model on x and its class labels y. Split
+    #   the batch into micro_batches equal pieces and run them one after
+    #   another, as ddp2 did. Backpropagate each piece's cross entropy divided
+    #   by micro_batches, so the gradients add up to the whole batch's
+    #   gradient. Then clip that total gradient to a norm of max_norm and step
+    #   the optimizer once. No gradient from an earlier call may carry over.
+    #   Return the sum of the divided losses as a Python float.
     def train_step(
         model: nn.Module,
         optimizer: torch.optim.Optimizer,
@@ -1611,10 +1648,11 @@ QUIZ17_SOURCE = source_file(
         ...
 
 
-    # TODO: Finish both methods. The block returns x plus a branch: a LayerNorm
-    #   of width, a Linear from width to 4 * width, a GELU, and a Linear back
-    #   to width. Choose the starting weights so the block starts as exactly
-    #   x, and every weight still gets a gradient after one step.
+    # TODO: Finish both methods. The block returns x plus a branch. The branch
+    #   is a LayerNorm of width, a Linear from width to 4 * width, a GELU, and
+    #   a Linear back to width. Choose the starting weights so the block
+    #   returns exactly x at the start, and every weight still gets a gradient
+    #   after one step.
     class ZeroStartBlock(nn.Module):
         def __init__(
             self,
@@ -1628,10 +1666,11 @@ QUIZ17_SOURCE = source_file(
 
 
     # TODO: Finish both methods. x holds readings of shape (batch, channels,
-    #   steps) taken around a ring, so the last step sits next to the first.
+    #   steps), taken around a ring, so the last step is next to the first.
     #   Return one score per step, of shape (batch, steps). A pattern should
-    #   score the same wherever it sits on the ring, and each score may see
-    #   only the 5 steps centered on its own. hidden is a width for inside.
+    #   get the same score wherever it appears on the ring. Each score may
+    #   depend only on the 5 steps centered on its own step. hidden is the
+    #   width to use for the layers inside.
     class LocalDetector(nn.Module):
         def __init__(
             self,
@@ -1645,13 +1684,13 @@ QUIZ17_SOURCE = source_file(
             ...
 
 
-    # TODO: Finish both methods. readings has shape (batch, steps, features),
-    #   and present, of shape (batch, steps), is False where a reading is
+    # TODO: Finish both methods. readings has shape (batch, steps, features).
+    #   present has shape (batch, steps) and is False where a reading is
     #   missing. Return one vector of width numbers per row, of shape (batch,
-    #   width). A missing reading must change nothing. Its numbers don't count,
-    #   and a row whose last readings are missing gives the same vector as
-    #   that row cut to the readings before them. Every row has at least one
-    #   reading present.
+    #   width). A missing reading must change nothing. Its numbers must not
+    #   affect the result. And a row whose last readings are missing must give
+    #   the same vector as that row cut off before them. Every row has at
+    #   least one reading present.
     class ReadingsEncoder(nn.Module):
         def __init__(
             self,
@@ -1669,13 +1708,14 @@ QUIZ17_SOURCE = source_file(
             ...
 
 
-    # TODO: Finish both methods. items has shape (batch, items, features), one
-    #   set of items per row, and an item is marked when its first feature is
-    #   1. Return one number per row, of shape (batch,). The items' order can't
-    #   matter, any number of them must work, and listing every item twice
-    #   doubles the marked ones, so it must change the number. Trained with
-    #   the check's recipe, 800 steps of Adam at 0.003 on the squared error
-    #   over sets of 1 to 12 items, the number should count the marked items.
+    # TODO: Finish both methods. items has shape (batch, items, features),
+    #   with one set of items per row. An item is marked when its first
+    #   feature is 1. Return one number per row, of shape (batch,). The order
+    #   of the items must not matter, and any number of items must work.
+    #   Listing every item twice doubles the number of marked items, so it
+    #   must change the result. The check trains the module for 800 steps of
+    #   Adam at 0.003 on the squared error, over sets of 1 to 12 items. After
+    #   that training, the number should be the count of marked items.
     class SetCounter(nn.Module):
         def __init__(
             self,
@@ -1691,9 +1731,10 @@ QUIZ17_SOURCE = source_file(
 
     # TODO: Finish both methods. corners has shape (batch, 3, 2), the three
     #   corners of a triangle on a plane. Return one number per triangle, of
-    #   shape (batch,), that depends on its shape and size alone. Moving the
-    #   triangle, turning it, or listing its corners in another order can't
-    #   change it, and different triangles should get different numbers.
+    #   shape (batch,), that depends only on its shape and size. Moving the
+    #   triangle, rotating it, or listing its corners in another order must
+    #   not change the number. Different triangles should get different
+    #   numbers.
     class TriangleScorer(nn.Module):
         def __init__(
             self,
@@ -1707,12 +1748,13 @@ QUIZ17_SOURCE = source_file(
 
 
     # TODO: Finish both methods. tokens has shape (batch, steps, keys +
-    #   values). Each step but the last holds a pair, a key's one hot followed
-    #   by its value's one hot, and no key repeats. The last step holds the
-    #   asked key's one hot and zeros. Return logits over the values, of shape
-    #   (batch, values), for the asked key's value. Trained with the check's
-    #   recipe, 300 steps of Adam at 0.01 on sequences of 8 pairs, it should
-    #   answer sequences of 24 pairs too.
+    #   values). Every step except the last holds one pair, the one hot vector
+    #   of a key followed by the one hot vector of its value. No key repeats.
+    #   The last step holds the one hot vector of the asked key, followed by
+    #   zeros. Return logits over the values for the asked key's value, of
+    #   shape (batch, values). The check trains the module for 300 steps of
+    #   Adam at 0.01 on sequences of 8 pairs. After that, it should also
+    #   answer sequences of 24 pairs.
     class Recall(nn.Module):
         def __init__(
             self,
@@ -1745,14 +1787,15 @@ def train_step(
         loss.backward()
         total += loss.item()
 
-    # Clipping waits for the last piece, since each piece's gradient alone isn't the batch's.
+    # Clip only after the last piece, because one piece's gradient alone is not the whole batch's gradient.
     nn.utils.clip_grad_norm_(model.parameters(), max_norm)
     optimizer.step()
 
     return total
 
 
-# The branch's last layer at zero makes the block x itself, and the layers before it still get gradients.
+# Setting the branch's last layer to zero makes the block return x itself, and the layers before it still get
+# gradients.
 class ZeroStartBlock(nn.Module):
     def __init__(
         self,
@@ -1771,8 +1814,8 @@ class ZeroStartBlock(nn.Module):
         return x + self.down(F.gelu(self.up(self.norm(x))))
 
 
-# A convolution keeps a shift, circular padding keeps it at the ring's ends too, and a kernel of 5
-# with a pointwise layer after it sees exactly 5 steps.
+# A convolution's output shifts when its input shifts, and circular padding makes that hold at the ring's
+# ends too. A kernel of 5, followed by a layer with kernel size 1, sees exactly 5 steps.
 class LocalDetector(nn.Module):
     def __init__(
         self,
@@ -1787,7 +1830,8 @@ class LocalDetector(nn.Module):
         return self.score(F.relu(self.conv(x))).squeeze(1)
 
 
-# Each reading on its own, then a mean over the present ones only, so a missing one counts for nothing.
+# Encode each reading on its own, then average over the present readings only, so a missing one counts for
+# nothing.
 class ReadingsEncoder(nn.Module):
     def __init__(
         self,
@@ -1822,7 +1866,7 @@ class SetCounter(nn.Module):
         return self.rho(self.phi(items).sum(dim=1)).squeeze(-1)
 
 
-# Side lengths don't change when the triangle moves or turns, and a sum over the sides ignores their order.
+# Side lengths don't change when the triangle moves or rotates, and a sum over the sides ignores their order.
 class TriangleScorer(nn.Module):
     def __init__(
         self,
@@ -1838,8 +1882,8 @@ class TriangleScorer(nn.Module):
         return self.rho(self.phi(sides).sum(dim=1)).squeeze(-1)
 
 
-# Attention from the last step finds the pair by its key, wherever it sits. With no positions, any
-# length works.
+# Attention from the last step finds the pair by its key, wherever the pair is. With no position
+# embeddings, any length works.
 class Recall(nn.Module):
     def __init__(
         self,
@@ -2006,7 +2050,7 @@ def check_zero_start(found: type) -> None:
         out = expect_rows(f"{call}(x of shape (5, {width}))", block(x), (5, width))
 
         if largest_gap(out, x) > 1e-6:
-            raise Mismatch(f"{call} moves its input by up to {largest_gap(out, x):.3g} at the start, but it should start as exactly x.")
+            raise Mismatch(f"{call} changes its input by up to {largest_gap(out, x):.3g} at the start, but it should return exactly x at the start.")
 
 
 def check_zero_start_learns(found: type) -> None:
@@ -2058,8 +2102,8 @@ def check_detector_shift(found: type) -> None:
 
         if gap > scale_of(out):
             raise Mismatch(
-                f"Turning the ring by {turn} steps should turn the scores by {turn} steps too, but they differ by up to "
-                f"{gap:.3g}. A pattern should score the same wherever it sits, the ring's ends included.",
+                f"Rotating the ring by {turn} steps should rotate the scores by {turn} steps too, but they differ by up "
+                f"to {gap:.3g}. A pattern should get the same score wherever it appears, the ring's ends included.",
             )
 
 
@@ -2255,8 +2299,8 @@ def check_triangle_moves(found: type) -> None:
 
     for change, moved in (
         ("Moving each triangle", corners + offsets),
-        ("Turning each triangle by 0.7", turned(corners, 0.7)),
-        ("Turning each triangle by 2.5", turned(corners, 2.5)),
+        ("Rotating each triangle by 0.7", turned(corners, 0.7)),
+        ("Rotating each triangle by 2.5", turned(corners, 2.5)),
     ):
         gap = largest_gap(scorer(moved), out)
 
@@ -2370,7 +2414,7 @@ QUIZ17_MODULE_TESTS: dict[str, tuple[tuple[int, ...], tuple[tuple[str, Callable[
         (3, 16),
         (
             ("gives one score per step, at any length", check_detector_shape),
-            ("turns its scores with the ring", check_detector_shift),
+            ("rotates its scores when the ring rotates", check_detector_shift),
             ("sees the 5 steps centered on each score", check_detector_reach),
         ),
     ),
@@ -2395,7 +2439,7 @@ QUIZ17_MODULE_TESTS: dict[str, tuple[tuple[int, ...], tuple[tuple[str, Callable[
         (16,),
         (
             ("gives one number per triangle", check_triangle_shape),
-            ("keeps its number when a triangle moves or turns", check_triangle_moves),
+            ("keeps its number when a triangle moves or rotates", check_triangle_moves),
             ("keeps its number when the corners are relisted", check_triangle_relisted),
             ("tells different triangles apart", check_triangle_apart),
         ),
@@ -2454,29 +2498,30 @@ QUIZ17 = Exercise(
     source=QUIZ17_SOURCE,
     solution=QUIZ17_SOLUTION,
     hints={
-        "train_step": "Clear the gradients once, before any piece. Loop over the paired chunks of x and y as ddp2 "
-        "did, and add each divided loss's .item() to a running total. nn.utils.clip_grad_norm_ and the step go after "
-        "the loop, since only then do the gradients hold the whole batch.",
+        "train_step": "Zero the gradients once, before the first piece. Loop over matching chunks of x and y as "
+        "ddp2 did, and add each divided loss's .item() to a running total. Call nn.utils.clip_grad_norm_ and step "
+        "after the loop, because only then do the gradients cover the whole batch.",
         "ZeroStartBlock.__init__": "A branch whose last layer is all zeros adds nothing to x. Zero that one layer's "
-        "weight and bias under torch.no_grad(), and leave the layers before it as drawn.",
-        "ZeroStartBlock.forward": "Return x plus the branch, its layers in the order the TODO lists them. A layer at "
-        "zero blocks the gradient to the layers before it, so start the last layer alone at zero.",
+        "weight and bias under torch.no_grad(), and leave the layers before it with their random starting values.",
+        "ZeroStartBlock.forward": "Return x plus the branch, with its layers in the order the TODO lists them. A "
+        "layer at zero blocks the gradient to the layers before it, so set only the last layer to zero.",
         "LocalDetector.__init__": "Give it a layer that slides the same weights along the steps.",
         "LocalDetector.forward": "A Conv1d with kernel_size 5 sees 2 steps on each side. Padding of 2 with "
-        "padding_mode circular wraps the ring, and a kernel_size 1 layer after it keeps the reach at 5.",
+        "padding_mode circular wraps around the ring. A second Conv1d with kernel_size 1 after it keeps each score's "
+        "view at 5 steps.",
         "ReadingsEncoder.__init__": "Give it layers that read one reading at a time.",
         "ReadingsEncoder.forward": "Encode every reading, then set the missing ones to 0 with torch.where. Divide "
         "the sum over the steps by how many readings are present, not by the number of steps.",
-        "SetCounter.__init__": "Give it a network for each item and one for the joined result.",
+        "SetCounter.__init__": "Give it one network to run on each item and another to run on the combined result.",
         "SetCounter.forward": "Run a network on every item, then sum over the items. A sum is the same in any order "
-        "and grows with the count, where a mean or a max would hide it.",
-        "TriangleScorer.__init__": "Give it a small network to run on whatever the corners give.",
-        "TriangleScorer.forward": "The lengths of the three sides stay the same when a triangle moves or turns. Run "
-        "a network on each length and sum the three, so their order can't matter.",
-        "Recall.__init__": "Give it a Linear into width and the projections that attention needs, then a Linear to "
-        "the values.",
-        "Recall.forward": "Let the last step ask, with its query against every step's key, and read the values by "
-        "those weights. Leave positions out, so any length works.",
+        "and grows with the number of items. A mean or a max would hide that number.",
+        "TriangleScorer.__init__": "Give it a small network to run on a quantity computed from the corners.",
+        "TriangleScorer.forward": "The lengths of the three sides stay the same when a triangle moves or rotates. "
+        "Run a network on each length and sum the three results, so their order does not matter.",
+        "Recall.__init__": "Give it a Linear layer into width, the query, key and value projections that attention "
+        "needs, and a Linear layer to the values.",
+        "Recall.forward": "Compare the last step's query with every step's key, and take the sum of the values "
+        "weighted by those attention weights. Leave out positions, so any length works.",
     },
     introduces=(),
     check=check_quiz17,

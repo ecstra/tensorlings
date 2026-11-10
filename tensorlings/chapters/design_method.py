@@ -38,11 +38,14 @@ DESIGN_METHOD = Chapter(
         """
         # The design method
 
-        A new problem has no paper to copy. This chapter is a method for one.
-        Isolate the skill in a toy task, beat a baseline and read the curves to
-        see what failed, build the module from the exact algorithm, check its
-        gradients before training, and test the property it should have
-        directly. Each step is measured on real runs.
+        A new problem often has no paper to copy. This chapter teaches a method
+        for designing a module for such a problem. First, isolate the skill the
+        problem needs in a small toy task. Then train models on it, compare them
+        with a simple baseline, and read their accuracy curves to see why they
+        failed. Next, build the module from an exact algorithm by replacing its
+        hard steps with soft ones. Check its gradients before training. Last,
+        test directly that the module has the properties it should have. Every
+        step is measured on real training runs.
 
         ## Further reading
 
@@ -159,7 +162,7 @@ class CausalAttention(nn.Module):
         return self.c_proj(F.scaled_dot_product_attention(q, k, v, is_causal=True))
 
 
-# Layers of attention alone, with residuals and learned positions, as induction1's model.
+# A stack of attention layers with no MLPs, with residual connections and learned positions, like induction1's model.
 class AttentionRecaller(nn.Module):
     def __init__(
         self,
@@ -195,7 +198,7 @@ class GRURecaller(nn.Module):
         return self.head(self.gru(self.ids(tokens))[0])
 
 
-# An MLP over the whole flattened sequence, so it reads every place at once but only one length.
+# An MLP over the whole flattened sequence. It sees every position at once, but it works for one sequence length only.
 class FlatRecaller(nn.Module):
     def __init__(
         self,
@@ -350,8 +353,8 @@ CLASSES = 4
 SHOTS = 5
 
 
-# Each episode draws 4 new class centres on the first 2 features. The other 6 features are noise, and
-# larger than the gaps between classes. The labels 0 to 3 mean something new in every episode.
+# Each episode draws 4 new class centres in the first 2 features. The other 6 features are noise, and the
+# noise is larger than the gaps between classes. The labels 0 to 3 mean something new in every episode.
 def episodes(
     count: int,
     generator: torch.Generator,
@@ -598,7 +601,7 @@ class BlockStack(nn.Module):
 # ---------------------------------------------------------------------------
 
 GAP_PART = '''
-# equivariance1's gap, given.
+# equivariance1's gap, given. It is 0 when applying g before f gives the same result as applying g after f.
 def equivariance_gap(
     f: Callable[[Tensor], Tensor],
     g: Callable[[Tensor], Tensor],
@@ -735,30 +738,37 @@ def table_modules() -> dict[str, nn.Module]:
 
 DESIGN1_LESSON = prose(
     """
-    A new problem rarely says which skill it needs. The method starts by
-    isolating one. A **toy task** asks for that skill alone. An exact program
-    can answer it, a knob sets how hard it is, and fresh examples never run
-    out.
+    A new problem rarely tells you which skill a model needs to solve it. So
+    the method starts by isolating one skill. A **toy task** is a small task
+    that tests that skill and nothing else. A short exact program can solve
+    it, so you know it is solvable. One setting controls how hard it is. And
+    you can generate as many fresh examples as you want.
 
-    Arora and colleagues built Zoology this way. On real text, 82% of the gap
-    between attention and convolution models with gates came from one skill,
-    recalling something said earlier. At recalling, a 70 million parameter
-    attention model beat a 1.4 billion parameter convolution model.
+    Arora and colleagues built their Zoology study this way. They compared
+    attention models with gated convolution models on real text. 82% of the
+    difference in quality between the two came from one skill, recalling
+    something that appeared earlier in the text. On that skill, a 70 million
+    parameter attention model beat a 1.4 billion parameter convolution model.
 
-    Their task, multi query associative recall, reads pairs, then asks for
-    several of them back.
+    Their toy task is called multi query associative recall. The model reads
+    a list of key and value pairs. Then it sees several of the keys again and
+    must answer each one's value.
 
     ```text
     A 4 B 3 C 6 F 1 E 2   then   A ? C ? F ? E ? B ?   answers 4 6 1 2 3
     ```
 
-    Here keys are ids 0 to 15 and values 16 to 31. A sequence of `pairs` pairs
-    lays them out key, value, key, value. The same keys follow, in a new order,
-    as queries. Only the query places are scored. Every other place gets the
-    target -100, which `F.cross_entropy` skips, as sft1's targets did.
+    In this chapter, keys are token ids 0 to 15 and values are ids 16 to 31. A
+    sequence with `pairs` pairs first lists them as key, value, key, value.
+    Then the same keys follow again in a new order. Each repeated key is a
+    query, and the model must predict its value at that position. Only the
+    query positions are scored. Every other position gets the target -100,
+    which `F.cross_entropy` ignores, as in sft1.
 
-    `pairs` is the knob. Trained 1,500 steps on fresh sequences, three models
-    got this share of queries right on new ones, the range over 3 seeds.
+    The number of pairs, `pairs`, controls how hard the task is. Three models
+    were trained for 1,500 steps on freshly generated sequences. The table
+    shows the fraction of queries each one answered correctly on new
+    sequences, as the range over 3 seeds.
 
     | Model | 4 pairs | 8 pairs | 16 pairs |
     |---|---|---|---|
@@ -766,16 +776,21 @@ DESIGN1_LESSON = prose(
     | attention, 1 layer | 34.0% to 34.1% | 25.9% to 26.1% | 19.4% to 19.6% |
     | attention, 2 layers | 100% | 100% | 99.99% to 100% |
 
-    Your `exact_recall` gets 100%, which shows the task is sound. A guess among
-    the values gets 1 in 16. The GRU and one attention layer land within a
-    point of each other, well above a guess.
+    Your `exact_recall` gets 100%, which shows the task can be solved exactly.
+    A random guess among the 16 values gets 1 in 16 right. The GRU and the 1
+    layer attention model score within one percentage point of each other,
+    well above a random guess.
 
-    Answering the value a sequence holds most often scores 34.15%, 25.95% and
-    19.525%. So both learned that shortcut, and neither recalls. Two layers can
-    shift, then match, as induction1 showed, and they recall every pair.
+    There is a shortcut that needs no recall. For every query, answer the
+    value that appears most often in that sequence. This shortcut scores
+    34.15%, 25.95% and 19.525% at 4, 8 and 16 pairs. Those match the GRU and 1
+    layer rows, so both models learned the shortcut and neither one recalls.
+    Two attention layers can shift information to the next position and then
+    match on it, as induction1 showed. They recall every pair.
 
-    Each run took under a minute on a laptop CPU. The task found the skill one
-    layer lacks, which on real text would take far longer to see.
+    Each training run took under a minute on a laptop CPU. In that time the
+    toy task showed which skill one attention layer lacks. On real text, the
+    same finding would take far longer to see.
     """,
 )
 
@@ -795,11 +810,13 @@ DESIGN1_SOURCE = source_file(
 
 
     # TODO: Finish building count sequences of the recall task. keys and values
-    #   are drawn for you, each of shape (count, pairs). Draw each sequence's
-    #   query order with torch.randperm(pairs, generator=generator). Lay the
-    #   pairs out key, value, key, value, as laid_out shows, then the keys again
-    #   in that order. targets is -100 everywhere but those query places, which
-    #   hold each query's value. Return tokens and targets, whole numbers.
+    #   are already drawn, each of shape (count, pairs). For each sequence, draw
+    #   a query order with torch.randperm(pairs, generator=generator). tokens
+    #   holds the pairs laid out key, value, key, value, as laid_out shows,
+    #   followed by the keys again in the query order. So tokens has shape
+    #   (count, 3 * pairs). targets has the same shape. It is -100 everywhere
+    #   except at the query positions, which hold each query's value. Return
+    #   (tokens, targets), both integer tensors.
     def recall_batch(
         count: int,
         pairs: int,
@@ -810,10 +827,13 @@ DESIGN1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the exact answer to every query, from a plain dict per
-    #   sequence of each key to its value, as exact_lookup in derive2 used a
-    #   loop. tokens is laid out as recall_batch makes it. Return whole numbers
-    #   of shape (count, pairs).
+    # TODO: Return the exact answer to every query, using plain Python. For each
+    #   sequence, build a dict that maps each key to its value, then look up
+    #   each query, as exact_lookup in derive2 did with a loop. tokens is laid
+    #   out as recall_batch makes it. Return an integer tensor of shape
+    #   (count, pairs).
+    #   Example: exact_recall(torch.tensor([[3, 20, 9, 17, 9, 3]]), 2) returns
+    #   tensor([[17, 20]]).
     def exact_recall(
         tokens: Tensor,
         pairs: int,
@@ -821,9 +841,12 @@ DESIGN1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the share of query places, where targets isn't -100, whose
-    #   highest score is the target, as a plain number. scores has shape
-    #   (count, steps, VOCABULARY) and targets (count, steps).
+    # TODO: Return the accuracy on the query positions, as a Python float. The
+    #   query positions are the ones where targets is not -100. At each one,
+    #   the prediction is the id with the highest score. The accuracy is the
+    #   fraction of query positions where the prediction equals the target.
+    #   scores has shape (count, steps, VOCABULARY) and targets has shape
+    #   (count, steps).
     def query_accuracy(
         scores: Tensor,
         targets: Tensor,
@@ -905,12 +928,12 @@ def check_recall_batch(
         raise Mismatch(f"{call} asks every sequence's keys in the same new order. Draw a new order for each sequence.")
 
     if (targets[:, : 2 * pairs] != -100).any():
-        raise Mismatch(f"{call}'s targets should be -100 at the {2 * pairs} places of the pairs, so the loss skips them.")
+        raise Mismatch(f"{call}'s targets should be -100 at the {2 * pairs} positions of the pairs, so the loss ignores them.")
 
     answers = RECALL_REFERENCE["exact_recall"](tokens, pairs)
 
     if not torch.equal(targets[:, 2 * pairs :], answers):
-        raise Mismatch(f"{call}'s targets at the query places should be each query's value, the one stored with its key.")
+        raise Mismatch(f"{call}'s targets at the query positions should be each query's value, the value stored with that key.")
 
     again = found(count, pairs, torch.Generator().manual_seed(seed))
 
@@ -962,7 +985,7 @@ def check_design1(checker: Checker) -> None:
     for count, pairs, seed in ((50, 5, 951), (7, 3, 952)):
         checker.test(
             function="recall_batch",
-            description="lays out pairs then queries, and targets only at the queries",
+            description="lays out the pairs then the queries, with targets only at the queries",
             run=lambda found, count=count, pairs=pairs, seed=seed: check_recall_batch(found, count, pairs, seed),
         )
 
@@ -980,7 +1003,7 @@ def check_design1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="query_accuracy",
-        description="scores the query places only",
+        description="scores only the query positions",
         inputs=(
             scored_places(955, 4, 6),
             scored_places(956, 8, 9),
@@ -998,13 +1021,15 @@ DESIGN1 = Exercise(
     source=DESIGN1_SOURCE,
     solution=DESIGN1_SOLUTION,
     hints={
-        "recall_batch": "order stacks one torch.randperm(pairs, generator=generator) per sequence. rows is "
-        "torch.arange(count).unsqueeze(1), so keys[rows, order] reorders each row. torch.cat the laid out pairs "
-        "with it on dim=1. Start targets from torch.full_like(tokens, -100) and fill its last pairs places.",
-        "exact_recall": "For each row of tokens.tolist(), build a dict from sequence[2 * i] to sequence[2 * i + 1]. "
-        "Then look up every token after the first 2 * pairs. torch.tensor of the lists gives whole numbers.",
-        "query_accuracy": "Keep the places where targets != -100. Compare scores.argmax(dim=-1) with targets "
-        "there, then take the mean as floats and .item().",
+        "recall_batch": "Build order by stacking one torch.randperm(pairs, generator=generator) per sequence. If "
+        "rows is torch.arange(count).unsqueeze(1), then keys[rows, order] reorders each row of keys. Join the laid "
+        "out pairs and the reordered keys with torch.cat on dim=1. Start targets from torch.full_like(tokens, -100) "
+        "and fill in its last pairs positions.",
+        "exact_recall": "For each row of tokens.tolist(), build a dict that maps sequence[2 * i] to "
+        "sequence[2 * i + 1]. Then look up every token after the first 2 * pairs. Calling torch.tensor on the "
+        "lists of answers gives an integer tensor.",
+        "query_accuracy": "Make a mask of the positions where targets != -100. Compare scores.argmax(dim=-1) with "
+        "targets at those positions. Convert the result to float, take the mean, and call .item().",
     },
     introduces=("toy task",),
     check=check_design1,
@@ -1017,19 +1042,23 @@ DESIGN1 = Exercise(
 
 DESIGN2_LESSON = prose(
     """
-    A score of 60% means little until you know what 60% beats. Karpathy's
-    recipe for training networks sets up "dumb baselines" early, and the
-    simplest ignores the input. Here that is always answering the value most
-    common in training. It gets 6.3% of queries right, about 1 in 16.
+    An accuracy of 60% means little until you know what a trivial method
+    would score. Karpathy's recipe for training neural networks sets up "dumb
+    baselines" early. The simplest baseline ignores the input entirely. Here
+    it always answers the value that was most common in the training targets.
+    It gets 6.3% of queries right, about 1 in 16.
 
-    Then read two curves, accuracy on the batches the model trains on and on
-    held out sequences. The two ways to fail look different there.
+    Next, track two accuracy curves during training. One is the accuracy on
+    the batches the model trains on. The other is the accuracy on held out
+    sequences that the model never trains on. The two ways a model can fail
+    look different on these curves.
 
-    - Failed to fit: training accuracy itself stays low. The model can't express the skill, or its training is broken.
-    - Failed to generalize: training accuracy is high and held out accuracy isn't. It learned its examples, not the skill.
+    - Failed to fit: even the training accuracy stays low. Either the model cannot express the skill, or its training is broken.
+    - Failed to generalize: training accuracy is high but held out accuracy is low. The model memorized its training examples instead of learning the skill.
 
-    Here is each model at 8 pairs after 1,500 steps, the range over 3 seeds.
-    A fixed set is all the sequences it ever trains on.
+    The table shows each model at 8 pairs after 1,500 steps, as the range
+    over 3 seeds. "64 fixed" means the model trains on the same 64 sequences
+    over and over. "Fresh sequences" means every batch is newly generated.
 
     | Model and data | Training | Held out | Diagnosis |
     |---|---|---|---|
@@ -1040,20 +1069,22 @@ DESIGN2_LESSON = prose(
     | attention, 2 layers, 1,024 fixed | 100% | 100% | works |
     | attention, 2 layers, fresh sequences | 100% | 100% | works |
 
-    The diagnosis says what to change. A model that failed to fit needs a layer
-    that can express the skill, or a fix to its training, which design4 checks.
-    More data won't help it. The GRU never left design1's shortcut, at 4 pairs
-    as at 8, and two attention layers recalled every pair.
+    The diagnosis tells you what to change. A model that failed to fit needs
+    a layer that can express the skill, or a fix to its training. design4
+    shows how to check the training. More data will not help such a model.
+    The GRU never got past design1's shortcut, at 4 pairs or at 8, while two
+    attention layers recalled every pair.
 
-    A model that failed to generalize needs more data, or a layer whose shape
-    matches the task. With 256 sequences, two seeds found the skill and one
-    learned its examples. From 1,024 on, every seed recalled every pair, at
-    4,096 too. A toy task makes fresh data forever, one more reason to start
+    A model that failed to generalize needs more data, or a layer whose
+    structure suits the task better. With 256 fixed sequences, two seeds
+    learned the skill and one memorized its examples. With 1,024 fixed
+    sequences, and also with 4,096, every seed recalled every pair. A toy
+    task can generate unlimited fresh data, which is one more reason to start
     with one.
 
-    Karpathy's order is fit first, then generalize. Get a model that can fit
-    the training set, then give up some training accuracy for held out
-    accuracy.
+    Karpathy's order is to fit first and generalize second. First get a model
+    that can fit the training set. Then trade some training accuracy for
+    better held out accuracy.
     """,
 )
 
@@ -1071,17 +1102,21 @@ DESIGN2_SOURCE = source_file(
     from torch import Tensor
 
     counts = torch.bincount(torch.tensor([20, 17, 20]))
-    common = counts.argmax()    # tensor(20), the id seen most
+    common = counts.argmax()    # tensor(20), the id that appears most often
     every = [step for step in range(1, 7) if step % 3 == 0]    # [3, 6]
 
 
-    # design1's task and accuracy, and the three models the lessons compare, given.
+    # design1's task and accuracy function, and the three models that the
+    # lessons compare. These are given.
 ''' + indented(DESIGN2_GIVEN) + '''
 
 
-    # TODO: Return the share of held_targets' query places, the ones that aren't
-    #   -100, equal to the value most common among train_targets' query places,
-    #   as a plain number. This baseline never reads the input.
+    # TODO: Return the accuracy of a baseline that never reads the input, as a
+    #   Python float. Find the value that appears most often in train_targets
+    #   at its query positions, the ones that are not -100. Return the fraction
+    #   of held_targets' query positions whose target equals that value.
+    #   Example: baseline_accuracy(torch.tensor([[-100, 20, 20, 17]]),
+    #   torch.tensor([[-100, 20, 17, 17]])) returns about 0.3333.
     def baseline_accuracy(
         train_targets: Tensor,
         held_targets: Tensor,
@@ -1089,12 +1124,14 @@ DESIGN2_SOURCE = source_file(
         ...
 
 
-    # TODO: Train model with torch.optim.AdamW at lr=1e-3 for steps steps. Each
-    #   step takes a batch from next_batch() and the cross entropy over every
-    #   place. Every `every` steps, counting from 1, after that step's update,
-    #   add (step, query_accuracy of the scores it just trained on,
-    #   query_accuracy on held) to the curve, the held out one inside
-    #   torch.no_grad(). Return the curve.
+    # TODO: Train model with torch.optim.AdamW at lr=1e-3 for `steps` steps.
+    #   Each step gets (tokens, targets) from next_batch() and minimizes the
+    #   cross entropy over every position. Count steps from 1. When the step
+    #   number is a multiple of `every`, after that step's update, append a
+    #   tuple of 3 numbers to the curve. They are the step number, the
+    #   query_accuracy of the scores the model just trained on, and the
+    #   query_accuracy on held, a (tokens, targets) pair of held out sequences.
+    #   Score held inside torch.no_grad(). Return the curve.
     def track(
         model: nn.Module,
         next_batch: Callable[[], tuple[Tensor, Tensor]],
@@ -1108,6 +1145,7 @@ DESIGN2_SOURCE = source_file(
     # TODO: Return "failed to fit" when train_accuracy is below fit_bar,
     #   "failed to generalize" when train_accuracy is more than gap_bar above
     #   held_accuracy, and "works" otherwise.
+    #   Example: diagnose(0.95, 0.5, 0.9, 0.25) returns "failed to generalize".
     def diagnose(
         train_accuracy: float,
         held_accuracy: float,
@@ -1205,7 +1243,7 @@ def check_track(
 
     for point, wanted in zip(actual, expected):
         if not isinstance(point, tuple) or len(point) != 3:
-            raise Mismatch(f"{call} holds {value_text(point)}, but each point should be a tuple of 3, step and two accuracies.")
+            raise Mismatch(f"{call} holds {value_text(point)}, but each point should be a tuple of 3 numbers, the step and two accuracies.")
 
         if point[0] != wanted[0]:
             raise Mismatch(f"{call} has a point at step {value_text(point[0])}, but the points should come at steps 3 and 6.")
@@ -1306,13 +1344,14 @@ DESIGN2 = Exercise(
     source=DESIGN2_SOURCE,
     solution=DESIGN2_SOLUTION,
     hints={
-        "baseline_accuracy": "Count the training targets that aren't -100 with torch.bincount and take .argmax(). "
-        "Then compare it with the held targets that aren't -100, and take the mean as floats.",
-        "track": "This is gpt3's loop with a curve. Flatten the scores to (places, VOCABULARY) and the targets to "
-        "places for F.cross_entropy, which skips the -100s. When step % every == 0, score held[0] under "
-        "torch.no_grad() and append the three numbers.",
-        "diagnose": "Check the fit first, with train_accuracy < fit_bar. Then check the gap, train_accuracy - "
-        "held_accuracy > gap_bar.",
+        "baseline_accuracy": "Count the training targets that are not -100 with torch.bincount, and take .argmax() "
+        "to get the most common value. Compare that value with the held targets that are not -100, convert the "
+        "result to float and take the mean.",
+        "track": "This is gpt3's training loop with a curve added. For F.cross_entropy, flatten the scores to shape "
+        "(positions, VOCABULARY) and the targets to one dimension. It ignores the -100 targets. When "
+        "step % every == 0, score held[0] under torch.no_grad() and append the three numbers.",
+        "diagnose": "Check the fit first, with train_accuracy < fit_bar. Then check the gap between the two "
+        "accuracies, train_accuracy - held_accuracy > gap_bar.",
     },
     introduces=(),
     check=check_design2,
@@ -1327,28 +1366,33 @@ DESIGN2 = Exercise(
 
 DESIGN3_LESSON = prose(
     """
-    38_soft_design made two small algorithms soft, with one or two hard steps
-    each. Now take k nearest neighbours, which labels a query by the labelled
-    points closest to it.
+    In 38_soft_design you made two small algorithms soft. Each had one or two
+    hard steps that pass no gradient, and you replaced them with smooth
+    versions that do. Now take k nearest neighbours. It labels a query point
+    by looking at the labelled points closest to it.
 
     1. Measure the distance from the query to every point in memory.
-    2. Keep the k nearest, a hard pick with `topk`.
-    3. Count each class's votes among them.
-    4. Answer the class with the most votes, a hard `argmax`.
+    2. Keep the k nearest points. This is a hard choice, made with `topk`.
+    3. Count how many of those k points have each label. These counts are the votes.
+    4. Answer the class with the most votes. This is another hard choice, made with `argmax`.
 
-    Steps 2 and 4 pass no gradient. The soft version weights every point in
-    memory by a softmax of minus its squared distance over a temperature, as
-    derive2 weighted its keys. The votes become those weights summed over one
-    hot labels, a chance per class.
+    Steps 2 and 4 pass no gradient. The soft version replaces them. It gives
+    every point in memory a weight, the softmax over the points of
+    `-distance ** 2 / temperature`, as derive2 weighted its keys. Close points
+    get large weights. The vote for a class becomes the sum of the weights of
+    the points with that label. So each query gets a probability for each
+    class.
 
-    The task gives each episode 4 new classes and 5 labelled points of each.
-    The first 2 of 8 features carry the class, and the other 6 are larger
-    noise. The labels mean something new in each episode, so no fixed
-    classifier can learn them.
+    The task is made of episodes. Each episode has 4 new classes, with 5
+    labelled points of each class in memory. Every point has 8 features. The
+    first 2 features depend on the class. The other 6 are random noise, larger
+    than the gaps between classes. The labels mean something new in each
+    episode, so no fixed classifier can learn them.
 
-    The soft steps make the distance itself trainable. A Linear projects every
-    point before the distances, and training learns it with the temperature.
-    Here are 500 new episodes, the range over 3 seeds.
+    Because every step is now soft, the distance itself can be trained. A
+    Linear layer projects every point before the distances are measured.
+    Training learns this projection together with the temperature. The table
+    shows the accuracy on 500 new episodes, as the range over 3 seeds.
 
     | Model | Right |
     |---|---|
@@ -1360,16 +1404,19 @@ DESIGN3_LESSON = prose(
     | hard, k 5, the trained projection | 95.8% to 95.9% |
     | hard, k 5, only the 2 features that matter | 96.0% |
 
-    The MLP sits at a guess, 1 in 4, since the labels change every episode.
-    The trained projection gives the 2 class features columns of length 1.8
-    or more, and the 6 noise features 0.09 or less. It found which features
-    matter with no one telling it. The hard algorithm, given that projection,
-    does as well, so the soft steps also taught the exact one.
+    The MLP scores about 1 in 4, the same as a random guess, because the
+    labels change every episode. In the trained projection's weight matrix,
+    the columns for the 2 class features have length 1.8 or more. The columns
+    for the 6 noise features have length 0.09 or less. So training found which
+    features matter without being told. The hard algorithm does as well as the
+    soft one when it uses the trained projection. So training the soft
+    version also improved the exact algorithm.
 
-    This model is attention over a memory of labelled points, with one hot
-    labels as the values. Matching Networks, by Vinyals and colleagues, use the
-    same form with cosine similarity. They note it covers nearest neighbours
-    as a special case.
+    This model is attention over a memory of labelled points. The query
+    attends to the memory points, and the values are their one hot labels.
+    Matching Networks, by Vinyals and colleagues, use the same form with
+    cosine similarity in place of distance. They point out that this form
+    includes nearest neighbours as a special case.
     """,
 )
 
@@ -1383,7 +1430,7 @@ DESIGN3_SOURCE = source_file(
     from torch import Tensor
 
     points = torch.tensor([[[0.0, 0.0], [3.0, 4.0]]])
-    distances = torch.cdist(points, points)    # tensor([[[0., 5.], [5., 0.]]]), every pair's distance
+    distances = torch.cdist(points, points)    # tensor([[[0., 5.], [5., 0.]]]), the distance between every pair of points
     nearest = torch.tensor([4.0, 1.0, 3.0]).topk(2, largest=False).indices    # tensor([1, 2])
     votes = F.one_hot(torch.tensor([2, 0, 2]), 4).sum(dim=0)    # tensor([1, 0, 2, 0])
 
@@ -1391,12 +1438,14 @@ DESIGN3_SOURCE = source_file(
 ''' + indented(EPISODES_PART) + '''
 
 
-    # TODO: Label every query by its k nearest points in memory, the hard way.
-    #   memory has shape (episodes, points, FEATURES), labels (episodes, points)
-    #   and queries (episodes, queries, FEATURES). Find each query's distances
-    #   to memory, keep the k nearest, count their labels' votes over CLASSES,
-    #   and return the class with the most votes, of shape (episodes, queries).
-    #   A tie goes to the lowest class among the tied, as argmax does.
+    # TODO: Label every query with hard k nearest neighbours. memory has shape
+    #   (episodes, points, FEATURES), labels has shape (episodes, points), and
+    #   queries has shape (episodes, queries, FEATURES). For each query,
+    #   compute its distance to every point in memory and keep the k nearest
+    #   points. Count how many of them have each of the CLASSES labels. Return
+    #   the label with the most votes, as an integer tensor of shape
+    #   (episodes, queries). A tie goes to the lowest label among the tied
+    #   ones, as argmax does.
     def knn_predict(
         memory: Tensor,
         labels: Tensor,
@@ -1407,9 +1456,11 @@ DESIGN3_SOURCE = source_file(
 
 
     # TODO: Return each query's soft votes, of shape (episodes, queries,
-    #   CLASSES). Weight every point in memory by a softmax over the points of
-    #   minus its squared distance divided by temperature. Then sum those
-    #   weights over the one hot labels.
+    #   CLASSES). First give every point in memory a weight, the softmax over
+    #   the points of -distance ** 2 / temperature, where distance is from the
+    #   query to that point. The vote for a class is the sum of the weights of
+    #   the points with that label. Multiplying the weights by the one hot
+    #   labels gives every vote at once.
     def soft_votes(
         memory: Tensor,
         labels: Tensor,
@@ -1419,10 +1470,10 @@ DESIGN3_SOURCE = source_file(
         ...
 
 
-    # TODO: Finish forward. Project memory and queries with self.project, take
-    #   soft_votes at the temperature exp(self.log_temperature), and return the
-    #   log of the votes with 1e-6 added, so a class with no weight doesn't
-    #   give minus infinity.
+    # TODO: Finish forward. Project memory and queries with self.project. Call
+    #   soft_votes on them with the temperature exp(self.log_temperature).
+    #   Return the log of the votes plus 1e-6. The 1e-6 keeps a class with
+    #   zero votes from giving minus infinity.
 ''' + indented(NEIGHBORS_INIT) + '''
 
         def forward(
@@ -1536,7 +1587,7 @@ def check_design3(checker: Checker) -> None:
     checker.test_method(
         class_name="SoftNeighbors",
         method="forward",
-        description="projects, takes the soft votes and their log",
+        description="projects the points and returns the log of the soft votes",
         run=check_neighbors_forward,
     )
     checker.test_method(
@@ -1555,11 +1606,11 @@ DESIGN3 = Exercise(
     source=DESIGN3_SOURCE,
     solution=DESIGN3_SOLUTION,
     hints={
-        "knn_predict": "torch.cdist(queries, memory) gives (episodes, queries, points). topk with largest=False and "
-        "dim=-1 gives the nearest places. labels.gather on dim 1 picks their labels, F.one_hot with CLASSES and "
-        ".sum(dim=2) counts the votes, and .argmax(dim=-1) answers.",
-        "soft_votes": "Square torch.cdist(queries, memory), negate it and divide by temperature, then softmax over "
-        "dim=-1. Multiply those weights by F.one_hot(labels, CLASSES).float() with @.",
+        "knn_predict": "torch.cdist(queries, memory) gives distances of shape (episodes, queries, points). topk "
+        "with largest=False and dim=-1 gives the indices of the nearest points. labels.gather on dim 1 picks their "
+        "labels. F.one_hot with CLASSES, then .sum(dim=2), counts the votes. Then .argmax(dim=-1) picks the winner.",
+        "soft_votes": "Square torch.cdist(queries, memory), negate it and divide by temperature, then take the "
+        "softmax over dim=-1. Multiply those weights by F.one_hot(labels, CLASSES).float() with the @ operator.",
         "SoftNeighbors.forward": "Call soft_votes with self.project(memory), labels, self.project(queries) and "
         "self.log_temperature.exp(), then torch.log of the votes plus 1e-6.",
     },
@@ -1576,24 +1627,32 @@ DESIGN3 = Exercise(
 
 DESIGN4_LESSON = prose(
     """
-    A new module can train and still not work as designed. Two checks before
-    training catch most of it, and both come from earlier chapters.
+    A new module can train and still not work the way it was designed to.
+    Two checks run before training catch most of these problems. Both come
+    from earlier chapters.
 
-    The first is the identity at the start. A block added to a working model
-    should begin as "do nothing", so it can't break what works. residual3's
-    zero start did this with the branch's last layer at zero. `identity_gap`
-    measures the largest change a block makes to its input.
+    The first check is that a block starts as the identity function. A block
+    added to a working model should begin by doing nothing, so it cannot
+    break what already works. residual3 did this by setting the last layer of
+    the branch to zero at the start. `identity_gap` measures the largest
+    change a block makes to its input. A gap of 0 means the block starts as
+    the identity.
 
-    The second is gradients that reach every parameter. debug3 looked for
-    layers with no gradient after one backward pass. A layer at zero blocks
-    the gradient to the layers before it on that first pass, though. So
-    `silent_after_one_step` takes one step on a copy of the model, then looks.
+    The second check is that gradients reach every parameter. debug3 looked
+    for layers with no gradient after one backward pass. But a layer whose
+    weights are zero blocks the gradient to the layers before it on that
+    first pass. So `silent_after_one_step` first takes one training step on a
+    copy of the model. Then it runs a second backward pass and looks for
+    parameters with no gradient.
 
-    Here are 48 gated blocks, `x + gate * branch(x)`, each variant trained 500
-    steps. They have no norm, and up and down start with Kaiming's draw, as a
-    deep model built without care would. The task answers input 0 when input 1
-    is above 0, and input 2 when it isn't. The error is the mean squared error
-    on new inputs, and always answering 0 gets 1.00.
+    The table tests a stack of 48 gated blocks, each computing
+    `x + gate * branch(x)`. Each variant trained for 500 steps. The blocks
+    have no LayerNorm, and their up and down layers start with Kaiming
+    initialization, as in a deep model built without care. So a block that
+    does not start as the identity changes its input a lot. The target is
+    input 0 when input 1 is above 0, and input 2 otherwise. The error is the
+    mean squared error on new inputs. Always answering 0 gives an error of
+    1.00.
 
     | Variant | Identity gap | Silent after one step | Held out error |
     |---|---|---|---|
@@ -1602,22 +1661,25 @@ DESIGN4_LESSON = prose(
     | hard gate, `(score > 0).float()` | 0 | 96 | 0.050 to 0.077 |
     | no residual | 4.7 to 5.5 | 0 | 1.00 |
 
-    The identity start is what lets 48 loud blocks train. A random start
-    moves each block's input by up to 3.9, the changes compound through 48
-    blocks, and the error never comes down. Bachlechner and colleagues' ReZero
-    starts every residual branch at zero too, with one zero scale per branch,
-    and trained 120 layer transformers with it. Without the residual, the
-    stack learned nothing.
+    Starting as the identity is what lets these 48 blocks train. With a
+    random start, each block changes its input by up to 3.9. Those changes
+    compound through 48 blocks, and the error never comes down. Bachlechner
+    and colleagues' ReZero also starts every residual branch at zero. It
+    multiplies each branch by one learned scale that starts at 0, and it
+    trained transformers with 120 layers this way. Without the residual
+    connection, the stack learned nothing.
 
-    The hard gate trained, so the loss alone would pass it. Its 96 gate
-    tensors, 50,688 numbers, got no gradient and never moved. Its gates stayed
-    as drawn, and the rest of the model worked around them. Credit for the
-    result would go to a gate that did nothing.
+    The variant with a hard gate trained, so judging by the loss alone you
+    would accept it. But its 96 gate tensors, holding 50,688 numbers, got no
+    gradient and never changed. The gates kept their random starting values,
+    and the rest of the model learned to work around them. You would credit
+    the result to a gate that did nothing.
 
-    The identity start matters again when a block goes into a model that
-    already works. Insert one new loud block in the middle of the trained
-    stack. Started at zero, the held out error stays exactly where it was.
-    Started at random, it rose 1.6 to 3.8 times on every seed.
+    Starting as the identity matters again when you add a block to a model
+    that already works. Insert one new block in the middle of the trained
+    stack. When the new block started at zero, the held out error stayed
+    exactly the same. When it started at random, the error rose by a factor
+    of 1.6 to 3.8 on every seed.
 
     The block in your file has two of these faults. Fix it so both checks
     pass.
@@ -1637,12 +1699,13 @@ DESIGN4_SOURCE = source_file(
     from torch import Tensor
 
     layer = nn.Linear(2, 2)
-    twin = copy.deepcopy(layer)    # its own weights, so training twin leaves layer alone
-    moved = torch.tensor([0.0, 0.0, 3.0]).any()    # tensor(True), some entry isn't 0
+    twin = copy.deepcopy(layer)    # a separate copy with its own weights, so training twin leaves layer unchanged
+    moved = torch.tensor([0.0, 0.0, 3.0]).any()    # tensor(True), because at least one entry is not 0
 
 
-    # TODO: Return the largest change block makes to x, entry by entry, as a
-    #   plain number. 0 means the block starts as "do nothing".
+    # TODO: Return the largest absolute difference between block(x) and x, over
+    #   all entries, as a Python float. 0 means the block is the identity, so
+    #   it leaves x unchanged.
     def identity_gap(
         block: nn.Module,
         x: Tensor,
@@ -1650,10 +1713,11 @@ DESIGN4_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the names of model's parameters that get no gradient after
-    #   one step, in order. Work on copy.deepcopy(model), so model itself never
-    #   changes. Backpropagate loss_of(copied), take one step of
-    #   torch.optim.SGD at lr, zero the gradients, and backpropagate again. A
+    # TODO: Return the names of the parameters that get no gradient after one
+    #   training step, in the order named_parameters() gives them. Work on a
+    #   copy made with copy.deepcopy(model), so model itself never changes.
+    #   Backpropagate loss_of on the copy, take one step of torch.optim.SGD at
+    #   lr, zero the gradients, and backpropagate loss_of on the copy again. A
     #   parameter is silent when its gradient is None or all zeros.
     def silent_after_one_step(
         model: nn.Module,
@@ -1663,10 +1727,11 @@ DESIGN4_SOURCE = source_file(
         ...
 
 
-    # TODO: This block starts far from "do nothing", and its gate never learns.
-    #   Fix __init__ so the block starts as the identity, with down's weight and
-    #   bias at zero as residual3 did. Fix forward so the gate is soft, a
-    #   sigmoid of the score.
+    # TODO: This block does not start as the identity, and its gate never
+    #   learns. Fix __init__ so the block starts as the identity, by setting
+    #   down's weight and bias to zero as residual3 did. Fix forward so the
+    #   gate is soft, the sigmoid of the gate's score instead of a hard
+    #   comparison with 0.
 ''' + indented(BLOCK_START + BROKEN_FORWARD) + '''
     ''',
 )
@@ -1828,7 +1893,7 @@ def check_block_learns(found: type) -> None:
     silent = HEALTH_REFERENCE["silent_after_one_step"](model, regression_loss(4, 982), 0.1)
 
     if silent:
-        raise Mismatch(f"Two GatedBlocks between Linears leave {', '.join(silent)} with no gradient after one step. A gate made with > passes none.")
+        raise Mismatch(f"Two GatedBlocks between Linears leave {', '.join(silent)} with no gradient after one step. A gate made with > passes no gradient.")
 
 
 def check_block_forward(found: type) -> None:
@@ -1911,9 +1976,9 @@ DESIGN4 = Exercise(
     solution=DESIGN4_SOLUTION,
     hints={
         "identity_gap": "Take block(x) - x, its .abs().max(), and .item().",
-        "silent_after_one_step": "Work on a copy.deepcopy of the model, with an SGD over copied.parameters(). After "
-        "the "
-        "second backward, keep each name from copied.named_parameters() whose grad is None or not grad.any().",
+        "silent_after_one_step": "Work on a copy.deepcopy of the model, with an SGD optimizer over "
+        "copied.parameters(). After the second backward, keep each name from copied.named_parameters() whose grad "
+        "is None or not grad.any().",
         "GatedBlock.__init__": "Under torch.no_grad(), call .zero_() on self.down.weight and self.down.bias, after "
         "the layers are made.",
         "GatedBlock.forward": "(score > 0).float() passes no gradient. torch.sigmoid of self.gate(h) does.",
@@ -1931,17 +1996,23 @@ DESIGN4 = Exercise(
 
 DESIGN5_LESSON = prose(
     """
-    A layer's structure promises properties. Shuffling the steps, shifting
-    them, turning points or making the input longer should change the output
-    in a known way, or not at all. The last move of the method tests each
-    property directly on the module, as equivariance1 did.
+    The structure of a layer promises certain properties. Suppose you shuffle
+    the steps of the input, shift them, rotate its points or make it longer.
+    The output should change in a known way, or not at all. The last step of
+    the method tests each property directly on the module, as equivariance1
+    did.
 
-    `property_gaps` takes equivariance1's gap for every change you name, a
-    rotation from its `rotate` among them. `prefix_gap` tests a longer input.
-    Append steps, and a causal module's earlier outputs shouldn't move.
+    `property_gaps` computes equivariance1's gap for every transform you give
+    it. The gap is the largest difference between transforming the input
+    before the module and transforming the output after it. A gap of 0 means
+    the property holds exactly. A rotation made with equivariance1's `rotate`
+    is one possible transform.
+    `prefix_gap` tests a longer input. If you append steps to the end of the
+    input, a causal module's outputs at the earlier steps should not change.
 
-    Here are untrained modules on 4 sequences of 12 steps of 16 numbers. A gap
-    near 1e-7 is float rounding, so that property holds.
+    The table shows the gaps of untrained modules on 4 sequences, each with
+    12 steps of 16 numbers. A gap near 1e-7 is only float rounding, so that
+    property holds.
 
     | Module | Shuffle | Shift by 1 | Prefix |
     |---|---|---|---|
@@ -1955,32 +2026,35 @@ DESIGN5_LESSON = prose(
     | GRU | 0.70 | 0.31 | 0 |
     | MLP over the whole sequence | 3.0 | 3.4 | can't run |
 
-    Choose layers by this table. Attention without positions treats its
-    steps as a set, so it can't tell their order. Positions or a causal mask
-    add order and break the shuffle. A convolution keeps shifts except at its
-    edges, and fully with circular padding. Causal layers keep the prefix,
-    which writing text one token at a time needs.
+    Use this table to choose layers. Attention without positions treats its
+    steps as a set, so it cannot tell their order. Adding positions or a
+    causal mask gives it a sense of order, so a shuffle then changes the
+    output. A convolution keeps its shift gap at zero except at its edges,
+    and everywhere with circular padding. Causal layers pass the prefix test,
+    which generating text one token at a time requires.
 
-    A trained model needs the test too, at the lengths it will meet. design1's
-    2 layer attention, trained on 8 pairs, got this share of queries right on
-    new sequences, the range over 3 seeds.
+    A trained model needs these tests too, at the sequence lengths it will
+    meet in use. design1's 2 layer attention model was trained on 8 pairs.
+    The table shows the fraction of queries it answered correctly on new
+    sequences of each length, as the range over 3 seeds.
 
     | Positions in training | 4 pairs | 8 | 12 | 16 |
     |---|---|---|---|---|
     | 0 to 23 | 98.2% to 99.8% | 100% | 66.8% to 68.3% | 52.2% to 52.7% |
     | from a random start | 99.5% to 99.8% | 99.9% to 100% | 99.8% to 99.9% | 97.6% to 99.4% |
 
-    The test caught the break, and the diagnosis is its learned positions.
-    Training sequences fill places 0 to 23, so the positions past them never
-    trained. The fix starts each batch's positions at a random place among all
-    96, so every position trains. It is a cousin of Kiyono and colleagues'
-    SHAPE, which shifts each sequence's positions by its own random offset.
-    Test at the lengths the module will meet, not only the ones it learned.
+    The test caught a failure on longer sequences, and the cause is the
+    learned positions. A training sequence of 8 pairs fills positions 0 to
+    23, so the position embeddings past 23 never trained. The fix starts each
+    batch's positions at a random place among all 96, so every position
+    embedding trains. This is close to Kiyono and colleagues' SHAPE, which
+    shifts each sequence's positions by its own random offset. Test at every
+    length the module will meet, including lengths it never trained on.
     """,
 )
 
 ROTATE_PART = '''
-# equivariance1's turn of points of shape (..., 2), given.
+# equivariance1's rotation by angle of points of shape (..., 2), given.
 def rotate(
     points: Tensor,
     angle: float,
@@ -2012,7 +2086,10 @@ DESIGN5_SOURCE = source_file(
 ''' + indented(ROTATE_PART) + '''
 
 
-    # TODO: Return x with its steps, dim 1, put in the order order gives.
+    # TODO: Return x with its steps, along dim 1, reordered by order. Step i of
+    #   the result is step order[i] of x.
+    #   Example: with the x at the top of this file,
+    #   shuffled(x, torch.tensor([2, 0, 1])) returns tensor([[[3.], [1.], [2.]]]).
     def shuffled(
         x: Tensor,
         order: Tensor,
@@ -2020,8 +2097,10 @@ DESIGN5_SOURCE = source_file(
         ...
 
 
-    # TODO: Return x with its steps, dim 1, rolled by steps places, the ones
-    #   pushed off the end wrapping to the front.
+    # TODO: Return x with its steps, along dim 1, shifted by `steps` places.
+    #   Steps pushed off the end wrap around to the front.
+    #   Example: with the x at the top of this file, shifted(x, 1) returns
+    #   tensor([[[3.], [1.], [2.]]]).
     def shifted(
         x: Tensor,
         steps: int,
@@ -2029,9 +2108,11 @@ DESIGN5_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the largest gap, entry by entry, between f of x and the first
-    #   steps of f of x with extra appended along dim 1, as a plain number. 0
-    #   means a longer input left the earlier outputs alone.
+    # TODO: Test whether a longer input changes the earlier outputs of f.
+    #   Append extra to x along dim 1 and run f on the result. Compare its
+    #   first x.shape[1] steps with f(x). Return the largest absolute
+    #   difference over all entries, as a Python float. 0 means the longer
+    #   input left the earlier outputs unchanged.
     def prefix_gap(
         f: Callable[[Tensor], Tensor],
         x: Tensor,
@@ -2040,8 +2121,8 @@ DESIGN5_SOURCE = source_file(
         ...
 
 
-    # TODO: Return a dict from each name in transforms to equivariance_gap of
-    #   f under that transform, on x.
+    # TODO: Return a dict that maps each name in transforms to the
+    #   equivariance_gap of f under that name's transform, on x.
     def property_gaps(
         f: Callable[[Tensor], Tensor],
         x: Tensor,
@@ -2178,10 +2259,11 @@ DESIGN5 = Exercise(
     solution=DESIGN5_SOLUTION,
     hints={
         "shuffled": "Index dim 1 with order and keep all of dim 0, as reordered in the file does.",
-        "shifted": "torch.roll with dims=1.",
-        "prefix_gap": "torch.cat x and extra on dim=1 and run f on it. Keep its first x.shape[1] steps and compare "
-        "them with f(x).",
-        "property_gaps": "A dict comprehension over transforms.items(), each value equivariance_gap(f, transform, x).",
+        "shifted": "Use torch.roll with dims=1.",
+        "prefix_gap": "Join x and extra with torch.cat on dim=1 and run f on the result. Keep the first x.shape[1] "
+        "steps of the output and compare them with f(x).",
+        "property_gaps": "Use a dict comprehension over transforms.items(), where each value is "
+        "equivariance_gap(f, transform, x).",
     },
     introduces=(),
     check=check_design5,

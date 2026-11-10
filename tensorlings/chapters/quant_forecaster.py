@@ -33,11 +33,12 @@ QUANT_FORECASTER = Chapter(
         """
         # Project: an honest forecast
 
-        Section 14's forecasting project. You make up a market with a weak
-        signal whose size you know, so you know the best score any forecast
-        can reach. Then you find three leaks that push a forecast past it,
-        score forecasts the way they would have run with walk forward
-        validation, and set a small model against a plain baseline.
+        This is Section 14's forecasting project. You simulate a market with a
+        weak signal of known size, so you know the best score any forecast can
+        reach. Then you find three kinds of leak that push a forecast's score
+        above that best. You score forecasts with walk forward validation,
+        which tests them the way they would really have run. Last, you compare
+        a small model with a simple baseline.
 
         ## Further reading
 
@@ -48,19 +49,20 @@ QUANT_FORECASTER = Chapter(
 )
 
 SETTINGS_PART = '''
-WINDOW = 20        # the market leans on the size of the mean of its last 20 days
-STRENGTH = 0.6     # how hard it leans
-KAPPA = 0.01 * math.sqrt(2 / math.pi) / math.sqrt(WINDOW)    # about that size on average, so the lean averages 0
+WINDOW = 20        # each return depends on the size of the mean of the last 20 returns
+STRENGTH = 0.6     # how strongly it depends on that size
+KAPPA = 0.01 * math.sqrt(2 / math.pi) / math.sqrt(WINDOW)    # the average of that size, subtracted so the lean averages 0
 HORIZON = 5        # each forecast is for the return over the next 5 days
 WINDOWS = (1, 5, 20, 60, 250)
-FIRST = 249        # rows start on the first day every window above is full
+FIRST = 249        # rows start on the first day on which every window above is full
 DAYS = 4254        # 4,000 rows, from day 249 to the last day with a target
 CUT = 3000         # the first test row
 '''
 
 MARKET_PART = '''
-# The made up market. Each day's return leans on the size of the mean of the last WINDOW days, less its average
-# size, plus noise of about 1%. After a big move either way, it tends to rise.
+# The simulated market. Each day's return is a lean plus noise of about 1%. The lean is STRENGTH times the size of
+# the mean of the last WINDOW returns, minus KAPPA, that size's average. So after a big move either way, the market
+# tends to rise.
 def make_market(
     days: int,
     strength: float,
@@ -161,8 +163,8 @@ def screen_on_training(
 '''
 
 LINEAR_PART = '''
-# Least squares with an intercept, fitted on the training rows, as linreg3 did. It runs in float64, since the
-# windows' tiny returns sit beside an intercept of 1 and float32 loses them on long series.
+# Least squares with an intercept, fitted on the training rows, as in linreg3. It runs in float64, because the
+# windows' tiny returns sit next to an intercept column of 1s, and float32 loses their precision on long series.
 def linear_forecast(
     train_x: Tensor,
     train_y: Tensor,
@@ -175,8 +177,8 @@ def linear_forecast(
 '''
 
 NEAREST_PART = '''
-# Each test row's forecast is the mean target of its count nearest training rows. The columns are scaled by the
-# training rows' mean and spread first, so each one counts about the same.
+# Each test row's forecast is the mean target of its count nearest training rows. Each column is first
+# standardized with the training rows' mean and standard deviation, so every column counts about the same.
 def nearest_days(
     train_x: Tensor,
     train_y: Tensor,
@@ -190,7 +192,7 @@ def nearest_days(
 '''
 
 INDICATORS_PART = '''
-# count made up indicators, one row per row of x, drawn at random with no link to the market at all.
+# count fake indicators with one value per row. They are random numbers with no link to the market at all.
 def noise_indicators(
     rows: int,
     count: int,
@@ -230,7 +232,7 @@ def fold_scores(
 '''
 
 STANDARDIZE_PART = '''
-# descent4's standardizing, with the mean and spread of the training rows alone.
+# descent4's standardizing, using the mean and standard deviation of the training rows only.
 def standardize(
     train: Tensor,
     other: Tensor,
@@ -396,50 +398,55 @@ def check_value(
 
 FORECAST1_LESSON = prose(
     """
-    This project makes up a market, then forecasts it honestly. You made the
-    market, so you know how good a forecast can be, and a fooled result
-    shows.
+    This project simulates a market and then forecasts it honestly. Because
+    you built the market, you know how good a forecast can possibly be. So a
+    result that fooled you stands out.
 
     Each day's **return** here is the change in the log of the price. The
-    market leans on the size of its recent move. A day's return is 0.6 times
-    the size of the mean of the last 20 returns, less its average size, plus
-    noise of about 1%. So after a big move up or down it tends to
-    rise, and the noise swamps that. Real models tie the expected return to
-    the recent past too. Engle, Lilien and Robins' ARCH-in-mean model of 1987
-    lets it grow with the recent variance, how widely returns have swung.
-    This market leans on the size of the average move instead, and its noise
-    keeps one size. Adding up the returns, then taking `exp`, gives the price
-    back.
+    market depends on the size of its recent move. A day's return is a lean
+    plus noise of about 1%. The lean is 0.6 times the absolute value of the
+    mean of the last 20 returns, minus that value's average. So after a big
+    move up or down the market tends to rise, but the noise is much larger
+    than that tendency. Real models also link the expected return to the
+    recent past. Engle, Lilien and Robins' ARCH-in-mean model of 1987 lets it
+    grow with the recent variance, which measures how widely returns have
+    swung. This market depends on the size of the average move instead, and
+    its noise always has the same size. To get the price back, add up the
+    returns and take `exp`.
 
     ```python
     torch.tensor([0.1, -0.2, 0.3]).cumsum(0)    # tensor([ 0.1000, -0.1000,  0.2000])
     ```
 
-    Each forecast is for the next 5 days' return, the target. stft1's
-    `unfold` gives every window of days at once.
+    Each forecast is for the total return of the next 5 days, called the
+    target. stft1's `unfold` gives every window of days at once.
 
-    Quants score a forecast by its correlation with what followed, the
-    **information coefficient**. A correlation is 1 when two series rise
-    and fall in step, and -1 when one falls as the other rises. It is near 0
-    when no straight line links them, even if a curve does. Quants usually
-    take it across many assets on one day, often on ranks. This project
-    takes it across the days of one market.
+    Quants score a forecast by its correlation with what actually happened,
+    which they call the **information coefficient**. A correlation is 1 when
+    two series rise and fall together, and -1 when one falls as the other
+    rises. It is near 0 when no straight line links them, even if a curve
+    does. Quants usually compute it across many assets on one day, often on
+    ranks. This project computes it across the days of one market.
 
-    You know the market's rule, so `true_expected` steps it 5 days ahead from
-    each day's last 20 returns, with the noise left out. The true average of
-    4,000 simulated futures per day correlates with it at 0.993. So its long
-    run score is the ceiling.
+    You know the market's rule, so `true_expected` applies it 5 days ahead,
+    starting from each day's last 20 returns, with the noise left out. For
+    each day, its forecast was compared with the average of 4,000 simulated
+    futures, and the correlation is 0.993. So it is very close to the true
+    expected target. Its score over a long run is the ceiling, the best
+    score any forecast can reach.
 
     | Market | The rule's score |
     |---|---|
     | 100,000 days, seed 1 | 0.168 |
     | The 1,000 test days of seeds 0 to 4 | 0.089 to 0.220 |
 
-    Squared, 0.168 is about 2.8% of the target's variance. The other 97.2%
-    is noise that no forecast can touch.
+    0.168 squared is about 0.028, so the rule explains about 2.8% of the
+    target's variance. The other 97.2% is noise that no forecast can
+    predict.
 
-    One market's test days are a rough measure, since even the rule's score
-    swings from 0.089 to 0.220. forecast3 deals with that.
+    The test days of one market give only a rough measure, since even the
+    rule's score ranges from 0.089 to 0.220 across seeds. forecast3 deals
+    with that.
     """,
 )
 
@@ -462,9 +469,12 @@ FORECAST1_SOURCE = source_file(
     grown = torch.tensor([0.0, 2.0]).exp()                            # tensor([1.0000, 7.3891])
 
 
-    # TODO: Return the price on each day. It starts from start, and each day's
-    #   return is the change in the log of the price, so day 0's price is
-    #   start times exp of day 0's return.
+    # TODO: Return the price on each day, starting from start. Each day's
+    #   return is the change in the log of the price, so the price on day t is
+    #   start * exp(sum of the returns of days 0 to t). So day 0's price is
+    #   start * exp(day 0's return).
+    #   Example: prices(torch.tensor([0.0, 2.0]), 1.0) returns
+    #   tensor([1.0000, 7.3891]).
     def prices(
         returns: Tensor,
         start: float,
@@ -475,8 +485,11 @@ FORECAST1_SOURCE = source_file(
     pairs = torch.arange(5.0).unfold(0, 2, 1)                           # tensor([[0., 1.], [1., 2.], [2., 3.], [3., 4.]])
 
 
-    # TODO: Return each day's target, the sum of the returns of the horizon days
-    #   after it. Only days with horizon more days after them get one.
+    # TODO: Return each day's target, the sum of the returns on the horizon
+    #   days after it. Only days that have horizon more days after them get a
+    #   target, so the result has len(returns) - horizon entries.
+    #   Example: forward_returns(torch.arange(5.0), 2) returns
+    #   tensor([3., 5., 7.]).
     def forward_returns(
         returns: Tensor,
         horizon: int,
@@ -488,7 +501,9 @@ FORECAST1_SOURCE = source_file(
 
 
     # TODO: Return the information coefficient of forecasts against outcomes,
-    #   their correlation, as a plain number.
+    #   which is their correlation, as a Python float.
+    #   Example: information_coefficient(torch.tensor([1.0, 2.0, 3.0]),
+    #   torch.tensor([1.0, 3.0, 2.0])) returns 0.5.
     def information_coefficient(
         forecasts: Tensor,
         outcomes: Tensor,
@@ -499,12 +514,13 @@ FORECAST1_SOURCE = source_file(
     lean = 0.6 * (abs(sum([0.5, -1.0, -3.0][-2:]) / 2) - 0.5)            # 0.9
 
 
-    # TODO: Finish the market's own forecast of each day's target, its rule
-    #   with the noise left out. history starts as the day's last WINDOW
-    #   returns. Then for each of the horizon days ahead, work out the lean
-    #   as make_market does, strength times the size of the mean of the last
-    #   WINDOW values of history less KAPPA. Add it to history and to a total.
-    #   The total is that day's forecast. Earlier days stay at 0.
+    # TODO: Finish the market's own forecast of each day's target, which is
+    #   its rule with the noise left out. history starts as the day's last
+    #   WINDOW returns. For each of the horizon days ahead, compute the lean as
+    #   make_market does, strength * (abs(mean of the last WINDOW values of
+    #   history) - KAPPA). Append the lean to history and add it to a running
+    #   total. The total is that day's forecast. Days before WINDOW - 1 stay
+    #   at 0.
     def true_expected(
         returns: Tensor,
         strength: float,
@@ -644,7 +660,7 @@ def check_forecast1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="true_expected",
-        description="steps the market's rule ahead with the noise left out",
+        description="applies the market's rule ahead with the noise left out",
         inputs=(
             (seeded_returns(1008, 26), 0.6, 3),
             (seeded_returns(1009, 24), 0.5, 1),
@@ -676,14 +692,15 @@ FORECAST1 = Exercise(
     source=FORECAST1_SOURCE,
     solution=FORECAST1_SOLUTION,
     hints={
-        "prices": "returns.cumsum(0) adds them up day by day. Take .exp() of that and multiply by start.",
-        "forward_returns": "returns.unfold(0, horizon, 1) holds every run of horizon days. The run that starts the day "
-        "after day t is row t + 1, so drop row 0 and .sum(dim=1).",
-        "information_coefficient": "torch.stack the two into rows, torch.corrcoef them, take the [0, 1] entry and "
-        ".item() it.",
-        "true_expected": "Start a total at 0.0, then loop horizon times. Each lean is strength times (abs of the sum "
-        "of history[-WINDOW:] over WINDOW, less KAPPA). Append it to history and add it to the total. After the "
-        "loop, the total goes into expected at that day.",
+        "prices": "returns.cumsum(0) gives the running total of the returns. Take .exp() of that and multiply by "
+        "start.",
+        "forward_returns": "returns.unfold(0, horizon, 1) holds every run of horizon consecutive days. The run that "
+        "starts the day after day t is row t + 1. So drop row 0 and take .sum(dim=1).",
+        "information_coefficient": "Stack the two series as rows with torch.stack, pass that to torch.corrcoef, then "
+        "take the [0, 1] entry and call .item().",
+        "true_expected": "Start a total at 0.0, then loop horizon times. Each lean is strength times (the absolute "
+        "value of sum(history[-WINDOW:]) / WINDOW, minus KAPPA). Append it to history and add it to the total. After "
+        "the loop, store the total in expected at that day.",
         "price": "It comes from prices. Get that right first.",
         "targets": "It comes from forward_returns. Get that right first.",
         "best": "It comes from true_expected. Get that right first.",
@@ -701,26 +718,31 @@ FORECAST1 = Exercise(
 
 FORECAST2_LESSON = prose(
     """
-    Over a long run no forecast beats the ceiling of 0.168. One period can
-    top it by luck, as the rule's 0.220 did. A **leak**, a forecast that saw
-    something from the days it is scored on, tops it on every seed. Here are
-    three common ones, each trained on the first 2,995 of 4,000 rows and
-    scored on the last 1,000.
+    Over a long run, no forecast beats the ceiling of 0.168. In one period a
+    forecast can beat it by luck, as the rule's 0.220 did. A **leak** is when
+    a forecast has seen information from the days it is scored on. A leak
+    beats the ceiling on every seed. Here are three common leaks. Each
+    pipeline trains on the first 2,995 of 4,000 rows and is scored on the
+    last 1,000.
 
     Each row holds the means of the last 1, 5, 20, 60 and 250 returns, up
-    to and including that day. A window that ends a day late holds the first
-    day of the target. That is future data in the features.
+    to and including that day. If a window ends one day late, it includes
+    the first day of the target. That puts future data in the features,
+    which is the first leak.
 
-    Rows next to each other share most of their windows and 4 of their 5
-    target days. A random split leaves nearly every test row a neighbour in
-    training. `nearest_days`, which averages the targets of the 10 most
-    similar training rows, then reads the answers off. It reads the four
-    longer means, since a single day's return is mostly noise.
+    Neighbouring rows share most of their windows and 4 of their 5 target
+    days. So if rows are split into training and test at random, nearly
+    every test row has a neighbour in training. That is the second leak.
+    `nearest_days` averages the targets of the 10 most similar training
+    rows, so it copies the answers from those neighbours. It uses only the
+    four longer means, since a single day's return is mostly noise.
 
-    The third is a choice made with the whole series. Keep the 50 of 5,000
-    made up indicators that score best, though none has any link to the
-    market, then fit least squares on them. Hastie, Tibshirani and Friedman
-    show screening on every row as the wrong way to validate, in 7.10.2.
+    The third leak is a choice made using the whole series. Out of 5,000
+    fake indicators with no link to the market, keep the 50 that score best,
+    then fit least squares on them. If the scoring uses every row, the test
+    rows help choose the indicators. Hastie, Tibshirani and Friedman show
+    this screening on every row as the wrong way to validate, in section
+    7.10.2.
 
     | Pipeline | Honest | Leaky |
     |---|---|---|
@@ -728,18 +750,20 @@ FORECAST2_LESSON = prose(
     | 10 nearest days | 0.024 | 0.299, a random split |
     | Least squares on 50 noise indicators | -0.011 | 0.231, kept on every row |
 
-    Each cell is the average over seeds 0 to 4. Every leaky score lands above
-    the ceiling on every seed, the lowest at 0.197, and so it does on seeds
-    5 to 19 too. The honest noise indicators score about 0, as they should.
+    Each cell is the average over seeds 0 to 4. Every leaky score is above
+    the ceiling on every seed, with the lowest at 0.197. The same holds on
+    seeds 5 to 19. The honest noise indicators score about 0, as they
+    should.
 
-    Standardizing with the whole series' mean and spread can't change least
-    squares' forecast, since its weights shift and scale to match. It is
-    still a habit to drop, and the check of `trailing_means` cuts later days
-    off to catch it.
+    Standardizing with the mean and standard deviation of the whole series
+    cannot change least squares' forecast, because its weights shift and
+    scale to compensate. It is still a habit to drop. The check of
+    `trailing_means` cuts off later days to catch it.
 
-    `time_split` leaves a gap of 5 rows too. The last 4 training rows'
-    targets reach into the test targets' days, and a fifth goes to be safe.
-    López de Prado's 2018 book calls dropping them **purging**.
+    `time_split` also leaves a gap of 5 rows between training and test. The
+    targets of the last 4 training rows would cover days that are also in
+    the test targets. A fifth row is dropped to be safe. López de Prado's
+    2018 book calls dropping these rows **purging**.
     """,
 )
 
@@ -755,7 +779,7 @@ FORECAST2_SOURCE = source_file(
 ''' + indented(SETTINGS_PART) + '''
 
 
-    # The market and forecast1's targets and score.
+    # The market, and forecast1's targets and score.
 ''' + indented(MARKET_PART) + '''
 
 
@@ -777,9 +801,11 @@ FORECAST2_SOURCE = source_file(
     means = torch.arange(6.0).unfold(0, 3, 1).mean(dim=1)              # tensor([1., 2., 3., 4.])
 
 
-    # TODO: Return one row per day from day max(windows) - 1 on, holding the
-    #   mean of the last window returns up to and including that day, one
-    #   column per window.
+    # TODO: Return one row per day, starting from day max(windows) - 1, and
+    #   one column per window in windows. The entry for a day and a window is
+    #   the mean of the last window returns, up to and including that day.
+    #   Example: trailing_means(torch.arange(6.0), (1, 3)) returns
+    #   tensor([[2., 1.], [3., 2.], [4., 3.], [5., 4.]]).
     def trailing_means(
         returns: Tensor,
         windows: tuple[int, ...],
@@ -790,8 +816,9 @@ FORECAST2_SOURCE = source_file(
     early, late = torch.arange(10.0)[:6], torch.arange(10.0)[8:]        # tensor([0., 1., 2., 3., 4., 5.]), tensor([8., 9.])
 
 
-    # TODO: Split by time. Return the train x and y, the rows before cut - gap,
-    #   then the test x and y, the rows from cut on.
+    # TODO: Split by time. Return train_x, train_y, test_x and test_y, in that
+    #   order. The training rows are the rows before cut - gap, and the test
+    #   rows are the rows from cut on.
     def time_split(
         x: Tensor,
         y: Tensor,
@@ -804,9 +831,9 @@ FORECAST2_SOURCE = source_file(
     best_two = torch.tensor([0.1, 0.4, 0.2, 0.3]).topk(2).indices       # tensor([1, 3])
 
 
-    # TODO: Return the column numbers of the keep indicators whose information
-    #   coefficients with targets are highest over the first train_rows rows
-    #   alone, as a tensor of whole numbers.
+    # TODO: Score each column of indicators by its information coefficient
+    #   with targets, using only the first train_rows rows. Return the column
+    #   indices of the keep highest scores, as an integer tensor.
     def screen_on_training(
         indicators: Tensor,
         targets: Tensor,
@@ -1006,8 +1033,8 @@ def expect_kept(
     if sorted(actual.tolist()) != sorted(expected.tolist()):
         raise Mismatch(
             f"{call} keeps the columns {sorted(actual.tolist())}, but it should keep {sorted(expected.tolist())}, the "
-            "highest information coefficients over the first train_rows rows alone. Keep the sign: a column that "
-            "runs against the targets scores low.",
+            "highest information coefficients over the first train_rows rows alone. Keep the sign, since a column "
+            "that runs against the targets scores low.",
         )
 
 
@@ -1110,12 +1137,13 @@ FORECAST2 = Exercise(
     solution=FORECAST2_SOLUTION,
     hints={
         "trailing_means": "For each window, returns.unfold(0, window, 1).mean(dim=1) gives the means from day window - 1 "
-        "on. Drop its first max(windows) - window entries so every column starts on the same day, then torch.stack "
-        "them with dim=1.",
+        "on. Drop its first max(windows) - window entries so every column starts on the same day. Then torch.stack "
+        "the columns with dim=1.",
         "time_split": "Slice x and y with [: cut - gap] for training and [cut:] for testing, in the order the TODO "
         "gives.",
-        "screen_on_training": "Score each column of indicators.T on its first train_rows rows against targets' first "
-        "train_rows, with information_coefficient. Then torch.tensor the scores and take .topk(keep).indices.",
+        "screen_on_training": "For each column in indicators.T, compute information_coefficient on its first "
+        "train_rows entries against the first train_rows targets. Then make a tensor of the scores with torch.tensor "
+        "and take .topk(keep).indices.",
         "x": "It comes from trailing_means. Get that right first.",
         "train_x": "It comes from time_split. Get that right first.",
         "linear_score": "It comes from trailing_means and time_split. Get those right first.",
@@ -1135,14 +1163,16 @@ FORECAST2 = Exercise(
 
 FORECAST3_LESSON = prose(
     """
-    forecast2 scored one test period, and forecast1 showed how far one
-    period's score swings, even the rule's. **Walk forward** validation
-    scores many periods in turn, the way the forecast would really have run.
+    forecast2 scored one test period, and forecast1 showed how much one
+    period's score can vary, even the rule's. **Walk forward** validation
+    scores many periods in turn, the way the forecast would really have run
+    over time.
 
-    Each fold trains on every row before it, less the purged gap, then
-    forecasts the next 500 rows. The next fold moves on 500 rows and trains
-    on more. scikit-learn's `TimeSeriesSplit` works this way, each training
-    set holding all the ones before it, with a `gap` for forecast2's purging.
+    Each fold trains on every row before its test period, minus the purged
+    gap, then forecasts the next 500 rows. The next fold moves forward 500
+    rows and trains on more data. scikit-learn's `TimeSeriesSplit` works
+    this way. Each training set contains all the earlier ones, and its `gap`
+    argument does forecast2's purging.
 
     | Fold | Train rows | Test rows |
     |---|---|---|
@@ -1150,7 +1180,8 @@ FORECAST3_LESSON = prose(
     | 2 | 0 to 1,994 | 2,000 to 2,499 |
     | 5 | 0 to 3,494 | 3,500 to 3,999 |
 
-    Here are least squares and the rule, over the 5 folds of seeds 0 to 4.
+    The table shows least squares and the rule, over the 5 folds of seeds 0
+    to 4.
 
     | Seed | Least squares, fold average | Lowest and highest fold | The rule, fold average |
     |---|---|---|---|
@@ -1160,13 +1191,14 @@ FORECAST3_LESSON = prose(
     | 3 | 0.011 | -0.033 to 0.059 | 0.134 |
     | 4 | -0.023 | -0.067 to 0.012 | 0.198 |
 
-    Over all 25 folds least squares averages 0.009, the rule 0.159. Single
-    folds run from -0.183 to 0.188, the rule's from 0.008 to 0.315. So one
-    period can make a weak forecast look strong or worthless. The spread
-    across folds and seeds is the error bar on the score.
+    Over all 25 folds, least squares averages 0.009 and the rule averages
+    0.159. Single folds of least squares range from -0.183 to 0.188, and the
+    rule's range from 0.008 to 0.315. So one period can make a weak forecast
+    look strong or worthless. The variation across folds and seeds is the
+    error bar on the score.
 
-    The rule's average sits near the ceiling of 0.168. Least squares gets
-    almost none of it, on every seed. forecast4 finds out why.
+    The rule's average is close to the ceiling of 0.168. Least squares
+    captures almost none of that, on every seed. forecast4 finds out why.
     """,
 )
 
@@ -1204,10 +1236,13 @@ FORECAST3_SOURCE = source_file(
     starts = list(range(1500, 4000, 500))                               # [1500, 2000, 2500, 3000, 3500]
 
 
-    # TODO: Return the walk forward folds over rows, one (train_end, test_start,
-    #   test_end) per fold. The first test starts at first_train, each next
-    #   one test_size rows later. A test ends test_size rows on, or at rows if
+    # TODO: Return the walk forward folds over `rows` rows, as a list with one
+    #   (train_end, test_start, test_end) tuple per fold. The first test starts
+    #   at first_train, and each later test starts test_size rows after the
+    #   one before. A test ends test_size rows after it starts, or at rows if
     #   that comes first. Training ends gap rows before the test starts.
+    #   Example: walk_forward(12, 4, 3, 0) returns
+    #   [(4, 4, 7), (7, 7, 10), (10, 10, 12)].
     def walk_forward(
         rows: int,
         first_train: int,
@@ -1217,9 +1252,10 @@ FORECAST3_SOURCE = source_file(
         ...
 
 
-    # TODO: Return least squares' information coefficient in each fold, as plain
-    #   numbers in a list. It trains on the rows before train_end and is scored
-    #   on the rows from test_start up to test_end.
+    # TODO: Return least squares' information coefficient in each fold, as a
+    #   list of Python floats. In each fold, fit linear_forecast on the rows
+    #   before train_end, and score it on the rows from test_start up to
+    #   test_end.
     def fold_scores(
         x: Tensor,
         y: Tensor,
@@ -1306,7 +1342,7 @@ def expect_folds(
         raise Mismatch(f"{call} is {value_text(actual)}, but it should be a list of (train_end, test_start, test_end).")
 
     if len(actual) != len(expected):
-        raise Mismatch(f"{call} gives {len(actual)} folds, but it should give {len(expected)}: {expected}.")
+        raise Mismatch(f"{call} gives {len(actual)} folds, but it should give {len(expected)}, which are {expected}.")
 
     for number, (fold, wanted) in enumerate(zip(actual, expected), start=1):
         if not isinstance(fold, (tuple, list)) or len(fold) != 3:
@@ -1432,17 +1468,18 @@ FORECAST3 = Exercise(
 
 FORECAST4_LESSON = prose(
     """
-    design2 sets a design against a plain baseline first. Least squares on
-    the five windows is the plainest model that reads the input. The model
-    to beat it is a small MLP, 5 inputs to 8 hidden to 1. It trains for 150
-    steps of Adam on windows standardized with the training rows.
+    design2 compares a new design with a simple baseline first. Least
+    squares on the five windows is the simplest model that reads the input.
+    The challenger is a small MLP with 5 inputs, 8 hidden units and 1
+    output. It trains for 150 steps of Adam on windows standardized with the
+    mean and standard deviation of the training rows.
 
-    The MLP learns the target divided by its spread, so the numbers stay
-    near 1. A correlation ignores that scale, so `mlp_forecast` returns the
-    outputs as they are.
+    The MLP learns the target divided by its standard deviation, so the
+    numbers it fits stay near 1. A correlation ignores scale, so
+    `mlp_forecast` returns the outputs without scaling them back.
 
-    Here are both over the 5 walk forward folds of seeds 0 to 4, beside the
-    rule.
+    The table shows both models over the 5 walk forward folds of seeds 0 to
+    4, next to the rule.
 
     | | Average over 25 folds | Lowest and highest fold | Folds won by the MLP |
     |---|---|---|---|
@@ -1450,33 +1487,38 @@ FORECAST4_LESSON = prose(
     | Least squares | 0.009 | -0.183 to 0.188 | |
     | The MLP | 0.107 | -0.054 to 0.271 | 23 of 25 |
 
-    The win holds across the spread. Over seeds 0 to 19 the MLP won 81 of
-    100 folds, and its average beat least squares' on 19 of the 20 seeds.
+    The MLP's win is consistent across folds and seeds. Over seeds 0 to 19,
+    the MLP won 81 of 100 folds, and its average beat least squares' on 19
+    of the 20 seeds.
 
     design2's diagnosis asks whether a model failed to fit or failed to
-    generalize. Scored on their own training rows, averaged over every fold,
-    least squares reaches 0.127 and the MLP 0.290. The rule scores 0.203 on
-    those same rows, what the market's real lean earns there. The MLP's
-    excess over it is noise it memorized, and that part is gone on the test
-    rows. Least squares falls short of the rule even on rows it trained on,
-    so it failed to fit. The market leans on the size of the 20 day mean, a V shape, and a
-    straight line can't draw a V. A rise and a fall pull its one weight in
-    opposite ways, so it ends near 0. The MLP's ReLUs bend, so it fits the V
-    and carries it to the test rows.
+    generalize. Scored on their own training rows and averaged over every
+    fold, least squares reaches 0.127 and the MLP reaches 0.290. The rule
+    scores 0.203 on those same rows, which is what the market's real lean
+    earns there. The MLP's score above 0.203 comes from noise it memorized,
+    and that part disappears on the test rows. Least squares falls short of
+    the rule even on the rows it trained on, so it failed to fit.
 
-    A failure to fit calls for a shape that can follow the data. The habit
-    carries to any module you design. Read the diagnosis and give the model
-    the shape the data needs. Then score it against the plainest baseline
-    across folds and seeds, under a ceiling where you have one.
+    The market depends on the absolute value of the 20 day mean, which has a
+    V shape. A straight line cannot draw a V. Big rises and big falls pull
+    the line's single weight for that window in opposite directions, so the
+    weight ends near 0. The MLP's ReLUs let it bend, so it fits the V and
+    carries it over to the test rows.
+
+    A failure to fit calls for a model whose shape can follow the data. This
+    habit applies to any module you design. Read the diagnosis and give the
+    model the shape the data needs. Then score it against the simplest
+    baseline across folds and seeds, and compare it with a ceiling when you
+    have one.
     """,
 )
 
 MLP_SOURCE_PART = '''
-    # TODO: Train an MLP on x and y and return it. Seed torch with seed, then
-    #   build Linear(x.shape[1], 8), ReLU and Linear(8, 1) in an
-    #   nn.Sequential. Take steps steps of Adam at a rate of 1e-2, each on the
-    #   mean squared error between the model's outputs, squeezed to one per
-    #   row, and y divided by y.std().
+    # TODO: Train an MLP on x and y and return it. Call torch.manual_seed(seed),
+    #   then build Linear(x.shape[1], 8), ReLU and Linear(8, 1) in an
+    #   nn.Sequential. Take `steps` steps of Adam at learning rate 1e-2. Each
+    #   step minimizes the mean squared error between the model's outputs,
+    #   squeezed to one number per row, and y / y.std().
     def train_mlp(
         x: Tensor,
         y: Tensor,
@@ -1486,10 +1528,10 @@ MLP_SOURCE_PART = '''
         ...
 
 
-    # TODO: Standardize train_x and test_x with standardize, train an MLP on
-    #   the training rows for 150 steps, and return the model's outputs for
-    #   test_x as they are, one per row, in eval mode with no autograd
-    #   recording.
+    # TODO: Standardize train_x and test_x with standardize. Train an MLP on
+    #   the training rows with train_mlp, using seed and 150 steps. Return the
+    #   model's outputs for test_x, one number per row, without rescaling.
+    #   Call model.eval() first, and run the model inside torch.no_grad().
     def mlp_forecast(
         train_x: Tensor,
         train_y: Tensor,
@@ -1499,9 +1541,11 @@ MLP_SOURCE_PART = '''
         ...
 
 
-    # TODO: For each fold, train both forecasts on the rows before train_end
-    #   and score them on the rows from test_start to test_end. Return one
-    #   (least squares' score, the MLP's score) pair per fold.
+    # TODO: For each fold, fit both forecasts, linear_forecast and
+    #   mlp_forecast with seed, on the rows before train_end. Score each one
+    #   with information_coefficient on the rows from test_start to test_end.
+    #   Return a list with one (least squares' score, MLP's score) tuple per
+    #   fold.
     def paired_scores(
         x: Tensor,
         y: Tensor,
@@ -1656,7 +1700,7 @@ def check_train_mlp(found: object) -> None:
 
         if shapes != wanted_shapes:
             raise Mismatch(
-                f"The model from {call} has parameters of shapes {shapes}, but they should be {wanted_shapes}: Linear(4, 8), "
+                f"The model from {call} has parameters of shapes {shapes}, but they should be {wanted_shapes}, from Linear(4, 8), "
                 "ReLU and Linear(8, 1).",
             )
 
@@ -1845,11 +1889,12 @@ FORECAST4 = Exercise(
     source=FORECAST4_SOURCE,
     solution=FORECAST4_SOLUTION,
     hints={
-        "train_mlp": "Seed torch with seed before building the nn.Sequential. In each step: zero_grad, the mean "
-        "squared gap between the outputs squeezed to one per row and y divided by y.std(), backward, step.",
-        "mlp_forecast": "Run both through standardize, then train_mlp on the training rows with seed and 150 "
-        "steps. Put the model in eval mode, and inside torch.no_grad() give its outputs for test_x, squeezed to one "
-        "per row.",
+        "train_mlp": "Seed torch with seed before building the nn.Sequential. In each step, call zero_grad, compute "
+        "the mean squared difference between the squeezed outputs and y divided by y.std(), then call backward and "
+        "step.",
+        "mlp_forecast": "Pass both through standardize, then call train_mlp on the training rows with seed and 150 "
+        "steps. Put the model in eval mode. Inside torch.no_grad(), return its outputs for test_x, squeezed to one "
+        "number per row.",
         "paired_scores": "For each fold, slice the training rows with [:train_end] and the test rows with "
         "[test_start:test_end]. Score linear_forecast and mlp_forecast with information_coefficient and append the "
         "pair.",

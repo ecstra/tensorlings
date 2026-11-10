@@ -37,11 +37,12 @@ LEARNED_PHYSICS = Chapter(
         """
         # Project: learned physics
 
-        A capstone of Your own modules. Particles joined by springs move under
-        a classic simulator you write. Then a network learns to move them
-        itself, one design step at a time, each step measured. The finished
-        simulator runs systems four times bigger than any it trained on, keeps
-        their energy, and stays close to the truth over long rollouts.
+        This project is a capstone for the Your own modules part of the course.
+        First you write a classic simulator for particles joined by springs.
+        Then you teach a network to simulate the same particles, one design
+        step at a time, and measure each step. The finished simulator handles
+        systems four times bigger than any it trained on. It keeps their energy
+        nearly constant and stays close to the true motion over long rollouts.
 
         ## Further reading
 
@@ -85,8 +86,9 @@ DT = 0.05
 
 SYSTEMS_PART = '''
 # Particles of mass 1 in a box from -1.5 to 1.5, joined by springs of rest length REST. springs[s, i, j] is the
-# stiffness of the spring between i and j, the same both ways, and 0 where there is none. A random path through every
-# particle keeps each system in one piece, and the velocities are shifted so no system drifts away as a whole.
+# stiffness of the spring between particles i and j in system s. It is the same in both directions, and 0 where there
+# is no spring. A random path through every particle keeps each system connected. The velocities are shifted so that
+# no system drifts away as a whole.
 def random_systems(
     count: int,
     particles: int,
@@ -169,7 +171,8 @@ WORLD_REFERENCE = namespace_of(WORLD_PART)
 # ---------------------------------------------------------------------------
 
 FLAT_PART = '''
-# An MLP that reads every coordinate and every stiffness of a system of 5 at once, and gives every acceleration.
+# An MLP that reads every coordinate and every stiffness of a system of 5 particles at once, and outputs every
+# acceleration.
 class FlatMLP(nn.Module):
     def __init__(
         self,
@@ -194,7 +197,8 @@ class FlatMLP(nn.Module):
 '''
 
 POOL_PART = '''
-# States for training, every frame of systems the true simulator ran, with their stiffnesses and true accelerations.
+# Training states. The true simulator runs random systems, and every frame becomes a state, with its stiffnesses and
+# true accelerations.
 def state_pool(
     systems: int,
     particles: int,
@@ -570,43 +574,45 @@ def seeded_model(
 
 PHYSICS1_LESSON = prose(
     """
-    This project's world is particles of mass 1 in a flat box, some pairs joined by springs.
-    physics1 builds its true simulator, the classic way. physics2 to physics4 then teach a network
-    to run the same world, one step of design1 to design5's method at a time.
+    This project simulates particles of mass 1 in a flat box, with some pairs joined by springs.
+    physics1 builds the true simulator in the classic way, from the physics equations. physics2 to
+    physics4 then teach a network to simulate the same world. They follow the method of design1 to
+    design5, one step at a time.
 
-    A spring of stiffness k and rest length 1 pulls its ends together when stretched, and pushes
-    them apart when squeezed. Hooke's law sets the size, k times the stretch, along the line between
-    the ends.
+    A spring of stiffness k and rest length 1 pulls its ends together when it is stretched, and
+    pushes them apart when it is squeezed. Hooke's law says the force is k times the stretch, which
+    is the length minus 1. The force points along the line between the ends.
 
     ```text
     pull on i from j = k_ij * (|x_j - x_i| - 1) * (x_j - x_i) / |x_j - x_i|
     ```
 
-    With mass 1, a particle's acceleration is the sum of its pulls. Every offset comes at once from
-    broadcasting, as equivariance2's squared_distances made them. `springs` holds 0 where no spring
-    joins a pair, so a missing spring pulls with nothing.
+    With mass 1, a particle's acceleration is the sum of the pulls on it. Broadcasting computes
+    every offset `x_j - x_i` at once, as equivariance2's squared_distances did. `springs` holds 0
+    where no spring joins a pair, so a missing spring adds no pull.
 
     A simulator moves time forward in steps of `DT`, here 0.05 seconds. The semi-implicit Euler
-    step updates the velocity first, then moves with the new velocity.
+    step updates the velocity first, then moves each particle with the new velocity.
 
     ```text
     v = v + a(x) * DT
     x = x + v * DT
     ```
 
-    Plain Euler moves with the old velocity instead, a small change with a large effect. With no
-    friction, a system's energy should stay put. Here is how much it changed after 1,000 steps, the
-    median over 100 systems of 5.
+    Plain Euler moves each particle with the old velocity instead. That small change has a large
+    effect. With no friction, a system's energy should stay constant. The table shows how much the
+    energy changed after 1,000 steps, as the median over 100 systems of 5 particles.
 
     | Step | Energy change after 1,000 steps |
     |---|---|
     | semi-implicit Euler | 1.7% |
     | plain Euler | about 1,281,000%, flying apart |
 
-    Wikipedia's article on the method says the semi-implicit step is symplectic, so it almost keeps
-    the energy. Plain Euler adds a little every step. DeepMind's learned simulator, GNS, has its
-    network predict accelerations and moves the particles with this same semi-implicit Euler step.
-    physics3's networks do the same, so how well they simulate comes down to their accelerations.
+    Wikipedia's article on the method says the semi-implicit step is symplectic, which means it
+    keeps the energy nearly constant. Plain Euler adds a little energy at every step. DeepMind's
+    learned simulator, GNS, has its network predict accelerations. It then moves the particles with
+    this same semi-implicit Euler step. physics3's networks do the same, so how well they simulate
+    depends only on how accurate their accelerations are.
     """,
 )
 
@@ -622,7 +628,7 @@ PHYSICS1_SOURCE = source_file(
     points = torch.tensor([[0.0, 0.0], [3.0, 4.0]])
     gaps = points.unsqueeze(0) - points.unsqueeze(1)   # gaps[i, j] is points[j] - points[i], shape (2, 2, 2)
     length = gaps[0, 1].norm()                          # tensor(5.)
-    along = gaps[0, 1] / length                         # tensor([0.6000, 0.8000]), length 1, the same way
+    along = gaps[0, 1] / length                         # tensor([0.6000, 0.8000]), length 1, pointing the same way
     both = torch.stack([points, points], dim=1).shape   # torch.Size([2, 2, 2]), a new dim 1
 
 ''' + indented(SETTINGS_PART) + '''
@@ -632,12 +638,16 @@ PHYSICS1_SOURCE = source_file(
 
 
     # TODO: Return every particle's acceleration, of shape (systems, particles,
-    #   2). x holds positions of shape (systems, particles, 2), and springs the
-    #   stiffnesses, of shape (systems, particles, particles). The spring from i
-    #   to j pulls i by springs[s, i, j] times (its length - REST), along the
-    #   offset x[s, j] - x[s, i] scaled to length 1. Mass is 1, so i's
-    #   acceleration is the sum of its pulls. Keep each length above 1e-9 with
-    #   .clamp_min, since a particle's offset to itself has length 0.
+    #   2). x holds positions of shape (systems, particles, 2), and springs
+    #   holds the stiffnesses, of shape (systems, particles, particles). The
+    #   spring between i and j pulls i with the force
+    #   springs[s, i, j] * (length - REST) * offset / length, where offset is
+    #   x[s, j] - x[s, i] and length is its norm. Mass is 1, so i's
+    #   acceleration is the sum of the pulls on it. Keep each length above
+    #   1e-9 with .clamp_min, since a particle's offset to itself has length 0.
+    #   Example: for x = torch.tensor([[[0.0, 0.0], [2.0, 0.0]]]) and
+    #   springs = torch.tensor([[[0.0, 1.0], [1.0, 0.0]]]), it returns
+    #   tensor([[[1., 0.], [-1., 0.]]]).
     def spring_accelerations(
         x: Tensor,
         springs: Tensor,
@@ -646,8 +656,8 @@ PHYSICS1_SOURCE = source_file(
 
 
     # TODO: Return the positions and velocities after one semi-implicit Euler
-    #   step of DT. First the velocity gains accelerate(x, springs) times DT,
-    #   then the positions move by the new velocity times DT.
+    #   step of DT. First add accelerate(x, springs) * DT to the velocity. Then
+    #   add the new velocity times DT to the positions. Return (x, v).
     def euler_step(
         accelerate: Callable[[Tensor, Tensor], Tensor],
         x: Tensor,
@@ -657,9 +667,10 @@ PHYSICS1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the positions over `steps` euler_steps with accelerate, x
-    #   first, stacked on a new dim 1, of shape (systems, steps + 1, particles,
-    #   2). Record nothing for autograd.
+    # TODO: Run `steps` euler_steps with accelerate, starting from x and v.
+    #   Return the positions at every step, starting with x, stacked on a new
+    #   dim 1, so the shape is (systems, steps + 1, particles, 2). Work inside
+    #   torch.no_grad().
     def rollout(
         accelerate: Callable[[Tensor, Tensor], Tensor],
         x: Tensor,
@@ -670,10 +681,13 @@ PHYSICS1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return each system's energy, of shape (systems,). The kinetic part
-    #   is half the sum of every velocity squared. A spring stores half its
-    #   stiffness times (length - REST) squared, and springs holds each spring
-    #   twice, i to j and j to i, so take a quarter of the sum over both.
+    # TODO: Return each system's total energy, of shape (systems,). The kinetic
+    #   energy is 0.5 times the sum of every velocity component squared. A
+    #   spring stores 0.5 * stiffness * (length - REST) ** 2 of potential
+    #   energy. springs holds each spring twice, at [i, j] and at [j, i], so
+    #   the potential energy is 0.25 times that sum over all pairs i, j.
+    #   Example: for the x and springs of spring_accelerations' example, with
+    #   v = torch.zeros(1, 2, 2), it returns tensor([0.5000]).
     def energy(
         x: Tensor,
         v: Tensor,
@@ -738,7 +752,7 @@ def check_physics1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="euler_step",
-        description="moves the velocity first, then the positions with it",
+        description="updates the velocity first, then moves the positions with the new velocity",
         inputs=(
             (CONSTANT_PULL, *triangle),
             (TRUE_PULL, *systems(3, 5, 1084)),
@@ -765,7 +779,7 @@ def check_physics1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="energy",
-        description="adds the kinetic energy and each spring's once",
+        description="adds the kinetic energy and each spring's potential energy, counted once",
         inputs=(
             triangle,
             systems(4, 5, 1086),
@@ -783,16 +797,17 @@ PHYSICS1 = Exercise(
     source=PHYSICS1_SOURCE,
     solution=PHYSICS1_SOLUTION,
     hints={
-        "spring_accelerations": "Make the offsets by broadcasting, as the gaps example does one dim further in, so "
-        "offsets[s, i, j] is x[s, j] - x[s, i]. Take their lengths with .norm over the last dim, keeping it, and clamp "
-        "them. Multiply the stretch, the unit offsets and springs with a dim added, then sum over j, dim 2.",
-        "euler_step": "Two lines. The new v comes from the old v and accelerate of the old x. The new x comes from the "
-        "old x and the new v. Return both.",
-        "rollout": "Keep a list that starts as [x]. Inside torch.no_grad(), loop steps times over euler_step and append "
-        "each new x, then torch.stack the list on dim 1.",
-        "energy": "The kinetic part is 0.5 times v squared summed over dims 1 and 2. For the springs, take every "
-        "pairwise length, as spring_accelerations did, then 0.25 times springs times the squared stretch, summed the "
-        "same way.",
+        "spring_accelerations": "Make the offsets by broadcasting, as the gaps example does, with the system dimension "
+        "in front. Then offsets[s, i, j] is x[s, j] - x[s, i]. Take their lengths with .norm over the last dim with "
+        "keepdim=True, and clamp them. Multiply the stretch, the unit offsets and springs with a dim added at the end. "
+        "Then sum over j, which is dim 2.",
+        "euler_step": "This takes two lines. The new v comes from the old v and accelerate of the old x. The new x comes "
+        "from the old x and the new v. Return both.",
+        "rollout": "Keep a list that starts as [x]. Inside torch.no_grad(), call euler_step steps times and append each "
+        "new x. Then torch.stack the list on dim 1.",
+        "energy": "The kinetic energy is 0.5 times v squared, summed over dims 1 and 2. For the springs, compute every "
+        "pairwise length as spring_accelerations did. Then take 0.25 times springs times the squared stretch, summed "
+        "over dims 1 and 2.",
     },
     introduces=(),
     check=check_physics1,
@@ -805,33 +820,37 @@ PHYSICS1 = Exercise(
 
 PHYSICS2_LESSON = prose(
     """
-    Before any clever model come the baselines, and a way to read their failures, as design2 did.
+    Before building a clever model, set up baselines and a way to diagnose their failures, as
+    design2 did.
 
     - Coasting gives accelerations of zero, so every particle keeps its starting velocity.
-    - `FlatMLP` reads all 10 coordinates and 25 stiffnesses of a system of 5 at once, and gives all 10 accelerations. It has 22,410 weights.
+    - `FlatMLP` reads all 10 coordinates and 25 stiffnesses of a system of 5 particles at once, and outputs all 10 accelerations. It has 22,410 weights.
 
-    Training draws on a pool of states. `state_pool` runs systems with the true simulator, and keeps
-    every frame with its true accelerations. The MLP here learned from 500 systems of 101 frames,
-    for 3,000 steps of 64 states.
+    Training samples from a pool of states. `state_pool` runs random systems with the true
+    simulator, and keeps every frame together with its true accelerations. The MLP in the table
+    trained on 500 systems of 101 frames each, for 3,000 steps with batches of 64 states.
 
-    Two scores read the result. A typical acceleration here is about 1.5 long, so `share_close`
-    counts the particles whose predicted acceleration lands within 0.1 of the truth.
-    `rollout_error` runs a whole simulation, and measures how far each particle ends up from where
-    the true simulator puts it, in a box 3 wide.
+    Two scores measure the result. A typical acceleration here has a length of about 1.5.
+    `share_close` gives the fraction of particles whose predicted acceleration is within 0.1 of the
+    true one. `rollout_error` runs a whole simulation with the model. It measures the average
+    distance between each particle and where the true simulator puts it. For scale, the box is 3
+    wide.
 
-    | Model | Close, training | Close, held out | Off after 50 steps | Off after 100 steps |
+    | Model | Close, training | Close, held out | Rollout error after 50 steps | After 100 steps |
     |---|---|---|---|---|
     | coasting | 2.0% | 1.9% | 1.65 | 2.13 |
     | flat MLP | 6.9% to 7.7% | 4.4% to 5.2% | 0.57 to 0.60 | 0.75 to 0.77 |
 
     The ranges are over 3 seeds, and the rollouts run 100 new systems for up to 5 seconds.
 
-    design2's diagnosis reads the flat MLP as failed to fit. It can't match the accelerations even
-    on its own training states. Given only 4 systems instead, it learns them, 96% to 98% close, and
-    gets under 1% of new states close, failed to generalize. So more data won't rescue it.
+    design2's diagnosis says the flat MLP failed to fit, because it cannot match the accelerations
+    even on its own training states. More data will not fix that. With only 4 training systems, it
+    does learn its training states, 96% to 98% close. But then it gets under 1% of new states close,
+    so it fails to generalize.
 
-    design2 named two cures for a failure to fit, a layer that can express the skill, or a fix to
-    its training. Longer training and a wider MLP try the second, over 3 seeds.
+    design2 named two cures for a failure to fit. One is a layer that can express the skill, and the
+    other is a fix to the training. Longer training and a wider MLP try the second cure, over 3
+    seeds.
 
     | Flat MLP | Close, training | Close, held out |
     |---|---|---|
@@ -839,9 +858,10 @@ PHYSICS2_LESSON = prose(
     | 20,000 steps | 17% to 18% | 6.4% to 7.0% |
     | 20,000 steps, 512 wide, 286,218 weights | 34% to 36% | 8.7% to 10.5% |
 
-    Even the wide one fits only a third of its own states, far from 90%. So the structure has to
-    change, and physics3 builds one from what the physics already says. The lines at the end of the
-    file run a shorter version, 200 systems for 1,000 steps, and reach the same verdict.
+    Even the wide MLP fits only a third of its own training states, far from 90%. So the structure
+    has to change. physics3 builds a structure from what the physics already tells us. The lines at
+    the end of the file run a shorter version, 200 systems for 1,000 steps, and reach the same
+    diagnosis.
     """,
 )
 
@@ -885,10 +905,11 @@ PHYSICS2_SOURCE = source_file(
         ...
 
 
-    # TODO: Train model with Adam at a rate of 0.003 for steps steps. pool holds
-    #   positions, springs and true accelerations. Each step draws 64 rows with
-    #   torch.randint and generator, and takes the mean squared error between
-    #   model's accelerations and the true ones. Return model.
+    # TODO: Train model with Adam at learning rate 0.003 for `steps` steps.
+    #   pool holds (positions, springs, true accelerations). Each step draws 64
+    #   random row indices with torch.randint and generator. It minimizes the
+    #   mean squared error between model's accelerations for those rows and
+    #   the true ones. Return model.
     def train_accelerations(
         model: nn.Module,
         pool: tuple[Tensor, Tensor, Tensor],
@@ -898,10 +919,10 @@ PHYSICS2_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the share of particles in pool whose predicted acceleration
-    #   lands within tolerance of the true one, as a plain number. A miss is the
-    #   length of the difference, over the last dim. Record nothing for
-    #   autograd.
+    # TODO: Return the fraction of particles in pool whose predicted
+    #   acceleration is within tolerance of the true one, as a Python float.
+    #   The miss for a particle is the norm of the difference over the last
+    #   dim. Work inside torch.no_grad().
     def share_close(
         model: nn.Module,
         pool: tuple[Tensor, Tensor, Tensor],
@@ -910,10 +931,10 @@ PHYSICS2_SOURCE = source_file(
         ...
 
 
-    # TODO: Roll accelerate out for as many steps as truth holds after its
-    #   first, and return the average distance from each particle to where
-    #   truth puts it at every step, of shape (steps + 1,). Average over the
-    #   systems and the particles.
+    # TODO: Roll accelerate out from x and v for truth.shape[1] - 1 steps, so
+    #   the path has as many frames as truth. At every frame, compute the
+    #   distance between each particle and its position in truth. Return the
+    #   mean over the systems and the particles, of shape (truth.shape[1],).
     def rollout_error(
         accelerate: Callable[[Tensor, Tensor], Tensor],
         x: Tensor,
@@ -1054,7 +1075,7 @@ def check_physics2(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="share_close",
-        description="gives the share of accelerations within tolerance",
+        description="gives the fraction of accelerations within tolerance",
         inputs=(
             (Described(seeded_model(BASELINE_REFERENCE["FlatMLP"]), "an untrained FlatMLP"), Described(pool, "states of 6 systems"), 0.5),
             (Described(seeded_model(BASELINE_REFERENCE["FlatMLP"], 1), "another untrained FlatMLP"), Described(pool, "states of 6 systems"), 1.5),
@@ -1082,8 +1103,8 @@ def check_physics2(checker: Checker) -> None:
     )
 
     for name, description in (
-        ("fit", "is the flat MLP's share close on its own training states"),
-        ("held_fit", "is its share close on held out states"),
+        ("fit", "is the flat MLP's fraction close on its own training states"),
+        ("held_fit", "is its fraction close on held out states"),
         ("verdict", "is design2's diagnosis of the flat MLP"),
     ):
         checker.check_name(
@@ -1101,14 +1122,14 @@ PHYSICS2 = Exercise(
     source=PHYSICS2_SOURCE,
     solution=PHYSICS2_SOLUTION,
     hints={
-        "coasting": "A tensor of zeros with x's shape, which zeros_like makes.",
+        "coasting": "Return a tensor of zeros with x's shape, which torch.zeros_like makes.",
         "train_accelerations": "Unpack the pool into xs, ss and targets. Each step, draw 64 row numbers below "
         "len(xs) with torch.randint and the generator. Then take F.mse_loss of model on those rows against their "
-        "targets, zero_grad, backward, step.",
+        "targets, and do zero_grad, backward and step.",
         "share_close": "Inside torch.no_grad(), take model of the positions and springs minus the targets, and its "
-        ".norm over dim 2. Compare with tolerance, and average as floats with .item().",
-        "rollout_error": "physics1's rollout for truth.shape[1] - 1 steps, minus truth, its .norm over the last dim, "
-        "then the mean over dims 0 and 2.",
+        ".norm over dim 2. Compare with tolerance, convert to float, take the mean and call .item().",
+        "rollout_error": "Run physics1's rollout for truth.shape[1] - 1 steps and subtract truth. Take the .norm over "
+        "the last dim, then the mean over dims 0 and 2.",
         "fit": "This name comes from the lines at the end of the file. Finish share_close first.",
         "held_fit": "This name comes from the lines at the end of the file. Finish share_close first.",
         "verdict": "This name comes from the lines at the end of the file. Finish the functions above it first.",
@@ -1126,19 +1147,23 @@ PHYSICS2 = Exercise(
 
 PHYSICS3_LESSON = prose(
     """
-    The physics says three things about forces between particles. physics3 builds each one into the
-    module, and measures what it buys.
+    The physics tells us three things about the forces between particles. physics3 builds each one
+    into the module and measures how much it helps.
 
-    - Every pair obeys one law, so one network reads each joined pair and each particle sums its messages, as message1 did.
-    - Only offsets matter, so the pair network reads x[j] - x[i], as GNS does, whose authors found it beat absolute positions.
-    - A spring pulls along its own line, so the network gives only a size, as equivariance2's EGNN moved points along differences.
+    - Every pair follows the same law. So one shared network reads each joined pair, and each particle sums the messages it gets, as in message1.
+    - Only offsets matter. So the pair network reads x[j] - x[i], as GNS does. Its authors found that offsets work better than absolute positions.
+    - A spring pulls along the line between its ends. So the network outputs only the pull's size, as equivariance2's EGNN moved points along differences.
 
-    Shared pairs take any number of particles, in any order. `RelativeForces` takes the first two. Its message is a vector of 2 from each pair's offset,
-    length and stiffness. `CentralForces` takes all three, plus Hooke's form. A small network learns
-    the law of the length, and the stiffness multiplies it.
+    A shared pair network works for any number of particles, in any order. `RelativeForces` uses the
+    first two facts. Its network turns each pair's offset, length and stiffness into a message, a
+    vector of 2. `CentralForces` uses all three facts, plus the form of Hooke's law. A small network
+    learns the size of the pull as a function of the length, and the stiffness multiplies it. The
+    tables also include a pair network that reads both particles' absolute positions instead of
+    their offset.
 
-    `moved_gap`, `turned_gap` and `shuffled_gap` test each property directly, as design5 did. Here
-    are the untrained modules' gaps. A gap near 1e-7 is float rounding, so the property holds.
+    Three functions test each property directly, as design5 did. `moved_gap` shifts every particle,
+    `turned_gap` rotates the system, and `shuffled_gap` reorders the particles. The table shows the
+    gaps of the untrained modules. A gap near 1e-7 is only float rounding, so the property holds.
 
     | Module | Weights | Moved | Turned | Shuffled |
     |---|---|---|---|---|
@@ -1147,35 +1172,38 @@ PHYSICS3_LESSON = prose(
     | `RelativeForces` | 4,610 | 2e-7 | 1.5 | 1e-7 |
     | `CentralForces` | 4,353 | 2e-7 | 2e-7 | 6e-8 |
 
-    Each trains as physics2's flat MLP did, but with its rate falling along a cosine from 3e-3 to 0,
-    as schedule1 showed. At a constant rate the weights kept bouncing, and one run stopped on a bad
-    step at 66%. GNS decays its rate too. Here is each one's share of held out accelerations within
-    0.1 over 5 seeds, also moved by (4, -3) and turned by 1 radian.
+    Each module trains as physics2's flat MLP did, but its learning rate falls along a cosine from
+    3e-3 to 0, as schedule1 showed. At a constant learning rate the weights kept jumping around, and
+    one run happened to stop after a bad step, at 66%. GNS decays its learning rate too. The table
+    shows the fraction of held out accelerations within 0.1, over 5 seeds. It also scores the same
+    states moved by (4, -3) and rotated by 1 radian.
 
-    | Module | Held out | Moved | Turned |
+    | Module | Held out | Moved | Rotated |
     |---|---|---|---|
     | flat MLP | 4.2% to 5.3% | 1.3% to 1.9% | 4.3% to 5.1% |
     | pairs on absolute positions | 87% to 91% | 0.7% to 10% | 87% to 90% |
     | `RelativeForces` | 89% to 96% | 89% to 96% | 89% to 95% |
     | `CentralForces` | 100% | 100% | 100% |
 
-    On states like the training ones, the two pair modules score close, since absolute positions
-    have seen every place in the box. Moved out of it, they fall to 10% or less, and offsets lose
-    nothing. The turn costs no module anything here, since the training states already come in
-    every orientation. To see what pulls along the line buy, train each module only on systems
-    along one line. Test it on new systems on that line, and on the same states turned 90 degrees.
+    On states like the training ones, the two pair modules score about the same, because the
+    training states cover every place in the box. When the states move out of the box, absolute
+    positions fall to 10% or less, while offsets lose nothing. Rotation costs no module anything
+    here, because the training states already come in every orientation. To see what pulling along
+    the line adds, train each module only on systems that lie along one line. Then test it on new
+    systems on that line, and on the same states rotated 90 degrees.
 
-    | Module | On the line | Turned 90 degrees |
+    | Module | On the line | Rotated 90 degrees |
     |---|---|---|
     | flat MLP | 21% to 24% | 0.8% to 1.3% |
     | pairs on absolute positions | 96% to 97% | under 0.3% |
     | `RelativeForces` | 97% to 98% | 0% to 2.2% |
     | `CentralForces` | 100% | 100% |
 
-    Each fact the physics gave pays off. Pairs fit where the flat MLP failed, and offsets survive a
-    move. Pulls along the line survive a turn no training state showed, because the network gives
-    only each pull's size and the offset carries its direction. `silent` runs design4's check, and
-    every weight of `CentralForces` learns from the first step.
+    Each fact from the physics pays off. Pair networks fit where the flat MLP failed, and offsets
+    keep working after a move. Pulls along the line keep working after a rotation that no training
+    state showed. That is because the network gives only each pull's size, and the offset gives its
+    direction. `silent` runs design4's check, and every weight of `CentralForces` gets a gradient
+    from the first step.
     """,
 )
 
@@ -1195,7 +1223,7 @@ PHYSICS3_SOURCE = source_file(
     from torch import Tensor
 
     offset = torch.tensor([3.0, 4.0])
-    pull = 2.0 * offset / offset.norm()           # tensor([1.2000, 1.6000]), size 2 along the offset
+    pull = 2.0 * offset / offset.norm()           # tensor([1.2000, 1.6000]), length 2, pointing along offset
     flags = torch.tensor([0.0, 1.5]) > 0           # tensor([False,  True])
     kept = torch.tensor([7.0, 7.0]) * flags        # tensor([0., 7.]), 0 where the flag is False
 
@@ -1210,15 +1238,16 @@ PHYSICS3_SOURCE = source_file(
 ''' + indented(ROTATE_PART) + '''
 
 
-    # design4's check that every weight learns.
+    # design4's check that every weight gets a gradient.
 ''' + indented(SILENT_PART) + '''
 
 
-    # TODO: Finish forward. Make the offsets x[s, j] - x[s, i] as physics1 did,
-    #   and their lengths, keeping the last dim. Each pair's input is its
-    #   offset, its length and springs[s, i, j], joined on a last dim of 4.
-    #   self.message turns it into a vector of 2. Keep the messages of joined
-    #   pairs only, springs above 0, and sum them over j.
+    # TODO: Finish forward. Compute the offsets x[s, j] - x[s, i] as physics1
+    #   did, and their lengths, keeping the last dim. Each pair's input is its
+    #   offset, its length and springs[s, i, j], joined along a last dim of
+    #   size 4. self.message turns each input into a message, a vector of 2.
+    #   Keep only the messages of joined pairs, where springs is above 0, and
+    #   sum them over j. The result has shape (systems, particles, 2).
 ''' + indented(RELATIVE_INIT) + '''
 
         def forward(
@@ -1229,9 +1258,10 @@ PHYSICS3_SOURCE = source_file(
             ...
 
 
-    # TODO: Finish forward. Each spring pulls along its offset made length 1,
-    #   as physics1's did, by springs[s, i, j] times self.law of the length.
-    #   Sum the pulls over j. Clamp the lengths above 1e-9.
+    # TODO: Finish forward. Each spring pulls along its unit offset,
+    #   offset / length, as in physics1. The size of the pull is
+    #   springs[s, i, j] times self.law(length). Sum the pulls over j. Clamp
+    #   the lengths to at least 1e-9.
 ''' + indented(CENTRAL_INIT) + '''
 
         def forward(
@@ -1242,9 +1272,9 @@ PHYSICS3_SOURCE = source_file(
             ...
 
 
-    # TODO: Return the largest change, entry by entry, in model's
-    #   accelerations when every particle moves by shift, as a plain number.
-    #   Record nothing for autograd.
+    # TODO: Return the largest absolute change in any entry of model's
+    #   accelerations when every particle moves by shift, as a Python float.
+    #   Work inside torch.no_grad().
     def moved_gap(
         model: nn.Module,
         x: Tensor,
@@ -1254,9 +1284,10 @@ PHYSICS3_SOURCE = source_file(
         ...
 
 
-    # TODO: Return equivariance_gap of model's accelerations, with springs
-    #   held fixed, under rotate by angle, as a plain number. Record nothing
-    #   for autograd.
+    # TODO: Return the equivariance_gap of model under a rotation by angle, as
+    #   a Python float. Its f runs model on positions with springs held fixed,
+    #   and its g rotates points by angle with rotate. Work inside
+    #   torch.no_grad().
     def turned_gap(
         model: nn.Module,
         x: Tensor,
@@ -1266,11 +1297,12 @@ PHYSICS3_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the largest gap, entry by entry, between model's
-    #   accelerations for the particles put in the order order gives, and its
-    #   accelerations put in that order afterwards, as a plain number. springs
-    #   needs the new order along both its particle dims. Record nothing for
-    #   autograd.
+    # TODO: Test whether reordering the particles reorders the accelerations
+    #   the same way. Run model on the particles reordered by order. Compare
+    #   that with model's original accelerations, reordered by order. Return
+    #   the largest absolute difference as a Python float. springs must be
+    #   reordered along both of its particle dims. Work inside
+    #   torch.no_grad().
     def shuffled_gap(
         model: nn.Module,
         x: Tensor,
@@ -1280,7 +1312,7 @@ PHYSICS3_SOURCE = source_file(
         ...
 
 
-    # Each structure's gaps, untrained, and the weights that never learn. These lines run as the file loads.
+    # The gaps of each untrained structure, and the weights that get no gradient. These lines run as the file loads.
 ''' + indented(PHYSICS3_NAMES) + '''
     ''',
 )
@@ -1439,7 +1471,7 @@ def check_physics3(checker: Checker) -> None:
         check_on_inputs(
             checker=checker,
             function="turned_gap",
-            description="gives equivariance_gap under a turn, the springs held fixed",
+            description="gives equivariance_gap under a rotation, with the springs held fixed",
             inputs=((model, x, springs, angle),),
             reference=STRUCTURE_REFERENCE["turned_gap"],
             expect=expect_close,
@@ -1484,14 +1516,14 @@ PHYSICS3 = Exercise(
     source=PHYSICS3_SOURCE,
     solution=PHYSICS3_SOLUTION,
     hints={
-        "RelativeForces.forward": "Offsets and lengths as in physics1, without the clamp. torch.cat the offsets, "
-        "lengths and springs.unsqueeze(3) on dim 3, run self.message on that, multiply by (springs > 0).unsqueeze(3), "
-        "and sum over dim 2.",
-        "CentralForces.forward": "physics1's spring_accelerations with self.law(lengths) in place of the stretch "
-        "lengths - REST.",
-        "moved_gap": "Inside torch.no_grad(), model of x + shift minus model of x, then .abs().max().item().",
-        "turned_gap": "Inside torch.no_grad(), equivariance_gap with f a lambda of points giving model(points, "
-        "springs), and g a lambda of points giving rotate(points, angle).",
+        "RelativeForces.forward": "Compute offsets and lengths as in physics1, without the clamp. Join the offsets, "
+        "lengths and springs.unsqueeze(3) with torch.cat on dim 3, and run self.message on the result. Multiply by "
+        "(springs > 0).unsqueeze(3), and sum over dim 2.",
+        "CentralForces.forward": "Copy physics1's spring_accelerations, with self.law(lengths) in place of the "
+        "stretch lengths - REST.",
+        "moved_gap": "Inside torch.no_grad(), take model of x + shift minus model of x, then .abs().max().item().",
+        "turned_gap": "Inside torch.no_grad(), call equivariance_gap with f a lambda of points giving "
+        "model(points, springs), and g a lambda of points giving rotate(points, angle).",
         "shuffled_gap": "x[:, order] reorders the particles. springs[:, order][:, :, order] reorders both dims. "
         "Compare model of those with model(x, springs)[:, order].",
         "gaps": "This name comes from the lines at the end of the file. Finish the classes and the gaps first.",
@@ -1510,15 +1542,16 @@ PHYSICS3 = Exercise(
 
 PHYSICS4_LESSON = prose(
     """
-    A simulator feeds its own output back in for hundreds of steps, so small errors can grow.
-    physics4 rolls every model out, and checks two more promises of the physics.
+    A simulator feeds its own output back in as input for hundreds of steps, so small errors can
+    grow. physics4 rolls out every model and checks two more properties that the physics guarantees.
 
-    - Energy stays put, up to the integrator's own 1.7% after 1,000 steps, from physics1.
+    - Energy stays constant, apart from the integrator's own change of 1.7% after 1,000 steps, from physics1.
     - A system's total momentum stays at 0, since every pull has an equal and opposite partner.
 
-    Each model trained on systems of 5, as in physics3. The new cases are systems of 10 and 20, and
-    springs from 1.5 to 3 stiff, where training never went past 1.5. Here is the rollout error after
-    100 steps, 5 seconds, and the energy change on 5 particles after 1,000, over 3 seeds.
+    Each model trained on systems of 5 particles, as in physics3. The new test cases are systems of
+    10 and 20 particles, and springs with stiffness from 1.5 to 3, while training never went above
+    1.5. The table shows the rollout error after 100 steps, which is 5 seconds. It also shows the
+    energy change on 5 particles after 1,000 steps. The ranges are over 3 seeds.
 
     | Model | 5 particles | 10 | 20 | Stiffer | Energy change |
     |---|---|---|---|---|---|
@@ -1528,23 +1561,26 @@ PHYSICS4_LESSON = prose(
     | central, stiffness read as an input | 0.027 to 0.042 | 0.042 to 0.082 | 0.12 to 0.21 | 0.55 to 0.80 | 1.4% to 1.5% |
     | `CentralForces` | 0.012 to 0.018 | 0.023 to 0.034 | 0.087 to 0.11 | 0.033 to 0.043 | 1.3% to 1.8% |
 
-    `RelativeForces` fit most states, yet its rollouts wander. Its pull on i from j is never exactly
-    minus its pull on j from i, so each step adds momentum from nowhere. After 1,000 steps a
-    system's total momentum, which starts at 0, has a median size of 1.1 to 19. A system drifting as
-    a whole gains energy too.
+    `RelativeForces` fit most states, but its rollouts drift away from the truth. Its pull on i from
+    j is never exactly minus its pull on j from i. So each step adds momentum that should not exist.
+    After 1,000 steps, a system's total momentum, which starts at 0, has a median size of 1.1 to 19.
+    A system that drifts as a whole also gains energy.
 
-    `CentralForces` makes every pair equal and opposite by construction. Both ends read the same
-    length and stiffness, and pull along opposite offsets. That is Newton's third law, and with a
-    force that depends only on the distance, energy keeps as well. Its momentum stays near 1e-6, and
-    its energy changes about as much as the true simulator's, 2.0% to 2.6% on 20 particles against
-    2.3%.
+    `CentralForces` makes the two pulls of every pair equal and opposite by construction. Both ends
+    see the same length and stiffness, and they pull along opposite offsets. That is Newton's third
+    law. And with a force that depends only on the distance, energy is conserved as well. Its
+    momentum stays near 1e-6. Its energy changes about as much as the true simulator's, 2.0% to 2.6%
+    on 20 particles against 2.3%.
 
-    The stiffness row shows Hooke's form at work. Read as an input, a stiffness above any in
-    training leaves the law guessing, 15 to 24 times further off than when it multiplies.
+    The Stiffer column shows why Hooke's form helps. The row "central, stiffness read as an input"
+    feeds the stiffness into the network instead of multiplying by it. A stiffness above any seen
+    in training then leaves the network guessing. Its error is 15 to 24 times larger than when the
+    stiffness multiplies the pull.
 
-    Interaction Networks simulated "dozens of objects over thousands of time steps", and GNS ran an
-    order of magnitude more particles than it trained on. Both are this design, messages between
-    pairs, at a larger scale. `CentralForces` trained on 5 particles runs 20 within 0.11.
+    Interaction Networks simulated "dozens of objects over thousands of time steps". GNS ran an
+    order of magnitude more particles than it trained on. Both use this design, messages between
+    pairs, at a larger scale. `CentralForces`, trained on 5 particles, simulates 20 particles with an
+    error of at most 0.11.
     """,
 )
 
@@ -1563,7 +1599,7 @@ PHYSICS4_SOURCE = source_file(
     import torch.nn.functional as F
     from torch import Tensor
 
-    changes = torch.tensor([0.01, -0.03, 0.5]).abs().median()    # tensor(0.0300), the middle of three
+    changes = torch.tensor([0.01, -0.03, 0.5]).abs().median()    # tensor(0.0300), the middle value of the three
     named = {"a": 1.5}["a"]                                       # 1.5
 
 
@@ -1574,10 +1610,10 @@ PHYSICS4_SOURCE = source_file(
 ''' + indented(MODELS_SOLUTION) + '''
 
 
-    # TODO: Return the median, over the systems, of the size of each system's
-    #   relative change in energy after steps euler_steps with accelerate, as a
-    #   plain number. The change is (energy at the end - energy at the start) /
-    #   energy at the start. Record nothing for autograd.
+    # TODO: Run `steps` euler_steps with accelerate. For each system, compute
+    #   the relative change in energy, (end energy - start energy) / start
+    #   energy. Return the median over the systems of its absolute value, as a
+    #   Python float. Work inside torch.no_grad().
     def energy_drift(
         accelerate: Callable[[Tensor, Tensor], Tensor],
         x: Tensor,
@@ -1588,9 +1624,10 @@ PHYSICS4_SOURCE = source_file(
         ...
 
 
-    # TODO: Return a dict from each case's name to accelerate's rollout_error
-    #   after steps steps, as a plain number. cases maps each name to x, v and
-    #   springs, and each case's truth is the true simulator's rollout.
+    # TODO: Return a dict that maps each case's name to accelerate's
+    #   rollout_error at the last of `steps` steps, as a Python float. cases
+    #   maps each name to (x, v, springs). Each case's truth is the rollout of
+    #   the true spring_accelerations for `steps` steps.
     def case_errors(
         accelerate: Callable[[Tensor, Tensor], Tensor],
         cases: dict[str, tuple[Tensor, Tensor, Tensor]],
@@ -1738,10 +1775,10 @@ PHYSICS4 = Exercise(
     source=PHYSICS4_SOURCE,
     solution=PHYSICS4_SOLUTION,
     hints={
-        "energy_drift": "Keep energy(x, v, springs) as the start. Inside torch.no_grad(), loop steps times over "
-        "euler_step. Then (end - start) / start, its .abs(), its .median() and .item().",
-        "case_errors": "Loop over cases.items(). For each case, truth is rollout of spring_accelerations for steps "
-        "steps. Take rollout_error of accelerate against it, and keep its last entry with .item().",
+        "energy_drift": "Save energy(x, v, springs) as the start. Inside torch.no_grad(), call euler_step steps "
+        "times. Then compute (end - start) / start and take its .abs(), its .median() and .item().",
+        "case_errors": "Loop over cases.items(). For each case, truth is the rollout of spring_accelerations for "
+        "steps steps. Take rollout_error of accelerate against it, and keep its last entry with .item().",
         "table": "This name comes from the lines at the end of the file. Finish case_errors first.",
         "drifts": "This name comes from the lines at the end of the file. Finish energy_drift first.",
     },

@@ -35,11 +35,12 @@ OWN_MODULE = Chapter(
         """
         # Project: a module of your own
 
-        The course's last project. You plan a module for a problem with the
-        design method, build it, test the property its structure promises,
-        and measure it against a baseline. The worked example learns the rule
-        of a cellular automaton from its rows. Keep it, or swap in a problem of
-        your own and keep the same names.
+        This is the course's last project. You plan a module for a problem with
+        the design method and build it. Then you test the property its
+        structure promises, and measure it against a baseline. The worked
+        example learns the rule of a cellular automaton from example rows. You
+        can keep that example, or replace it with a problem of your own that
+        uses the same names.
 
         ## Further reading
 
@@ -71,12 +72,12 @@ def indented(part: str) -> str:
 
 
 SETTINGS_PART = '''
-RULE = 110     # the worked example's rule, by its Wolfram number
-WIDTH = 16     # cells in each training row, on a ring
+RULE = 110     # the worked example's rule, given by its Wolfram number
+WIDTH = 16     # the number of cells in each training row, arranged in a ring
 '''
 
 PLAN_CLASS_PART = '''
-# A record of the plan, its fields filled by name.
+# A record of the plan. You fill in its fields by name.
 class Plan(NamedTuple):
     problem: str
     skill: str
@@ -98,8 +99,9 @@ def shifted(
 '''
 
 CHANGE_PART = '''
-# A change the answer must follow. One function changes the input and the answer alike. A pair
-# gives the input's change and then the answer's, for an answer that moves another way or not at all.
+# A change that the answer must follow. A single function changes the input and the answer in the same
+# way. A pair gives the change to the input and then the change to the answer, for an answer that changes
+# differently or not at all.
 Change = Callable[[Tensor], Tensor] | tuple[Callable[[Tensor], Tensor], Callable[[Tensor], Tensor]]
 '''
 
@@ -157,7 +159,7 @@ OWN1_PARTS = (
 )
 
 GAP_PART = '''
-# design5's gaps, given, with a pair's first change run on the input and its second on the answer.
+# design5's gaps, given. For a pair, the first change runs on the input and the second on the answer.
 def property_gaps(
     f: Callable[[Tensor], Tensor],
     x: Tensor,
@@ -174,7 +176,7 @@ def property_gaps(
 '''
 
 SILENT_PART = '''
-# design4's check for parameters that never learn, given.
+# design4's check for parameters that get no gradient, given.
 def silent_after_one_step(
     model: nn.Module,
     loss_of: Callable[[nn.Module], Tensor],
@@ -256,8 +258,8 @@ def score(
 '''
 
 RECIPE_PART = '''
-# The run the checks repeat with your own functions, both models from seed 0. Raise these if your
-# problem needs more rows or more steps to learn.
+# The training run that the checks repeat with your own functions, with both models seeded at 0. Raise
+# these if your problem needs more rows or more steps to learn.
 TRAIN_ROWS = 64
 TRAIN_STEPS = 500
 '''
@@ -347,7 +349,7 @@ def expect_plain_share(
         raise Mismatch(f"{call} is {value_text(value)}, a tensor, but it should be a plain number. Use .item() on it.")
 
     if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 <= value <= 1:
-        raise Mismatch(f"{call} is {value_text(value)}, but it should be a share between 0 and 1.")
+        raise Mismatch(f"{call} is {value_text(value)}, but it should be a fraction between 0 and 1.")
 
     return float(value)
 
@@ -358,64 +360,70 @@ def expect_plain_share(
 
 OWN1_LESSON = prose(
     """
-    This last project is yours. Pick a problem, plan a module for it with
-    the design method, then build it in own2. The file holds a worked
-    example to keep or replace.
+    This last project is yours. Pick a problem and plan a module for it with
+    the design method. Then build the module in own2. The file holds a
+    worked example that you can keep or replace.
 
     The plan comes before any code. `Plan` is a named tuple, a record whose
-    fields you fill by name. Each field is one step of the method.
+    fields you fill in by name. Each field is one step of the method.
 
     - problem: what the module must do.
-    - skill: the one skill a toy task isolates, as design1's recall did.
-    - structure and layer: what shape the data has, and the layer that fits it from combine5's guide.
-    - shown_in: the exercise that showed that layer.
+    - skill: the single skill that a toy task isolates, as design1's recall task did.
+    - structure and layer: the structure of the data, and the layer from combine5's guide that fits it.
+    - shown_in: the exercise that introduced that layer.
     - baseline: the simplest model to beat, as design2 set up.
-    - property: the change the answer must follow, as design5 tested.
+    - property: a change to the input that the answer must follow, as design5 tested.
     - margin: how far above the baseline the module must score.
 
     The worked example is a cellular automaton. A row of cells, each 0 or 1,
-    sits on a ring. Each step, every cell reads itself and its two
-    neighbours, and a rule gives its new state.
+    is arranged in a ring, so the last cell is next to the first. At each
+    step, every cell looks at itself and its two neighbours, and a rule gives
+    its new state.
 
-    Three cells make 8 patterns, so a rule is 8 bits. Stephen Wolfram
-    numbered the rules by them. Read each pattern as a 3 bit number, and bit
-    k of the rule's number is the new state of pattern k. In 2004 Matthew
-    Cook published a proof that Rule 110 can compute anything a computer can.
+    Three cells have 8 possible patterns, so a rule is 8 bits, one new state
+    per pattern. Stephen Wolfram numbered the rules by those bits. Read each
+    pattern, left neighbour then cell then right neighbour, as a 3 bit number
+    k. Then bit k of the rule's number is the new state for pattern k. In
+    2004 Matthew Cook published a proof that Rule 110 can compute anything a
+    computer can.
 
     ```python
     [(110 >> k) & 1 for k in range(8)]    # [0, 1, 1, 1, 0, 1, 1, 0], pattern 000 first
     ```
 
-    `exact` is the rule's exact program, as design1's `exact_recall` was.
-    `make_batch` draws random rows and gives each one's next row, so every
-    answer is known and the data never runs out.
+    `exact` is the exact program for the rule, as design1's `exact_recall`
+    was for recall. `make_batch` draws random rows and computes each one's
+    next row. So every answer is known, and you can generate as much data as
+    you want.
 
-    The property belongs to the problem before any module has it. Shift a
-    row around the ring, and its next row shifts the same way. So the check
-    tests your `TRANSFORMS` on `exact` first. A gap there means the property
-    is wrong, not the module.
+    The property belongs to the problem itself, before any module has it. If
+    you shift a row around the ring, its next row shifts the same way. So the
+    check first tests your `TRANSFORMS` on `exact`. A gap there means the
+    property itself is wrong.
 
-    A `Change` that is one function changes the input and the answer
-    alike. When the answer moves another way, give a pair, the input's
-    change and then the answer's. Reversing a row, for one, leaves its
-    majority as it was.
+    A `Change` that is a single function changes the input and the answer in
+    the same way. When the answer changes differently, give a pair, the
+    change to the input and then the change to the answer. For example,
+    reversing a row leaves its majority value unchanged, so the answer's
+    change does nothing.
 
     ```python
     "reverse": (lambda rows: rows.flip(1), lambda answer: answer),
     ```
 
-    A change must also do the same thing every time it runs, so a shuffle
-    draws its order once, outside the function.
+    A change must also do the same thing every time it runs. So a shuffle
+    must draw its order once, outside the function.
 
-    `floor_score` is what doing nothing scores, every cell keeping its
-    state. On Rule 110 it gets 62% of cells right, so a model has learned
-    something only above that.
+    `floor_score` is the score of doing nothing, where every cell keeps its
+    state. On Rule 110 it gets 62% of cells right. So a model has learned
+    something only if it scores above that.
 
     For a problem of your own, keep these names and change what they hold.
-    The checks then hold for your problem. The ones tied to the rule switch
-    off once `RULE` is gone. Three problems to start from:
+    The checks then apply to your problem. The checks that are specific to
+    the rule turn off once `RULE` is removed. Here are three problems to
+    start from.
 
-    - Conway's Game of Life on a torus: a local rule in two directions, with shifts both ways as its property.
+    - Conway's Game of Life on a torus: a local rule in two dimensions, with shifts in both directions as its property.
     - Ranks in a set: the rank of each number among the rest, where shuffling the set shuffles the ranks.
     - A running maximum: the largest value so far in a stream, where doubling every value doubles every answer.
     """,
@@ -443,10 +451,11 @@ OWN1_SOURCE = source_file(
 ''' + indented(CHANGE_PART) + '''
 
 
-    # TODO: Plan the module before writing it. Fill each field in plain words.
-    #   shown_in is the name of the exercise that showed the layer you pick,
-    #   as combine5's guide lists them. margin is how much higher the module's
-    #   share right must be than the baseline's, between 0 and 1.
+    # TODO: Plan the module before writing it. Fill in each field in plain
+    #   words. shown_in is the name of the exercise that introduced the layer
+    #   you pick, as combine5's guide lists them. margin is how much higher
+    #   the module's accuracy must be than the baseline's, a number between 0
+    #   and 1.
     PLAN = Plan(
         problem=...,
         skill=...,
@@ -461,19 +470,22 @@ OWN1_SOURCE = source_file(
 
     bits = [(110 >> k) & 1 for k in range(8)]                     # [0, 1, 1, 1, 0, 1, 1, 0], pattern 000 first
     ring = torch.roll(torch.tensor([[1.0, 0.0, 0.0]]), 1, dims=1)    # tensor([[0., 1., 0.]]), the last cell wraps to the front
-    picked = torch.tensor([5.0, 7.0])[torch.tensor([[1, 0]])]        # tensor([[7., 5.]]), a table read at many places at once
+    picked = torch.tensor([5.0, 7.0])[torch.tensor([[1, 0]])]        # tensor([[7., 5.]]), a table indexed at many positions at once
 
 
-    # TODO: Return each row's next row under RULE, of the same shape. A cell's
-    #   pattern is its left neighbour, itself and its right neighbour, read as
-    #   a 3 bit number. On the ring, the first cell's left neighbour is the
-    #   last cell. Its new state is that bit of RULE, as 0.0 or 1.0.
+    # TODO: Return each row's next row under RULE, with the same shape. A
+    #   cell's pattern is the 3 bit number 4 * left + 2 * cell + right, where
+    #   left and right are its neighbours. On the ring, the first cell's left
+    #   neighbour is the last cell. The cell's new state is bit number
+    #   pattern of RULE, as 0.0 or 1.0.
+    #   Example: exact(torch.tensor([[0.0, 1.0, 0.0, 0.0]])) returns
+    #   tensor([[1., 1., 0., 0.]]).
     def exact(rows: Tensor) -> Tensor:
         ...
 
 
-    # TODO: Draw count random rows of WIDTH cells, each 0.0 or 1.0, with
-    #   generator, and return them with their next rows from exact.
+    # TODO: Draw count random rows of WIDTH cells with generator, each cell
+    #   0.0 or 1.0. Return the rows and their next rows from exact, as a pair.
     def make_batch(
         count: int,
         generator: torch.Generator,
@@ -481,15 +493,17 @@ OWN1_SOURCE = source_file(
         ...
 
 
-    # TODO: Name the changes the property promises the answer will follow,
-    #   each a Change of a batch of rows. Each must do the same thing every
-    #   time it runs. For the rule, give a shift by 1 and a shift by 5 around
-    #   the ring.
+    # TODO: Make a dict that gives a name to each change your property says
+    #   the answer must follow. Each value is a Change of a batch of rows, and
+    #   it must do the same thing every time it runs. For the rule, give a
+    #   shift by 1 and a shift by 5 around the ring.
     TRANSFORMS: dict[str, Change] = ...
 
 
-    # TODO: Return the share of cells right when every cell keeps its state, as
-    #   a plain number. That is the floor any model has to beat.
+    # TODO: Return the fraction of cells that are right if every cell keeps
+    #   its state, as a Python float. That is the floor any model has to beat.
+    #   Example: floor_score(torch.tensor([[0.0, 1.0]]),
+    #   torch.tensor([[0.0, 0.0]])) returns 0.5.
     def floor_score(
         rows: Tensor,
         next_rows: Tensor,
@@ -564,7 +578,7 @@ def check_plan(value: object) -> None:
         text = getattr(value, field)
 
         if not isinstance(text, str) or not text.strip():
-            raise Mismatch(f"PLAN.{field} is {value_text(text)}, but it should say it in words.")
+            raise Mismatch(f"PLAN.{field} is {value_text(text)}, but it should be a description in words.")
 
     names = [exercise.name for exercise in EXERCISES]
     earlier = names[: names.index("own1")] if "own1" in names else names
@@ -578,7 +592,7 @@ def check_plan(value: object) -> None:
     margin = value.margin
 
     if isinstance(margin, bool) or not isinstance(margin, (int, float)) or not 0 < margin < 1:
-        raise Mismatch(f"PLAN.margin is {value_text(margin)}, but it should be a share between 0 and 1, such as 0.2.")
+        raise Mismatch(f"PLAN.margin is {value_text(margin)}, but it should be a number between 0 and 1, such as 0.2.")
 
 
 def generic_batch(module: object) -> tuple[Tensor, Tensor]:
@@ -788,7 +802,7 @@ def check_own1(checker: Checker) -> None:
 
     checker.test(
         function="make_batch",
-        description="draws a batch with its generator, its targets from exact",
+        description="draws a batch with its generator, with targets from exact",
         run=check_make_batch(module),
     )
     checker.check_name(
@@ -800,7 +814,7 @@ def check_own1(checker: Checker) -> None:
     if reference is None:
         checker.test(
             function="floor_score",
-            description="gives a share as a plain number",
+            description="gives a fraction as a plain number",
             run=lambda found: expect_plain_share(
                 call="floor_score(a batch from make_batch)",
                 value=found(*generic_batch(module)),
@@ -812,7 +826,7 @@ def check_own1(checker: Checker) -> None:
         check_on_inputs(
             checker=checker,
             function="floor_score",
-            description="gives the share of cells that keep their state, as a plain number",
+            description="gives the fraction of cells that keep their state, as a plain number",
             inputs=tuple(
                 (
                     Described(value=row, text=f"{len(row)} random rows of {row.shape[1]} cells"),
@@ -839,17 +853,18 @@ OWN1 = Exercise(
     source=OWN1_SOURCE,
     solution=OWN1_SOLUTION,
     hints={
-        "PLAN": "Answer each field in a few words. For the rule, the structure is local and the same at every cell, "
-        "which combine5's guide gives to a convolution, shown in conv4. A margin of 0.2 asks for 20 points over the "
-        "baseline.",
-        "exact": "torch.roll by 1 and by -1 along dim 1 gives each cell's left and right neighbour. Weigh them 4, 2 "
-        "and 1 to get the pattern, .long() it, and index a tensor of the rule's 8 bits with it.",
-        "make_batch": "torch.randint(0, 2, (count, WIDTH), generator=generator) gives whole numbers. Make them "
-        "floats with .float(), then return them with exact of them.",
-        "TRANSFORMS": "A dict of two lambdas, each calling shifted on its rows, one with 1 and one with 5. A shift "
-        "moves the next row the same way, so each entry is one function, not a pair.",
-        "floor_score": "Compare rows with next_rows, turn the matches into floats, and take their mean as a plain "
-        "number.",
+        "PLAN": "Answer each field in a few words. For the rule, the structure is local and the same at every cell. "
+        "combine5's guide matches that structure to a convolution, introduced in conv4. A margin of 0.2 asks for 20 "
+        "percentage points over the baseline.",
+        "exact": "torch.roll by 1 and by -1 along dim 1 gives each cell's left and right neighbour. Weight the left "
+        "neighbour, the cell and the right neighbour by 4, 2 and 1 and add them to get the pattern. Convert it with "
+        ".long(), and use it to index a tensor of the rule's 8 bits.",
+        "make_batch": "torch.randint(0, 2, (count, WIDTH), generator=generator) gives integers. Convert them to "
+        "floats with .float(), then return them together with exact of them.",
+        "TRANSFORMS": "Make a dict of two lambdas, each calling shifted on its rows, one with 1 and one with 5. A "
+        "shift moves the next row the same way, so each entry is a single function, not a pair.",
+        "floor_score": "Compare rows with next_rows, convert the matches to floats, and take their mean with "
+        ".mean().item().",
         "floor": "It comes from floor_score and make_batch. Get those right first.",
     },
     introduces=(),
@@ -864,34 +879,37 @@ OWN1 = Exercise(
 
 OWN2_LESSON = prose(
     """
-    Now the module, built and judged the way the method says.
+    Now you build the module and judge it the way the method says.
 
-    The plan picked two layers, each for a reason it can name.
+    The plan picked two layers, each for a clear reason.
 
     | Layer | Why |
     |---|---|
-    | `nn.Conv1d` of width 3, circular padding | a cell reads itself and two neighbours, the same everywhere, and design5's table shows circular padding keeps shifts exactly |
-    | `nn.Conv1d` of width 1 | each cell's 16 readings become one logit for its next state, the same per cell |
+    | `nn.Conv1d` of width 3, circular padding | reads a cell and its two neighbours, with the same weights at every cell |
+    | `nn.Conv1d` of width 1 | turns each cell's 16 channels into one logit for its next state, with the same weights at every cell |
 
-    A 1 by 1 convolution is a Linear run on each place on its own. No layer
-    reads the row's length, so the module takes a row of any width.
+    design5's table showed that with circular padding, a convolution's
+    output shifts exactly when its input shifts. A 1 by 1 convolution is a
+    Linear layer applied to each position separately. No layer depends on
+    the row's length, so the module accepts a row of any width.
 
-    `train` doesn't depend on the problem, so it serves any module of
-    yours. It runs Adam at 0.01 on one fixed batch. `loss_of` and `score`
-    fit the rule, whose cells are 0 or 1, with binary cross entropy and a
-    logit cut at 0. A problem with other answers, such as ranks, writes
-    both its own way, a mean squared error and a share within a tolerance,
-    for example.
+    `train` does not depend on the problem, so it works for any module of
+    yours. It runs Adam at learning rate 0.01 on one fixed batch. `loss_of`
+    and `score` are written for the rule, whose cells are 0 or 1. They use
+    binary cross entropy, and a logit above 0 counts as a prediction of 1.
+    A problem with other answers, such as ranks, writes both functions its
+    own way. For example, it might use a mean squared error and the fraction
+    of answers within a tolerance.
 
     The last lines run the method's checks in order.
 
-    - Before training: design4's `silent_after_one_step` must list nothing, every parameter learning.
-    - After training: design5's `property_gaps` must be float rounding, below 1e-4.
-    - Against the baseline: both train on the same `TRAIN_ROWS` rows for `TRAIN_STEPS` steps, then are scored on 1,000 rows they never saw, as design2 did.
+    - Before training: design4's `silent_after_one_step` must return an empty list, which means every parameter gets a gradient.
+    - After training: every gap from design5's `property_gaps` must be at the level of float rounding, below 1e-4.
+    - Against the baseline: both models train on the same `TRAIN_ROWS` rows for `TRAIN_STEPS` steps. Then they are scored on 1,000 new rows, as in design2.
 
     The checks repeat that run with your own functions, so raise
-    `TRAIN_ROWS` or `TRAIN_STEPS` if your problem needs more. Here is the
-    run with 64 rows and 500 steps, the range over 3 seeds.
+    `TRAIN_ROWS` or `TRAIN_STEPS` if your problem needs more. The table
+    shows the run with 64 rows and 500 steps, as the range over 3 seeds.
 
     | Model | Training rows | New rows | New rows of 256 cells |
     |---|---|---|---|
@@ -899,21 +917,25 @@ OWN2_LESSON = prose(
     | your module | 100% | 100% | 100% |
     | the baseline | 100% | 65.9% to 68.7% | can't run |
 
-    The baseline fit every training row and missed a third of the new cells,
-    design2's "failed to generalize". Every input cell reaches every output
-    through weights of its own, so it learned 64 rows and not the rule.
+    The baseline fit every training row and got a third of the new cells
+    wrong, which is design2's "failed to generalize". In the baseline, every
+    input cell reaches every output through its own weights. So it memorized
+    the 64 rows instead of learning the rule.
 
-    Your module learned the 8 patterns themselves, so a row it never saw is
-    no harder. Fed its own rows back 100 times on a ring of 80 cells, it
-    matched the rule on every cell, on all 3 seeds.
+    Your module learned what to do with each of the 8 patterns, so a row it
+    never saw is no harder. It was also fed its own output as input 100
+    times, on a ring of 80 cells. It matched the rule on every cell, on all 3
+    seeds.
 
-    Structure buys data. Your module is exact from 16 training rows. The
-    baseline needs 256 rows to reach 89% to 90% and 1,024 to reach 100%, and
-    it still can't take a row of another width.
+    The right structure saves a lot of data. Your module is exact after
+    training on only 16 rows. The baseline needs 256 rows to reach 89% to
+    90%, and 1,024 rows to reach 100%. Even then it cannot handle a row of
+    another width.
 
-    Once your module wins, interp's tools show how. A probe, as interp1 fit
-    one, reads what each layer holds, and patching, as interp3 did, tests
-    which layer the answer runs through.
+    Once your module wins, the tools from the interpretability chapter can
+    show how it works. A probe, like the one interp1 trained, reads what each
+    layer holds. Activation patching, as in interp3, tests which layer the
+    answer passes through.
     """,
 )
 
@@ -932,7 +954,8 @@ OWN2_SOURCE = source_file(
 
 
     # own1's plan and toy task, given. If you planned a problem of your own,
-    # paste your own1 here in their place, and write a Baseline for it below.
+    # paste your own1 code here in their place, and write a Baseline for your
+    # problem below.
 ''' + indented(OWN1_PARTS) + '''
 
 
@@ -945,16 +968,16 @@ OWN2_SOURCE = source_file(
 ''' + indented(BASELINE_PART) + '''
 
 
-    wraps = nn.Conv1d(1, 1, 3, padding=1, padding_mode="circular")    # its ends read each other, as the ring does
-    per_cell = nn.Conv1d(16, 1, 1)                                     # one Linear from 16 channels to 1, run at every cell
+    wraps = nn.Conv1d(1, 1, 3, padding=1, padding_mode="circular")    # the first and last cells see each other, as on the ring
+    per_cell = nn.Conv1d(16, 1, 1)                                     # one Linear from 16 channels to 1, applied at every cell
     read = per_cell(torch.zeros(2, 16, 7))                             # shape (2, 1, 7), one value per cell
 
 
-    # TODO: Build the module the plan names. For the rule, rows of shape
-    #   (count, width) become one channel, a convolution of width 3 with
-    #   circular padding reads each cell's neighbourhood into 16 channels, a
-    #   ReLU follows, and a convolution of width 1 gives one logit per cell.
-    #   forward returns logits of shape (count, width).
+    # TODO: Build the module the plan names. For the rule, forward turns rows
+    #   of shape (count, width) into one input channel. A convolution of width
+    #   3 with circular padding reads each cell's neighbourhood into 16
+    #   channels. A ReLU follows, then a convolution of width 1 gives one
+    #   logit per cell. forward returns logits of shape (count, width).
     class OwnModule(nn.Module):
         def __init__(self) -> None:
             super().__init__()
@@ -965,7 +988,7 @@ OWN2_SOURCE = source_file(
 
 
     # TODO: Return the loss of model on inputs against targets, as a tensor.
-    #   For the rule, binary cross entropy on the logits, from
+    #   For the rule, use binary cross entropy on the logits, with
     #   F.binary_cross_entropy_with_logits.
     def loss_of(
         model: nn.Module,
@@ -975,9 +998,9 @@ OWN2_SOURCE = source_file(
         ...
 
 
-    # TODO: Train model for steps steps with Adam at a rate of 0.01, each step
-    #   on the whole batch of inputs and targets, with loss_of. Return the
-    #   last loss as a plain number.
+    # TODO: Train model for `steps` steps with Adam at learning rate 0.01.
+    #   Each step computes loss_of on the whole batch of inputs and targets.
+    #   Return the last loss as a Python float.
     def train(
         model: nn.Module,
         inputs: Tensor,
@@ -987,9 +1010,10 @@ OWN2_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the share of targets model gets right on inputs, as a plain
-    #   number, a logit above 0 meaning 1. Score in eval mode without recording
-    #   for autograd, then put model back in training mode.
+    # TODO: Return the fraction of targets that model gets right on inputs, as
+    #   a Python float. A logit above 0 counts as a prediction of 1. Call
+    #   model.eval() and score inside torch.no_grad(). Then call model.train()
+    #   to put the model back in training mode.
     def score(
         model: nn.Module,
         inputs: Tensor,
@@ -1010,9 +1034,10 @@ OWN2_SOURCE = source_file(
 
     # TODO: Run the method's checks. Before training, set silent to
     #   silent_after_one_step of own, with loss_of on the training rows and a
-    #   rate of 0.1. Then train own and baseline TRAIN_STEPS steps each on the
-    #   training rows. Set own_score and baseline_score to their scores on the
-    #   held rows, and gaps to property_gaps of own on the first 64 held rows.
+    #   learning rate of 0.1. Then train own and baseline for TRAIN_STEPS steps
+    #   each on the training rows. Set own_score and baseline_score to their
+    #   scores on held_rows and held_next. Set gaps to property_gaps of own on
+    #   the first 64 held rows, with TRANSFORMS.
     silent = ...
     own_score = ...
     baseline_score = ...
@@ -1337,8 +1362,8 @@ def check_silent(module: object) -> Callable[[object], None]:
     def run(value: object) -> None:
         if value != []:
             raise Mismatch(
-                f"silent is {value_text(value)}, but it should be [], every parameter learning. A parameter listed "
-                "never moves, so the module isn't the one you planned.",
+                f"silent is {value_text(value)}, but it should be [], meaning every parameter gets a gradient. A listed "
+                "parameter never changes, so the module isn't the one you planned.",
             )
 
         train_rows, train_next = module_batch(module, recipe(module)[0], 0)
@@ -1350,7 +1375,7 @@ def check_silent(module: object) -> Callable[[object], None]:
         )
 
         if found:
-            raise Mismatch(f"silent_after_one_step of a fresh OwnModule lists {found}, so silent can't be []. Find why they never learn.")
+            raise Mismatch(f"silent_after_one_step of a fresh OwnModule lists {found}, so silent can't be []. Find out why they get no gradient.")
 
     return run
 
@@ -1427,7 +1452,7 @@ def check_own2(checker: Checker) -> None:
     )
     checker.test(
         function="loss_of",
-        description="gives the loss as a tensor training can follow",
+        description="gives the loss as a tensor that training can backpropagate through",
         run=check_loss_of(module),
     )
     checker.test(
@@ -1442,7 +1467,7 @@ def check_own2(checker: Checker) -> None:
     )
     checker.check_name(
         name="silent",
-        description="is design4's check before training, with every parameter learning",
+        description="is design4's check before training, with every parameter getting a gradient",
         run=check_silent(module),
     )
     checker.check_name(
@@ -1470,14 +1495,14 @@ OWN2 = Exercise(
     source=OWN2_SOURCE,
     solution=OWN2_SOLUTION,
     hints={
-        "OwnModule.forward": "In __init__ make the two Conv1d layers from the file's examples, 1 to 16 channels and "
-        "16 to 1. In forward, unsqueeze(1) the rows into one channel, run the first, a ReLU and the second, then "
-        "squeeze(1).",
-        "loss_of": "Run model on inputs and hand the logits and targets to F.binary_cross_entropy_with_logits.",
-        "train": "Make one torch.optim.Adam over model.parameters() before the loop. Each step, take loss_of, zero "
-        "the gradients, backpropagate and step. Return loss.item() after the loop.",
-        "score": "model.eval(), then inside torch.no_grad() compare (model(inputs) > 0).float() with targets and take "
-        "the mean's .item(). Call model.train() before returning it.",
+        "OwnModule.forward": "In __init__, make the two Conv1d layers shown in the file's examples, one from 1 to 16 "
+        "channels and one from 16 to 1. In forward, call unsqueeze(1) to turn the rows into one channel. Run the "
+        "first layer, a ReLU and the second layer, then call squeeze(1).",
+        "loss_of": "Run model on inputs and pass the logits and targets to F.binary_cross_entropy_with_logits.",
+        "train": "Make one torch.optim.Adam over model.parameters() before the loop. In each step, compute loss_of, "
+        "zero the gradients, backpropagate and step. Return loss.item() after the loop.",
+        "score": "Call model.eval(). Then, inside torch.no_grad(), compare (model(inputs) > 0).float() with targets, "
+        "convert the result to float and take .mean().item(). Call model.train() before returning the result.",
         "silent": "Pass own, a lambda that takes a model and returns loss_of of it on train_rows and train_next, and "
         "0.1.",
         "own_score": "Call train on own and on baseline with the training rows and TRAIN_STEPS, then score each on "

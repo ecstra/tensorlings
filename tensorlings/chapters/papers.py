@@ -36,9 +36,10 @@ PAPERS = Chapter(
         """
         # Papers
 
-        Most new modules start in a paper. This chapter reads one into code,
-        Power and colleagues' grokking paper, then reproduces its result small,
-        with several seeds and the spread said out loud.
+        Most new modules first appear in a research paper. This chapter turns
+        one paper into code, Power and colleagues' paper on grokking. Then it
+        reproduces the paper's main result at a small scale. It trains with
+        several seeds and reports how much the results vary between them.
 
         ## Further reading
 
@@ -58,8 +59,8 @@ EQUALS = P + 1
 '''
 
 START_PART = '''
-# gpt2's GPT as the paper's model. The head gets a weight of its own, as in Nanda and
-# colleagues' grokking model, and every layer keeps PyTorch's own default start.
+# gpt2's GPT, set up as the paper's model. The head gets its own weight matrix, as in Nanda
+# and colleagues' grokking model. Every layer keeps PyTorch's default initialization.
 class PaperGPT(GPT):
     def __init__(
         self,
@@ -247,44 +248,48 @@ def small_model(seed: int) -> nn.Module:
 
 PAPER1_LESSON = prose(
     """
-    Most new modules start in a paper, so a module of your own often starts
-    with reading one into code. Three moves do most of the work.
+    Most new modules first appear in a paper, so building your own module
+    often starts with turning a paper into code. Three habits do most of the
+    work.
 
     - Shapes: list every symbol the method uses, with its shape.
     - Lines: turn each sentence of the setup into one line of code.
-    - Counts: count the parameters, and check the count against the paper's.
+    - Counts: count the model's parameters, and compare the count with the paper's number.
 
-    Power and colleagues' grokking paper shows the moves. Grokking is their
-    name for a model that gets every training example right early and the
-    held out ones only much later. Its data are the tables of an operation,
-    such as a + b mod 97. Every number is a token of
-    its own, so the model never sees digits. It learns what each number means
-    only from how the numbers combine.
+    Power and colleagues' grokking paper is a good example. Grokking is their
+    name for a model that gets every training example right early, but gets
+    the held out examples right only much later. The data is the full table
+    of an operation such as a + b mod 97, which is `(a + b) % 97` in Python.
+    Every number is a separate token, so the model never sees digits. It
+    learns what each number means only from how the numbers combine.
 
-    - Equations: each is four tokens, a, then op, then b, then =. With p numbers the vocabulary holds p + 2 tokens.
-    - Data: every pair of numbers makes one equation, p squared in all. A random fraction trains, and the rest is held out.
-    - Model: a decoder only transformer of 2 layers, width 128 and 4 heads, about 400,000 weights outside the embeddings.
-    - Loss: cross entropy on the answer alone, scored at the = token, never on the question.
-    - Optimizer: AdamW at a rate of 0.001, betas 0.9 and 0.98, weight decay 1, warmed up over the first 10 updates.
+    - Equations: each equation is four tokens, a, then the operation token, then b, then =. With p numbers, the vocabulary has p + 2 tokens.
+    - Data: every pair of numbers makes one equation, p squared in all. A random fraction is used for training, and the rest is held out.
+    - Model: a decoder only transformer with 2 layers, width 128 and 4 heads. It has about 400,000 parameters outside the embeddings.
+    - Loss: cross entropy on the answer only, computed from the scores at the = token. The question tokens are never scored.
+    - Optimizer: AdamW with learning rate 0.001, betas 0.9 and 0.98, and weight decay 1. The learning rate warms up over the first 10 updates.
     - Batches: 512 equations, or half the training set when that is smaller.
 
-    gpt2's GPT at 2 layers, width 128 and 4 heads is nearly that model. Weight
-    decay 1 is ten times gpt3's 0.1, and paper2 shows what that much buys.
+    gpt2's GPT with 2 layers, width 128 and 4 heads is nearly that model. A
+    weight decay of 1 is ten times gpt3's 0.1. paper2 shows what such strong
+    weight decay does.
 
-    The paper never says how its weights start, or whether its head shares
-    `wte`'s table. Its released code gives the head a weight of its own and
-    keeps PyTorch's own start for every layer. The given `PaperGPT` does
-    the same, as does Nanda and colleagues' grokking model. PyTorch's start is
-    larger than gpt2's 0.02. paper2 shows what gpt2's two choices would
-    change.
+    The paper never says how its weights are initialized, or whether its
+    output head shares the embedding table `wte`. Its released code gives the
+    head its own weight matrix and keeps PyTorch's default initialization for
+    every layer. The given `PaperGPT` does the same, and so does Nanda and
+    colleagues' grokking model. PyTorch's default initial weights are larger
+    than gpt2's, which have a standard deviation of 0.02. paper2 shows what
+    gpt2's two choices would change.
 
-    The warmup needs a scheduler schedule1 didn't show.
-    `LambdaLR(optimizer, f)` sets the rate to the starting rate times `f(n)`,
-    where n counts the calls to `scheduler.step()` so far, from 0.
+    The warmup needs a learning rate scheduler that schedule1 did not show.
+    `LambdaLR(optimizer, f)` sets the learning rate to the starting rate times
+    `f(n)`. Here n is the number of calls to `scheduler.step()` so far,
+    starting from 0.
 
-    The count leaves out the token and position tables and the head. It
-    covers the blocks and the last LayerNorm, the part that grows with the
-    model's depth.
+    The parameter count leaves out the token and position embedding tables
+    and the head. It counts the transformer blocks and the final LayerNorm,
+    the part of the model that grows with its depth.
     """,
 )
 
@@ -306,7 +311,7 @@ PAPER1_SOURCE = source_file(
     last = torch.zeros(2, 4, 99)[:, -1].shape           # torch.Size([2, 99]), the scores at the last token
     warmup = [min(1.0, (step + 1) / 10) for step in (0, 1, 9, 20)]    # [0.1, 0.2, 1.0, 1.0]
     sgd = torch.optim.SGD([torch.zeros(1, requires_grad=True)], lr=0.1)
-    halved = torch.optim.lr_scheduler.LambdaLR(sgd, lambda step: 0.5)    # sgd's rate is now 0.1 * 0.5 = 0.05
+    halved = torch.optim.lr_scheduler.LambdaLR(sgd, lambda step: 0.5)    # sgd's learning rate is now 0.1 * 0.5 = 0.05
 
 
     # SelfAttention, GPT2MLP and GPT2Block from block2, and init_weights,
@@ -318,17 +323,23 @@ PAPER1_SOURCE = source_file(
 ''' + indented(START_PART) + '''
 
 
-    # TODO: Return every equation of a + b mod p, as two tensors of whole
-    #   numbers. inputs has one row per pair, a then OP then b then EQUALS,
-    #   where OP is p and EQUALS is p + 1, with a running slowest. answers
-    #   holds (a + b) % p for each row.
+    # TODO: Return every equation of a + b mod p, as two integer tensors.
+    #   inputs has one row per pair (a, b), holding a, OP, b, EQUALS, where OP
+    #   is p and EQUALS is p + 1. The rows go through every pair with a
+    #   changing slowest, as firsts and seconds show. answers holds
+    #   (a + b) % p for each row.
+    #   Example: equations(2) returns tensor([[0, 2, 0, 3], [0, 2, 1, 3],
+    #   [1, 2, 0, 3], [1, 2, 1, 3]]) and tensor([0, 1, 1, 0]).
     def equations(p: int) -> tuple[Tensor, Tensor]:
         ...
 
 
     # TODO: Shuffle the numbers 0 to count - 1 with torch.randperm and
-    #   generator. Return the first int(fraction * count) of them as the
-    #   training rows, and the rest as the validation rows.
+    #   generator. Return the first int(fraction * count) of the shuffled
+    #   numbers as the training row indices, and the rest as the validation
+    #   row indices.
+    #   Example: split_equations(5, 0.4, torch.Generator().manual_seed(0))
+    #   returns (tensor([4, 0]), tensor([1, 3, 2])).
     def split_equations(
         count: int,
         fraction: float,
@@ -337,8 +348,9 @@ PAPER1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the cross entropy of the model's scores at the last token,
-    #   the = token, against answers, as a tensor.
+    # TODO: Return the cross entropy between the model's scores at the last
+    #   position, the = token, and answers, as a tensor. model(inputs) has
+    #   shape (batch, 4, vocabulary) and answers has shape (batch,).
     def answer_loss(
         model: nn.Module,
         inputs: Tensor,
@@ -347,9 +359,10 @@ PAPER1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the share of answers the model gets right, its top score at
-    #   the last token, as a plain number. Score in eval mode without recording
-    #   for autograd, then put the model back in training mode.
+    # TODO: Return the fraction of answers the model gets right, as a Python
+    #   float. The model's answer is the token with the highest score at the
+    #   last position. Call model.eval() and score inside torch.no_grad().
+    #   Then call model.train() to put the model back in training mode.
     def answer_accuracy(
         model: nn.Module,
         inputs: Tensor,
@@ -358,9 +371,11 @@ PAPER1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the paper's AdamW, at a rate of 0.001, betas 0.9 and 0.98
-    #   and the given weight_decay, and a LambdaLR that scales the rate by
-    #   min(1.0, (step + 1) / 10), its warmup over the first 10 updates.
+    # TODO: Return the paper's optimizer and scheduler. The optimizer is AdamW
+    #   over every parameter of model, with learning rate 0.001, betas 0.9 and
+    #   0.98, and the given weight_decay. The scheduler is a LambdaLR that
+    #   multiplies the learning rate by min(1.0, (step + 1) / 10), which warms
+    #   it up over the first 10 updates.
     def paper_optimizer(
         model: nn.Module,
         weight_decay: float,
@@ -368,8 +383,9 @@ PAPER1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return how many numbers the parameters of model.h and model.ln_f
-    #   hold together, the weights outside the tables and the head.
+    # TODO: Return the total number of entries in the parameters of model.h
+    #   and model.ln_f. These are all the parameters outside the embedding
+    #   tables and the head.
     def non_embedding_parameters(model: nn.Module) -> int:
         ...
 
@@ -575,7 +591,7 @@ def check_paper_optimizer(found: object) -> None:
 
         for step, (got, wanted) in enumerate(zip(rates, expected)):
             if not math.isclose(got, wanted, rel_tol=1e-9):
-                raise Mismatch(f"Before update {step + 1} the rate is {got:.6g}, but it should be {wanted:.6g}, rising in a line to 0.001 over the first 10 updates.")
+                raise Mismatch(f"Before update {step + 1} the rate is {got:.6g}, but it should be {wanted:.6g}, rising linearly to 0.001 over the first 10 updates.")
 
 
 def check_counted(value: object) -> None:
@@ -608,7 +624,7 @@ def check_paper1(checker: Checker) -> None:
     )
     checker.test(
         function="answer_loss",
-        description="scores the answer at the = token alone",
+        description="scores only the answer, at the = token",
         run=check_answer_loss,
     )
     checker.test(
@@ -624,7 +640,7 @@ def check_paper1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="non_embedding_parameters",
-        description="counts the weights outside the tables and the head",
+        description="counts the parameters outside the embedding tables and the head",
         inputs=(
             (Described(REFERENCE["PaperGPT"](99, 4, 128, 2, 4), "PaperGPT(99, 4, 128, 2, 4)"),),
             (Described(REFERENCE["GPT"](20, 8, 32, 3, 4), "GPT(20, 8, 32, 3, 4)"),),
@@ -634,7 +650,7 @@ def check_paper1(checker: Checker) -> None:
     )
     checker.check_name(
         name="counted",
-        description="the paper's model outside its embeddings",
+        description="the paper's model's parameter count outside its embeddings",
         run=check_counted,
     )
 
@@ -647,17 +663,18 @@ PAPER1 = Exercise(
     source=PAPER1_SOURCE,
     solution=PAPER1_SOLUTION,
     hints={
-        "equations": "The file's firsts and seconds lines give every pair of a and b. Stack a, a row of p, b and a row "
-        "of p + 1 along dim=1, then take the sum mod p.",
-        "split_equations": "The shuffled line does the shuffling. Slice it at the cut for the two parts.",
-        "answer_loss": "model(inputs) has shape (batch, 4, vocabulary). The last line of the file's examples picks "
-        "the scores at the last token.",
-        "answer_accuracy": "argmax over the last dimension gives each answer. Compare with answers, then take the "
-        "float mean and .item().",
-        "paper_optimizer": "torch.optim.AdamW takes lr, betas and weight_decay. The warmup line holds the lambda the "
-        "LambdaLR needs.",
-        "non_embedding_parameters": "Sum numel over model.h.parameters() and model.ln_f.parameters(). PaperGPT's "
-        "head has a weight of its own, so model.parameters() would count it too.",
+        "equations": "The firsts and seconds lines in the file show how to list every pair of a and b. Stack a, a "
+        "tensor full of p, b and a tensor full of p + 1 along dim=1. The answers are the sums mod p.",
+        "split_equations": "The shuffled line in the file shows the shuffle. Slice the shuffled numbers at "
+        "int(fraction * count) to get the two parts.",
+        "answer_loss": "model(inputs) has shape (batch, 4, vocabulary). The line near the top of the file that sets "
+        "last shows how to pick the scores at the last position.",
+        "answer_accuracy": "Take the argmax over the last dimension of the scores at the last position to get each "
+        "answer. Compare with answers, convert to float, take the mean and call .item().",
+        "paper_optimizer": "torch.optim.AdamW takes lr, betas and weight_decay as keyword arguments. The warmup line "
+        "in the file holds the function that LambdaLR needs.",
+        "non_embedding_parameters": "Add up .numel() over model.h.parameters() and model.ln_f.parameters(). "
+        "PaperGPT's head has its own weight, so model.parameters() would count it too.",
         "counted": "It comes from non_embedding_parameters. If it fails while the function passes, rerun the file.",
     },
     introduces=(),
@@ -703,40 +720,46 @@ PAPER2_MAIN = '''
 
 PAPER2_LESSON = prose(
     """
-    A paper's result is a claim about runs, so you check it with runs of your
-    own. Power and colleagues claim three things.
+    A paper's result is a claim about training runs, so you check it with
+    training runs of your own. Power and colleagues claim three things.
 
     - Grokking: training accuracy reaches 100% early, and validation accuracy catches up only much later.
     - Weight decay: of every trick they tried, it helped generalization the most.
-    - Data: the less of the table trains, the longer the jump takes.
+    - Data: the smaller the fraction of the table used for training, the longer validation accuracy takes to jump.
 
-    `grok` makes the run. main runs it on seed 0 with 30% of the table,
-    the fraction Nanda and colleagues used.
+    `grok` runs the training. main calls it on seed 0 and trains on 30% of
+    the table, the fraction Nanda and colleagues used. Here are the training
+    and validation accuracy at several updates.
 
     | Update | 100 | 300 | 1,000 | 2,000 | 3,000 | 4,000 | 4,200 | 4,400 | 4,600 |
     |---|---|---|---|---|---|---|---|---|---|
     | Training | 19% | 100% | 100% | 100% | 100% | 100% | 100% | 100% | 100% |
     | Validation | 0.1% | 5% | 13% | 15% | 21% | 36% | 59% | 95% | 99% |
 
-    By update 300 the model knows every training equation and almost none of
-    the rest. For thousands of updates little changes, then validation leaps
-    from 36% to 99% in 600 updates. Training dips now and then and recovers,
-    so main stops at the first point past 99%.
+    By update 300 the model gets every training equation right and almost
+    none of the others. For thousands of updates little changes. Then
+    validation accuracy jumps from 36% to 99% in 600 updates. Training
+    accuracy sometimes dips and recovers, so main stops at the first point
+    where validation accuracy passes 99%.
 
-    One run is an anecdote. Here are 5 seeds, the update where each first
-    passed 99%, with seed 0 the run above.
+    One run is only an anecdote. The next table shows 5 seeds, with the
+    update where each one first passed 99%. Seed 0 is the run above.
 
     | Seed | 0 | 1 | 2 | 3 | 4 |
     |---|---|---|---|---|---|
     | Training | 300 | 300 | 300 | 300 | 300 |
     | Validation | 4,600 | 3,600 | 3,200 | 3,700 | 4,900 |
 
-    `mean_and_spread` sums them up. Validation passes at 4,000 on average,
-    with a spread of 718, 13 times as late as training. A GPU run doesn't
-    repeat exactly. Seed 0 has passed 99% at 4,400, 4,600 and 4,800 in three
-    runs, so yours may land a few hundred updates away.
+    `mean_and_spread` summarizes them with their mean and their standard
+    deviation. The standard deviation measures how far the values typically
+    are from their mean. Validation passes 99% at update 4,000 on average,
+    with a standard deviation of 718. That is 13 times as late as training.
+    A run on a GPU does not repeat exactly. Seed 0 has passed 99% at 4,400,
+    4,600 and 4,800 in three runs, so yours may finish a few hundred updates
+    earlier or later.
 
-    Then what moves the jump, the update where validation first passed 99%.
+    Next, what makes the jump come earlier or later? This table shows the
+    update where validation accuracy first passed 99% in each kind of run.
 
     | Run | Seeds | Validation passes 99% at |
     |---|---|---|
@@ -745,21 +768,25 @@ PAPER2_LESSON = prose(
     | 70% | 3 | 700 to 1,200 |
     | 30%, gpt3's weight decay of 0.1 | 3 | not in 6,000 updates, at 3% to 14% |
     | 30%, no weight decay | 3 | not in 6,000 updates, at 3% to 9% |
-    | 30%, gpt2's 0.02 start, own head | 5 | 2,500 to 3,400 |
-    | 30%, gpt2's 0.02 start, tied head | 5 | 1,200 to 2,700 |
-    | 50%, gpt2's 0.02 start, tied head | 3 | 300, with training |
+    | 30%, gpt2's 0.02 initialization, own head | 5 | 2,500 to 3,400 |
+    | 30%, gpt2's 0.02 initialization, tied head | 5 | 1,200 to 2,700 |
+    | 50%, gpt2's 0.02 initialization, tied head | 3 | 300, together with training |
 
-    All three claims hold. At gpt3's 0.1 the jump doesn't come within 6,000
-    updates. In the paper's first figure, with no weight decay at all, it came
-    after close to a million. The last three rows add a fourth. Liu and colleagues' Omnigrok traced
-    grokking to a weight norm too large for the solution that generalizes.
-    Weight decay shrinks it, and a smaller start begins closer to it. gpt2's
-    0.02 start alone brings every seed's jump earlier, by 500 to 1,600
-    updates. Tying the head to `wte` as well brings every seed's closer
-    still, and at 50% it removes the wait.
+    All three claims hold. With gpt3's weight decay of 0.1, the jump does not
+    come within 6,000 updates. In the paper's first figure, with no weight
+    decay at all, it came after close to a million updates.
 
-    `run.py train paper2` runs main. The check reads your model back and asks
-    for nearly every held out equation.
+    The last three rows add a fourth finding. Liu and colleagues' Omnigrok
+    traced grokking to weights that are too large overall, measured by their
+    norm, for the solution that generalizes. Weight decay shrinks the
+    weights, and a smaller initialization starts them closer to the right
+    size. gpt2's 0.02 initialization alone brings every seed's jump earlier,
+    by 500 to 1,600 updates. Tying the head to `wte` as well brings every
+    seed's jump earlier still. At 50% of the table, it removes the wait
+    entirely.
+
+    `run.py train paper2` runs main. The check loads your saved model and
+    requires it to get nearly every held out equation right.
     """,
 )
 
@@ -777,12 +804,12 @@ PAPER2_SOURCE = source_file(
     from tensorlings.training import best_device, save_checkpoint
 
     pairs = [(100, 0.2, 0.0), (200, 0.6, 0.1)]
-    found = next(point[0] for point in pairs if point[1] >= 0.5)    # 200, the first step past 0.5
+    found = next(point[0] for point in pairs if point[1] >= 0.5)    # 200, the step of the first point whose entry 1 reaches 0.5
     values = torch.tensor([3.0, 5.0], dtype=torch.float64)
-    center, wobble = values.mean().item(), values.std().item()     # 4.0 and 1.414..., the spread dividing by n - 1
+    center, wobble = values.mean().item(), values.std().item()     # 4.0 and 1.414..., the mean and the standard deviation that divides by n - 1
 
 
-    # The model from gpt2 and every piece of paper1.
+    # The model from gpt2 and every function from paper1.
 ''' + indented(MODEL_PARTS) + '''
 
 ''' + indented(SETTINGS_PART) + '''
@@ -794,16 +821,17 @@ PAPER2_SOURCE = source_file(
 ''' + indented(RUN_PART) + '''
 
 
-    # TODO: Train model as the paper does, for up to steps updates, and return
-    #   its curve. Move inputs and answers to device first. Make the optimizer
+    # TODO: Train model as the paper does, for up to `steps` updates, and
+    #   return its curve. splits holds the training and the validation row
+    #   indices. Move inputs and answers to device first. Make the optimizer
     #   and scheduler with paper_optimizer and weight_decay. Each update draws
-    #   a batch of min(512, len(train) // 2) training rows at random with
-    #   torch.randint and generator, takes answer_loss, zeroes the old
-    #   gradients, backpropagates, steps the optimizer and steps the
-    #   scheduler. After each `every` updates, append (step, training
-    #   accuracy, validation accuracy) with answer_accuracy on each set. Stop
-    #   right after a point whose validation accuracy reaches stop_at, unless
-    #   stop_at is None.
+    #   a batch of min(512, len(train) // 2) training rows at random, using
+    #   torch.randint with generator. It computes answer_loss on them, zeroes
+    #   the old gradients, backpropagates, steps the optimizer and steps the
+    #   scheduler. Count updates from 1. After every `every` updates, append
+    #   (step, training accuracy, validation accuracy) to the curve, each
+    #   accuracy from answer_accuracy. If stop_at is not None, stop right
+    #   after the first point whose validation accuracy reaches stop_at.
     def grok(
         model: nn.Module,
         inputs: Tensor,
@@ -819,9 +847,11 @@ PAPER2_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the step of the first point of curve whose entry at column
-    #   reaches threshold, or None when none does. Column 1 is training and
-    #   column 2 is validation.
+    # TODO: Return the step of the first point in curve whose entry at index
+    #   column is at least threshold, or None if no point reaches it. Column 1
+    #   is the training accuracy and column 2 is the validation accuracy.
+    #   Example: first_step([(100, 0.2, 0.0), (200, 0.995, 0.1)], 1, 0.99)
+    #   returns 200.
     def first_step(
         curve: list[tuple[int, float, float]],
         column: int,
@@ -830,8 +860,10 @@ PAPER2_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the mean of values and their spread, the standard deviation
-    #   that divides by n - 1, as two plain numbers.
+    # TODO: Return the mean of values and their standard deviation, as two
+    #   Python floats. Use the standard deviation that divides by n - 1, which
+    #   is what torch's .std() computes.
+    #   Example: mean_and_spread([3.0, 5.0]) returns (4.0, 1.4142135623730951).
     def mean_and_spread(values: list[float]) -> tuple[float, float]:
         ...
 
@@ -903,9 +935,9 @@ def expect_pair(
     )
 
     if not isinstance(actual, (tuple, list)) or len(actual) != 2:
-        raise Mismatch(f"{call} is {value_text(actual)}, but it should be two plain numbers, the mean and the spread.")
+        raise Mismatch(f"{call} is {value_text(actual)}, but it should be two plain numbers, the mean and the standard deviation.")
 
-    for name, got, wanted in zip(("the mean", "the spread"), actual, expected):
+    for name, got, wanted in zip(("the mean", "the standard deviation"), actual, expected):
         expect_close(
             call=f"{name} from {call}",
             actual=got,
@@ -944,7 +976,7 @@ def expect_curve(
     )
 
     if not isinstance(actual, list) or len(actual) != len(expected):
-        raise Mismatch(f"{call} is {value_text(actual)}, but it should be a list of {len(expected)} points, one per {len(expected)} checks.")
+        raise Mismatch(f"{call} is {value_text(actual)}, but it should be a list of {len(expected)} points, one for each time it measures the accuracies.")
 
     for got, wanted in zip(actual, expected):
         if not isinstance(got, (tuple, list)) or len(got) != 3:
@@ -1068,7 +1100,7 @@ def check_paper2(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="mean_and_spread",
-        description="gives the mean and the spread that divides by n - 1",
+        description="gives the mean and the standard deviation that divides by n - 1",
         inputs=(
             ([3.0, 5.0],),
             ([400.0, 500.0, 700.0],),
@@ -1104,8 +1136,8 @@ PAPER2 = Exercise(
         "grok": "Unpack splits into train and validation. In the loop, index train with torch.randint(0, len(train), "
         "(batch,), generator=generator) to pick rows, then use inputs and answers at those rows.",
         "first_step": "Walk the points in order and return point[0] as soon as point[column] reaches threshold.",
-        "mean_and_spread": "The file's center and wobble line does it for a tensor. Make the tensor from values with "
-        "dtype=torch.float64 and return both numbers.",
+        "mean_and_spread": "The line in the file that sets center and wobble does this for a tensor. Make a tensor "
+        "from values with dtype=torch.float64 and return both numbers.",
         "memorized": "It comes from mean_and_spread. If it fails while the function passes, rerun the file.",
         "generalized": "It comes from mean_and_spread. If it fails while the function passes, rerun the file.",
     },
