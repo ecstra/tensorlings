@@ -29,11 +29,12 @@ RNN = Chapter(
         """
         # Recurrent networks
 
-        A recurrent network reads a sequence one step at a time and carries a
-        summary of the past, its hidden state. This chapter builds one step by
-        hand, matches `nn.RNN`, runs batches of sequences, and shows a task
-        where the hidden state beats a fixed window once the sequence outgrows
-        it.
+        A recurrent network reads a sequence one step at a time. As it reads,
+        it keeps a vector that summarizes the steps so far, called its hidden
+        state. This chapter builds one step by hand and checks it against
+        `nn.RNN`. Then it runs batches of sequences. It ends with a task where
+        the hidden state beats a model that sees only a fixed window of recent
+        steps, once the sequence is longer than the window.
 
         ## Further reading
 
@@ -85,35 +86,42 @@ def reference_run_rnn(
 RNN1_LESSON = prose(
     """
     Section 6 is about sequences, like the letters of a name, the samples of a
-    sound or a price day by day. A sequence model reads one step at a time and
-    carries a summary of everything so far.
+    sound recording, or a price recorded day by day. A sequence model reads a
+    sequence one step at a time. As it reads, it keeps a summary of every step
+    so far.
 
-    That summary is the **hidden state**, a vector `h`. At each step one layer
-    combines the step's input `x` with the previous hidden state, and a tanh
-    keeps the result between -1 and 1.
+    That summary is the **hidden state**, a vector `h`. At each step, one
+    layer combines the input of that step, `x`, with the previous hidden
+    state. Then tanh squashes every entry of the result into the range -1 to
+    1. The result is the new hidden state.
 
     ```text
     h = tanh(x @ W_ih.T + b_ih + h @ W_hh.T + b_hh)
     ```
 
-    The first state is all zeros. The same weights run at every step, so a
-    model of 10 steps and one of 1000 have the same parameters. Convolution
-    shared its weights across positions, and this shares them across time. A
-    model built this way is a **recurrent neural network**, an RNN.
+    The hidden state before the first step is all zeros. The same weights are
+    used at every step. So a model that reads 10 steps has exactly the same
+    parameters as one that reads 1000. Convolution reused its weights at every
+    position of its input, and this model reuses its weights at every step in
+    time. A model built this way is a **recurrent neural network**, or RNN.
 
-    The two matrices are one Linear in disguise. Put `x` and `h` side by side
-    with `torch.cat`. A Linear whose weight is `W_ih` and `W_hh` side by side,
-    with the bias `b_ih + b_hh`, then gives the same sum.
+    The two matrix multiplications can also be done by one Linear layer. Join
+    `x` and `h` into one longer vector with `torch.cat`. Then make a weight
+    that has the columns of `W_ih` followed by the columns of `W_hh`, and use
+    the bias `b_ih + b_hh`. A Linear layer with that weight and bias, applied
+    to the joined vector, gives the same sum as the formula.
 
     ```python
     torch.cat([torch.tensor([1.0, 2.0]), torch.tensor([3.0])])    # tensor([1., 2., 3.])
     ```
 
-    `nn.RNN(input_size, hidden_size)` keeps the four tensors as `weight_ih_l0`,
-    `weight_hh_l0`, `bias_ih_l0` and `bias_hh_l0`, with l0 for layer 0. With
-    `batch_first=True` it reads a tensor of shape (batch, steps, input_size).
-    It returns every step's hidden state, of shape (batch, steps,
-    hidden_size), and the last state, of shape (1, batch, hidden_size).
+    `nn.RNN(input_size, hidden_size)` stores the four tensors of the formula
+    as `weight_ih_l0`, `weight_hh_l0`, `bias_ih_l0` and `bias_hh_l0`. The
+    `l0` in each name means layer 0. With `batch_first=True`, it takes an
+    input of shape (batch, steps, input_size) and returns two tensors. The
+    first holds the hidden state of every step, with shape (batch, steps,
+    hidden_size). The second holds only the last hidden state, with shape (1,
+    batch, hidden_size).
     """,
 )
 
@@ -128,8 +136,10 @@ RNN1_SOURCE = source_file(
     squashed = torch.tanh(torch.tensor([0.0, 5.0]))    # tensor([0.0000, 0.9999])
 
 
-    # TODO: Return the next hidden state from input x, of shape (input_size,),
-    #   and hidden state h, of shape (hidden_size,), by the lesson's formula.
+    # TODO: Return the next hidden state, computed with the lesson's formula.
+    #   x is the input of this step, of shape (input_size,), and h is the
+    #   previous hidden state, of shape (hidden_size,). The result has shape
+    #   (hidden_size,).
     def rnn_step(
         x: Tensor,
         h: Tensor,
@@ -144,9 +154,10 @@ RNN1_SOURCE = source_file(
     rows = torch.stack([torch.ones(2), torch.zeros(2)])    # tensor([[1., 1.], [0., 0.]])
 
 
-    # TODO: Run rnn_step along xs, of shape (steps, input_size), from a hidden
-    #   state of zeros. Return every step's hidden state, of shape
-    #   (steps, hidden_size).
+    # TODO: Run the RNN over the sequence xs, of shape (steps, input_size).
+    #   Start from a hidden state of zeros and call rnn_step once for each row
+    #   of xs. Return the hidden state after every step, stacked into a tensor
+    #   of shape (steps, hidden_size).
     def run_rnn(
         xs: Tensor,
         W_ih: Tensor,
@@ -160,8 +171,11 @@ RNN1_SOURCE = source_file(
     side_by_side = torch.cat([torch.ones(2, 1), torch.zeros(2, 2)], dim=1)    # shape (2, 3)
 
 
-    # TODO: Return the weight and the bias of one Linear that, applied to x and
-    #   h side by side, gives the same sum as the two matrices and two biases.
+    # TODO: Return the weight and the bias of one Linear layer that, applied to
+    #   torch.cat([x, h]), gives the same sum as the lesson's formula. W_ih has
+    #   shape (hidden_size, input_size) and W_hh has shape
+    #   (hidden_size, hidden_size), so the weight you return has shape
+    #   (hidden_size, input_size + hidden_size).
     def as_one_linear(
         W_ih: Tensor,
         W_hh: Tensor,
@@ -175,8 +189,9 @@ RNN1_SOURCE = source_file(
     example.weight_hh_l0.shape    # torch.Size([4, 4])
 
 
-    # TODO: Return run_rnn of xs, of shape (steps, input_size), with the four
-    #   tensors of rnn, an nn.RNN with one layer.
+    # TODO: rnn is an nn.RNN with one layer. Return the hidden states that
+    #   run_rnn gives for xs, of shape (steps, input_size), using the four
+    #   weight and bias tensors stored in rnn.
     def run_module(
         rnn: nn.RNN,
         xs: Tensor,
@@ -317,7 +332,7 @@ RNN1 = Exercise(
     source=RNN1_SOURCE,
     solution=RNN1_SOLUTION,
     hints={
-        "rnn_step": "Write the formula as it is, with torch.tanh around the whole sum.",
+        "rnn_step": "Write the formula as it appears in the lesson, with torch.tanh around the whole sum.",
         "run_rnn": "Start h at torch.zeros(W_hh.shape[0]). Loop over the rows of xs, update h with rnn_step, keep "
         "each h in a list, and torch.stack the list.",
         "as_one_linear": "torch.cat([W_ih, W_hh], dim=1) is the weight, and b_ih + b_hh the bias.",
@@ -334,30 +349,39 @@ RNN1 = Exercise(
 
 RNN2_LESSON = prose(
     """
-    Training reads many sequences at once. With `batch_first=True` the input
-    has shape (batch, steps, features) and the hidden state (batch, hidden).
-    Each step is rnn1's formula, run on every row together.
+    Training processes many sequences at once, as a batch. With
+    `batch_first=True`, the input has shape (batch, steps, features) and the
+    hidden state has shape (batch, hidden). Each step applies the formula from
+    rnn1 to every sequence of the batch at the same time, one row per
+    sequence.
 
-    PyTorch's default, `batch_first=False`, puts the steps first, as (steps,
-    batch, features). Plenty of code uses it, so check which one a model
-    expects. `x.transpose(0, 1)` swaps the two.
+    PyTorch's default is `batch_first=False`, which puts the steps first, as
+    (steps, batch, features). A lot of code uses this layout, so check which
+    one a model expects. `x.transpose(0, 1)` swaps the first two dimensions,
+    which converts one layout into the other.
 
-    `num_layers=2` stacks a second RNN that reads the first one's hidden
-    states as its input. The outputs are the top layer's states. The last
-    state holds one row per layer.
+    `num_layers=2` stacks a second RNN on top of the first. The second RNN
+    takes the hidden states of the first as its input sequence. The outputs
+    are then the hidden states of the top layer. The last state holds one row
+    per layer, so its first dimension is the number of layers.
 
     | Setting | Input | Outputs | Last state |
     |---|---|---|---|
     | `batch_first=True` | (batch, steps, features) | (batch, steps, hidden) | (layers, batch, hidden) |
     | `batch_first=False` | (steps, batch, features) | (steps, batch, hidden) | (layers, batch, hidden) |
 
-    The last state never puts the batch first, whatever the setting.
+    The last state never puts the batch first, whatever `batch_first` says.
 
-    The sequences of one batch often differ in length. The short ones are
-    padded with zeros at the end, up to the longest. Then each sequence's
-    answer is its output at its own last real step, which the last column
-    isn't for a short one. Indexing with two tensors picks one row and one
-    step for each pair.
+    The sequences in one batch often have different lengths. The short ones
+    are padded with zeros at the end, up to the length of the longest one. So
+    the output you want from each sequence is its output at its own last real
+    step. For a short sequence that is not the last step of the outputs,
+    because the last step there comes from padding.
+
+    To pick a different step for each sequence, index with two tensors. The
+    first tensor lists the rows and the second lists the steps. Each pair of
+    values, one from each tensor, picks one entry. Here row 0 takes step 2 and
+    row 1 takes step 0.
 
     ```python
     outputs = torch.arange(12.0).view(2, 3, 2)
@@ -377,9 +401,11 @@ RNN2_SOURCE = source_file(
     first_steps = batch[:, 0]             # shape (8, 3), step 0 of every sequence
 
 
-    # TODO: Return every step's hidden state for xs, of shape
-    #   (batch, steps, input_size), from hidden states of zeros, as a tensor of
-    #   shape (batch, steps, hidden_size). Run all the rows of each step at once.
+    # TODO: Run the RNN over xs, a batch of sequences of shape
+    #   (batch, steps, input_size), starting from hidden states of zeros. At
+    #   each step t, process step t of every sequence at once, as one matrix of
+    #   shape (batch, input_size). Return the hidden states of every step, as a
+    #   tensor of shape (batch, steps, hidden_size).
     def run_rnn_batch(
         xs: Tensor,
         W_ih: Tensor,
@@ -390,8 +416,10 @@ RNN2_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the shapes of the outputs and the last state that nn.RNN gives
-    #   for these sizes, as two tuples, following the lesson's table.
+    # TODO: Return the shape of the outputs and the shape of the last state that
+    #   nn.RNN returns for these sizes, as two tuples. Use the lesson's table.
+    #   Example: rnn_shapes(8, 5, 3, 16, 1, True) returns
+    #   ((8, 5, 16), (1, 8, 16)).
     def rnn_shapes(
         batch: int,
         steps: int,
@@ -403,8 +431,9 @@ RNN2_SOURCE = source_file(
         ...
 
 
-    # TODO: Return each sequence's output at its last real step. outputs has
-    #   shape (batch, steps, hidden) and lengths holds each sequence's length.
+    # TODO: Return each sequence's output at its last real step, the step just
+    #   before its padding starts. outputs has shape (batch, steps, hidden).
+    #   lengths has shape (batch,) and holds the real length of each sequence.
     #   The result has shape (batch, hidden).
     def last_real_outputs(
         outputs: Tensor,
@@ -561,13 +590,15 @@ def vote_sequences(
 
 RNN3_LESSON = prose(
     """
-    Here is a task that needs the whole past. Each sequence is a vote of 21
-    steps, each +1 or -1, and the label says whether the +1s won. Every step
-    counts, so nothing short of the whole sequence settles it.
+    Here is a task that needs every step of the past. Each sequence is a vote
+    of 21 steps, and each step is +1 or -1. The label is 1 when there are more
+    +1s than -1s, and 0 otherwise. Every step counts toward the result, so a
+    model cannot be sure of the answer without reading the whole sequence.
 
-    A fixed window model reads only the last few steps, through a small MLP.
-    An RNN reads every step and carries a running summary. Each model trained
-    for 500 steps of Adam on fresh random votes.
+    A fixed window model reads only the last few steps and passes them through
+    a small MLP. An RNN reads every step and keeps a running summary in its
+    hidden state. Each model below was trained for 500 steps of Adam, on new
+    random votes at every step.
 
     | Model | Accuracy on votes of 21 |
     |---|---|
@@ -576,25 +607,28 @@ RNN3_LESSON = prose(
     | MLP on all 21 steps | 100% |
     | RNN with a hidden state of 16 | 98.9% |
 
-    The window of 21 wins, but only because it was built for exactly 21 steps.
-    Given a longer vote it can still only read the last 21. To read more it
-    needs a bigger model, trained again.
+    The MLP on all 21 steps wins, but only because it was built for exactly 21
+    steps. Given a longer vote, it can still read only the last 21 steps. To
+    read more steps it needs a bigger model, which has to be trained again.
 
-    The RNN has the same 321 parameters for any length. Here are both, trained
-    on votes of 21, then given longer votes they never saw.
+    The RNN has the same 321 parameters for any length of vote. The next table
+    shows both models trained on votes of 21 steps, then tested on longer
+    votes they never saw in training.
 
     | Model | Votes of 21 | Votes of 41 | Votes of 101 |
     |---|---|---|---|
     | MLP on the last 21 steps | 100% | 76.3% | 65.2% |
     | RNN with a hidden state of 16 | 98.9% | 93.0% | 77.2% |
 
-    The window's scores match the best any rule on the last 21 votes can
-    reach. The RNN beats them at every longer length, on each of five seeds.
-    It learned a running count in its hidden state, which reaches back past
-    the window's 21 steps.
+    On the longer votes, the window model scores as well as any rule that
+    reads only the last 21 steps can score. The RNN beats it at every longer
+    length, and does so for each of five random seeds. The RNN learned to keep
+    a running count of the vote in its hidden state. That count includes steps
+    from before the last 21.
 
-    40_bptt shows what training through many steps does to the gradient, and
-    41_gated_rnns how gates hold a value longer still.
+    The 40_bptt chapter shows what training through many steps does to the
+    gradient. The 41_gated_rnns chapter shows how gates let a network keep a
+    value for even longer.
     """,
 )
 
@@ -610,9 +644,10 @@ RNN3_SOURCE = source_file(
     last_two = votes[:, -2:]    # tensor([[1., 1.]])
 
 
-    # TODO: Finish forward. x has shape (batch, steps). Read only the last
-    #   self.window steps, through self.hidden, a ReLU and self.out, and return
-    #   one score per sequence, shape (batch,).
+    # TODO: Finish forward. x has shape (batch, steps). Take only the last
+    #   self.window steps of each sequence and pass them through self.hidden,
+    #   a ReLU and self.out. Return one score per sequence, with shape
+    #   (batch,).
     class WindowModel(nn.Module):
         def __init__(
             self,
@@ -628,9 +663,10 @@ RNN3_SOURCE = source_file(
             ...
 
 
-    # TODO: Finish forward. x has shape (batch, steps). Give each step a feature
-    #   dimension of size 1, run self.rnn, pass its last state through self.out,
-    #   and return one score per sequence, shape (batch,).
+    # TODO: Finish forward. x has shape (batch, steps), but self.rnn expects
+    #   (batch, steps, 1), with one feature per step. Add that last dimension,
+    #   run self.rnn, and pass its last hidden state through self.out. Return
+    #   one score per sequence, with shape (batch,).
     class Reader(nn.Module):
         def __init__(self, hidden: int) -> None:
             super().__init__()
@@ -677,7 +713,7 @@ RNN3_SOLUTION = source_file(
             self.rnn = nn.RNN(1, hidden, batch_first=True)
             self.out = nn.Linear(hidden, 1)
 
-        # The last state has shape (1, batch, hidden), one row for the one layer.
+        # The last state has shape (1, batch, hidden), with one row because there is one layer.
         def forward(self, x: Tensor) -> Tensor:
             _, last = self.rnn(x.unsqueeze(2))
 
@@ -819,8 +855,8 @@ RNN3 = Exercise(
     hints={
         "WindowModel.forward": "x[:, -self.window :] keeps the last steps. Pass them through self.hidden, "
         "torch.relu and self.out, then .squeeze(1).",
-        "Reader.forward": "x.unsqueeze(2) has shape (batch, steps, 1). self.rnn returns the outputs and the last "
-        "state, and last[0] is the one layer's state.",
+        "Reader.forward": "x.unsqueeze(2) has shape (batch, steps, 1). self.rnn returns two tensors, the outputs and "
+        "the last state. If the last state is called last, last[0] is the state of the one layer.",
     },
     introduces=(),
     check=check_rnn3,

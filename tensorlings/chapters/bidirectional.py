@@ -28,10 +28,12 @@ BIDIRECTIONAL = Chapter(
         """
         # Bidirectional RNNs
 
-        An RNN's state at a position knows only what came before it. A
-        bidirectional RNN adds a second RNN that reads from the end, so every
-        position sees the whole sequence. This chapter builds one, matches it
-        with PyTorch's, and shows when reading ahead is fair.
+        The hidden state of an RNN at a position depends only on the steps up
+        to that position. A bidirectional RNN adds a second RNN that reads the
+        sequence from the end. So its output at every position depends on the
+        whole sequence. This chapter builds one and checks it against
+        PyTorch's version. Then it shows when it is fair for a model to read
+        the steps after a position, and when it is not.
 
         ## Further reading
 
@@ -107,27 +109,32 @@ def seeded_bidirectional(
 
 BIDIR1_LESSON = prose(
     """
-    An RNN reads from left to right, so its state at a position knows only
-    what came before. A bidirectional RNN, from Schuster and Paliwal in 1997,
-    runs a second RNN from right to left and joins the two states at every
-    position. Then each position sees the whole sequence, before and after.
+    An RNN reads from left to right. So its hidden state at a position
+    depends only on that step and the steps before it. A bidirectional RNN,
+    from Schuster and Paliwal in 1997, also runs a second RNN from right to
+    left. At every position it joins the two hidden states into one vector.
+    So the output at each position depends on the whole sequence, before and
+    after it.
 
-    The backward RNN reads the sequence flipped along its steps. Its states
-    come out in flipped order too, so flip them back, and each one lines up
-    with its own position.
+    The backward RNN reads the sequence with its steps in reverse order,
+    which `flip` gives. Its hidden states also come out in reverse order.
+    Flip them back, and the state at each index belongs to the step at that
+    same index.
 
     ```python
     torch.tensor([[1, 2, 3]]).flip(1)    # tensor([[3, 2, 1]])
     ```
 
     `nn.RNN(input, hidden, batch_first=True, bidirectional=True)` holds two
-    sets of weights. The backward set has the same names with `_reverse` on
-    the end, like `weight_ih_l0_reverse`. Its output has 2 * hidden features
-    at each step, the forward state first, then the backward one.
+    sets of weights. The backward set has the same names with `_reverse`
+    added at the end, like `weight_ih_l0_reverse`. Its output has 2 * hidden
+    features at each step. The first `hidden` of them are the forward state,
+    and the rest are the backward state.
 
     The last state it returns has shape (2, batch, hidden). Its second row is
-    the backward RNN's state after the whole sequence. That state belongs to
-    position 0 of the output, not to the last position.
+    the backward RNN's state after it has read the whole sequence, from the
+    end back to the start. So that state matches position 0 of the output,
+    and not the last position.
     """,
 )
 
@@ -140,7 +147,7 @@ BIDIR1_SOURCE = source_file(
     from torch import Tensor
 
 
-    # The RNN of rnn1, its state at every step, starting from zeros.
+    # The RNN from rnn1, run over a batch. It returns the hidden state at every step, starting from zeros.
     def run_rnn(
         x: Tensor,
         weight_ih: Tensor,
@@ -161,9 +168,11 @@ BIDIR1_SOURCE = source_file(
     flipped = torch.tensor([[1, 2, 3]]).flip(1)    # tensor([[3, 2, 1]])
 
 
-    # TODO: Return the backward RNN's state at every position of x, of shape
-    #   (batch, steps, input), as one tensor of shape (batch, steps, hidden).
-    #   Run run_rnn on x flipped along its steps, then flip the states back.
+    # TODO: Return the backward RNN's hidden state at every position of x, of
+    #   shape (batch, steps, input), as one tensor of shape
+    #   (batch, steps, hidden). Run run_rnn on x with its steps reversed. Then
+    #   reverse the order of the states, so the state at index t belongs to
+    #   step t.
     def run_backward(
         x: Tensor,
         weight_ih: Tensor,
@@ -177,9 +186,10 @@ BIDIR1_SOURCE = source_file(
     joined = torch.cat([torch.zeros(1, 2), torch.ones(1, 2)], dim=1)    # tensor([[0., 0., 1., 1.]])
 
 
-    # TODO: Return what rnn, an nn.RNN with bidirectional=True and
-    #   batch_first=True, gives at every position of x. Join its forward
-    #   states and its backward states along the features.
+    # TODO: rnn is an nn.RNN with bidirectional=True and batch_first=True.
+    #   Return the same output that rnn gives for x, built with run_rnn and
+    #   run_backward from rnn's weights. Join the forward states and the
+    #   backward states along the feature dimension, forward first.
     def run_bidirectional(
         x: Tensor,
         rnn: nn.RNN,
@@ -261,7 +271,7 @@ def check_bidir1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="run_backward",
-        description="reads from the end and lines each state up with its position",
+        description="reads from the end and puts each state back at its own position",
         inputs=(
             (small_tensor(460, 2, 5, 3) / 2, *backward_weights(461)),
             (small_tensor(462, 1, 4, 3) / 2, *backward_weights(463)),
@@ -291,8 +301,9 @@ BIDIR1 = Exercise(
     solution=BIDIR1_SOLUTION,
     hints={
         "run_backward": "Call run_rnn on x.flip(1) with the weights, then .flip(1) the result.",
-        "run_bidirectional": "run_rnn with rnn.weight_ih_l0 and the other _l0 weights gives the forward states, and "
-        "run_backward with the _l0_reverse ones the backward states. Join them with torch.cat along dim=2.",
+        "run_bidirectional": "run_rnn with rnn.weight_ih_l0 and the other _l0 tensors gives the forward states. "
+        "run_backward with the _l0_reverse tensors gives the backward states. Join them with torch.cat along "
+        "dim=2.",
     },
     introduces=(),
     check=check_bidir1,
@@ -417,30 +428,31 @@ def leak_errors(
 
 BIDIR2_LESSON = prose(
     """
-    A bidirectional RNN sees the whole sequence at every position. Whether
-    that is fair depends on the job.
+    At every position, a bidirectional RNN sees the whole sequence. Whether
+    it is fair to use the steps after a position depends on the task.
 
-    Tagging labels every position of a sequence that already exists in full,
-    like marking each word of a sentence as a noun or a verb. Reading ahead is
-    fair there, since the end is already written. Here each of 20 random
-    numbers is tagged 1 when it is larger than both its neighbours, a peak. A
-    GRU of 16 units trains for 300 steps.
+    Tagging gives a label to every position of a sequence that already exists
+    in full. An example is marking each word of a sentence as a noun or a
+    verb. Reading ahead is fair there, because the whole sequence is known before
+    any label is needed. In this example, each of 20 random numbers gets the
+    tag 1 when it is larger than both its neighbours, which makes it a peak.
+    All the other numbers get 0. A GRU with 16 units trains for 300 steps.
 
-    | Reads | Tags right |
+    | Reads | Correct tags |
     |---|---|
     | forward only | 86.3% |
     | both ways | 98.2% |
 
-    Tagging nothing as a peak already gets 64.9%. Reading forward only, a
-    step can't see whether the next number is smaller, so it guesses from its
-    own size. Over five seeds the two stayed at 86.2% to 86.5% and 98.2% to
-    98.5%.
+    Tagging no number as a peak already gets 64.9% right. A model that reads
+    forward only cannot see whether the next number is smaller. So it has to
+    guess from the size of the number itself. Over five seeds, reading forward
+    only scored 86.2% to 86.5%, and reading both ways scored 98.2% to 98.5%.
 
-    Generating writes a sequence one step at a time, each new step from the
-    steps before it. The future doesn't exist yet, so a model that needs it
-    can't run. Worse, it looks better in training. Train each model for 500
-    steps to give the next value of a noisy wave, the target being the input
-    moved one step.
+    Generating writes a sequence one step at a time, and computes each new
+    step from the steps before it. The future steps do not exist yet, so a
+    model that reads them cannot run. Worse, such a model looks better during
+    training. To see this, train each model for 500 steps to predict the next
+    value of a noisy sine wave. The target is the input shifted by one step.
 
     ```python
     x = torch.tensor([[1.0, 2.0, 3.0, 4.0]])
@@ -452,16 +464,19 @@ BIDIR2_LESSON = prose(
     | forward only | 0.021 | 0.052 |
     | both ways | 0.0025 | 0.555 |
 
-    The backward RNN reads the very value it is asked to give, so its error
-    in training is 8 times lower. When it writes its own steps that value
-    isn't there yet, and it does worse than a flat line at 0, which scores
-    0.500. Over five seeds it scored 0.526 to 0.591 on its own steps, against
-    0.034 to 0.052 for the forward reader.
+    In training, the backward RNN reads the exact value it is asked to
+    predict, so its error is 8 times lower. When the model writes its own
+    steps, that value does not exist yet. Then it does worse than always
+    predicting 0, which has an error of 0.500. Over five seeds, the model that
+    reads both ways scored 0.526 to 0.591 on the steps it wrote itself. The
+    model that reads forward only scored 0.034 to 0.052.
 
     So read both ways when the whole input exists before any output is
-    needed. Tagging is one case, and so is an encoder that reads a whole
-    sentence before 43_seq2seq's decoder writes. Read forward only when the
-    model writes its own next step. Section 7 meets this same leak again.
+    needed. Tagging is one case. Another is the encoder in 43_seq2seq, which
+    reads a whole sentence before the decoder starts writing. Read forward
+    only when the model writes its own next step. Letting a model see steps it
+    will not have when it runs is called a leak. Section 7 meets the same
+    leak again.
     """,
 )
 
@@ -474,12 +489,15 @@ BIDIR2_SOURCE = source_file(
     from torch import Tensor
 
     x = torch.tensor([[1.0, 3.0, 2.0]])
-    rises = x[:, 1:] > x[:, :-1]    # tensor([[ True, False]]), each step against the one before
+    rises = x[:, 1:] > x[:, :-1]    # tensor([[ True, False]]), whether each step is larger than the one before
 
 
-    # TODO: Return 1.0 at every position of x, of shape (batch, steps), whose
-    #   number is larger than both its neighbours, and 0.0 elsewhere. The
-    #   first and last steps have one neighbour each.
+    # TODO: x has shape (batch, steps). Return a float tensor of the same
+    #   shape, with 1.0 where a number is larger than both of its neighbours
+    #   and 0.0 everywhere else. The first and last steps have only one
+    #   neighbour each, so they only need to be larger than that one.
+    #   Example: peak_tags(torch.tensor([[1.0, 3.0, 2.0, 5.0]])) returns
+    #   tensor([[0., 1., 0., 1.]]).
     def peak_tags(x: Tensor) -> Tensor:
         ...
 
@@ -488,10 +506,11 @@ BIDIR2_SOURCE = source_file(
     width = both(torch.zeros(2, 20, 1))[0].shape    # torch.Size([2, 20, 32]), both directions joined
 
 
-    # TODO: Finish Tagger. self.head turns each step's output of self.layer
-    #   into one score, so its input size depends on bidirectional. forward
-    #   takes x of shape (batch, steps) and returns one score per step, of
-    #   shape (batch, steps).
+    # TODO: Finish Tagger. self.head is a Linear layer that turns the output of
+    #   self.layer at each step into one score. Its input size depends on
+    #   bidirectional, because a bidirectional GRU outputs twice as many
+    #   features. forward takes x of shape (batch, steps) and returns one score
+    #   per step, of shape (batch, steps).
     class Tagger(nn.Module):
         def __init__(
             self,
@@ -509,10 +528,11 @@ BIDIR2_SOURCE = source_file(
     longer = torch.cat([torch.zeros(2, 3), torch.ones(2, 1)], dim=1)    # shape (2, 4), one step longer
 
 
-    # TODO: Return count steps that model writes after prefix, of shape
-    #   (batch, steps), as one tensor of shape (batch, count). At each step,
-    #   run model on the sequence so far, take its score at the last position
-    #   as the next value, and add it on. Record nothing for autograd.
+    # TODO: Generate count new steps after prefix, of shape (batch, steps), and
+    #   return them as one tensor of shape (batch, count). At each step, run
+    #   model on the sequence so far and take its output at the last position
+    #   as the next value. Append that value to the sequence. Do not record
+    #   anything for autograd.
     def generate(
         model: nn.Module,
         prefix: Tensor,
@@ -534,7 +554,7 @@ BIDIR2_SOLUTION = source_file(
     rises = x[:, 1:] > x[:, :-1]
 
 
-    # Each step's neighbours, with -inf past the ends so the ends compare with one neighbour only.
+    # The neighbours of each step, with -inf past both ends, so each end is compared with its one real neighbour.
     def peak_tags(x: Tensor) -> Tensor:
         lowest = torch.full_like(x[:, :1], float("-inf"))
         left = torch.cat([lowest, x[:, :-1]], dim=1)
@@ -687,12 +707,12 @@ BIDIR2 = Exercise(
     source=BIDIR2_SOURCE,
     solution=BIDIR2_SOLUTION,
     hints={
-        "peak_tags": "Build each step's left and right neighbour by shifting x one step with torch.cat, putting "
-        "float('-inf') past the ends. A peak is larger than both, as floats.",
+        "peak_tags": "Build tensors of each step's left and right neighbour by shifting x one step with torch.cat, "
+        "and put float('-inf') past the ends. A peak is larger than both neighbours. Convert the result to floats.",
         "Tagger.forward": "In __init__, the head is nn.Linear(2 * hidden_size, 1) when bidirectional and "
         "nn.Linear(hidden_size, 1) when not. forward runs self.layer on x.unsqueeze(2), then the head, then "
         ".squeeze(2).",
-        "generate": "Inside torch.no_grad(), repeat count times: model(sequence)[:, -1:] is the next value, so "
+        "generate": "Inside torch.no_grad(), repeat count times. model(sequence)[:, -1:] is the next value, so "
         "torch.cat it onto sequence along dim=1. Return the part after the prefix.",
     },
     introduces=(),

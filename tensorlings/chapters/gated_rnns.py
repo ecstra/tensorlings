@@ -32,11 +32,13 @@ GATED_RNNS = Chapter(
         """
         # Gated RNNs
 
-        A plain RNN rewrites its whole state at every step, and its gradient
-        fades over long spans. Gated RNNs let the input decide, step by step,
-        what to keep and what to write. This chapter builds the LSTM and the
-        GRU, matches them with PyTorch's, measures when each one beats a plain
-        RNN, and names the idea under both, a weight computed from the input.
+        A plain RNN replaces its whole hidden state at every step, and its
+        gradient vanishes over many steps. A gated RNN computes gates from each
+        input. At every step, the gates decide how much of the old state to
+        keep and how much new content to write. This chapter builds the LSTM
+        and the GRU and checks them against PyTorch's versions. It measures
+        when each one beats a plain RNN. Last, it looks at the idea behind
+        both, the gate, which is a weight computed from the input.
 
         ## Further reading
 
@@ -77,34 +79,43 @@ def half_tensor(
 
 LSTM1_LESSON = prose(
     """
-    An RNN rewrites its whole hidden state at every step, through one tanh.
-    bptt3 showed what that does to a gradient over a long span. The **LSTM**,
-    from Hochreiter and Schmidhuber in 1997, keeps a second state, the cell,
-    which a step changes only where gates let it.
+    A plain RNN computes its whole new hidden state through one tanh at every
+    step. bptt3 showed that this makes the gradient vanish over many steps.
+    The **LSTM**, from Hochreiter and Schmidhuber in 1997, keeps a second
+    state vector, called the cell. At each step, gates control how much of
+    the cell changes.
 
-    Each step takes the input `x` and the last hidden state `h`, and computes
-    four things. Each has its own weight and bias on `x` and on `h`, named as
-    PyTorch names them.
+    Each step takes the input `x` and the previous hidden state `h`, and
+    computes four vectors. Each of the four has its own weights and biases
+    for `x` and for `h`. The names below are the ones PyTorch uses.
 
     ```text
-    i = sigmoid(x @ W_ii.T + b_ii + h @ W_hi.T + b_hi)    how much new content goes in
-    f = sigmoid(x @ W_if.T + b_if + h @ W_hf.T + b_hf)    how much of the old cell stays
+    i = sigmoid(x @ W_ii.T + b_ii + h @ W_hi.T + b_hi)    how much of g goes in
+    f = sigmoid(x @ W_if.T + b_if + h @ W_hf.T + b_hf)    how much of the old c is kept
     g = tanh(x @ W_ig.T + b_ig + h @ W_hg.T + b_hg)       the new content
-    o = sigmoid(x @ W_io.T + b_io + h @ W_ho.T + b_ho)    how much of the cell shows
+    o = sigmoid(x @ W_io.T + b_io + h @ W_ho.T + b_ho)    how much of c reaches h
     c = f * c + i * g
     h = o * tanh(c)
     ```
 
-    The cell's update is a sum with no squash. Where `f` is near 1 and `i`
-    near 0, the cell carries its value forward unchanged, and its gradient
-    flows back unchanged too. The forget gate `f` came later, from Gers,
-    Schmidhuber and Cummins in 2000. Without it, a cell could only add.
+    `i`, `f` and `o` are **gates**, called the input, forget and output gate.
+    Each is a vector of numbers between 0 and 1, from the sigmoid. A gate
+    multiplies another vector entry by entry, so each of its entries sets how
+    much of the matching entry passes through.
 
-    `nn.LSTM` stacks the four sets of weights in one matrix, in the order i,
-    f, g, o. `weight_ih_l0` has shape (4 * hidden, input), `weight_hh_l0` has
-    shape (4 * hidden, hidden), and both biases, `bias_ih_l0` and
-    `bias_hh_l0`, are added. `.chunk(4, dim=1)` cuts the stacked result back
-    into four parts.
+    The cell update `c = f * c + i * g` has no tanh around it. Where `f` is
+    near 1 and `i` is near 0, the cell keeps its value unchanged from one step
+    to the next. Its gradient also flows back through those steps unchanged.
+    The forget gate `f` was added later, by Gers, Schmidhuber and Cummins in
+    2000. Without it the update was `c = c + i * g`, so a cell could only add
+    to its value.
+
+    `nn.LSTM` stacks the four sets of weights into one matrix, in the order i,
+    f, g, o. So `weight_ih_l0` has shape (4 * hidden, input) and
+    `weight_hh_l0` has shape (4 * hidden, hidden). It has two bias vectors,
+    `bias_ih_l0` and `bias_hh_l0`, and both are added. After one matrix
+    multiplication with the stacked weights, `.chunk(4, dim=1)` cuts the
+    result back into four equal parts.
 
     ```python
     torch.arange(8.0).view(1, 8).chunk(4, dim=1)
@@ -112,9 +123,9 @@ LSTM1_LESSON = prose(
     ```
 
     `nn.LSTM(input, hidden, batch_first=True)` takes `x` of shape (batch,
-    steps, input). It returns the hidden state at every step first. Then
-    comes the pair of the last `h` and `c`, each with an extra first dimension
-    of size 1. Both states start at zeros.
+    steps, input) and returns two things. The first is the hidden state at
+    every step. The second is a pair, the last `h` and the last `c`, each
+    with an extra first dimension of size 1. Both states start at zeros.
     """,
 )
 
@@ -129,9 +140,10 @@ LSTM1_SOURCE = source_file(
     parts = torch.arange(8.0).view(1, 8).chunk(4, dim=1)    # four pieces of shape (1, 2)
 
 
-    # TODO: Return the new h and c after one LSTM step, from x of shape (batch,
-    #   input) and h and c of shape (batch, hidden), with weights stacked in
-    #   nn.LSTM's order, i, f, g, o.
+    # TODO: Run one LSTM step and return the new h and the new c, in that
+    #   order. x has shape (batch, input), and h and c have shape
+    #   (batch, hidden). The weights and biases are stacked in nn.LSTM's
+    #   order, i, f, g, o, as the lesson describes.
     def lstm_cell(
         x: Tensor,
         h: Tensor,
@@ -147,9 +159,10 @@ LSTM1_SOURCE = source_file(
     stacked = nn.LSTM(3, 4).weight_ih_l0.shape    # torch.Size([16, 3])
 
 
-    # TODO: Return the hidden state at every step of x, of shape (batch, steps,
-    #   input), as one tensor of shape (batch, steps, hidden). Run lstm_cell
-    #   with lstm's own weights, starting h and c at zeros.
+    # TODO: Run lstm_cell over every step of x, of shape (batch, steps, input),
+    #   with the weights and biases stored in lstm. Start h and c at zeros.
+    #   Return the hidden state h of every step, as one tensor of shape
+    #   (batch, steps, hidden).
     def run_lstm(
         x: Tensor,
         lstm: nn.LSTM,
@@ -160,8 +173,10 @@ LSTM1_SOURCE = source_file(
     count = sum(p.numel() for p in nn.RNN(1, 16).parameters())    # 304
 
 
-    # TODO: Return how many numbers nn.LSTM(input_size, hidden_size) learns,
-    #   from its weight shapes, without building one.
+    # TODO: Return the number of parameters of nn.LSTM(input_size, hidden_size),
+    #   which is the count of all the numbers in its weights and biases. Work
+    #   it out from their shapes, without building the layer.
+    #   Example: lstm_size(1, 16) returns 1216.
     def lstm_size(
         input_size: int,
         hidden_size: int,
@@ -329,11 +344,14 @@ LSTM1 = Exercise(
     source=LSTM1_SOURCE,
     solution=LSTM1_SOLUTION,
     hints={
-        "lstm_cell": "Add x @ weight_ih.T, bias_ih, h @ weight_hh.T and bias_hh, then .chunk(4, dim=1) into i, f, "
-        "g and o. Put sigmoid on i, f and o and tanh on g, then follow the lesson's last two lines.",
+        "lstm_cell": "Add x @ weight_ih.T, bias_ih, h @ weight_hh.T and bias_hh, then split the sum into i, f, g "
+        "and o with .chunk(4, dim=1). Apply sigmoid to i, f and o and tanh to g. Then compute c and h with the "
+        "last two lines of the lesson's formulas.",
         "run_lstm": "Start h and c as torch.zeros(len(x), lstm.hidden_size). For each step t, call lstm_cell on "
-        "x[:, t] with lstm.weight_ih_l0 and the rest, then torch.stack the h's along dim=1.",
-        "lstm_size": "Each of the 4 parts has a weight on the input, a weight on h and two biases of hidden_size.",
+        "x[:, t] with lstm.weight_ih_l0 and the other three tensors. Collect each h in a list, then torch.stack "
+        "the list along dim=1.",
+        "lstm_size": "Each of the 4 parts has a weight of shape (hidden_size, input_size) for x and a weight of "
+        "shape (hidden_size, hidden_size) for h. It also has two biases of size hidden_size.",
     },
     introduces=(),
     check=check_lstm1,
@@ -419,17 +437,19 @@ def recall_error(
 
 LSTM2_LESSON = prose(
     """
-    bptt3 showed a plain RNN's gradient fading over a long span, and lstm1
-    built a cell whose update has no squash. Here is what that buys, measured,
-    and the catch that comes with it.
+    bptt3 showed that a plain RNN's gradient vanishes over many steps. lstm1
+    built a cell whose update has no tanh around it. This lesson measures how
+    much that helps, and shows a catch that comes with it.
 
-    The task is bptt3's long gap. Each step holds a value from -1 to 1 and a
-    mark of 0 or 1. One of the first 5 steps is marked, and the model gives
-    back its value at the very end. Always guessing 0 scores a mean squared
-    error of 0.333.
+    The task is the one from the end of bptt3. Each step holds a value from -1
+    to 1 and a mark of 0 or 1. One of the first 5 steps is marked. After the
+    last step, the model has to output the value of the marked step. Always
+    guessing 0 gives a mean squared error of 0.333.
 
-    Every model has 16 hidden units and trains for 1,500 Adam steps, three
-    times with different seeds. A run counts as solved below an error of 0.01.
+    Every model has 16 hidden units and trains for 1,500 steps of Adam. Each
+    one trains three times, with different seeds. A run counts as solved if
+    its error ends below 0.01. The length is the number of steps in each
+    sequence.
 
     | Model | Length 10 | Length 20 | Length 40 |
     |---|---|---|---|
@@ -438,12 +458,15 @@ LSTM2_LESSON = prose(
     | LSTM, forget bias 1 | 3 of 3 | 3 of 3 | 0 of 3 |
     | LSTM, forget bias 3 | 3 of 3 | 3 of 3 | 3 of 3 |
 
-    At length 10 every model solves it. A plain RNN is fine for short gaps, and
-    for answers that build up over the whole sequence, like rnn3's vote.
+    At length 10 every model solves the task. A plain RNN is fine when the
+    value it needs is only a few steps back. It is also fine when the answer
+    builds up over the whole sequence, like the vote in rnn3.
 
-    The LSTM as PyTorch builds it fails exactly where the RNN does. PyTorch
-    starts every bias near 0, so the forget gate starts near sigmoid(0), 0.5.
-    The cell then halves at every step, and so does its gradient.
+    The LSTM with PyTorch's starting weights fails at exactly the same lengths
+    as the RNN. PyTorch starts every bias near 0, so the forget gate starts
+    near `sigmoid(0)`, which is 0.5. So the cell's value is halved at every
+    step, and so is its gradient. The table shows how much of the cell's
+    value is left after 20 and after 40 steps, for three starting biases.
 
     | Forget bias | Forget gate at the start | Left after 20 steps | Left after 40 steps |
     |---|---|---|---|
@@ -451,16 +474,17 @@ LSTM2_LESSON = prose(
     | 1 | 0.73 | 0.0019 | 3.6e-6 |
     | 3 | 0.95 | 0.38 | 0.14 |
 
-    Start the forget gate's bias higher, and the cell carries the value and
-    its gradient across the gap from the first step of training. Training can
-    still close the gate later. Gers, Schmidhuber and Cummins proposed this in
-    2000. In 2015 Jozefowicz, Zaremba and Sutskever found that a bias of 1
-    improved the LSTM on almost every task, and recommended it for every LSTM.
-    bptt3's identity start did the same for a ReLU RNN, a path that starts
-    open.
+    With a higher starting bias for the forget gate, the cell keeps the value
+    and its gradient across all the steps. This works from the very first
+    step of training. Training can still lower the bias later, which closes
+    the gate. Gers, Schmidhuber and Cummins proposed this in 2000. In 2015,
+    Jozefowicz, Zaremba and Sutskever found that a bias of 1 improved the
+    LSTM on almost every task. They recommended it for every LSTM. The
+    identity start in bptt3 did the same thing for a ReLU RNN. In both cases
+    the state is carried forward unchanged at the start of training.
 
-    So the LSTM's edge is real, and it lives in two places, a cell with no
-    squash and a forget gate that starts open.
+    So the LSTM really does beat the plain RNN, for two reasons. Its cell
+    update has no tanh around it, and its forget gate can start open.
     """,
 )
 
@@ -472,12 +496,13 @@ LSTM2_SOURCE = source_file(
     import torch.nn as nn
     from torch import Tensor
 
-    gate = torch.sigmoid(torch.tensor(1.0))    # tensor(0.7311), a forget gate's start at a bias of 1
+    gate = torch.sigmoid(torch.tensor(1.0))    # tensor(0.7311), the forget gate at the start when its bias is 1
 
 
-    # TODO: Return the share of a cell's value left after steps steps, when its
-    #   forget gate stays at its start, the sigmoid of bias, and nothing new
-    #   goes in. Return a plain number.
+    # TODO: Return the fraction of a cell's value that is left after the given
+    #   number of steps. The forget gate stays at sigmoid(bias) at every step,
+    #   and nothing new is written to the cell. Return a Python float.
+    #   Example: forget_fraction(1.0, 20) returns about 0.0019.
     def forget_fraction(
         bias: float,
         steps: int,
@@ -488,9 +513,10 @@ LSTM2_SOURCE = source_file(
     second_quarter = torch.arange(8)[2:4]    # tensor([2, 3]), the second quarter of 8 rows
 
 
-    # TODO: Set the forget gate's part of lstm.bias_ih_l0 to value and its part
-    #   of lstm.bias_hh_l0 to 0, in place, without recording for autograd. In
-    #   the order i, f, g, o, the forget gate's part is the second quarter.
+    # TODO: Set the forget gate's entries of lstm.bias_ih_l0 to value, and its
+    #   entries of lstm.bias_hh_l0 to 0. Change the tensors in place, and make
+    #   sure autograd does not record the change. The order is i, f, g, o, so
+    #   the forget gate's entries are the second quarter of each bias.
     def set_forget_bias_(
         lstm: nn.LSTM,
         value: float,
@@ -501,9 +527,10 @@ LSTM2_SOURCE = source_file(
     last = torch.zeros(2, 5, 16)[:, -1]    # shape (2, 16), each sequence's last step
 
 
-    # TODO: Finish forward. x has shape (batch, steps, 2). Run self.layer, then
-    #   self.head on the last step's output, and return one guess per sequence,
-    #   of shape (batch,).
+    # TODO: Finish forward. x has shape (batch, steps, 2). Run self.layer on x,
+    #   then apply self.head to the output of the last step. Return one guess
+    #   per sequence, of shape (batch,). self.layer can be an nn.RNN, nn.GRU
+    #   or nn.LSTM.
     class Recaller(nn.Module):
         def __init__(
             self,
@@ -633,7 +660,7 @@ def check_lstm2(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="forget_fraction",
-        description="gives the share left after many steps",
+        description="gives the fraction of the cell left after many steps",
         inputs=(
             (2.0, 10),
             (-1.0, 3),
@@ -668,11 +695,12 @@ LSTM2 = Exercise(
     source=LSTM2_SOURCE,
     solution=LSTM2_SOLUTION,
     hints={
-        "forget_fraction": "torch.sigmoid(torch.tensor(bias)).item() is the gate. Raise it to the power steps.",
+        "forget_fraction": "torch.sigmoid(torch.tensor(bias)).item() is the gate as a Python float. Raise it to the "
+        "power steps.",
         "set_forget_bias_": "With h = lstm.hidden_size, the forget part is [h : 2 * h]. Inside torch.no_grad(), "
         "assign value to that slice of lstm.bias_ih_l0 and 0.0 to that slice of lstm.bias_hh_l0.",
-        "Recaller.forward": "self.layer(x) returns the outputs at every step first. Take outputs[:, -1], run "
-        "self.head, then .squeeze(1).",
+        "Recaller.forward": "The first thing self.layer(x) returns is the outputs at every step. Take "
+        "outputs[:, -1], apply self.head, then .squeeze(1).",
     },
     introduces=(),
     check=check_lstm2,
@@ -687,35 +715,41 @@ LSTM2 = Exercise(
 
 GRU1_LESSON = prose(
     """
-    The **GRU**, from Cho and colleagues in 2014, keeps one state and two
-    gates. Each step computes this, with PyTorch's names.
+    The **GRU**, or gated recurrent unit, from Cho and colleagues in 2014, has
+    one state and two gates. Each step computes the following, with PyTorch's
+    names.
 
     ```text
-    r = sigmoid(x @ W_ir.T + b_ir + h @ W_hr.T + b_hr)       how much of h the content reads
-    z = sigmoid(x @ W_iz.T + b_iz + h @ W_hz.T + b_hz)       how much of h stays
+    r = sigmoid(x @ W_ir.T + b_ir + h @ W_hr.T + b_hr)       how much of h goes into n
+    z = sigmoid(x @ W_iz.T + b_iz + h @ W_hz.T + b_hz)       how much of the old h is kept
     n = tanh(x @ W_in.T + b_in + r * (h @ W_hn.T + b_hn))    the new content
     h = (1 - z) * n + z * h
     ```
 
-    The last line is derive1's gated memory, with `1 - z` as the gate that
-    blends new content in. The reset gate `r` lets a step ignore the old state
-    when it writes new content.
+    The last line is the gated memory from derive1. The update gate `z` sets
+    how much of the old `h` is kept, and `1 - z` sets how much of the new
+    content `n` is written. The reset gate `r` lets a step ignore the old
+    state when it computes the new content.
 
-    Cho's paper puts `r` on `h` before it meets the weights, as
-    `(r * h) @ W_hn.T`. PyTorch applies it after, to `h @ W_hn.T + b_hn`,
-    which its documentation says is on purpose, for speed. So in `nn.GRU` the
-    parts of `n` from `x` and from `h` stay apart until `r` arrives.
+    Cho's paper multiplies `h` by `r` before the matrix multiplication, as
+    `(r * h) @ W_hn.T`. PyTorch multiplies after, as
+    `r * (h @ W_hn.T + b_hn)`, and its documentation says this is on purpose,
+    for speed. So in `nn.GRU`, the parts of `n` computed from `x` and from `h`
+    must stay separate. Only the part from `h` is multiplied by `r`.
 
-    `nn.GRU` stacks its weights in the order r, z, n. Cut each into three with
-    `.chunk(3, dim=1)`.
+    `nn.GRU` stacks its weights in the order r, z, n. You can cut each stacked
+    result into three parts with `.chunk(3, dim=1)`.
 
-    It has three sets of weights where the LSTM has four. With an input of 1
-    and a hidden size of 16, that is 912 numbers against the LSTM's 1,216.
+    A GRU has three sets of weights where the LSTM has four. With an input
+    size of 1 and a hidden size of 16, the GRU has 912 parameters and the LSTM
+    has 1,216.
 
-    The update gate `z` starts near 0.5 too, so the old state's share halves
-    at every step, as with lstm2's forget gate. `z` is the second of the three
-    parts, as `f` is the LSTM's, so lstm2's `set_forget_bias_` opens it
-    unchanged. Here is lstm2's task, with 16 units and three seeds.
+    The update gate `z` also starts near 0.5. So the fraction of the old state
+    that is kept halves at every step, as with the forget gate in lstm2. `z`
+    is the second of the GRU's three parts, as `f` is the second of the
+    LSTM's four. So `set_forget_bias_` from lstm2 works on a GRU as it is,
+    and sets the bias of `z`. Here is the task from lstm2, with 16 units and
+    three seeds.
 
     | Model | Length 10 | Length 20 | Length 40 |
     |---|---|---|---|
@@ -724,9 +758,10 @@ GRU1_LESSON = prose(
     | LSTM, forget bias 3 | 3 of 3 | 3 of 3 | 3 of 3 |
 
     Chung and colleagues compared the GRU and the LSTM in 2014 on music and
-    speech, and neither won across the board. In 2015 Jozefowicz and
-    colleagues found the GRU ahead of the LSTM on all their tasks but language
-    modelling. An LSTM with a forget bias of 1 beat both on almost all.
+    speech, and neither was better on every task. In 2015, Jozefowicz and
+    colleagues found the GRU better than the LSTM on all their tasks except
+    language modelling. But an LSTM with a forget bias of 1 beat both on
+    almost all of them.
     """,
 )
 
@@ -742,9 +777,9 @@ GRU1_SOURCE = source_file(
     kept = (1 - z) * torch.tensor([5.0]) + z * torch.tensor([2.0])    # tensor([2.3000]), mostly the old 2
 
 
-    # TODO: Return the new h after one GRU step, from x of shape (batch, input)
-    #   and h of shape (batch, hidden), with weights stacked in nn.GRU's order,
-    #   r, z, n.
+    # TODO: Run one GRU step with PyTorch's formulas from the lesson, and return
+    #   the new h. x has shape (batch, input) and h has shape (batch, hidden).
+    #   The weights and biases are stacked in nn.GRU's order, r, z, n.
     def gru_cell(
         x: Tensor,
         h: Tensor,
@@ -756,9 +791,10 @@ GRU1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the hidden state at every step of x, of shape (batch, steps,
-    #   input), as one tensor of shape (batch, steps, hidden). Run gru_cell with
-    #   gru's own weights, starting h at zeros.
+    # TODO: Run gru_cell over every step of x, of shape (batch, steps, input),
+    #   with the weights and biases stored in gru. Start h at zeros. Return the
+    #   hidden state h of every step, as one tensor of shape
+    #   (batch, steps, hidden).
     def run_gru(
         x: Tensor,
         gru: nn.GRU,
@@ -870,10 +906,12 @@ GRU1 = Exercise(
     source=GRU1_SOURCE,
     solution=GRU1_SOLUTION,
     hints={
-        "gru_cell": "Chunk x @ weight_ih.T + bias_ih and h @ weight_hh.T + bias_hh into three parts each. Add the "
-        "r parts and the z parts before their sigmoids, and multiply only the h part of n by r.",
+        "gru_cell": "Split x @ weight_ih.T + bias_ih and h @ weight_hh.T + bias_hh into three parts each with "
+        ".chunk(3, dim=1). For r and z, add the part from x and the part from h before the sigmoid. For n, "
+        "multiply only the part from h by r.",
         "run_gru": "Start h as torch.zeros(len(x), gru.hidden_size). For each step t, call gru_cell on x[:, t] "
-        "with gru.weight_ih_l0 and the rest, then torch.stack the h's along dim=1.",
+        "with gru.weight_ih_l0 and the other three tensors. Collect each h in a list, then torch.stack the list "
+        "along dim=1.",
     },
     introduces=(),
     check=check_gru1,
@@ -886,23 +924,24 @@ GRU1 = Exercise(
 
 GATING1_LESSON = prose(
     """
-    Once trained, a Linear multiplies every input by the same numbers. A gate
-    is a weight computed from the input itself. derive1's gated memory, the
-    LSTM's i, f and o, and the GRU's r and z are all gates. Here is the move
-    on its own.
+    Once a Linear layer is trained, it multiplies every input by the same
+    weights. A gate is different, because it is a weight computed from the
+    input itself. The gated memory of derive1, the LSTM's i, f and o, and the
+    GRU's r and z are all gates. Here is a gate on its own.
 
     ```text
     gate = sigmoid(x @ W.T + b)
     out = gate * signal
     ```
 
-    Each entry of `signal` gets scaled by a number from 0 to 1 that this input
-    chose. Another input chooses another scale.
+    Each entry of `signal` is multiplied by a number from 0 to 1 that was
+    computed from `x`. A different `x` gives different numbers.
 
-    A gate can do what no fixed weight can, and multiply two inputs. "Pass the
-    value through when the switch is on" is the value times the switch. Each
-    model below learns it from a random value and a switch of 0 or 1, in 2,000
-    Adam steps at 0.05, on five seeds.
+    A gate can multiply two inputs together, which no fixed weight can do.
+    Take the rule "output the value when the switch is 1, and 0 when it is
+    0". That rule is the value times the switch. Each model below learns this
+    rule from a random value and a switch of 0 or 1. Each one trains for 2,000
+    steps of Adam with a learning rate of 0.05, on five seeds.
 
     | Model | Weights | Mean squared error |
     |---|---|---|
@@ -911,21 +950,23 @@ GATING1_LESSON = prose(
     | MLP with 4 ReLU units | 17 | 0.00002 to 0.0002 |
     | gate on the switch, times the value | 2 | 0.0001 to 0.0002 |
 
-    Always guessing 0 scores 0.5. A Linear can only add the two, and an MLP
-    must build the product out of ReLU pieces. The gate multiplies, so 2
-    weights are enough.
+    Always guessing 0 gives an error of 0.5. A Linear layer can only add the
+    value and the switch, each times a weight. An MLP has to build the product
+    out of the straight pieces its ReLU units make. The gate multiplies
+    directly, so 2 weights are enough.
 
-    The gated linear unit of Dauphin and colleagues, from 2016, makes a whole
-    layer of gates. One Linear gives twice the width, and its second half
-    gates its first, `a * sigmoid(b)`. `F.glu` does this split for you.
+    The gated linear unit, or GLU, from Dauphin and colleagues in 2016, makes
+    a whole layer of gates. One Linear layer produces twice as many outputs as
+    the result needs. The first half is `a`, the second half is `b`, and the
+    result is `a * sigmoid(b)`. `F.glu` does this split and product for you.
 
     ```python
     F.glu(torch.tensor([1.0, 2.0, 0.0, -3.0]), dim=-1)    # tensor([0.5000, 0.0949])
     ```
 
-    Here `a` is `[1, 2]` and `b` is `[0, -3]`, so the gates are 0.5 and
-    0.047. Section 7 comes back to weights computed from the input several
-    times.
+    Here `a` is `[1, 2]` and `b` is `[0, -3]`, so the gates `sigmoid(b)` are
+    0.5 and 0.047. Section 7 comes back to weights computed from the input
+    several times.
     """,
 )
 
@@ -940,8 +981,9 @@ GATING1_SOURCE = source_file(
     scales = torch.sigmoid(torch.tensor([0.0, 2.0]))    # tensor([0.5000, 0.8808])
 
 
-    # TODO: Return the gate that x gives, sigmoid of a Linear with weight and
-    #   bias, one number from 0 to 1 per output.
+    # TODO: Return the gate computed from x, which is the sigmoid of a Linear
+    #   layer with weight and bias applied to x. It holds one number from 0 to
+    #   1 for each output of the Linear layer.
     def gate(
         x: Tensor,
         weight: Tensor,
@@ -953,7 +995,8 @@ GATING1_SOURCE = source_file(
     scaled = scales * torch.tensor([4.0, 4.0])    # tensor([2.0000, 3.5232])
 
 
-    # TODO: Return signal scaled by the gate that x gives with weight and bias.
+    # TODO: Return signal multiplied, entry by entry, by the gate computed from
+    #   x with weight and bias.
     def gated(
         signal: Tensor,
         x: Tensor,
@@ -966,9 +1009,10 @@ GATING1_SOURCE = source_file(
     halves = torch.tensor([1.0, 2.0, 0.0, -3.0]).chunk(2, dim=-1)    # (tensor([1., 2.]), tensor([ 0., -3.]))
 
 
-    # TODO: Return the gated linear unit of x without F.glu. A Linear with
-    #   weight and bias gives twice the width, and its second half, through a
-    #   sigmoid, scales its first half.
+    # TODO: Return the gated linear unit of x, without F.glu. Apply a Linear
+    #   layer with weight and bias to x, which gives twice as many outputs as
+    #   the result needs. Split them into a first half a and a second half b,
+    #   and return a * sigmoid(b).
     def glu(
         x: Tensor,
         weight: Tensor,
@@ -1028,7 +1072,7 @@ def check_gating1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="gate",
-        description="gives sigmoid of a Linear",
+        description="gives the sigmoid of a Linear",
         inputs=(
             (half_tensor(430, 2, 3), half_tensor(431, 4, 3), half_tensor(432, 4)),
             (half_tensor(433, 1, 2), half_tensor(434, 2, 2), half_tensor(435, 2)),
@@ -1039,7 +1083,7 @@ def check_gating1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="gated",
-        description="scales the signal by the gate x gives",
+        description="multiplies the signal by the gate computed from x",
         inputs=(
             (small_tensor(436, 2, 4), half_tensor(437, 2, 3), half_tensor(438, 4, 3), half_tensor(439, 4)),
             (small_tensor(440, 3, 2), half_tensor(441, 3, 5), half_tensor(442, 2, 5), half_tensor(443, 2)),
@@ -1068,7 +1112,7 @@ GATING1 = Exercise(
     source=GATING1_SOURCE,
     solution=GATING1_SOLUTION,
     hints={
-        "gate": "torch.sigmoid of x @ weight.T + bias.",
+        "gate": "Apply torch.sigmoid to x @ weight.T + bias.",
         "gated": "Multiply signal by gate(x, weight, bias).",
         "glu": "Split x @ weight.T + bias into a and b with .chunk(2, dim=-1), then multiply a by torch.sigmoid of b.",
     },
@@ -1089,12 +1133,13 @@ WEIGHT_SETS: dict[str, int] = {
 
 LSTM3_LESSON = prose(
     """
-    Which recurrent layer to reach for, from what this chapter measured.
+    This lesson uses what the chapter measured to decide which recurrent layer
+    to use.
 
-    First, is the LSTM winning only because it has four times the weights?
-    Give each model about 1,150 weights instead, which buys the RNN 32 hidden
-    units, the GRU 18 and the LSTM 15. Here is lstm2's task again, three seeds
-    each.
+    First, does the LSTM win only because it has four times as many weights?
+    To test that, give each model about 1,150 weights. With that budget the
+    RNN gets 32 hidden units, the GRU gets 18 and the LSTM gets 15. Here is
+    the task from lstm2 again, with three seeds for each model.
 
     | Model | Weights | Length 20 | Length 40 |
     |---|---|---|---|
@@ -1104,26 +1149,28 @@ LSTM3_LESSON = prose(
     | LSTM, 15 units, forget bias 1 | 1,140 | 3 of 3 | 0 of 3 |
     | LSTM, 15 units, forget bias 3 | 1,140 | 3 of 3 | 3 of 3 |
 
-    More units don't save the RNN. Its trouble is the squash at every step,
-    not its size. Speed goes the other way. On 4 threads of this Mac's CPU,
-    an Apple M5, a training step at length 40 took 0.94 to 0.96 ms for the RNN.
-    The gated ones took 2.0 to 2.1 ms, over twice as long.
+    More units do not help the RNN. Its problem is the tanh at every step, and
+    a bigger state does not remove it. On speed, the RNN wins. On 4 threads of
+    this Mac's CPU, an Apple M5, one training step at length 40 took 0.94 to
+    0.96 ms for the RNN. The gated layers took 2.0 to 2.1 ms, more than twice
+    as long.
 
-    - A plain RNN suits short gaps, and answers that build up over the whole sequence. It is the smallest and the fastest.
-    - A GRU or an LSTM reaches long gaps once the gate that keeps its state starts open. `make_recurrent` below starts it at 3.
-    - Jozefowicz and colleagues used a bias of 1, which reached 20 steps here but not 40.
+    - A plain RNN suits answers that need only recent steps or build up over the whole sequence. It is the smallest and fastest.
+    - A GRU or an LSTM handles long gaps when the gate that keeps its state starts open. `make_recurrent` below sets its bias to 3.
+    - Jozefowicz and colleagues used a bias of 1, which handled 20 steps here but not 40.
     - A GRU does the same with three quarters of an LSTM's weights.
 
-    All three run one step after another, which a GPU can't spread out.
-    44_causal_conv and 45_state_space train on every step at once, and
-    Section 7's models replaced RNNs for most text. An RNN still fits where
-    its fixed size state matters, like reading a stream one step at a time on
-    a small device.
+    All three layers must run one step after another, because each step needs
+    the hidden state from the step before. So a GPU cannot compute the steps
+    in parallel. 44_causal_conv and 45_state_space show models that train on
+    every step at once. Section 7's models replaced RNNs for most text. An RNN
+    still fits well where its fixed size state matters, like reading a stream
+    one step at a time on a small device.
     """,
 )
 
 SET_FORGET_BIAS = '''
-# set_forget_bias_ from lstm2. On a GRU it sets the update gate z, its second part.
+# set_forget_bias_ from lstm2. On a GRU it sets the bias of the update gate z, the GRU's second part.
 def set_forget_bias_(
     lstm: nn.LSTM,
     value: float,
@@ -1149,15 +1196,17 @@ LSTM3_SOURCE = source_file(
 ''' + INDENTED_SET_FORGET_BIAS + '''
 
 
-    # How many sets of weights each layer learns, one per gate or content.
+    # How many sets of weights each layer has, one for each gate and one for the new content.
     WEIGHT_SETS = {"rnn": 1, "gru": 3, "lstm": 4}
 
     sets = WEIGHT_SETS["gru"]    # 3, the GRU's r, z and n
 
 
-    # TODO: Return how many numbers a one layer nn.RNN, nn.GRU or nn.LSTM
-    #   learns, with kind "rnn", "gru" or "lstm", from its sets of weights,
-    #   without building one.
+    # TODO: Return the number of parameters of a one layer nn.RNN, nn.GRU or
+    #   nn.LSTM, chosen by kind, which is "rnn", "gru" or "lstm". Work it out
+    #   from WEIGHT_SETS and the shapes in one set of weights, without
+    #   building the layer.
+    #   Example: recurrent_size("gru", 1, 16) returns 912.
     def recurrent_size(
         kind: str,
         input_size: int,
@@ -1171,6 +1220,7 @@ LSTM3_SOURCE = source_file(
 
     # TODO: Return the largest hidden size whose recurrent_size, for kind and
     #   input_size, is at most budget.
+    #   Example: hidden_for_budget("lstm", 2, 1200) returns 15.
     def hidden_for_budget(
         kind: str,
         input_size: int,
@@ -1182,9 +1232,10 @@ LSTM3_SOURCE = source_file(
     layer = nn.GRU(2, 18, batch_first=True)    # batch first, like every layer in this chapter
 
 
-    # TODO: Return a one layer nn.RNN, nn.GRU or nn.LSTM for kind, with
-    #   batch_first=True. For a GRU or an LSTM, start the gate that keeps the
-    #   state open with set_forget_bias_(layer, open_bias).
+    # TODO: Build and return a one layer nn.RNN, nn.GRU or nn.LSTM, chosen by
+    #   kind, with batch_first=True. For a GRU or an LSTM, call
+    #   set_forget_bias_(layer, open_bias), so that the gate that keeps the
+    #   state starts open.
     def make_recurrent(
         kind: str,
         input_size: int,
@@ -1211,7 +1262,7 @@ LSTM3_SOLUTION = source_file(
     sets = WEIGHT_SETS["gru"]
 
 
-    # Each set has a weight on the input, a weight on h and two biases.
+    # Each set has a weight for the input, a weight for h and two biases.
     def recurrent_size(
         kind: str,
         input_size: int,
@@ -1309,7 +1360,7 @@ def check_lstm3(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="recurrent_size",
-        description="counts each layer's weights",
+        description="counts each layer's parameters",
         inputs=(
             ("rnn", 2, 32),
             ("gru", 2, 18),
@@ -1353,7 +1404,8 @@ LSTM3 = Exercise(
     hints={
         "recurrent_size": "Each set holds hidden_size * input_size, hidden_size * hidden_size and two biases of "
         "hidden_size. Multiply by WEIGHT_SETS[kind].",
-        "hidden_for_budget": "Start at 1 and step up while recurrent_size of one more unit still fits the budget.",
+        "hidden_for_budget": "Start at a hidden size of 1, and add 1 while recurrent_size with one more unit is still "
+        "at most budget.",
         "make_recurrent": "Pick nn.RNN, nn.GRU or nn.LSTM by kind and build it with batch_first=True. When kind is "
         "gru or lstm, call set_forget_bias_(layer, open_bias) before returning it.",
     },

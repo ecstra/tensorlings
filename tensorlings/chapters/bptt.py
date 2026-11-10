@@ -33,11 +33,12 @@ BPTT = Chapter(
         """
         # Backprop through time
 
-        Training an RNN means backprop through every step it ran. This chapter
-        does that by hand on a one number RNN, splits long sequences into
-        chunks the way language models trained on them did, and measures the
-        gradient fading over long spans and blowing up, with clipping as the
-        fix for the second.
+        Training an RNN means running backprop through every step it took.
+        This chapter does that by hand for an RNN whose hidden state is a
+        single number. Then it splits long sequences into chunks and trains on
+        one chunk at a time, the way language models were once trained on long
+        text. Last, it measures how the gradient shrinks towards 0 or grows
+        huge over many steps, and uses gradient clipping to fix the growth.
 
         ## Further reading
 
@@ -92,36 +93,42 @@ def reference_state_gradients(
 
 BPTT1_LESSON = prose(
     """
-    An RNN uses the same weights at every step. Unrolled, its loop is one long
-    chain of layers that share their weights, and backprop runs through it like
-    through any chain. Running it backwards through the steps is called
+    An RNN uses the same weights at every step. You can write out its loop
+    one step after another, which is called unrolling it. The result is one
+    long chain of layers that all share the same weights. Backprop runs
+    through this chain the same way it runs through any chain of layers.
+    Running backprop backwards through the steps like this is called
     **backprop through time**.
 
-    Take an RNN whose state is one number, `h = tanh(w * h + u * x)` at each
-    step. Walking back from the last step, the chain rule gives three lines
-    per step.
+    Take an RNN whose hidden state is one number, updated by
+    `h = tanh(w * h + u * x)` at each step. Here `w` and `u` are numbers too.
+    Going backwards from the last step, the chain rule gives three updates at
+    each step.
 
-    - The gradient inside the tanh is the gradient of `h` times `1 - h ** 2`, tanh's derivative.
-    - That times the previous step's `h` adds to `w`'s gradient, and that times `x` adds to `u`'s.
-    - That times `w` is the gradient of the previous state, where the next step back starts.
+    - The gradient of the value inside the tanh is the gradient of `h` times `1 - h ** 2`, the derivative of tanh.
+    - Add that gradient times the previous `h` to the gradient of `w`, and that gradient times `x` to the gradient of `u`.
+    - That gradient times `w` is the gradient of the previous `h`. The next step back starts from it.
 
-    Every step adds to the same `w` and `u`, since they are the same numbers at
-    every step.
+    Every step adds to the gradients of the same `w` and `u`, because the RNN
+    uses the same two numbers at every step.
 
-    The last line is where trouble starts. The gradient reaching a state k
-    steps back is k factors multiplied together, `(1 - h ** 2) * w` from each
-    step. A number multiplied by itself often enough shrinks towards 0 or
-    grows without end.
+    The third update is where trouble starts. Each step back multiplies the
+    gradient by that step's `(1 - h ** 2) * w`. So the gradient of the last
+    state with respect to a state k steps back is a product of k such factors.
+    A product of many factors below 1 shrinks towards 0, and a product of many
+    factors above 1 grows without limit. The table multiplies one factor by
+    itself 10 times and 50 times.
 
     | Factor | 10 times | 50 times |
     |---|---|---|
     | 0.9 | 0.349 | 0.005 |
     | 1.1 | 2.59 | 117 |
 
-    With one number for a state, a bigger `w` doesn't explode for long. The
-    state saturates near -1 or 1, `1 - h ** 2` falls towards 0, and the
-    factors shrink. Here is `state_gradients` below on 50 random inputs, with
-    `u` at 0.5.
+    When the state is one number, a bigger `w` does not make the gradient
+    explode for long. A big `w` pushes the state close to -1 or 1, where tanh
+    is flat, which is called saturating. Then `1 - h ** 2` is close to 0, so
+    the factors shrink. Here is what `state_gradients`, from the file below,
+    returns on 50 random inputs with `u` set to 0.5.
 
     | w | 1 step back | 10 steps back | 50 steps back |
     |---|---|---|---|
@@ -130,10 +137,11 @@ BPTT1_LESSON = prose(
     | 1.5 | 0.846 | 7e-5 | 2e-15 |
     | 3 | 0.036 | 1e-14 | 0 |
 
-    Only with inputs of 0, where every state stays at 0, does a `w` of 1.1
-    give the 2.59 and 117 of the first table. So this one number RNN's
-    gradient fades, and its far past barely trains. bptt3 shows a vector
-    state, where a large `W_hh` makes the gradient explode instead.
+    A `w` of 1.1 gives the 2.59 and 117 of the first table only when every
+    input is 0. Then every state stays at 0, so every factor is exactly `w`.
+    So in this one number RNN the gradient vanishes, and the weights barely
+    learn from steps far in the past. bptt3 shows an RNN with a vector state,
+    where a large `W_hh` makes the gradient explode instead.
     """,
 )
 
@@ -148,9 +156,12 @@ BPTT1_SOURCE = source_file(
     so_far = torch.cumprod(factors, dim=0)    # tensor([0.5000, 0.2500, 0.1250]), the running products
 
 
-    # TODO: Run a one number RNN along xs, of shape (steps,), from a state of 0,
-    #   with h = tanh(w * h + u * x) at each step. Return every step's state,
-    #   of shape (steps,).
+    # TODO: Run an RNN whose state is one number over xs, of shape (steps,).
+    #   Start from h = 0, and at each step set h = tanh(w * h + u * x), where x
+    #   is that step's input. Return the state after every step, as a tensor of
+    #   shape (steps,).
+    #   Example: scalar_rnn(torch.tensor([1.0, 0.0]), torch.tensor(0.5),
+    #   torch.tensor(1.0)) returns tensor([0.7616, 0.3634]).
     def scalar_rnn(
         xs: Tensor,
         w: Tensor,
@@ -159,9 +170,11 @@ BPTT1_SOURCE = source_file(
         ...
 
 
-    # TODO: Finish the loop, which walks back from the last step to the first by
-    #   the lesson's three lines. It returns the gradient of the last state with
-    #   respect to w and to u, without autograd.
+    # TODO: Finish the loop. It goes backwards from the last step to the first
+    #   and applies the lesson's three updates at each step. before is the
+    #   state from the step before t, or 0 at the first step. The function
+    #   returns the gradients of the last state with respect to w and to u,
+    #   computed by hand without autograd.
     def backprop_through_time(
         xs: Tensor,
         w: Tensor,
@@ -182,10 +195,13 @@ BPTT1_SOURCE = source_file(
         return grad_w, grad_u
 
 
-    # TODO: Return the gradient of the last state with respect to every state
-    #   before it, the state one step back first and the starting state last,
-    #   of shape (steps,). Each is a running product of the factors
-    #   (1 - h ** 2) * w, starting from the last step's.
+    # TODO: Return the gradient of the last state with respect to each earlier
+    #   state, as a tensor of shape (steps,). Entry 0 is for the state one step
+    #   back, and the last entry is for the starting state of 0. Each step t
+    #   has the factor (1 - h ** 2) * w, where h is the state after step t.
+    #   Entry k is the product of the factors of the last k + 1 steps.
+    #   Example: with the same xs, w and u as the scalar_rnn example,
+    #   state_gradients returns tensor([0.4340, 0.0911]).
     def state_gradients(
         xs: Tensor,
         w: Tensor,
@@ -241,7 +257,7 @@ BPTT1_SOLUTION = source_file(
         return grad_w, grad_u
 
 
-    # Step t's factor is how much its state moves per nudge to the state before it.
+    # The factor of step t is the derivative of its state with respect to the state before it.
     def state_gradients(
         xs: Tensor,
         w: Tensor,
@@ -288,7 +304,7 @@ def check_bptt1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="state_gradients",
-        description="gives the gradient reaching each earlier state",
+        description="gives the gradient of the last state with respect to each earlier state",
         inputs=BPTT1_CASES,
         reference=reference_state_gradients,
         expect=expect_tensor,
@@ -307,8 +323,8 @@ BPTT1 = Exercise(
         "in a list. torch.stack the list.",
         "backprop_through_time": "grad_inside is grad_h * (1 - states[t] ** 2). Add grad_inside * before to grad_w "
         "and grad_inside * xs[t] to grad_u, then set grad_h to grad_inside * w.",
-        "state_gradients": "The factors are (1 - scalar_rnn(xs, w, u) ** 2) * w. Flip them so the last step's comes "
-        "first, then take torch.cumprod with dim=0.",
+        "state_gradients": "The factors are (1 - scalar_rnn(xs, w, u) ** 2) * w. Flip them so that the last step's "
+        "factor comes first, then take torch.cumprod with dim=0.",
     },
     introduces=(),
     check=check_bptt1,
@@ -335,34 +351,38 @@ def delayed_sequences(
 
 BPTT2_LESSON = prose(
     """
-    Backprop through time keeps every step's numbers until `backward` runs, and
-    the model learns only once per pass. On a sequence of a million steps,
-    like a long text, that is far too much memory and far too few updates.
+    Backprop through time has to keep the values computed at every step until
+    `backward` runs. The model also gets only one update per pass over the
+    sequence. For a sequence of a million steps, like a long text, that needs
+    far too much memory and gives far too few updates.
 
     Truncated backprop through time cuts the sequence into chunks of a few
-    dozen steps and updates after each chunk. Each chunk starts from the state
-    the last one ended in, so the model still reads the whole sequence in
-    order. The gradient, though, stops at the chunk's start.
+    dozen steps and updates the weights after each chunk. Each chunk starts
+    from the hidden state that the previous chunk ended with. So the model
+    still reads the whole sequence in order. But the gradient does not flow
+    back past the start of the chunk.
 
-    `.detach()` makes that cut. It gives a tensor with the same numbers and no
-    history, so `backward` stops there.
+    `.detach()` makes that cut. It returns a tensor with the same numbers but
+    without the record of how they were computed. So `backward` stops at that
+    tensor.
 
     ```python
     h = torch.ones(2, requires_grad=True) * 3
-    h.detach().requires_grad    # False, the same numbers cut from how they were made
+    h.detach().requires_grad    # False, the same numbers without their history
     ```
 
-    Without it, the second chunk's `backward` would run back into the first
-    chunk's steps, whose saved numbers the first `backward` already freed.
-    PyTorch stops with an error that says it is trying to backward through the
-    graph a second time.
+    Without `.detach()`, the second chunk's `backward` would run back into the
+    steps of the first chunk. The first `backward` already freed the values it
+    saved for those steps. So PyTorch stops with an error that says it is
+    trying to backward through the graph a second time.
 
-    `nn.RNN` takes a starting state as its second argument, of shape (layers,
-    batch, hidden), and returns the state it ended in.
+    `nn.RNN` takes a starting hidden state as an optional second argument, of
+    shape (layers, batch, hidden). Its second output is the hidden state after
+    the last step, which the next chunk can start from.
 
-    The cost is the longest span the model can learn. Here an RNN learns to
-    give back each input 3 steps later, on 32 sequences of 1,000 steps, in 10
-    passes of Adam.
+    The price of cutting is a limit on how far back the model can learn a
+    connection. Here an RNN learns to output each input again 3 steps later.
+    It trains on 32 sequences of 1,000 steps, for 10 passes of Adam.
 
     | Chunk length | Updates per pass | Mean squared error |
     |---|---|---|
@@ -373,13 +393,14 @@ BPTT2_LESSON = prose(
     | 100 | 10 | 0.001 |
     | 1,000, the whole sequence | 1 | 0.503 |
 
-    Chunks of 2 never learn it, since no gradient ever spans the 3 steps it
-    needs. Their error stays near 1, what always guessing 0 gives. Chunks of 4
-    to 20 learn it well. The whole sequence learns it worst after chunks of 2,
-    with only 10 updates in all. Over five seeds, chunks of 4 to 20 stayed
-    below 0.0002, while chunks of 2 and the whole sequence stayed at 0.48 or
-    more. So a chunk must be longer than the span to learn, and short enough
-    to give many updates.
+    Chunks of 2 never learn the task, because no gradient ever reaches back
+    the 3 steps it needs. Their error stays near 1, which is the error of
+    always guessing 0. Chunks of 4 to 20 learn it well. The whole sequence
+    does second worst, after chunks of 2, because it gets only 10 updates in
+    total. Over five seeds, chunks of 4 to 20 stayed below 0.0002. Chunks of 2
+    and the whole sequence stayed at 0.48 or more. So a chunk must be longer
+    than the distance the model has to learn, and short enough to give many
+    updates.
     """,
 )
 
@@ -393,13 +414,14 @@ BPTT2_SOURCE = source_file(
     from torch import Tensor
 
     h = torch.ones(2, requires_grad=True) * 3
-    cut = h.detach()              # the same numbers, with no history behind them
+    cut = h.detach()              # the same numbers, without the record of how they were computed
     cut_has_history = cut.requires_grad    # False
 
 
-    # TODO: Finish forward. x has shape (batch, steps, 1), and h is the state to
-    #   start from, or None for zeros. Return the prediction at every step, of
-    #   shape (batch, steps, 1), and the state the RNN ended in.
+    # TODO: Finish forward. x has shape (batch, steps, 1). h is the hidden state
+    #   to start from, or None to start from zeros. Return two things, the
+    #   prediction at every step, of shape (batch, steps, 1), and the hidden
+    #   state of self.rnn after the last step.
     class Predictor(nn.Module):
         def __init__(self, hidden: int) -> None:
             super().__init__()
@@ -414,11 +436,13 @@ BPTT2_SOURCE = source_file(
             ...
 
 
-    # TODO: Finish the loop, one pass of truncated backprop through time over x
-    #   and y, both of shape (batch, steps, 1), in chunks of `length` steps. Each
-    #   chunk starts from the state the chunk before ended in, cut from its
-    #   history, and takes one step of optimizer on its mean squared error.
-    #   Return the last chunk's loss.
+    # TODO: Finish the loop so the function runs one pass of truncated backprop
+    #   through time. x and y both have shape (batch, steps, 1), and the loop
+    #   splits them into chunks of `length` steps. Each chunk starts from the
+    #   hidden state the previous chunk ended with, detached from its history.
+    #   For each chunk, compute the mean squared error and take one step of
+    #   optimizer. Call that error loss, because the last line returns the
+    #   last chunk's loss.
     def train_truncated(
         model: nn.Module,
         optimizer: torch.optim.Optimizer,
@@ -555,7 +579,7 @@ def check_predictor_forward(found: type) -> None:
         result = model(x, h)
 
         if not isinstance(result, tuple) or len(result) != 2:
-            raise Mismatch(f"{call} should give the predictions and the last state, as a tuple of two.")
+            raise Mismatch(f"{call} should return the predictions and the last state, as a tuple of two.")
 
         expect_tensor(
             call=f"the predictions of {call}",
@@ -605,7 +629,7 @@ def check_truncated_learns(found: object) -> None:
 
     if error > 0.05:
         raise Mismatch(
-            f"After 3 passes in chunks of 10, the model gives back inputs from 3 steps earlier with a mean squared "
+            f"After 3 passes in chunks of 10, the model repeats inputs from 3 steps earlier with a mean squared "
             f"error of {error:.3f}, but it should be below 0.05.",
         )
 
@@ -614,17 +638,17 @@ def check_bptt2(checker: Checker) -> None:
     checker.test_method(
         class_name="Predictor",
         method="forward",
-        description="predicts every step and gives back the last state",
+        description="predicts every step and returns the last state",
         run=check_predictor_forward,
     )
     checker.test(
         function="train_truncated",
-        description="updates once per chunk, carrying the state across",
+        description="updates once per chunk and carries the state into the next chunk",
         run=check_one_pass,
     )
     checker.test(
         function="train_truncated",
-        description="learns to give back each input 3 steps later",
+        description="learns to repeat each input 3 steps later",
         run=check_truncated_learns,
     )
 
@@ -637,11 +661,11 @@ BPTT2 = Exercise(
     source=BPTT2_SOURCE,
     solution=BPTT2_SOLUTION,
     hints={
-        "Predictor.forward": "self.rnn(x, h) gives every step's state and the last state. Pass the first through "
-        "self.out and return both.",
+        "Predictor.forward": "self.rnn(x, h) returns the hidden state of every step and the last hidden state. Pass "
+        "the first through self.out, and return the result together with the last state.",
         "train_truncated": "Call model on x_chunk and the carried h, and keep both the predictions and the new h. "
-        "Take F.mse_loss against y_chunk, zero the gradients, backward and step. Then set h = h.detach() for the "
-        "next chunk.",
+        "Compute F.mse_loss against y_chunk, then zero the gradients, call backward and step the optimizer. Then "
+        "set h = h.detach() for the next chunk.",
     },
     introduces=(),
     check=check_bptt2,
@@ -656,30 +680,41 @@ BPTT2 = Exercise(
 
 BPTT3_LESSON = prose(
     """
-    bptt1 multiplied factors on a one number state. A real RNN has a vector
-    state and a matrix `W_hh`, and the same thing happens. Here is
-    `gradient_by_distance` below on a tanh `nn.RNN` with a state of 32 and
-    `batch_first=True`, over 16 sequences of 60 random steps.
+    In bptt1 the state was one number, and the gradient was a product of one
+    factor per step. A real RNN has a vector state and a matrix `W_hh`, and
+    the same thing happens. The table shows what `gradient_by_distance`, from
+    the file below, returns for a tanh `nn.RNN` with a hidden state of size 32
+    and `batch_first=True`. The input is 16 sequences of 60 random steps.
+
+    Each number measures how strongly the last state depends on the input
+    that many steps back. The first row uses the starting weights PyTorch
+    gives a new `nn.RNN`. The second row multiplies its `W_hh` by 5.
 
     | Steps back | 0 | 1 | 5 | 10 | 20 | 30 | 50 |
     |---|---|---|---|---|---|---|---|
     | PyTorch's start | 1.04 | 1.41 | 0.046 | 0.021 | 0.0001 | 8e-7 | 3e-11 |
     | `W_hh` times 5 | 0.80 | 1.44 | 4.5 | 24 | 377 | 5,650 | 559,000 |
 
-    From PyTorch's start the gradient fades, the **vanishing gradient**. A
-    step 50 back gets a gradient 30 billion times weaker than the last step's,
-    so the model can't learn that it matters. A bigger learning rate doesn't
-    help, since the signal never arrives. Gates, in 41_gated_rnns, are the fix.
+    With PyTorch's starting weights, the gradient shrinks towards 0 as it goes
+    back. This is the **vanishing gradient**. The step 50 back gets a gradient
+    30 billion times smaller than the last step's. So the model cannot learn
+    that the step 50 back matters. A bigger learning rate does not help,
+    because almost none of the gradient reaches that far back. The gates in
+    41_gated_rnns fix this.
 
-    The second row is the opposite, the **exploding gradient**. With a vector
-    state, a large `W_hh` multiplies the gradient up faster than the tanh
-    shrinks it. A ReLU never shrinks it at all.
+    The second row shows the opposite problem, the **exploding gradient**,
+    where the gradient grows huge as it goes back. With a vector state, a
+    large `W_hh` multiplies the gradient up by more than the tanh derivative
+    shrinks it. An RNN that uses ReLU in place of tanh never shrinks it at
+    all.
 
-    Le, Jaitly and Hinton started a ReLU RNN's `W_hh` at the **identity
-    matrix**, 1 on the diagonal and 0 elsewhere. Then `h @ W_hh.T` is `h`, so
-    the state carries forward unchanged. A little above the identity, the
-    state and its gradient grow at every step. Here are such RNNs, with a
-    state of 16, trained on votes of 51 steps by 300 steps of SGD at 0.01.
+    Le, Jaitly and Hinton started the `W_hh` of a ReLU RNN at the **identity
+    matrix**, which has 1 on the diagonal and 0 everywhere else. Then
+    `h @ W_hh.T` equals `h`, so the state is carried to the next step
+    unchanged. If `W_hh` starts a little larger than the identity, the state
+    and its gradient grow at every step. Here are such RNNs with a hidden
+    state of size 16. Each one trained on the votes from rnn3, 51 steps long,
+    for 300 steps of SGD with a learning rate of 0.01.
 
     | Start | Clipping | Largest gradient norm | Accuracy |
     |---|---|---|---|
@@ -688,20 +723,24 @@ BPTT3_LESSON = prose(
     | 1.05 times the identity | none | 141 million | 50.6% |
     | 1.05 times the identity | at 1.0 | 590 | 79.5% |
 
-    Unclipped, one huge gradient throws the weights far off in a single step.
-    Clipped at 1.0, the norms before clipping still spike, but no step moves
-    the weights by more than 0.01 in all. Over five seeds the clipped runs
-    reached 79.0% to 84.9%, and the unclipped ones 49.5% to 61.8%.
+    Without clipping, one huge gradient can push the weights far from any
+    good values in a single step. With clipping at 1.0, the gradient norms
+    before clipping still spike. But the clipped gradient has a norm of at
+    most 1.0. With a learning rate of 0.01, no step can change the weights by
+    a norm of more than 0.01. Over five seeds, the clipped runs reached 79.0%
+    to 84.9% accuracy, and the unclipped ones 49.5% to 61.8%.
 
-    Clipping, from clipping1, caps the size of a step and keeps its direction.
-    Pascanu, Mikolov and Bengio proposed it for RNNs whose gradients explode,
-    and the RNNs in their paper were tanh and sigmoid ones. It does nothing
-    for a gradient that fades.
+    Gradient clipping, from clipping1, limits the size of a step but keeps its
+    direction. Pascanu, Mikolov and Bengio proposed it for RNNs whose
+    gradients explode. The RNNs in their paper used tanh and sigmoid.
+    Clipping does nothing for a gradient that vanishes.
 
-    The identity start also carries a value across a long gap. Each step holds
-    a value from -1 to 1 and a mark. One of the first 5 steps is marked, and
-    the RNN gives back its value after 40 steps. Each start trained for 1,500
-    steps of Adam at 0.01, clipped at 1.0, on five seeds.
+    Starting at the identity also helps an RNN remember a value over many
+    steps. In this task each step holds two numbers, a value from -1 to 1 and
+    a mark that is 1 or 0. One of the first 5 steps is marked. After reading
+    all 40 steps, the RNN has to output the value of the marked step. Each
+    start trained for 1,500 steps of Adam with a learning rate of 0.01 and
+    clipping at 1.0. The table gives the range of errors over five seeds.
 
     | Start | Mean squared error |
     |---|---|
@@ -709,13 +748,14 @@ BPTT3_LESSON = prose(
     | PyTorch's, ReLU | 0.333 to 0.334 |
     | the identity, ReLU | 0.003 to 0.026 |
 
-    Guessing 0 scores 0.333, so from PyTorch's start no seed learns it. From
-    the identity, every seed does. lstm2 comes back to this task.
+    Always guessing 0 gives an error of 0.333. So from PyTorch's starting
+    weights, no seed learns the task. From the identity, every seed learns it.
+    lstm2 comes back to this task.
     """,
 )
 
 GIVEN_VOTES = '''
-# The votes of rnn3, each step +1 or -1, labelled by whether the +1s won.
+# The votes from rnn3. Each step is +1 or -1, and the label is 1 when there are more +1s than -1s.
 def vote_sequences(
     count: int,
     steps: int,
@@ -758,10 +798,11 @@ BPTT3_SOURCE = source_file(
 ''' + INDENTED_VOTES + '''
 
 
-    # TODO: Return how strongly the last state of rnn depends on each step of x.
-    #   x has shape (batch, steps, 1). Take the gradient of the sum of the last
-    #   state with respect to x, and its norm over the batch for each step.
-    #   Return one norm per step, shape (steps,), the last step first.
+    # TODO: Measure how strongly the last hidden state of rnn depends on each
+    #   step of x, which has shape (batch, steps, 1). Take the gradient of the
+    #   sum of the last state with respect to x. For each step, compute the
+    #   norm of that gradient over the batch and feature dimensions. Return
+    #   one norm per step, of shape (steps,), with the last step first.
     def gradient_by_distance(
         rnn: nn.RNN,
         x: Tensor,
@@ -770,11 +811,12 @@ BPTT3_SOURCE = source_file(
 
 
     eye = torch.eye(3)    # tensor([[1., 0., 0.], [0., 1., 0.], [0., 0., 1.]]), the identity matrix
-    size = nn.RNN(1, 3).hidden_size    # 3, the size of its state
+    size = nn.RNN(1, 3).hidden_size    # 3, the size of its hidden state
 
 
-    # TODO: Set rnn's weight_hh_l0 to scale times the identity matrix, in place,
-    #   without recording for autograd.
+    # TODO: Set rnn.weight_hh_l0 to scale times the identity matrix. Change the
+    #   existing tensor in place, and make sure autograd does not record the
+    #   change.
     def identity_start_(
         rnn: nn.RNN,
         scale: float,
@@ -782,9 +824,10 @@ BPTT3_SOURCE = source_file(
         ...
 
 
-    # TODO: Finish the loop. After backward, clip the gradient's norm to
-    #   max_norm, or only measure it when max_norm is None, as clipping2 did.
-    #   Keep the largest norm seen and return it.
+    # TODO: Finish the loop. After backward, clip the norm of the gradient to
+    #   max_norm. When max_norm is None, measure the norm without clipping, as
+    #   clipping2 did. Keep the largest norm seen before clipping in largest,
+    #   which the function returns.
     def train_votes(
         model: nn.Module,
         steps: int,
@@ -1034,8 +1077,8 @@ BPTT3 = Exercise(
         "last state, take x.grad.norm(dim=(0, 2)), and .flip(0) it.",
         "identity_start_": "Inside torch.no_grad(), build torch.eye of rnn.hidden_size times scale and .copy_ it into "
         "rnn.weight_hh_l0.",
-        "train_votes": "cap is float('inf') when max_norm is None, else max_norm. clip_grad_norm_ returns the norm "
-        "from before clipping, so keep the larger of it and largest.",
+        "train_votes": "Use a cap of float('inf') when max_norm is None, and max_norm otherwise. clip_grad_norm_ "
+        "returns the norm from before clipping, so set largest to the larger of that norm and largest.",
     },
     introduces=(),
     check=check_bptt3,
