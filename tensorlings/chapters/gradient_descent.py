@@ -30,11 +30,12 @@ GRADIENT_DESCENT = Chapter(
         """
         # Gradient descent
 
-        Most models have no formula for their best parameters. Gradient descent
-        finds good ones by stepping against the gradient of the loss, over and
-        over. This chapter takes the steps by hand, then with autograd, and
-        shows the two things that make it work or fail, the learning rate and
-        the scale of the features.
+        Most models have no formula that gives their best parameters. Gradient
+        descent finds good parameters by changing them in small steps, each one
+        in the direction of the negative gradient of the loss, again and again.
+        This chapter computes those steps by hand first, then with autograd. It
+        also shows the two things that decide whether gradient descent works,
+        which are the learning rate and the scale of the features.
 
         ## Further reading
 
@@ -120,21 +121,23 @@ def autograd_descent(
 
 DESCENT1_LESSON = prose(
     """
-    Least squares only works for a few simple models. Most models have no
-    formula for their best parameters, so training finds them another way. Start anywhere, then walk downhill on the loss, a small step
-    at a time.
+    Least squares gives the best parameters with a formula, but it only works
+    for a few simple models. Most models have no such formula, so training
+    finds their parameters another way. It starts from any values and changes
+    them in many small steps, and each step makes the loss a little lower. You
+    can picture this as walking downhill on the loss.
 
-    The gradient of the loss points the way each parameter would raise the
-    loss fastest, as derivatives3 showed. So each step moves the parameters
-    against it.
+    As derivatives3 showed, the gradient of the loss points in the direction
+    where the loss increases fastest. So each step changes the parameters in
+    the opposite direction, by subtracting a small multiple of the gradient.
 
     ```python
     w = w - learning_rate * grad_w
     ```
 
-    The **learning rate** sets the size of each step. Take the loss
-    `(3 * w - 6) ** 2`, which is lowest at `w = 2` and has derivative
-    `6 * (3 * w - 6)`.
+    The **learning rate** is that small multiple, so it sets the size of each
+    step. For example, take the loss `(3 * w - 6) ** 2`. It is lowest at
+    `w = 2`, and its derivative is `6 * (3 * w - 6)`.
 
     ```python
     w = 0.0
@@ -144,15 +147,16 @@ DESCENT1_LESSON = prose(
     # w goes 1.8, 1.98, 1.998, 1.9998, 1.99998
     ```
 
-    Each step closes most of the gap to 2. Walking downhill on the loss like
-    this is **gradient descent**.
+    Each step removes 90 percent of the remaining distance between `w` and 2.
+    Changing the parameters step by step against the gradient like this is
+    called **gradient descent**.
 
-    For a linear model with the mean squared error, Section 1's backprop by
-    hand gives the gradients. The loss is the mean of `errors ** 2`, where
-    `errors = x @ w + b - y`. Its gradient with respect to `errors` is
-    `2 * errors / n` for `n` examples. From there the rules of the backprop
-    chapter give `grad_w` and `grad_b`. Remember that `b` was copied into
-    every prediction.
+    For a linear model with the mean squared error, you can work out the
+    gradients by hand with the backprop rules from Section 1. The loss is the
+    mean of `errors ** 2`, where `errors = x @ w + b - y`. With `n` examples,
+    the gradient of the loss with respect to `errors` is `2 * errors / n`.
+    From there, the rules of the backprop chapter give `grad_w` and `grad_b`.
+    Remember that the same `b` is added to every prediction.
     """,
 )
 
@@ -164,7 +168,7 @@ DESCENT1_SOURCE = source_file(
     from torch import Tensor
 
     # Gradient descent on the loss (3 * w - 6) ** 2, whose derivative is
-    # 6 * (3 * w - 6). w moves toward 2, the bottom of the loss.
+    # 6 * (3 * w - 6). w gets closer to 2, where the loss is lowest.
     w = 0.0
 
     for _ in range(5):
@@ -172,7 +176,11 @@ DESCENT1_SOURCE = source_file(
         w = w - 0.05 * grad                          # 1.8, 1.98, 1.998, ...
 
 
-    # TODO: Return the weights after one step of gradient descent.
+    # TODO: Return the weights w after one step of gradient descent with the
+    #   given learning rate. grad_w is the gradient of the loss with respect to
+    #   w, and it has the same shape as w.
+    #   Example: step(torch.tensor([1.0, 2.0]), torch.tensor([10.0, -10.0]), 0.1)
+    #   returns tensor([0., 3.]).
     def step(
         w: Tensor,
         grad_w: Tensor,
@@ -182,10 +190,15 @@ DESCENT1_SOURCE = source_file(
 
 
     # TODO: Finish the last two lines, so this returns grad_w and grad_b, the
-    #   gradients of the mean squared error of x @ w + b against y. grad_errors,
-    #   the gradient of the errors, is filled in from the lesson. x @ w is a
-    #   matrix times a flat tensor, as in matvec_grad_v of backprop3, and b is
-    #   copied into every prediction, as row is in backprop2.
+    #   gradients of the mean squared error of x @ w + b against y. x has shape
+    #   (examples, features), w has shape (features,), y has shape (examples,),
+    #   and b is a single number. grad_errors, the gradient of the loss with
+    #   respect to errors, is already filled in from the lesson. x @ w
+    #   multiplies a matrix by a 1D tensor, like matvec_grad_v in backprop3. b
+    #   is added to every prediction, like row in backprop2.
+    #   Example: for x = torch.tensor([[1.0, 2.0], [3.0, 4.0]]), w at zeros,
+    #   b = torch.tensor(0.0) and y = torch.tensor([1.0, 2.0]), mse_gradients
+    #   returns (tensor([ -7., -10.]), tensor(-3.)).
     def mse_gradients(
         x: Tensor,
         w: Tensor,
@@ -200,9 +213,9 @@ DESCENT1_SOURCE = source_file(
         return grad_w, grad_b
 
 
-    # TODO: Finish the two lines in the loop, so this runs gradient descent from
-    #   w at zeros and b at 0 for the given number of steps, and returns the
-    #   final w and b.
+    # TODO: Finish the two lines in the loop, so this runs gradient descent for
+    #   the given number of steps and returns the final w and b. w starts as
+    #   all zeros and b starts at 0. Each step updates both w and b.
     def descend(
         x: Tensor,
         y: Tensor,
@@ -243,8 +256,8 @@ DESCENT1_SOLUTION = source_file(
         return w - learning_rate * grad_w
 
 
-    # The mean divides by the number of examples. b was added to every
-    # prediction, so its gradient adds grad_errors up.
+    # The loss is a mean, so grad_errors divides by the number of examples. b is
+    # added to every prediction, so its gradient is the sum of grad_errors.
     def mse_gradients(
         x: Tensor,
         w: Tensor,
@@ -295,7 +308,7 @@ def check_descent1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="step",
-        description="moves the weights against the gradient",
+        description="subtracts learning_rate * grad_w from w",
         inputs=(
             (small_tensor(60, 3), small_tensor(61, 3), 0.1),
             (small_tensor(62, 2, 2), small_tensor(63, 2, 2), 0.5),
@@ -319,7 +332,7 @@ def check_descent1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="descend",
-        description="runs gradient descent from zeros",
+        description="runs gradient descent starting from zeros",
         inputs=(
             (*named(*linear_data(68, 8, 2)), 50, 0.05),
             (*named(*linear_data(69, 10, 3)), 80, 0.02),
@@ -337,9 +350,9 @@ DESCENT1 = Exercise(
     source=DESCENT1_SOURCE,
     solution=DESCENT1_SOLUTION,
     hints={
-        "step": "Take the learning rate times the gradient away from w, as the line in the loop above does.",
-        "mse_gradients": "w plays the part of v in matvec_grad_v of backprop3, with grad_errors as the gradient "
-        "handed down. b was copied into every prediction, so its gradient adds grad_errors up.",
+        "step": "Subtract the learning rate times the gradient from w, like the update line in the loop above.",
+        "mse_gradients": "w plays the role of v in matvec_grad_v from backprop3, and grad_errors plays the role of "
+        "grad_y. b is added to every prediction, so its gradient is the sum of grad_errors.",
         "descend": "Call step for w with grad_w, and for b with grad_b.",
     },
     introduces=("learning rate", "gradient descent"),
@@ -354,9 +367,10 @@ DESCENT1 = Exercise(
 DESCENT2_LESSON = prose(
     """
     Working out gradients by hand stops being practical once a model has more
-    than a few steps. Autograd does it instead. Give the parameters
-    `requires_grad=True`, compute the loss, call `.backward()`, and every
-    parameter's `.grad` holds its gradient.
+    than a few operations. Autograd computes them for you. Create the
+    parameters with `requires_grad=True`, compute the loss, and call
+    `loss.backward()`. After that, each parameter's `.grad` holds the gradient
+    of the loss with respect to that parameter.
 
     ```python
     w = torch.zeros(2, requires_grad=True)
@@ -374,19 +388,26 @@ DESCENT2_LESSON = prose(
         b.grad = None
     ```
 
-    Three lines are new.
+    Three lines in this loop are new.
 
-    - `with torch.no_grad():` stops autograd from recording what runs inside it. The update is not part of the loss, so it must not join the graph.
-    - `-=` changes `w` in place, so it stays the tensor that asked for gradients. `w = w - ...` would make a new tensor.
-    - `w.grad = None` clears the gradient. Gradients add up across `.backward()` calls, as autograd4 showed, so without it each step would add every gradient before it.
+    - `with torch.no_grad():` stops autograd from recording the operations
+      inside it. The update is not part of computing the loss, so it must stay
+      out of the graph.
+    - `-=` changes `w` in place, so `w` stays the same tensor that was created
+      with `requires_grad=True`. Writing `w = w - ...` would make a new tensor.
+    - `w.grad = None` clears the gradient. As autograd4 showed, each
+      `.backward()` call adds its gradients to what `.grad` already holds.
+      Without clearing, each step's gradient would include the gradients of
+      all the steps before it.
 
-    Watching the loss tells you whether training works. It should fall fast at
-    first, then level off. `loss.item()` turns the loss into a plain number to
-    keep or print.
+    Watching the loss tells you whether training works. The loss should drop
+    fast at first, then level off. `loss.item()` turns the loss, a tensor that
+    holds one number, into a plain Python float that you can store or print.
 
-    The loops here end with `return w.detach(), b.detach()`. `.detach()`
-    gives the same numbers as a tensor that autograd no longer records. So
-    whatever the caller does with them stays out of the training's graph.
+    The loops in this exercise end with `return w.detach(), b.detach()`.
+    `.detach()` returns a tensor with the same numbers that autograd no longer
+    tracks. So whatever the caller does with the returned tensors is not
+    recorded in the training graph.
     """,
 )
 
@@ -399,8 +420,8 @@ DESCENT2_SOURCE = source_file(
 
 
     # TODO: This should run gradient descent with autograd and return the final
-    #   w and b, but they come out wrong, since each step's gradient piles onto
-    #   the ones before. Read the lesson, then fix it.
+    #   w and b. They come out wrong, because each step's gradient is added onto
+    #   the gradients of all the steps before. Read the lesson, then fix it.
     def train(
         x: Tensor,
         y: Tensor,
@@ -422,7 +443,8 @@ DESCENT2_SOURCE = source_file(
 
 
     # TODO: Finish the line that sets loss, so this trains on the mean absolute
-    #   error from linreg2 instead.
+    #   error from linreg2 instead of the mean squared error. The mean absolute
+    #   error is the mean of the absolute values of the errors x @ w + b - y.
     def train_absolute(
         x: Tensor,
         y: Tensor,
@@ -446,8 +468,12 @@ DESCENT2_SOURCE = source_file(
         return w.detach(), b.detach()
 
 
-    # TODO: Finish the line that fills history, so this returns the loss at
-    #   every step, before that step's update, as plain numbers.
+    # TODO: Finish the line that appends to history, so this returns a list of
+    #   the loss at every step, each as a plain Python float. Record each loss
+    #   before that step's update.
+    #   Example: for x = torch.tensor([[1.0, 2.0], [3.0, 4.0]]) and
+    #   y = torch.tensor([1.0, 2.0]), loss_history(x, y, 3, 0.05) returns about
+    #   [2.5, 0.845, 0.286].
     def loss_history(
         x: Tensor,
         y: Tensor,
@@ -482,7 +508,7 @@ DESCENT2_SOLUTION = source_file(
     from torch import Tensor
 
 
-    # Without clearing, each .backward() adds onto every gradient before it.
+    # Without clearing, each .backward() adds its gradients to those of earlier steps.
     def train(
         x: Tensor,
         y: Tensor,
@@ -610,7 +636,7 @@ def check_descent2(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="loss_history",
-        description="gives the loss before every step, as plain numbers",
+        description="gives the loss before every step, as plain Python floats",
         inputs=training_data,
         reference=lambda x, y, steps, learning_rate: autograd_descent(x, y, steps, learning_rate)[2],
         expect=expect_history,
@@ -625,9 +651,11 @@ DESCENT2 = Exercise(
     source=DESCENT2_SOURCE,
     solution=DESCENT2_SOLUTION,
     hints={
-        "train": "The gradients pile up from one step to the next. Clear w.grad and b.grad at the end of each step.",
-        "train_absolute": "The mean absolute error of x @ w + b against y, written as in linreg2.",
-        "loss_history": "loss is a tensor holding one number. Append loss.item(), the plain number.",
+        "train": "The gradients add up from one step to the next. Set w.grad and b.grad to None at the end of "
+        "each step.",
+        "train_absolute": "Compute the mean absolute error of x @ w + b against y, the same way linreg2 does.",
+        "loss_history": "loss is a tensor that holds one number. Append loss.item(), which is that number as a "
+        "Python float.",
     },
     introduces=(),
     check=check_descent2,
@@ -641,31 +669,35 @@ DESCENT2 = Exercise(
 DESCENT3_LESSON = prose(
     """
     The learning rate decides whether training works at all. Take the loss
-    `w ** 2`, with gradient `2 * w`, starting at `w = 1`. Each step multiplies
-    `w` by `1 - 2 * learning_rate`. After 10 steps the loss is
+    `w ** 2`, whose gradient is `2 * w`, and start at `w = 1`. Each step
+    computes `w - learning_rate * 2 * w`, which multiplies `w` by
+    `1 - 2 * learning_rate`. The loss is lowest at `w = 0`, its minimum. This
+    table shows the loss after 10 steps for five learning rates.
 
     | Learning rate | Loss after 10 steps | What happens |
     |---|---|---|
-    | 0.01 | 0.668 | crawls toward the bottom |
-    | 0.1 | 0.0115 | gets there |
-    | 0.5 | 0 | lands on the bottom in one step |
-    | 0.9 | 0.0115 | jumps across the bottom and back, and still gets there |
-    | 1.1 | 38.3 | jumps farther each time, and blows up |
+    | 0.01 | 0.668 | `w` moves slowly toward the minimum |
+    | 0.1 | 0.0115 | `w` gets close to the minimum |
+    | 0.5 | 0 | `w` reaches the minimum in one step |
+    | 0.9 | 0.0115 | `w` jumps past the minimum each step, but still gets close |
+    | 1.1 | 38.3 | `w` jumps past the minimum by more each step, so the loss blows up |
 
-    Too small wastes steps. Too big overshoots, and past a limit every step
-    lands farther from the bottom than the last. The loss then grows without
-    end, until it is `inf`, infinity, or `nan`, short for not a number. A loss like that
-    is the first sign of a learning rate that is too big.
+    A learning rate that is too small wastes steps. One that is too big jumps
+    past the minimum. Past a certain size, every step ends farther from the
+    minimum than the step before. The loss then keeps growing until it
+    becomes `inf`, which means infinity, or `nan`, short for not a number. A
+    loss like that is the first sign that the learning rate is too big.
 
-    `math.isfinite(x)` is True for a plain number and False for `inf` and
-    `nan`. `math.inf` is infinity as a plain number, above every finite loss,
-    so it makes a good starting best loss. Comparing a `nan` with anything
-    gives False, so test for it before comparing losses.
+    `math.isfinite(x)` is True for an ordinary number and False for `inf` and
+    `nan`. `math.inf` is infinity as a Python float. It is larger than every
+    finite loss, so it is a good starting value for the best loss so far.
+    Comparisons like `<` and `>` with a `nan` always give False. So check for
+    `nan` before comparing losses.
 
-    There is no rule that gives the right rate for a new model. The usual way
-    is to try a few rates ten times apart, like 0.001, 0.01 and 0.1, and keep
-    the one with the lowest loss. Another is to start high and halve the rate
-    until training stops blowing up.
+    No rule gives the right learning rate for a new model. The usual approach
+    is to try a few rates that are 10 times apart, like 0.001, 0.01 and 0.1.
+    Then you keep the one with the lowest loss. Another approach is to start
+    with a high rate and halve it until training stops blowing up.
     """,
 )
 
@@ -679,7 +711,7 @@ DESCENT3_SOURCE = source_file(
     from torch import Tensor
 
 
-    # The training loop from descent2, giving the loss after the last step.
+    # The training loop from descent2. It returns the loss after the last step.
     def final_loss(
         x: Tensor,
         y: Tensor,
@@ -703,9 +735,9 @@ DESCENT3_SOURCE = source_file(
         return ((x @ w + b - y) ** 2).mean().item()
 
 
-    # TODO: Finish the if line, so this returns the learning rate from rates whose
-    #   final_loss after the given steps is lowest, skipping any rate whose loss
-    #   is not finite.
+    # TODO: Finish the if line, so this returns the rate in rates with the lowest
+    #   final_loss after the given number of steps. Skip any rate whose loss is
+    #   not finite, meaning inf or nan.
     def best_learning_rate(
         x: Tensor,
         y: Tensor,
@@ -725,9 +757,10 @@ DESCENT3_SOURCE = source_file(
         return best_rate
 
 
-    # TODO: Finish blows_up, the test the while loop runs. It returns True when
-    #   final_loss at that rate is not finite, or is above start_loss, the loss
-    #   with w and b at zero before any step.
+    # TODO: Finish blows_up, the test that the while loop runs. blows_up(rate)
+    #   returns True when final_loss at that rate is not finite, or is above
+    #   start_loss. start_loss is the loss before any step, while w and b are
+    #   still zero. The loop halves the rate until blows_up returns False.
     def halve_until_stable(
         x: Tensor,
         y: Tensor,
@@ -806,7 +839,7 @@ DESCENT3_SOLUTION = source_file(
     ) -> float:
         start_loss = (y ** 2).mean().item()
 
-        # A nan fails every comparison, so loss > start_loss alone would call a nan stable.
+        # loss > start_loss is False for a nan, so that test alone would call a nan loss stable.
         def blows_up(rate: float) -> bool:
             loss = final_loss(x, y, rate, steps)
 
@@ -894,8 +927,8 @@ DESCENT3 = Exercise(
     hints={
         "best_learning_rate": "Keep a rate when math.isfinite says its loss is finite and the loss is below "
         "best_loss.",
-        "halve_until_stable": "In blows_up, get final_loss(x, y, rate, steps). Return True when math.isfinite "
-        "says it isn't finite, or when it is above start_loss.",
+        "halve_until_stable": "In blows_up, compute final_loss(x, y, rate, steps). Return True when math.isfinite "
+        "says that loss is not finite, or when the loss is above start_loss.",
     },
     introduces=(),
     check=check_descent3,
@@ -908,8 +941,8 @@ DESCENT3 = Exercise(
 
 DESCENT4_LESSON = prose(
     """
-    Features often live on very different scales. Here one feature is a
-    fraction and the other is in the thousands.
+    Features often have very different scales. In this example, the first
+    feature is a fraction between 0 and 1, and the second is in the thousands.
 
     ```python
     x = torch.tensor([[0.2, 1500.0],
@@ -918,24 +951,27 @@ DESCENT4_LESSON = prose(
                       [0.7, 2900.0]])
     ```
 
-    The gradient of each weight is scaled by its feature, so the second
-    weight's gradient is about a thousand times the first's. A learning rate
-    small enough to keep the second weight from blowing up leaves the first
-    one barely moving. No single rate suits both.
+    Each weight's gradient is multiplied by the values of its feature. So the
+    second weight's gradient is about a thousand times the first weight's
+    gradient. A learning rate small enough to keep the second weight from
+    blowing up changes the first weight very little. No single learning rate
+    works for both.
 
-    The fix is to put every feature on the same scale before training.
-    Standardizing takes each column's mean away, then divides by the column's
-    standard deviation, its typical distance from the mean. Every column then
-    has mean 0 and spread 1.
+    The fix is to put every feature on the same scale before training, which
+    is called standardizing. For each column, subtract the column's mean, then
+    divide by the column's standard deviation. The standard deviation measures
+    how far the values typically are from the mean. After standardizing, every
+    column has mean 0 and standard deviation 1.
 
     ```python
     x.mean(dim=0)    # about 0.575 and 2025, one mean per column
-    x.std(dim=0)     # about 0.299 and 862, one spread per column
+    x.std(dim=0)     # about 0.299 and 862, one standard deviation per column
     ```
 
-    Here is training on 20 examples like these for 100 steps, over 10 runs.
-    The targets are `3 * fraction + thousands / 1000 + 0.5`, and the rates
-    tried were half a power of ten apart.
+    The table below comes from training on 20 examples like these for 100
+    steps, repeated on 10 random datasets. The targets are
+    `3 * fraction + thousands / 1000 + 0.5`. Each learning rate tried was
+    `10 ** 0.5`, about 3.16, times the one before.
 
     | Features | Learning rate | Loss after 100 steps |
     |---|---|---|
@@ -943,15 +979,15 @@ DESCENT4_LESSON = prose(
     | raw | 1e-7, the best | 0.83 to 1.70 |
     | standardized | 0.1 | below 3e-9 |
 
-    On the raw features the first weight ends near 0.00001, where it should
-    be 3. The loss, 1.35 at the median, is about what predicting the mean
-    target for every example gives, 1.24. Standardized, the first weight ends
-    at 3.
+    On the raw features, the first weight ends near 0.00001, but its correct
+    value is 3. The median loss is 1.35. That is about as bad as predicting
+    the mean target for every example, which gives a loss of 1.24. With
+    standardized features, the first weight ends at 3.
 
-    Keep the mean and the spread you computed on the training data, and use
-    those same numbers on any new example. Don't standardize a new example
-    with its own numbers, and don't fold new examples into the mean and the
-    spread either.
+    Compute the mean and the standard deviation on the training data, and use
+    those same numbers to standardize any new example. Don't standardize a new
+    example with its own mean and standard deviation. Don't include new
+    examples when you compute the mean and standard deviation either.
     """,
 )
 
@@ -967,19 +1003,28 @@ DESCENT4_SOURCE = source_file(
                       [0.5, 1100.0],
                       [0.7, 2900.0]])
 
-    # One mean and one spread per column, so dim=0, down the rows.
+    # One mean and one standard deviation per column. dim=0 computes down the
+    # rows, so each column gets its own number.
     means = x.mean(dim=0)                        # about 0.575 and 2025
     spreads = x.std(dim=0)                       # about 0.299 and 862
 
 
-    # TODO: Return the mean and the spread of every column of x, as the two lines
-    #   above work them out.
+    # TODO: Return a pair, the mean and the standard deviation of every column of
+    #   x, computed the way the two lines above compute them. x has shape
+    #   (examples, features), and each result has shape (features,).
+    #   Example: column_stats(torch.tensor([[1.0, 10.0], [3.0, 30.0]])) returns
+    #   (tensor([ 2., 20.]), tensor([ 1.4142, 14.1421])).
     def column_stats(x: Tensor) -> tuple[Tensor, Tensor]:
         ...
 
 
-    # TODO: Return x standardized with the given mean and spread, each column's
-    #   mean taken away, then divided by its spread.
+    # TODO: Return x standardized with the given mean and spread. For each
+    #   column, subtract that column's mean, then divide by that column's
+    #   spread, which is its standard deviation. mean and spread both have shape
+    #   (features,).
+    #   Example: standardize_with(torch.tensor([[1.0, 10.0], [3.0, 30.0]]),
+    #   torch.tensor([2.0, 20.0]), torch.tensor([1.0, 10.0])) returns
+    #   tensor([[-1., -1.], [ 1.,  1.]]).
     def standardize_with(
         x: Tensor,
         mean: Tensor,
@@ -988,7 +1033,7 @@ DESCENT4_SOURCE = source_file(
         ...
 
 
-    # The training loop from descent2, giving the loss after the last step.
+    # The training loop from descent2. It returns the loss after the last step.
     def final_loss(
         x: Tensor,
         y: Tensor,
@@ -1012,9 +1057,10 @@ DESCENT4_SOURCE = source_file(
         return ((x @ w + b - y) ** 2).mean().item()
 
 
-    # TODO: This trains on x as it is, and the loss blows up. x here is the
-    #   training data, so its own column stats are the right ones. Make it train
-    #   on x standardized with them, keeping the rate and the steps.
+    # TODO: This trains on the raw x, and the loss blows up. Make it train on x
+    #   standardized with the column means and standard deviations that
+    #   column_stats gives for x. Using x's own numbers is right here, because
+    #   x is the training data. Keep the learning rate of 0.1 and the 100 steps.
     def fit_loss(
         x: Tensor,
         y: Tensor,
@@ -1043,7 +1089,7 @@ DESCENT4_SOLUTION = source_file(
         return x.mean(dim=0), x.std(dim=0)
 
 
-    # The mean and the spread have shape (columns,), which lines up with every row.
+    # mean and spread have shape (columns,), so broadcasting applies them to every row.
     def standardize_with(
         x: Tensor,
         mean: Tensor,
@@ -1103,18 +1149,18 @@ def check_descent4(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="column_stats",
-        description="gives the mean and the spread of every column",
+        description="gives the mean and the standard deviation of every column",
         inputs=(
             (named(*scaled_data(76, 6))[0],),
             (small_tensor(77, 5, 3),),
         ),
         reference=lambda x: (x.mean(dim=0), x.std(dim=0)),
-        expect=expect_parts("the means", "the spreads"),
+        expect=expect_parts("the means", "the standard deviations"),
     )
     check_on_inputs(
         checker=checker,
         function="standardize_with",
-        description="takes the mean away and divides by the spread, column by column",
+        description="subtracts the mean and divides by the standard deviation, column by column",
         inputs=(
             (named(*scaled_data(78, 4))[0], torch.tensor([0.5, 2000.0]), torch.tensor([0.25, 800.0])),
             (small_tensor(79, 3, 3), torch.tensor([1.0, -1.0, 0.0]), torch.tensor([2.0, 0.5, 1.0])),
@@ -1148,11 +1194,12 @@ DESCENT4 = Exercise(
     source=DESCENT4_SOURCE,
     solution=DESCENT4_SOLUTION,
     hints={
-        "column_stats": "Return the two lines that set means and spreads, with this function's x, as a pair.",
-        "standardize_with": "Take mean away from x, then divide by spread. Both have one number per column, which "
-        "broadcasting lines up with every row.",
+        "column_stats": "Return the two expressions that set means and spreads, as a pair, using this "
+        "function's x.",
+        "standardize_with": "Subtract mean from x, then divide by spread. Both have one number per column, and "
+        "broadcasting applies them to every row.",
         "fit_loss": "Get the mean and the spread from column_stats(x), standardize x with them, and pass the "
-        "standardized x to final_loss in place of x.",
+        "standardized x to final_loss instead of x.",
     },
     introduces=(),
     check=check_descent4,

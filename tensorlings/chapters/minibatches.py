@@ -34,11 +34,12 @@ MINIBATCHES = Chapter(
         """
         # Minibatches
 
-        Real datasets are too big to read in full for every step. Each step uses
-        a small random group of examples instead, a minibatch. This chapter
-        picks minibatches, shows why their noisy gradients still work, runs
-        training in epochs, and ends with PyTorch's DataLoader, which does the
-        bookkeeping.
+        Real datasets are too big to go through in full for every training step.
+        So each step uses a small random group of examples instead, called a
+        minibatch. This chapter shows how to pick minibatches, and why training
+        still works even though their gradients are noisy. It then organizes
+        training into epochs, which are full passes over the data. It ends with
+        PyTorch's DataLoader, which does the shuffling and splitting for you.
 
         ## Further reading
 
@@ -91,15 +92,17 @@ def expect_tensor_list(
 
 MINIBATCH1_LESSON = prose(
     """
-    So far every step used every example. With a million examples, each step
-    would read all of them to move the parameters a little. So each step uses
-    a small random group of examples instead, often 32 to 512 of them. A group
-    of examples the model takes in together is a **batch**, and a batch drawn
-    at random from the data is a **minibatch**.
+    So far, every step of gradient descent used every example. With a million
+    examples, each step would have to process all of them, only to change the
+    parameters a little. So in practice each step uses a small random group of
+    examples instead, often 32 to 512 of them. A group of examples that the
+    model processes together is called a **batch**. A batch drawn at random
+    from the data is called a **minibatch**.
 
-    A minibatch's gradient is a noisy estimate of the gradient over every
-    example, and on average it points the same way. Here is the gradient of
-    `w` for a linear model on 10 examples, with minibatches of 3.
+    The gradient of the loss on a minibatch is a noisy estimate of the
+    gradient on all the examples. Averaged over many minibatches, it equals
+    the full gradient. Here is the gradient of `w` for a linear model on 10
+    examples, with minibatches of 3.
 
     ```text
     every example              [48.00, -7.15, 49.40]
@@ -107,16 +110,18 @@ MINIBATCH1_LESSON = prose(
     mean of 200 minibatches    [47.70, -6.28, 47.55]
     ```
 
-    One minibatch is far off, but the mean of many comes back to the full
-    gradient. Over 10 runs, one minibatch missed some entry by 10 to 47, and
-    the mean of 200 by 0.2 to 3.6.
+    One minibatch's gradient is far off, but the mean of many of them comes
+    close to the full gradient. Over 10 runs with different random draws, a
+    single minibatch's gradient was off by 10 to 47 in its worst entry. The
+    mean of 200 minibatch gradients was off by only 0.2 to 3.6.
 
-    So each step is noisy, but it reads far fewer examples. For the same
-    number of examples read, many cheap noisy steps beat a few exact ones.
-    Here is a linear model with 10 features fit to 10,000 examples. Full batch
-    means every step uses every example. Each way ran at its best learning
-    rate. Each entry is how far the loss ends above the least squares best,
-    the median of 10 runs.
+    So each step is noisy, but it processes far fewer examples. For the same
+    number of examples processed, many cheap noisy steps reach a lower loss
+    than a few exact ones. The table below fits a linear model with 10
+    features to 10,000 examples. Full batch means every step uses every
+    example. Each method ran at its best learning rate. Each entry is the
+    final loss minus the least squares loss, which is the lowest loss
+    possible. It is the median over 10 runs.
 
     | Examples read | Full batch | Minibatches of 32 |
     |---|---|---|
@@ -124,24 +129,25 @@ MINIBATCH1_LESSON = prose(
     | 50,000 | 0.23 after 5 steps | 0.0066 after 1,565 steps |
     | 200,000 | 0.022 after 20 steps | 0.0011 after 6,260 steps |
 
-    The minibatches ended lower in all 10 runs.
+    Minibatches reached the lower loss in all 10 runs.
 
-    A tensor of positions picks those rows, in that order.
+    Indexing a tensor with a tensor of positions picks the rows at those
+    positions, in that order.
 
     ```python
     x = torch.tensor([[1.0], [2.0], [3.0], [4.0], [5.0]])
     x[torch.tensor([3, 0])]    # tensor([[4.], [1.]])
     ```
 
-    `torch.randperm(n)` gives the numbers 0 to `n - 1` in a random order, so
-    its first `k` entries are `k` different random positions. Pass it a
-    generator, as in `torch.randperm(5, generator=g)`, and the order comes out
-    the same every run. A generator made with
-    `torch.Generator().manual_seed(0)` always draws the same random numbers,
-    which is how the checks repeat your draws.
+    `torch.randperm(n)` returns the numbers 0 to `n - 1` in a random order. So
+    its first `k` entries are `k` different random positions. You can pass it
+    a random number generator, as in `torch.randperm(5, generator=g)`. A
+    generator made with `torch.Generator().manual_seed(0)` produces the same
+    random numbers every time the program runs. That is how the checks
+    reproduce your random draws exactly.
 
     `.clone()` makes a copy of a tensor. A function can change the copy
-    without touching the tensor it was given.
+    without changing the tensor that was passed in.
     """,
 )
 
@@ -154,16 +160,22 @@ MINIBATCH1_SOURCE = source_file(
 
     x = torch.tensor([[1.0], [2.0], [3.0], [4.0], [5.0]])
 
-    # A tensor of positions picks those rows, in that order.
+    # Indexing with a tensor of positions picks those rows, in that order.
     picked = x[torch.tensor([3, 0])]                       # tensor([[4.], [1.]])
 
-    # torch.randperm(n) gives 0 to n - 1 in a random order, the same order every
-    # run for a generator with the same seed.
-    order = torch.randperm(5, generator=torch.Generator().manual_seed(0))
+    # torch.randperm(n) returns 0 to n - 1 in a random order. With a generator
+    # made from the same seed, the order is the same every run.
+    order = torch.randperm(5, generator=torch.Generator().manual_seed(0))    # tensor([4, 0, 1, 3, 2])
 
 
-    # TODO: Return the rows of x at the first size positions of a randperm made
-    #   with generator, and the entries of y at the same positions.
+    # TODO: Return a random minibatch of size examples. Make a random order of
+    #   the row positions of x with torch.randperm and generator, and keep its
+    #   first size positions. Return the rows of x at those positions and the
+    #   entries of y at the same positions. x has shape (examples, features)
+    #   and y has shape (examples,).
+    #   Example: for x = torch.arange(10.0).reshape(5, 2), y = torch.arange(5.0)
+    #   and a generator seeded with 0, random_minibatch(x, y, 2, generator)
+    #   returns (tensor([[8., 9.], [0., 1.]]), tensor([4., 0.])).
     def random_minibatch(
         x: Tensor,
         y: Tensor,
@@ -173,10 +185,11 @@ MINIBATCH1_SOURCE = source_file(
         ...
 
 
-    # TODO: Finish the line that sets loss, the mean squared error of x @ w + b
-    #   against y on the rows at positions only. The lines after it give its
-    #   gradients by autograd. The first two lines work on copies, so the w and
-    #   b passed in keep no gradient from one call to the next.
+    # TODO: Finish the line that sets loss, so it is the mean squared error of
+    #   x @ w + b against y, computed only on the rows at positions. positions
+    #   is a 1D tensor of row positions. The lines after it compute the
+    #   gradients with autograd. The first two lines make copies of w and b, so
+    #   the w and b passed in don't keep gradients from one call to the next.
     def minibatch_gradients(
         x: Tensor,
         y: Tensor,
@@ -193,8 +206,9 @@ MINIBATCH1_SOURCE = source_file(
 
 
     # TODO: Finish the line in the loop, so this returns the mean of grad_w over
-    #   the random minibatches of the given size, one per draw. It comes out
-    #   close to the gradient over every example.
+    #   draws random minibatches of the given size. Each pass of the loop draws
+    #   one minibatch. The result comes out close to the gradient on all the
+    #   examples.
     def mean_minibatch_gradient(
         x: Tensor,
         y: Tensor,
@@ -351,10 +365,10 @@ MINIBATCH1 = Exercise(
     source=MINIBATCH1_SOURCE,
     solution=MINIBATCH1_SOLUTION,
     hints={
-        "random_minibatch": "Take torch.randperm(len(x), generator=generator) and keep its first size entries with "
-        "a slice. Those positions pick the rows of x and the entries of y.",
-        "minibatch_gradients": "The mean squared error as in descent2, with x[positions] in place of x and "
-        "y[positions] in place of y.",
+        "random_minibatch": "Call torch.randperm(len(x), generator=generator) and keep its first size entries with "
+        "a slice. Index x and y with those positions.",
+        "minibatch_gradients": "Write the mean squared error as in descent2, using x[positions] instead of x and "
+        "y[positions] instead of y.",
         "mean_minibatch_gradient": "Add this draw's grad_w to total.",
     },
     introduces=("batch", "minibatch"),
@@ -368,11 +382,12 @@ MINIBATCH1 = Exercise(
 
 MINIBATCH2_LESSON = prose(
     """
-    Drawing every minibatch at random can pick one example many times and
-    another never. The usual way is to shuffle the examples once, then cut the
-    shuffled order into pieces, so every example is used exactly once. One full
-    pass over the data like this is an **epoch**, and training runs for many
-    epochs, with a new shuffle each time.
+    If every minibatch is drawn at random on its own, some examples get picked
+    many times and others never. The usual approach is to shuffle the examples
+    once, then split the shuffled order into consecutive pieces. That way every
+    example is used exactly once. One full pass over the data like this is
+    called an **epoch**. Training runs for many epochs, with a new shuffle each
+    time.
 
     ```python
     order = torch.randperm(10, generator=torch.Generator().manual_seed(0))
@@ -380,18 +395,19 @@ MINIBATCH2_LESSON = prose(
     # three pieces of positions, of sizes 4, 4 and 2
     ```
 
-    `range(0, 10, 4)` counts 0, 4 and 8, the start of each piece. The last
-    piece is smaller when the count of examples doesn't divide evenly. Some
-    training leaves that piece out, so every step sees the same number of
-    examples.
+    `range(0, 10, 4)` gives 0, 4 and 8, which are the start positions of the
+    pieces. The last piece is smaller when the number of examples is not a
+    multiple of the piece size. Some training code leaves that smaller piece
+    out, so that every step uses the same number of examples.
 
-    The shuffle matters. Data often arrives sorted, by date or by kind. Cut
-    without a shuffle, each minibatch would hold one kind of example, and
-    every step would pull the parameters toward that kind alone.
+    The shuffle matters. Data often comes sorted, for example by date or by
+    category. If you split it without shuffling, each minibatch holds only one
+    kind of example. Then each step changes the parameters to fit only that
+    kind of example.
 
-    Here is a linear model trained for 5 epochs in minibatches of 32, on 2,000
-    examples sorted by their target. Each entry is how far the loss ends above
-    the least squares best, the median of 10 runs.
+    The table below trains a linear model for 5 epochs in minibatches of 32,
+    on 2,000 examples sorted by their target. Each entry is the final loss
+    minus the least squares loss, the median over 10 runs.
 
     | Learning rate | Shuffled every epoch | Kept sorted |
     |---|---|---|
@@ -399,10 +415,12 @@ MINIBATCH2_LESSON = prose(
     | 0.03 | 0.0005 | 0.12 |
     | 0.1 | 0.0023 | 0.80 |
 
-    Shuffling ended lower in all 30 pairs of runs.
+    Shuffling gave the lower loss in all 30 pairs of runs, 10 for each
+    learning rate.
 
-    Training on minibatches is the loop from descent2 inside a loop over the
-    pieces of each epoch. Each step uses the rows of its piece only.
+    To train on minibatches, put the training step from descent2 inside two
+    loops. The outer loop runs over epochs, and the inner loop runs over the
+    pieces of each epoch. Each step uses only the rows in its piece.
     """,
 )
 
@@ -414,14 +432,17 @@ MINIBATCH2_SOURCE = source_file(
     from torch import Tensor
 
     # One epoch over 10 examples in minibatches of 4. The order is shuffled once,
-    # then cut into pieces, so every example is used once.
+    # then split into pieces, so every example is used exactly once.
     order = torch.randperm(10, generator=torch.Generator().manual_seed(0))
     pieces = [order[start:start + 4] for start in range(0, 10, 4)]    # sizes 4, 4 and 2
 
 
-    # TODO: Finish the last line, so this returns the positions of every
-    #   minibatch of one epoch over n examples, the shuffled order cut into
-    #   pieces of size. The last piece may be smaller.
+    # TODO: Finish the last line, so this returns the minibatches of one epoch
+    #   over n examples, as a list of tensors of positions. Split the shuffled
+    #   order into consecutive pieces of size positions each. The last piece
+    #   may be smaller.
+    #   Example: epoch_batches(10, 4, torch.Generator().manual_seed(0)) returns
+    #   [tensor([4, 1, 7, 5]), tensor([3, 9, 0, 8]), tensor([6, 2])].
     def epoch_batches(
         n: int,
         size: int,
@@ -432,8 +453,11 @@ MINIBATCH2_SOURCE = source_file(
         return ...
 
 
-    # TODO: Finish the last line the same way, but leave out the last piece when
-    #   it is smaller than size, so every minibatch has size positions.
+    # TODO: Finish the last line the same way as in epoch_batches, but leave out
+    #   the last piece when it is smaller than size, so every minibatch has
+    #   exactly size positions.
+    #   Example: full_batches(10, 4, torch.Generator().manual_seed(0)) returns
+    #   [tensor([4, 1, 7, 5]), tensor([3, 9, 0, 8])].
     def full_batches(
         n: int,
         size: int,
@@ -444,9 +468,10 @@ MINIBATCH2_SOURCE = source_file(
         return ...
 
 
-    # TODO: Finish the two lines that set xb and yb, the rows of the minibatch, so
-    #   this trains for the given epochs, one epoch_batches pass each, and
-    #   returns the final w and b.
+    # TODO: Finish the two lines that set xb and yb, the rows of x and the
+    #   entries of y in this minibatch. Then this trains for the given number
+    #   of epochs, with epoch_batches splitting each epoch into minibatches,
+    #   and returns the final w and b.
     def train_epochs(
         x: Tensor,
         y: Tensor,
@@ -497,7 +522,7 @@ MINIBATCH2_SOLUTION = source_file(
         return [order[start:start + size] for start in range(0, n, size)]
 
 
-    # Starts up to n - size leave room for a whole piece.
+    # A piece that starts at n - size or earlier has room for size positions.
     def full_batches(
         n: int,
         size: int,
@@ -585,7 +610,7 @@ def check_minibatch2(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="epoch_batches",
-        description="shuffles once and cuts the order into pieces",
+        description="shuffles once and splits the order into pieces",
         inputs=sizes,
         reference=reference_epoch_batches,
         expect=expect_tensor_list,
@@ -619,11 +644,11 @@ MINIBATCH2 = Exercise(
     source=MINIBATCH2_SOURCE,
     solution=MINIBATCH2_SOLUTION,
     hints={
-        "epoch_batches": "Cut order the way the line that sets pieces does, with n and size in place of 10 and 4.",
-        "full_batches": "Cut the same way, but stop the starts early enough that every piece is whole. The last "
-        "start that leaves room for a whole piece is n - size.",
-        "train_epochs": "xb is the rows of x at positions, and yb the entries of y at positions, picked as in "
-        "minibatch1.",
+        "epoch_batches": "Split order the way the line that sets pieces does, using n and size instead of 10 and 4.",
+        "full_batches": "Split the same way, but end the range early enough that every piece is complete. The last "
+        "start position that leaves room for a complete piece is n - size.",
+        "train_epochs": "xb is the rows of x at positions, and yb is the entries of y at positions. Index them as "
+        "in minibatch1.",
     },
     introduces=("epoch",),
     check=check_minibatch2,
@@ -636,9 +661,10 @@ MINIBATCH2 = Exercise(
 
 MINIBATCH3_LESSON = prose(
     """
-    PyTorch does the shuffling and cutting for you. A `TensorDataset` pairs
-    row `i` of `x` with entry `i` of `y`. A `DataLoader` shuffles the pairs and
-    hands them out in minibatches, a fresh shuffle every time you loop over it.
+    PyTorch can do the shuffling and splitting for you. A `TensorDataset`
+    pairs row `i` of `x` with entry `i` of `y`. A `DataLoader` shuffles those
+    pairs and gives them out in minibatches. It shuffles again every time you
+    loop over it.
 
     ```python
     from torch.utils.data import DataLoader, TensorDataset
@@ -654,19 +680,21 @@ MINIBATCH3_LESSON = prose(
         ...
     ```
 
-    Each loop over the loader is one epoch, and `xb` and `yb` are the rows of
-    one minibatch, already picked. `drop_last=True` leaves out a last
-    minibatch that is smaller than `batch_size`. `len(loader)` gives the number
-    of minibatches in an epoch.
+    Each full loop over the loader is one epoch. In each pass of the loop,
+    `xb` and `yb` hold the rows of `x` and the entries of `y` for one
+    minibatch. `drop_last=True` leaves out the last minibatch if it is smaller
+    than `batch_size`. `len(loader)` gives the number of minibatches in one
+    epoch.
 
-    The size of a minibatch trades noise for speed. Bigger minibatches give
-    steadier gradients, but each step costs more. Smaller ones give more steps
-    per epoch with noisier gradients. Sizes from 32 to 512 are common, and the
-    learning rate usually has to change when the size does.
+    Choosing the minibatch size is a tradeoff between noise and speed. Bigger
+    minibatches give less noisy gradients, but each step takes more
+    computation. Smaller ones give more steps per epoch, but noisier
+    gradients. Sizes from 32 to 512 are common. When you change the size, you
+    usually have to change the learning rate too.
 
-    The number of steps a run takes, epochs times minibatches per epoch, is
-    worth knowing. Later chapters change the learning rate over a run by that
-    count.
+    The total number of steps in a training run is the number of epochs times
+    the number of minibatches per epoch. Later chapters use that count to
+    change the learning rate during a run.
     """,
 )
 
@@ -684,7 +712,7 @@ MINIBATCH3_SOURCE = source_file(
     y = torch.arange(10.0)
 
     # A TensorDataset pairs row i of x with entry i of y. A DataLoader shuffles the
-    # pairs and hands them out in minibatches, one epoch per loop over it.
+    # pairs and gives them out in minibatches. Each full loop over it is one epoch.
     loader = DataLoader(
         TensorDataset(x, y),
         batch_size=4,
@@ -694,8 +722,9 @@ MINIBATCH3_SOURCE = source_file(
     sizes = [len(yb) for xb, yb in loader]                 # [4, 4, 2]
 
 
-    # TODO: Return a DataLoader over x and y with minibatches of size, shuffled
-    #   with generator, that leaves out a last minibatch smaller than size.
+    # TODO: Return a DataLoader over x and y that gives shuffled minibatches of
+    #   size examples, using generator for the shuffle. It should leave out the
+    #   last minibatch if that minibatch is smaller than size.
     def make_loader(
         x: Tensor,
         y: Tensor,
@@ -706,7 +735,8 @@ MINIBATCH3_SOURCE = source_file(
 
 
     # TODO: Finish the line that starts the inner loop, so this trains like
-    #   train_epochs in minibatch2, with each epoch's minibatches from loader.
+    #   train_epochs in minibatch2, but takes each epoch's minibatches from
+    #   loader.
     def train_with_loader(
         x: Tensor,
         y: Tensor,
@@ -734,9 +764,12 @@ MINIBATCH3_SOURCE = source_file(
         return w.detach(), b.detach()
 
 
-    # TODO: Return how many steps a run takes over n examples, for the given
-    #   epochs and minibatch size. drop_last says whether a last, smaller
-    #   minibatch is left out. math.ceil rounds up and // rounds down.
+    # TODO: Return the total number of training steps for a run over n examples,
+    #   with the given minibatch size and number of epochs. Each minibatch is
+    #   one step. drop_last says whether a smaller last minibatch is left out.
+    #   math.ceil rounds up, and // divides and rounds down.
+    #   Example: count_steps(10, 4, 3, False) returns 9, and
+    #   count_steps(10, 4, 3, True) returns 6.
     def count_steps(
         n: int,
         size: int,
@@ -881,7 +914,7 @@ def check_minibatch3(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="make_loader",
-        description="shuffles with the generator and leaves out a short last minibatch",
+        description="shuffles with the generator and leaves out a smaller last minibatch",
         inputs=(
             (*named(*linear_data(89, 10, 2)), 4, seeded(0)),
             (*named(*linear_data(90, 9, 3)), 3, seeded(6)),
@@ -930,9 +963,9 @@ MINIBATCH3 = Exercise(
     hints={
         "make_loader": "Build it the way the line that sets loader does, with batch_size=size, generator=generator "
         "and drop_last=True.",
-        "train_with_loader": "Loop over loader itself. Each turn gives xb and yb.",
-        "count_steps": "One epoch has n / size minibatches, rounded up when the last smaller one counts and down "
-        "when drop_last leaves it out. Multiply by epochs.",
+        "train_with_loader": "Loop over loader itself. Each pass of the loop gives one minibatch as xb and yb.",
+        "count_steps": "One epoch has n / size minibatches. Round up when the smaller last minibatch counts, and "
+        "round down when drop_last leaves it out. Then multiply by epochs.",
     },
     introduces=(),
     check=check_minibatch3,

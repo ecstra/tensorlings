@@ -16,10 +16,11 @@ SOFTMAX_REGRESSION = Chapter(
         """
         # Softmax regression
 
-        Many tasks pick one answer from a fixed set of options. This chapter turns
-        a model's scores into probabilities with softmax, keeps softmax from
-        overflowing on big scores, and builds softmax regression, the linear
-        model that picks a class.
+        Many tasks ask a model to choose one answer from a fixed set of options.
+        This chapter turns a model's scores into probabilities with softmax. It
+        shows how to keep softmax from overflowing when the scores are big. Then
+        it builds softmax regression, a linear model that predicts which option,
+        or class, an example belongs to.
 
         ## Further reading
 
@@ -36,14 +37,15 @@ SOFTMAX_REGRESSION = Chapter(
 
 SOFTMAX1_LESSON = prose(
     """
-    Regression predicts a number. Often the answer is a pick among a fixed set
-    of options instead, like which of ten digits an image shows. Each option is
-    called a **class**. It has nothing to do with a Python class.
+    Regression predicts a number. Often the answer is instead one choice from a
+    fixed set of options, like which of the ten digits an image shows. Each
+    option is called a **class**. This kind of class has nothing to do with a
+    Python class.
 
-    The model gives one score per class. A raw score like this, any number at
-    all, is a **logit**. To turn the scores into probabilities, take the exp of
-    each, which is always positive. Then divide by their total, so they add up
-    to 1.
+    The model outputs one score per class. A raw score like this, which can be
+    any number, is called a **logit**. To turn the scores into probabilities,
+    first take `exp` of each score, which always gives a positive number. Then
+    divide each result by the sum of all of them, so that they add up to 1.
 
     ```python
     scores = torch.tensor([2.0, 1.0, 0.1])
@@ -51,18 +53,20 @@ SOFTMAX1_LESSON = prose(
     exps / exps.sum()           # tensor([0.6590, 0.2424, 0.0986])
     ```
 
-    That function is **softmax**. What it gives is a **probability
-    distribution**, numbers between 0 and 1 that add up to 1, one per class.
-    A higher score gets a higher probability, so the largest score always gets
-    the largest probability.
+    This function is called **softmax**. Its output is a **probability
+    distribution**, which means one number per class, each between 0 and 1,
+    all adding up to 1. A higher score always gets a higher probability, so
+    the largest score gets the largest probability.
 
-    Adding the same number to every score changes nothing. Every exp gets
-    multiplied by the same amount, and the division cancels it.
+    Adding the same number `c` to every score does not change the softmax.
+    Each `exp(s + c)` equals `exp(s) * exp(c)`, so every exp gets multiplied by
+    the same factor `exp(c)`. Dividing by the sum cancels that factor.
 
-    For a batch of examples the scores form a matrix, one row per example and
-    one column per class. Softmax works on each row on its own, so each row's
-    total has to line up with its row. `keepdim=True` does that, as in
-    reductions1.
+    For a batch of examples, the scores form a matrix with one row per example
+    and one column per class. Softmax applies to each row separately, so each
+    row must be divided by its own sum. Summing with `keepdim=True`, as in
+    reductions1, gives the sums a shape that broadcasting lines up with the
+    rows.
     """,
 )
 
@@ -75,19 +79,25 @@ SOFTMAX1_SOURCE = source_file(
 
     scores = torch.tensor([2.0, 1.0, 0.1])
 
-    # exp makes every score positive, and dividing by the total makes them add up to 1.
+    # exp makes every score positive, and dividing by the sum makes them add up to 1.
     exps = torch.exp(scores)                          # tensor([7.3891, 2.7183, 1.1052])
     probabilities = exps / exps.sum()                 # tensor([0.6590, 0.2424, 0.0986])
 
 
-    # TODO: Return the softmax of each row of scores, a matrix with one row per
-    #   example and one column per class, so every row adds up to 1.
+    # TODO: Return the softmax of each row of scores, so every row of the result
+    #   adds up to 1. scores is a matrix of shape (examples, classes), and the
+    #   result has the same shape.
+    #   Example: softmax_rows(torch.tensor([[2.0, 1.0, 0.1], [0.0, 0.0, 0.0]]))
+    #   returns tensor([[0.6590, 0.2424, 0.0986], [0.3333, 0.3333, 0.3333]]).
     def softmax_rows(scores: Tensor) -> Tensor:
         ...
 
 
-    # TODO: Return the most likely class of each row of scores, one class number
-    #   per row.
+    # TODO: Return the most likely class for each row of scores, as a tensor with
+    #   one class number per row. The most likely class is the one with the
+    #   largest probability.
+    #   Example: most_likely(torch.tensor([[2.0, 1.0, 0.1], [0.0, 3.0, 1.0]]))
+    #   returns tensor([0, 1]).
     def most_likely(scores: Tensor) -> Tensor:
         ...
     ''',
@@ -155,10 +165,10 @@ SOFTMAX1 = Exercise(
     source=SOFTMAX1_SOURCE,
     solution=SOFTMAX1_SOLUTION,
     hints={
-        "softmax_rows": "Follow the two lines that set exps and probabilities, but each row needs its own total. Add up along dim=1 with keepdim=True, so the totals have "
-        "shape (rows, 1) and line up with the rows.",
-        "most_likely": "The largest score gets the largest probability, so argmax on the scores along each row "
-        "finds the class.",
+        "softmax_rows": "Copy the pattern of the two lines that set exps and probabilities, but divide each row by "
+        "its own sum. Sum along dim=1 with keepdim=True, so the sums have shape (rows, 1) and line up with the rows.",
+        "most_likely": "The largest score gets the largest probability, so argmax of the scores along each row "
+        "gives the class.",
     },
     introduces=("logit", "softmax", "probability distribution"),
     check=check_softmax1,
@@ -171,10 +181,11 @@ SOFTMAX1 = Exercise(
 
 SOFTMAX2_LESSON = prose(
     """
-    exp grows fast. Tensors hold float32 numbers unless told otherwise, about
-    7 digits, as micrograd3 said. A float32 holds numbers up to about
-    `3.4e38`, and `exp(89)` is already more than that, so it comes out as
-    `inf`. Then `inf / inf` is `nan`.
+    `exp` grows very fast. Unless you ask for another type, tensors hold
+    float32 numbers, which keep about 7 significant digits, as micrograd3
+    said. The largest float32 number is about `3.4e38`. `exp(89)` is already
+    bigger than that, so it comes out as `inf`. A result too big for its type
+    like this is called an overflow. Then `inf / inf` gives `nan`.
 
     ```python
     scores = torch.tensor([1000.0, 999.0])
@@ -182,24 +193,24 @@ SOFTMAX2_LESSON = prose(
     torch.exp(scores) / torch.exp(scores).sum()      # tensor([nan, nan])
     ```
 
-    Scores that big do happen, when the features are not standardized or the
-    learning rate is too high. The fix uses what softmax1 showed, that taking
-    the same number away from every score changes nothing. So take the largest
-    score away first. The largest becomes 0, every exp is at most 1, and
-    nothing overflows.
+    Scores that big do happen, for example when the features are not
+    standardized or the learning rate is too high. The fix uses a fact from
+    softmax1. Subtracting the same number from every score does not change the
+    softmax. So subtract the largest score from every score first. Then the
+    largest score becomes 0, every exp is at most 1, and nothing overflows.
 
     ```python
     shifted = scores - scores.max()                  # tensor([ 0., -1.])
     torch.exp(shifted) / torch.exp(shifted).sum()    # tensor([0.7311, 0.2689])
     ```
 
-    For a matrix, take each row's own largest score away.
-    `scores.amax(dim=1, keepdim=True)` gives the largest of each row, shaped
-    `(rows, 1)` so it lines up with the rows.
+    For a matrix, subtract each row's own largest score from that row.
+    `scores.amax(dim=1, keepdim=True)` gives the largest score of each row,
+    with shape `(rows, 1)`, so broadcasting lines it up with the rows.
 
-    PyTorch's own `torch.softmax(scores, dim=1)` takes the largest away for
-    you. Every library does, since a single `nan` spreads through every later
-    step of training.
+    PyTorch's own `torch.softmax(scores, dim=1)` subtracts the largest score
+    for you. Every library does this, because a single `nan` spreads into
+    every later step of training.
     """,
 )
 
@@ -212,22 +223,24 @@ SOFTMAX2_SOURCE = source_file(
 
     scores = torch.tensor([1000.0, 999.0])
 
-    # Taking the largest score away first keeps every exp at most 1.
+    # Subtracting the largest score first keeps every exp at most 1.
     shifted = scores - scores.max()                       # tensor([ 0., -1.])
     probabilities = torch.exp(shifted) / torch.exp(shifted).sum()    # tensor([0.7311, 0.2689])
 
 
-    # TODO: This gives nan for rows with big scores. Fix it by taking each row's
-    #   largest score away first, as the lesson shows.
+    # TODO: This returns nan for rows with big scores. Fix it by subtracting each
+    #   row's largest score from that row before the exp, as the lesson shows.
     def softmax_rows(scores: Tensor) -> Tensor:
         exps = torch.exp(scores)
 
         return exps / exps.sum(dim=1, keepdim=True)
 
 
-    # TODO: Return how sure the model is in each row, the probability it gives
-    #   its most likely class. torch.softmax(scores, dim=1) gives the
-    #   probabilities.
+    # TODO: Return how confident the model is for each row of scores. That is the
+    #   probability it gives to its most likely class, so the result has one
+    #   number per row. torch.softmax(scores, dim=1) gives the probabilities.
+    #   Example: confidence(torch.tensor([[2.0, 1.0, 0.1], [0.0, 0.0, 0.0]]))
+    #   returns tensor([0.6590, 0.3333]).
     def confidence(scores: Tensor) -> Tensor:
         ...
     ''',
@@ -246,7 +259,7 @@ SOFTMAX2_SOLUTION = source_file(
     probabilities = torch.exp(shifted) / torch.exp(shifted).sum()
 
 
-    # Each row's largest, kept with size 1, lines up with its row.
+    # keepdim=True keeps each row's largest score in shape (rows, 1), so it lines up with its row.
     def softmax_rows(scores: Tensor) -> Tensor:
         exps = torch.exp(scores - scores.amax(dim=1, keepdim=True))
 
@@ -296,9 +309,9 @@ SOFTMAX2 = Exercise(
     source=SOFTMAX2_SOURCE,
     solution=SOFTMAX2_SOLUTION,
     hints={
-        "softmax_rows": "Take each row's largest score away before the exp. scores.amax(dim=1, keepdim=True) gives "
-        "it with the shape that lines up with the rows.",
-        "confidence": "Get the probabilities, then the largest one in each row with .amax(dim=1).",
+        "softmax_rows": "Subtract each row's largest score before the exp. scores.amax(dim=1, keepdim=True) gives "
+        "those largest scores in a shape that lines up with the rows.",
+        "confidence": "Compute the probabilities, then take the largest one in each row with .amax(dim=1).",
     },
     introduces=(),
     check=check_softmax2,
@@ -312,8 +325,9 @@ SOFTMAX2 = Exercise(
 SOFTMAX3_LESSON = prose(
     """
     Softmax regression is linear regression with one output per class,
-    followed by softmax. The weights have shape `(features, classes)`, and the
-    bias has one number per class.
+    followed by softmax. The weight matrix `W` has shape `(features, classes)`,
+    and the bias `b` has one number per class. So `x @ W + b` gives one row of
+    class scores per example.
 
     ```python
     x = torch.tensor([[1.0, 2.0],
@@ -324,23 +338,26 @@ SOFTMAX3_LESSON = prose(
     scores = x @ W + b    # tensor([[ 2.0, -0.5,  1.5], [ 2.5, -2.5, -1.5]])
     ```
 
-    Each example's correct class is its **label**, a whole number from 0 up to
-    the number of classes minus 1. The model's predicted class is the one with
-    the largest score. **Accuracy** is the fraction of examples whose
+    Each example's correct class is called its **label**, a whole number from
+    0 up to the number of classes minus 1. The model's predicted class is the
+    one with the largest score. **Accuracy** is the fraction of examples whose
     predicted class equals the label.
 
-    `==` between two tensors compares them entry by entry, giving `True` and
-    `False`. `.mean()` refuses `True` and `False`, but `.float()` turns them
-    into 1.0 and 0.0, and the mean of those is the fraction that were `True`.
+    `==` between two tensors compares them entry by entry, and gives a tensor
+    of `True` and `False` values. `.mean()` raises an error on `True` and
+    `False` values. `.float()` turns them into 1.0 and 0.0, and the mean of
+    those is the fraction that were `True`.
 
     ```python
     predicted = torch.tensor([2, 0, 1, 1])
     (predicted == 1).float().mean()    # tensor(0.5000), half were predicted as class 1
     ```
 
-    Accuracy is what people report, but training can't use it. A small change
-    in the weights rarely flips a prediction, so accuracy has no useful
-    gradient. The next chapter builds the loss that training uses instead.
+    People report accuracy, but training can't use it as the loss. A small
+    change in the weights rarely changes any predicted class, so accuracy
+    usually stays exactly the same. That makes its gradient 0 almost
+    everywhere, which gives gradient descent no direction to follow. The next
+    chapter builds the loss that training uses instead.
     """,
 )
 
@@ -361,8 +378,12 @@ SOFTMAX3_SOURCE = source_file(
     scores = x @ W + b                                 # tensor([[2.0, -0.5, 1.5], [2.5, -2.5, -1.5]])
 
 
-    # TODO: Return the probability of every class for every example, one row per
-    #   example. torch.softmax(scores, dim=1) gives each row's softmax.
+    # TODO: Return the probability of every class for every example, as a tensor
+    #   of shape (examples, classes). x has shape (examples, features), W has
+    #   shape (features, classes) and b has shape (classes,).
+    #   torch.softmax(scores, dim=1) gives the softmax of each row of scores.
+    #   Example: class_probabilities(x, W, b), with the x, W and b above,
+    #   returns tensor([[0.5922, 0.0486, 0.3592], [0.9756, 0.0066, 0.0179]]).
     def class_probabilities(
         x: Tensor,
         W: Tensor,
@@ -371,8 +392,10 @@ SOFTMAX3_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the predicted class of every example, the class with the
-    #   largest score.
+    # TODO: Return the predicted class of every example, which is the class with
+    #   the largest score. The result has one class number per example.
+    #   Example: predict_classes(x, W, b), with the x, W and b above, returns
+    #   tensor([0, 0]).
     def predict_classes(
         x: Tensor,
         W: Tensor,
@@ -382,7 +405,10 @@ SOFTMAX3_SOURCE = source_file(
 
 
     # TODO: This should return the fraction of examples whose predicted class
-    #   equals its label, but it crashes. Read the error, then fix it.
+    #   equals their label, as a Python float, but it crashes. Read the error,
+    #   then fix it.
+    #   Example: accuracy(torch.tensor([2, 0, 1, 1]), torch.tensor([2, 1, 1, 0]))
+    #   should return 0.5.
     def accuracy(
         predicted: Tensor,
         labels: Tensor,
@@ -476,8 +502,8 @@ SOFTMAX3 = Exercise(
     source=SOFTMAX3_SOURCE,
     solution=SOFTMAX3_SOLUTION,
     hints={
-        "class_probabilities": "Make the scores as the line that sets scores does, then pass them to torch.softmax "
-        "with dim=1.",
+        "class_probabilities": "Compute the scores the way the line that sets scores does, then pass them to "
+        "torch.softmax with dim=1.",
         "predict_classes": "The largest score has the largest probability, so take argmax of the scores along each "
         "row, as most_likely does in softmax1.",
         "accuracy": "The error says .mean() can't work on True and False. Turn them into 1.0 and 0.0 with .float() "

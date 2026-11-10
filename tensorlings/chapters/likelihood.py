@@ -22,11 +22,11 @@ LIKELIHOOD = Chapter(
         """
         # Losses as probability
 
-        Where do losses come from? This chapter shows that the usual ones are the
-        same idea, the probability a model gives the data it should have
-        predicted. That gives cross entropy for classes, and the squared error
-        for numbers, and ends with the gradient of cross entropy worked out by
-        hand.
+        Where do loss functions come from? This chapter shows that the usual
+        losses all come from one idea. A good model should give a high
+        probability to the correct answers in the data. Applied to classes, this
+        idea gives cross entropy. Applied to numbers, it gives the squared error.
+        The chapter ends by working out the gradient of cross entropy by hand.
 
         ## Further reading
 
@@ -67,38 +67,42 @@ def label_tensor(
 
 LIKELIHOOD1_LESSON = prose(
     """
-    A softmax model gives each example a probability for its correct label.
-    Say it gives 0.7, 0.9 and 0.2 to three examples' labels. Their product,
-    0.126, is the probability the model gives to all three labels at once.
-    That product is the **likelihood** of the labels, and a better model gives
-    a higher one.
+    A softmax model gives each example a probability for every class,
+    including its correct label. Say it gives probabilities 0.7, 0.9 and 0.2
+    to the correct labels of three examples. Their product, 0.126, is the
+    probability that the model gives to all three labels together. That
+    product is called the **likelihood** of the labels. A better model gives
+    the labels a higher likelihood.
 
-    Training could push the likelihood up, but a product of thousands of
-    probabilities shrinks to 0 in a float.
+    Training could try to increase the likelihood directly. The problem is
+    that a product of thousands of probabilities is so small that a float
+    rounds it to 0.
 
     ```python
     torch.full((1000,), 0.5).prod()            # tensor(0.)
     torch.log(torch.full((1000,), 0.5)).sum()  # tensor(-693.1473)
     ```
 
-    `torch.full((1000,), 0.5)` is 1000 entries of 0.5, and `.prod()`
-    multiplies all entries. 0.5 to the power 1000 is far below the smallest
-    float32, the kind of number a tensor holds, so it comes out as 0. A 0
-    can't tell a good model from a bad one.
+    `torch.full((1000,), 0.5)` makes a tensor of 1000 entries that are all
+    0.5, and `.prod()` multiplies all the entries together. 0.5 to the power
+    1000 is far smaller than the smallest positive float32, the number type a
+    tensor holds. So the product comes out as 0, which is called underflow.
+    When every likelihood is 0, you can't tell a good model from a bad one.
 
-    The log fixes it. The log of a product is the sum of the logs, and the log
-    of a division is the difference, so `math.log(12 / 3)` equals
-    `math.log(12) - math.log(3)`. A sum of thousands of negative numbers is a
-    big negative number, nothing worse.
+    Taking the log fixes this. The log of a product is the sum of the logs,
+    `log(a * b) = log(a) + log(b)`. The log of a division is the difference of
+    the logs, so `math.log(12 / 3)` equals `math.log(12) - math.log(3)`. The
+    log of a probability is negative. A sum of thousands of them is a large
+    negative number, which a float stores without trouble.
 
-    The log grows when its input grows, so the model with the higher
-    likelihood has the higher log likelihood too. Training lowers a loss, so
-    it flips the sign. The negative log likelihood, divided by the number of
-    examples, is the loss.
+    The log increases when its input increases. So the model with the higher
+    likelihood also has the higher log likelihood, which is the sum of the
+    logs. Training lowers a loss, so the loss flips the sign. The loss is the
+    negative log likelihood divided by the number of examples.
 
-    To pick each row's probability for its label, index with two tensors, one
-    row position and one column position per example. `torch.arange(n)` gives
-    0 to `n - 1`.
+    To pick each row's probability for its label, index with two tensors. The
+    first holds the row position of each example, and the second holds the
+    column position. `torch.arange(n)` gives the row positions 0 to `n - 1`.
 
     ```python
     probabilities = torch.tensor([[0.7, 0.2, 0.1],
@@ -122,12 +126,16 @@ LIKELIHOOD1_SOURCE = source_file(
                                   [0.5, 0.3, 0.2]])
     labels = torch.tensor([0, 1, 2])
 
-    # One row position and one column position per example picks each row's
-    # probability for its label.
+    # Indexing with a tensor of row positions and a tensor of column positions
+    # picks one entry per row, here each row's probability for its label.
     picked = probabilities[torch.arange(3), labels]    # tensor([0.7, 0.9, 0.2])
 
 
     # TODO: Return each row's probability for its label, for any number of rows.
+    #   probabilities has shape (examples, classes), labels has shape
+    #   (examples,), and the result has shape (examples,).
+    #   Example: label_probabilities(probabilities, labels), with the tensors
+    #   above, returns tensor([0.7000, 0.9000, 0.2000]).
     def label_probabilities(
         probabilities: Tensor,
         labels: Tensor,
@@ -135,8 +143,9 @@ LIKELIHOOD1_SOURCE = source_file(
         ...
 
 
-    # TODO: This should return the log likelihood of the labels, but for a few
-    #   hundred examples it gives -inf. Read the lesson, then fix the last line.
+    # TODO: This should return the log likelihood of the labels, the log of the
+    #   product of each label's probability. For a few hundred examples it
+    #   returns -inf instead. Read the lesson, then fix the last line.
     def log_likelihood(
         probabilities: Tensor,
         labels: Tensor,
@@ -146,8 +155,10 @@ LIKELIHOOD1_SOURCE = source_file(
         return torch.log(picked.prod())
 
 
-    # TODO: Return the loss, minus the log of each label's probability, averaged
-    #   over the examples.
+    # TODO: Return the negative log likelihood loss. Take the log of each label's
+    #   probability, put a minus sign in front, and average over the examples.
+    #   Example: negative_log_likelihood(probabilities, labels), with the
+    #   tensors above, returns about tensor(0.6905).
     def negative_log_likelihood(
         probabilities: Tensor,
         labels: Tensor,
@@ -257,8 +268,8 @@ LIKELIHOOD1 = Exercise(
     source=LIKELIHOOD1_SOURCE,
     solution=LIKELIHOOD1_SOLUTION,
     hints={
-        "label_probabilities": "Follow the line that sets picked, with torch.arange(len(labels)) in place of "
-        "torch.arange(3).",
+        "label_probabilities": "Copy the pattern of the line that sets picked, using torch.arange(len(labels)) "
+        "instead of torch.arange(3).",
         "log_likelihood": "The product of hundreds of probabilities is 0, and log(0) is -inf. Take the log of each "
         "probability first, then add the logs up.",
         "negative_log_likelihood": "Take the log of each label's probability, then the mean, then flip the sign.",
@@ -274,37 +285,39 @@ LIKELIHOOD1 = Exercise(
 
 LIKELIHOOD2_LESSON = prose(
     """
-    The negative log likelihood of softmax probabilities is called **cross
-    entropy**. It is the standard loss for picking a class.
+    The negative log likelihood of softmax probabilities, averaged over the
+    examples, is called **cross entropy**. It is the standard loss for models
+    that pick a class.
 
-    Taking softmax and then the log throws precision away. A probability far
-    below the smallest float rounds to 0, and its log is `-inf`, even though
-    the true log is an ordinary number.
+    Computing softmax first and then taking the log loses precision. A
+    probability smaller than the smallest float32 rounds to 0, and its log is
+    `-inf`. The true log is an ordinary number, like -120 in this example.
 
     ```python
     scores = torch.tensor([[60.0, 0.0, -60.0]])
     torch.log(torch.softmax(scores, dim=1))    # tensor([[  0., -60., -inf]]), the last should be -120
     ```
 
-    So work in logs from the start. Softmax is `exp(score) / total`. By the
-    rule for the log of a division, its log is each score minus the log of the
-    row's total of exps. `torch.logsumexp`
-    computes that log of a sum of exps with the largest score taken out first,
-    as softmax2 did, so it never overflows.
+    So work with logs from the start. Softmax is `exp(score) / total`, where
+    `total` is the sum of the exps of all the scores in the row. By the rule
+    for the log of a division, the log of softmax is `score - log(total)`.
+    `torch.logsumexp` computes `log(total)`, the log of a sum of exps. It
+    subtracts the largest score before taking the exps, as softmax2 did, so it
+    never overflows.
 
     ```python
     torch.logsumexp(scores, dim=1, keepdim=True)    # tensor([[60.]])
     ```
 
     PyTorch's `F.cross_entropy(logits, labels)` takes the raw scores and the
-    labels and does all of it. That is why models output logits and leave the
-    softmax to the loss.
+    labels, and does all of these steps. This is why models output logits and
+    leave the softmax to the loss function.
 
-    A model that knows nothing gives every class the same score, so every
-    class gets probability `1 / classes`. With 10 classes its cross entropy
-    comes out at 2.303. A new model should start near that number. A starting
-    loss far above it means the model is confidently wrong before it has
-    learned anything.
+    A model that has learned nothing gives every class the same score, so
+    every class gets probability `1 / classes`. With 10 classes, its cross
+    entropy is 2.303. A newly created model should start with a loss near that
+    number. A starting loss far above it means the model is confidently wrong
+    before it has learned anything.
     """,
 )
 
@@ -319,19 +332,28 @@ LIKELIHOOD2_SOURCE = source_file(
 
     scores = torch.tensor([[60.0, 0.0, -60.0]])
 
-    # The log of a sum of exps, with the largest taken out first so nothing overflows.
+    # The log of the sum of the exps in each row. It subtracts the largest score
+    # first, so nothing overflows.
     log_total = torch.logsumexp(scores, dim=1, keepdim=True)     # tensor([[60.]])
 
 
-    # TODO: Return the log of the softmax of each row of scores, each score
-    #   minus its row's log_total, so very small probabilities keep their logs.
+    # TODO: Return the log of the softmax of each row of scores. Compute it as
+    #   each score minus its row's log_total, so very small probabilities get
+    #   their correct logs instead of -inf. The result has the same shape as
+    #   scores, (examples, classes).
+    #   Example: log_softmax_rows(torch.tensor([[60.0, 0.0, -60.0]])) returns
+    #   tensor([[   0.,  -60., -120.]]).
     def log_softmax_rows(scores: Tensor) -> Tensor:
         ...
 
 
     # TODO: Finish the two lines, so this returns the cross entropy of logits
-    #   against labels, the mean of minus each row's log probability for its
-    #   label. It should match PyTorch's own cross entropy.
+    #   against labels. That is the mean over the rows of minus each row's log
+    #   probability for its label. The result should match PyTorch's
+    #   F.cross_entropy.
+    #   Example: for logits = torch.tensor([[2.0, 1.0, 0.1], [0.0, 3.0, 1.0]])
+    #   and labels = torch.tensor([0, 2]), cross_entropy returns about
+    #   tensor(1.2934).
     def cross_entropy(
         logits: Tensor,
         labels: Tensor,
@@ -343,7 +365,8 @@ LIKELIHOOD2_SOURCE = source_file(
 
 
     # TODO: Return the cross entropy of a model that gives every class the same
-    #   score, for this many classes.
+    #   score, for the given number of classes, as a Python float.
+    #   Example: starting_loss(10) returns about 2.303.
     def starting_loss(classes: int) -> float:
         ...
     ''',
@@ -436,10 +459,10 @@ LIKELIHOOD2 = Exercise(
     source=LIKELIHOOD2_SOURCE,
     solution=LIKELIHOOD2_SOLUTION,
     hints={
-        "log_softmax_rows": "Take torch.logsumexp of the scores along dim=1 with keepdim=True, as the line that "
-        "sets log_total does. Then take it away from the scores.",
-        "cross_entropy": "Pick each row's log probability for its label as likelihood1 picks probabilities. The "
-        "loss is minus their mean.",
+        "log_softmax_rows": "Compute torch.logsumexp of the scores along dim=1 with keepdim=True, as the line that "
+        "sets log_total does. Then subtract it from the scores.",
+        "cross_entropy": "Pick each row's log probability for its label, the way likelihood1 picks probabilities. "
+        "The loss is minus their mean.",
         "starting_loss": "Every class gets probability 1 / classes, so the loss is minus the log of that. "
         "math.log gives the log of a plain number.",
     },
@@ -454,50 +477,57 @@ LIKELIHOOD2 = Exercise(
 
 LIKELIHOOD3_LESSON = prose(
     """
-    Squared error is a likelihood too. Suppose each target is the prediction
-    plus random noise, and the noise follows a Gaussian, the bell curve, with
-    spread `sigma`. A target here can be any number, so it gets a probability
-    density in place of a probability. A density is higher where targets are
-    more likely. The density of seeing target `y` is
+    The squared error also comes from a likelihood. Suppose each target is the
+    prediction plus random noise. Suppose also that the noise follows a
+    Gaussian distribution, the bell curve, with standard deviation `sigma`. A
+    target here can be any real number, so it gets a probability density
+    instead of a probability. A density is higher where targets are more
+    likely. The density of seeing the target `y` is
 
     ```text
     exp(-(y - prediction) ** 2 / (2 * sigma ** 2)) / (sigma * sqrt(2 * pi))
     ```
 
-    Its negative log, by the rules for the log of a product and a division, is
+    Using the rules for the log of a product and of a division, and
+    `log(exp(u)) = u`, its negative log is
 
     ```text
     (y - prediction) ** 2 / (2 * sigma ** 2) + log(sigma * sqrt(2 * pi))
     ```
 
-    `math.pi` and `math.sqrt` give pi and square roots of plain numbers. For
-    one target of 3.0, a prediction of 2.5 and `sigma` of 1, that is 1.0439.
+    `math.pi` is the number pi, and `math.sqrt` takes the square root of a
+    plain number. For one target of 3.0, a prediction of 2.5 and `sigma` of 1,
+    the negative log is 1.0439.
 
-    With `sigma` fixed, the second part is the same for every model, and the
-    first is the squared error divided by a constant. So the model with the
-    lowest squared error has the highest likelihood under Gaussian noise. The
-    mean squared error is the negative log likelihood with the constants
-    dropped. Picking squared error says the misses are Gaussian.
+    If `sigma` is fixed, the second term is the same for every model. The
+    first term is the squared error divided by the constant `2 * sigma ** 2`.
+    So the model with the lowest squared error has the highest likelihood
+    under Gaussian noise. The mean squared error is the negative log
+    likelihood with the constants dropped. So choosing the squared error as
+    the loss amounts to assuming that the errors are Gaussian.
 
-    Other noise gives other losses. A Laplace distribution has density
-    `exp(-abs(y - prediction) / b) / (2 * b)` for a spread `b`. Its negative
+    Other kinds of noise give other losses. A Laplace distribution with scale
+    `b` has density `exp(-abs(y - prediction) / b) / (2 * b)`. Its negative
     log is the absolute error divided by `b`, plus `log(2 * b)`. A Laplace
-    gives far misses more probability than a Gaussian does. So one wild target
-    costs the absolute error less than it costs the squared error.
+    distribution gives large errors more probability than a Gaussian does. So
+    a target far from the others, called an outlier, raises the absolute error
+    much less than it raises the squared error.
 
-    Here is a line fit by gradient descent to 20 points with a true slope of
-    2, on each loss. The noise is Gaussian with spread 0.3, and then one target
-    is raised by 30. Each entry is how far the fitted slope lands from 2, the
-    median of 10 runs.
+    The table below fits a line by gradient descent to 20 points whose true
+    slope is 2, once with each loss. The noise is Gaussian with standard
+    deviation 0.3. In the second row, one target is also raised by 30. Each
+    entry is the distance between the fitted slope and 2, the median over 10
+    runs.
 
     | Targets | Squared error | Absolute error |
     |---|---|---|
     | Gaussian noise only | 0.032 | 0.045 |
     | one target raised by 30 | 1.36 | 0.083 |
 
-    On Gaussian noise the squared error lands closer, in 7 of 10 runs, as its
-    likelihood says it should. One wild target drags its slope to about 3.4,
-    while the absolute error barely moves.
+    With Gaussian noise only, the squared error gives the closer slope in 7 of
+    10 runs, as its likelihood says it should. With the outlier, the squared
+    error's slope moves to about 3.4. The absolute error's slope barely
+    changes.
     """,
 )
 
@@ -510,13 +540,16 @@ LIKELIHOOD3_SOURCE = source_file(
     import torch
     from torch import Tensor
 
-    # The Gaussian negative log for one target of 3.0, a prediction of 2.5 and
-    # sigma of 1.
+    # The Gaussian negative log likelihood for one target of 3.0, a prediction
+    # of 2.5 and sigma of 1.
     one_target = (3.0 - 2.5) ** 2 / (2 * 1.0 ** 2) + math.log(1.0 * math.sqrt(2 * math.pi))    # 1.0439
 
 
     # TODO: Return the Gaussian negative log likelihood from the lesson, for
-    #   noise with spread sigma, averaged over the examples.
+    #   noise with standard deviation sigma, averaged over the examples.
+    #   predictions and targets are 1D tensors of the same length.
+    #   Example: gaussian_nll(torch.tensor([2.5]), torch.tensor([3.0]), 1.0)
+    #   returns about tensor(1.0439).
     def gaussian_nll(
         predictions: Tensor,
         targets: Tensor,
@@ -525,8 +558,9 @@ LIKELIHOOD3_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the mean Gaussian negative log likelihood, given only the mean
-    #   squared error of the predictions and sigma.
+    # TODO: Return the mean Gaussian negative log likelihood when all you know is
+    #   mse, the mean squared error of the predictions, and sigma.
+    #   Example: nll_from_mse(0.25, 1.0) returns about 1.0439.
     def nll_from_mse(
         mse: float,
         sigma: float,
@@ -535,7 +569,9 @@ LIKELIHOOD3_SOURCE = source_file(
 
 
     # TODO: Return the mean over the examples of the Laplace negative log
-    #   likelihood from the lesson, for noise with spread b.
+    #   likelihood from the lesson, for Laplace noise with scale b.
+    #   Example: laplace_nll(torch.tensor([2.5]), torch.tensor([3.0]), 1.0)
+    #   returns about tensor(1.1931).
     def laplace_nll(
         predictions: Tensor,
         targets: Tensor,
@@ -646,11 +682,11 @@ LIKELIHOOD3 = Exercise(
     source=LIKELIHOOD3_SOURCE,
     solution=LIKELIHOOD3_SOLUTION,
     hints={
-        "gaussian_nll": "Write the negative log from the lesson for every example, with math.log, math.sqrt and "
-        "math.pi for the constant. Then take the mean.",
-        "nll_from_mse": "The first part of the negative log, averaged over the examples, is the mean squared error "
-        "divided by 2 * sigma ** 2. Add the constant part.",
-        "laplace_nll": "The absolute error of each example divided by b, plus math.log(2 * b), then the mean.",
+        "gaussian_nll": "Write the negative log from the lesson for every example, using math.log, math.sqrt and "
+        "math.pi for the constant term. Then take the mean.",
+        "nll_from_mse": "The first term of the negative log, averaged over the examples, is the mean squared error "
+        "divided by 2 * sigma ** 2. Then add the constant term.",
+        "laplace_nll": "Divide the absolute error of each example by b, add math.log(2 * b), then take the mean.",
     },
     introduces=(),
     check=check_likelihood3,
@@ -664,28 +700,33 @@ LIKELIHOOD3 = Exercise(
 LIKELIHOOD4_LESSON = prose(
     """
     The gradient of cross entropy with respect to the logits has a simple
-    form, worth working out by hand once.
+    formula. It is worth working it out by hand once.
 
-    For one example with logits `z` and label `y`, the loss is
-    `-z[y] + logsumexp(z)`. `logsumexp(z)` is the log of a total. By the chain
-    rule, its partial with respect to `z[j]` is `1 / total` times the total's
-    own partial, which is `exp(z[j])`. That makes `exp(z[j]) / total`, which
-    is `softmax(z)[j]`. The partial of `-z[y]` is -1 for `j == y` and 0
-    for every other `j`. So the gradient is the softmax probabilities, with 1
-    taken away at the label.
+    Take one example with logits `z` and label `y`. Its loss is
+    `-z[y] + logsumexp(z)`, because the log of softmax is the score minus
+    `logsumexp`. Write `total` for the sum of `exp(z[k])` over all classes
+    `k`, so `logsumexp(z)` is `log(total)`. The derivative of `log(t)` is
+    `1 / t`. So by the chain rule, the partial derivative of `log(total)` with
+    respect to `z[j]` is `1 / total` times the partial of `total`. The partial
+    of `total` with respect to `z[j]` is `exp(z[j])`. That makes
+    `exp(z[j]) / total`, which is `softmax(z)[j]`. The partial of `-z[y]` is
+    -1 when `j == y` and 0 for every other `j`. So the gradient is the softmax
+    probabilities, with 1 subtracted at the label.
 
     ```text
     gradient = softmax(z) - one_hot(y)
     ```
 
     A **one hot** row has a 1 at one position and 0 everywhere else. Here the
-    1 sits at the label. For the mean loss over `n` examples, divide by
-    `n`.
+    1 is at the label's position. For the mean loss over `n` examples, divide
+    the gradient by `n`.
 
-    So the correct class gets pushed up by the probability it is missing, and
-    every other class gets pushed down by the probability it took.
+    Training changes the logits in the direction of the negative gradient. So
+    the correct class's logit is raised in proportion to `1 - p`, where `p` is
+    the probability the model gave it. Every other class's logit is lowered in
+    proportion to the probability the model gave that class.
 
-    Two position tensors also set entries, the way they pick them.
+    You can also assign to the entries that two position tensors pick.
 
     ```python
     grid = torch.zeros(2, 3)
@@ -693,8 +734,8 @@ LIKELIHOOD4_LESSON = prose(
     # tensor([[0., 0., 1.], [1., 0., 0.]])
     ```
 
-    PyTorch has `F.one_hot(labels, classes)`, which gives whole numbers, and
-    `.float()` turns them into floats.
+    PyTorch has `F.one_hot(labels, classes)`, which returns a tensor of whole
+    numbers. `.float()` turns them into floats.
     """,
 )
 
@@ -705,13 +746,17 @@ LIKELIHOOD4_SOURCE = source_file(
     import torch
     from torch import Tensor
 
-    # Two position tensors set one entry per row, the way they pick them.
+    # Assigning through a tensor of row positions and a tensor of column
+    # positions sets one entry per row.
     grid = torch.zeros(2, 3)
     grid[torch.arange(2), torch.tensor([2, 0])] = 1.0       # tensor([[0., 0., 1.], [1., 0., 0.]])
 
 
-    # TODO: Finish the second line, so this returns one one hot row per label,
-    #   with the 1 at the label's position.
+    # TODO: Finish the second line, so this returns a one hot row for each label,
+    #   with the 1 at the label's position. The result has shape
+    #   (len(labels), classes).
+    #   Example: one_hot(torch.tensor([2, 0, 1]), 3) returns
+    #   tensor([[0., 0., 1.], [1., 0., 0.], [0., 1., 0.]]).
     def one_hot(
         labels: Tensor,
         classes: int,
@@ -723,8 +768,11 @@ LIKELIHOOD4_SOURCE = source_file(
 
 
     # TODO: Finish the last line, so this returns the gradient of the mean cross
-    #   entropy of logits against labels, with respect to the logits, worked out
-    #   by hand.
+    #   entropy of logits against labels, with respect to logits. Use the
+    #   formula from the lesson instead of autograd. The result has the same
+    #   shape as logits, (examples, classes).
+    #   Example: cross_entropy_grad(torch.tensor([[0.0, 0.0]]), torch.tensor([1]))
+    #   returns tensor([[ 0.5000, -0.5000]]).
     def cross_entropy_grad(
         logits: Tensor,
         labels: Tensor,
@@ -736,7 +784,9 @@ LIKELIHOOD4_SOURCE = source_file(
 
     # TODO: Finish the last two lines, so this returns the gradients of the mean
     #   cross entropy of softmax regression with respect to W and b. The first
-    #   line gives the gradient of the logits x @ W + b.
+    #   line computes grad_logits, the gradient of the loss with respect to the
+    #   logits x @ W + b. x has shape (examples, features), W has shape
+    #   (features, classes) and b has shape (classes,).
     def softmax_regression_grads(
         x: Tensor,
         W: Tensor,
@@ -781,7 +831,7 @@ LIKELIHOOD4_SOLUTION = source_file(
         return (probabilities - one_hot(labels, logits.shape[1])) / len(labels)
 
 
-    # W is on the right of x @ W, and b was copied into every row.
+    # W is on the right of x @ W. b is added to every row, so its gradient sums grad_logits over the rows.
     def softmax_regression_grads(
         x: Tensor,
         W: Tensor,
@@ -849,12 +899,12 @@ LIKELIHOOD4 = Exercise(
     source=LIKELIHOOD4_SOURCE,
     solution=LIKELIHOOD4_SOLUTION,
     hints={
-        "one_hot": "Follow the line that sets one entry per row of grid, with torch.arange(len(labels)) for the "
-        "rows and labels for the columns.",
-        "cross_entropy_grad": "Take the softmax of each row of logits, take away one_hot(labels, logits.shape[1]), "
-        "and divide by the number of examples.",
-        "softmax_regression_grads": "W is on the right of x @ W, like b in backprop3. b was copied into every row, "
-        "so its gradient adds grad_logits up over the rows.",
+        "one_hot": "Copy the pattern of the line that sets one entry per row of grid, using torch.arange(len(labels)) "
+        "for the rows and labels for the columns.",
+        "cross_entropy_grad": "Start from the softmax probabilities, subtract one_hot(labels, logits.shape[1]), and "
+        "divide by the number of examples.",
+        "softmax_regression_grads": "W is on the right of x @ W, like b in matmul_grad_b of backprop3. b is added to "
+        "every row, so its gradient is grad_logits summed over the rows.",
     },
     introduces=("one hot",),
     check=check_likelihood4,
