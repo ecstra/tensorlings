@@ -1000,7 +1000,7 @@ def check_quiz2(checker: Checker) -> None:
         description="gives the position of the largest partial derivative",
         inputs=(
             (Described(lambda v: (v ** 2).sum(), "(v ** 2).sum()"), torch.tensor([1.0, 3.0, -4.0, 2.0])),
-            (Described(lambda v: v[0] * v[1] + v[2] ** 3, "v[0] * v[1] + v[2] ** 3"), torch.tensor([2.0, 5.0, 1.0])),
+            (Described(lambda v: v[0] * v[1] + v[2] ** 3, "v[0] * v[1] + (v[2] ** 3)"), torch.tensor([2.0, 5.0, 1.0])),
         ),
         reference=lambda f, v: autograd_backward(f, (v,), torch.tensor(1.0))[0].argmax().item(),
         expect=expect_value,

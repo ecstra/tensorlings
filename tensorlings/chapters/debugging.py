@@ -1636,7 +1636,7 @@ QUIZ6 = Exercise(
         "is at least 2, as adamw2's groups do, and scale each in place with *=, as adamw1's MyAdamW does.",
         "clipped_step": "Clear the gradients with the optimizer's zero_grad before backward. Clip with "
         "torch.nn.utils.clip_grad_norm_ after backward and before the step, and return what it gives with .item().",
-        "warmup_to_picked_rate": "Smooth as schedule2's smooth does, dividing the kth average by 1 - beta ** k. "
+        "warmup_to_picked_rate": "Smooth as schedule2's smooth does, dividing the kth average by 1 - (beta ** k). "
         "Find the position of the smallest smoothed loss and take a tenth of that rate as base. Then warm up as "
         "warmup1's warmup_rate does.",
         "start_excess": "The starting loss is F.cross_entropy of model(x) and y inside torch.no_grad, with .item(). The "

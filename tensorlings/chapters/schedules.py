@@ -697,7 +697,7 @@ SCHEDULE2_SOURCE = source_file(
     #   The average starts at 0, and each loss updates it to
     #   beta * average + (1 - beta) * loss. Keep the running average itself
     #   uncorrected. At the k-th loss, counted from 1, append the average
-    #   divided by 1 - beta ** k, the same correction Adam's hats make.
+    #   divided by 1 - (beta ** k), the same correction Adam's hats make.
     #   Example: smooth([3.0, 2.0, 2.5, 1.0], 0.9) returns about
     #   [3.0, 2.474, 2.483, 2.052].
     def smooth(
@@ -906,7 +906,7 @@ SCHEDULE2 = Exercise(
     hints={
         "exponential_rates": "Follow the formula at the end of the lesson in a list comprehension over k.",
         "smooth": "Keep an average starting at 0.0, and count the losses from 1 with enumerate(losses, start=1). "
-        "Update the average as beta * average + (1 - beta) * loss, then append it divided by 1 - beta ** k.",
+        "Update the average as beta * average + (1 - beta) * loss, then append it divided by 1 - (beta ** k).",
         "pick_rate": "Find the position of the smallest smoothed loss, take the rate there, and divide by 10.",
         "range_test": "Set the learning rate to rate, the loop variable that holds this step's rate.",
     },

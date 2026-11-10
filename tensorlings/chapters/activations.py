@@ -530,7 +530,7 @@ ACTIVATIONS1_LESSON = prose(
     output can be read as a probability. The derivatives of both activations
     can be written in terms of their own outputs. With `s = sigmoid(x)`, the
     derivative of sigmoid is `s * (1 - s)`, which is at most 0.25. With
-    `t = tanh(x)`, the derivative of tanh is `1 - t ** 2`, which is at most 1.
+    `t = tanh(x)`, the derivative of tanh is `1 - (t ** 2)`, which is at most 1.
 
     Both curves become flat for inputs far from 0. At `x = 4`, sigmoid's
     derivative is already 0.018. So a neuron whose input is far from 0 passes
@@ -777,7 +777,7 @@ GELU1_LESSON = prose(
     used it.
 
     ```text
-    0.5 * x * (1 + tanh(sqrt(2 / pi) * (x + 0.044715 * x ** 3)))
+    0.5 * x * (1 + tanh(sqrt(2 / pi) * (x + 0.044715 * (x ** 3))))
     ```
 
     `F.gelu(x, approximate="tanh")` computes this approximation.

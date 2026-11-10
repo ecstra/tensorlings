@@ -109,8 +109,8 @@ RMSPROP1_LESSON = prose(
     of the average of the squared gradients.
 
     ```text
-    s = alpha * s + (1 - alpha) * g ** 2
-    parameter = parameter - lr * g / (sqrt(s) + eps)
+    s = alpha * s + (1 - alpha) * (g ** 2)
+    parameter = parameter - (lr * g) / (sqrt(s) + eps)
     ```
 
     Here `g` is the gradient and `s` is a running average of its square. Each
@@ -136,7 +136,7 @@ RMSPROP1_LESSON = prose(
     `torch.optim.RMSprop(params, lr=0.01)` does all of this.
 
     Starting the averages at 0 has a side effect. After one step the average
-    is only `(1 - alpha) * g ** 2`, a hundredth of the first squared gradient.
+    is only `(1 - alpha) * (g ** 2)`, a hundredth of the first squared gradient.
     Its square root is a tenth of the gradient's size. So the first step comes
     out about 10 times the learning rate.
     """,
@@ -259,7 +259,7 @@ RMSPROP1_SOLUTION = source_file(
                 parameter.grad = None
 
 
-    # The first average is (1 - alpha) * grad ** 2, so the step is about lr / sqrt(1 - alpha).
+    # The first average is (1 - alpha) * (grad ** 2), so the step is about lr / sqrt(1 - alpha).
     def first_step(
         grad: Tensor,
         lr: float,
@@ -328,7 +328,7 @@ RMSPROP1 = Exercise(
         "MyRMSprop.step": "The new average is square_average_update called on the old average, parameter.grad and "
         "self.alpha. Then subtract from the parameter self.lr times parameter.grad, divided by the new average's "
         ".sqrt() plus self.eps.",
-        "first_step": "The first average is (1 - alpha) * grad ** 2. Divide lr times grad.abs() by the square root "
+        "first_step": "The first average is (1 - alpha) * (grad ** 2). Divide lr times grad.abs() by the square root "
         "of that average plus eps.",
     },
     introduces=(),
@@ -352,10 +352,10 @@ ADAM1_LESSON = prose(
 
     ```text
     m = beta1 * m + (1 - beta1) * grad
-    v = beta2 * v + (1 - beta2) * grad ** 2
-    m_hat = m / (1 - beta1 ** t)
-    v_hat = v / (1 - beta2 ** t)
-    parameter = parameter - lr * m_hat / (sqrt(v_hat) + eps)
+    v = beta2 * v + (1 - beta2) * (grad ** 2)
+    m_hat = m / (1 - (beta1 ** t))
+    v_hat = v / (1 - (beta2 ** t))
+    parameter = parameter - (lr * m_hat) / (sqrt(v_hat) + eps)
     ```
 
     `m` plays the part of momentum's velocity, but as an average instead of a
@@ -520,11 +520,12 @@ ADAM2_LESSON = prose(
     Both averages start at 0. After one step, `m` is a tenth of the gradient,
     because `1 - beta1` is 0.1. And `v` is a thousandth of the squared
     gradient, because `1 - beta2` is 0.001. Without the hats, the first step
-    would be `lr * 0.1 * grad / sqrt(0.001 * grad ** 2)`, which is about 3.2
-    times the learning rate.
+    would be `(lr * 0.1 * grad) / sqrt(0.001 * (grad ** 2))`, which is about
+    3.2 times the learning rate.
 
     Suppose the gradient stays the same at every step. Then the uncorrected
-    step is the learning rate times `(1 - beta1 ** t) / sqrt(1 - beta2 ** t)`.
+    step is the learning rate times
+    `(1 - (beta1 ** t)) / sqrt(1 - (beta2 ** t))`.
     That factor rises to about 6.6 near step 12, and it comes back down near
     1 only after a few thousand steps. So without the hats, Adam's early steps
     are several times too big. That happens right when the weights are random
@@ -791,8 +792,8 @@ ADAM2 = Exercise(
     source=ADAM2_SOURCE,
     solution=ADAM2_SOLUTION,
     hints={
-        "uncorrected_ratio": "After t steps of the same gradient, m is (1 - beta1 ** t) times the gradient. And v is "
-        "(1 - beta2 ** t) times its square. Divide the first factor by the square root of the second.",
+        "uncorrected_ratio": "After t steps of the same gradient, m is (1 - (beta1 ** t)) times the gradient. And v "
+        "is (1 - (beta2 ** t)) times its square. Divide the first factor by the square root of the second.",
         "peak_ratio": "Compute uncorrected_ratio for every t from 1 to steps and find the largest. Return its t, "
         "counted from 1, and the ratio itself.",
         "adam_step": "The step is lr times m_hat, divided by the square root of v_hat plus 1e-8.",
@@ -808,7 +809,7 @@ ADAM2 = Exercise(
 
 ADAMW1_LESSON = prose(
     """
-    Weight decay in Section 2 added `strength * w ** 2` to the loss, which
+    Weight decay in Section 2 added `strength * (w ** 2)` to the loss, which
     adds `2 * strength * w` to the gradient. With SGD, that shrinks every
     weight toward 0 by the same fraction each step. PyTorch's
     `torch.optim.Adam(params, weight_decay=0.01)` does the same thing. It adds

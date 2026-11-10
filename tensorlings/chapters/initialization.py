@@ -150,7 +150,7 @@ INIT1_LESSON = prose(
 
     Take inputs with standard deviation 1 and weights with standard deviation
     `s`. Each product then has variance `s ** 2`, so the sum of `n` of them
-    has variance `n * s ** 2`. That means each output has standard deviation
+    has variance `n * (s ** 2)`. That means each output has standard deviation
     `sqrt(n) * s`. In a stack of layers, every layer multiplies the standard
     deviation by `sqrt(n) * s` again.
 

@@ -138,7 +138,7 @@ MICROGRAD1_LESSON = prose(
     backward step. Its local derivative comes from the power rule in
     derivatives2. The result of `a ** n` has only `a` as a child, because `n`
     is a plain number, not a `Value`. Division can then be built from a power
-    and a multiplication, since `a / b` equals `a * b ** -1`.
+    and a multiplication, since `a / b` equals `a * (b ** -1)`.
     """,
 )
 
@@ -312,7 +312,7 @@ MICROGRAD1_SOLUTION = source_file(
         def __sub__(self, other: "Value | float") -> "Value":
             return self + (-other)
 
-        # The local derivative from the power rule, n * x ** (n - 1), times out.grad.
+        # The local derivative from the power rule, n * (x ** (n - 1)), times out.grad.
         def __pow__(self, n: float) -> "Value":
             out = Value(self.data ** n, (self,), f"**{n}")
 
@@ -401,7 +401,7 @@ def check_micrograd1(checker: Checker) -> None:
                 ("a ** -1", lambda a: a ** -1, (4.0,)),
                 ("(a * b) ** 0.5", lambda a, b: (a * b) ** 0.5, (2.0, 8.0)),
                 # The power is not the last step here, so its gradient handed down is not 1.
-                ("a ** 2 * 3", lambda a: a ** 2 * 3, (1.5,)),
+                ("(a ** 2) * 3", lambda a: a ** 2 * 3, (1.5,)),
                 # a feeds the power and the sum, so a step that sets a.grad with = wipes out the sum's share.
                 ("a ** 2 + a", lambda a: a ** 2 + a, (1.5,)),
             ),
@@ -438,7 +438,7 @@ MICROGRAD1 = Exercise(
         "Value.__neg__": "Return self times -1. __mul__ wraps the -1 in a Value.",
         "Value.__sub__": "Return self plus the negative of other. When other is a Value, -other calls __neg__. When "
         "other is a plain number, -other is a plain number too.",
-        "Value.__pow__": "The power rule gives the local derivative n * x ** (n - 1), where x is self.data. Multiply "
+        "Value.__pow__": "The power rule gives the local derivative n * (x ** (n - 1)), where x is self.data. Multiply "
         "it by out.grad, as every backward step does with its local derivative.",
         "Value.__truediv__": "Return self times other to the power -1. Both of those operations already work.",
     },
@@ -923,7 +923,7 @@ MICROGRAD3_SOLUTION = source_file(
 
 CHECKED_BUILDS: tuple[tuple[Described, list[float]], ...] = (
     (Described(lambda a, b: (a * b + 1).log(), "(a * b + 1).log()"), [2.0, 3.0]),
-    (Described(lambda a, b, c: ((a - b) ** 2 / c).exp(), "((a - b) ** 2 / c).exp()"), [1.5, 0.5, 4.0]),
+    (Described(lambda a, b, c: ((a - b) ** 2 / c).exp(), "(((a - b) ** 2) / c).exp()"), [1.5, 0.5, 4.0]),
     (Described(lambda a, b: a.exp() * b - a / (b + 2), "a.exp() * b - a / (b + 2)"), [0.3, -1.2]),
     # a feeds the log and the product, so a log step that sets a.grad with = in place of += fails here.
     (Described(lambda a: a.log() * a, "a.log() * a"), [2.0]),

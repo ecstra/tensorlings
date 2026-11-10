@@ -223,7 +223,7 @@ SCALING1_LESSON = prose(
     A power law keeps falling forever, but no model's loss can fall below the
     entropy of the text itself. Hoffmann and colleagues, in the Chinchilla
     paper, included that floor in their fit. With unlimited data, their law
-    is `1.69 + 406.4 / N ** 0.34`. Here are two fits to that law, both made
+    is `1.69 + 406.4 / (N ** 0.34)`. Here are two fits to that law, both made
     from points between 10 million and 1 billion parameters. The table then
     follows them out to larger sizes.
 
@@ -257,7 +257,7 @@ SCALING1_SOURCE = source_file(
     back = math.exp(2.0)                                     # 7.389..., the number whose log is 2.0
 
 
-    # TODO: Return scale * n ** -alpha for every size in n.
+    # TODO: Return scale * (n ** -alpha) for every size in n.
     #   Example: power_law(torch.tensor([1.0, 100.0]), 2.0, 0.5) returns
     #   tensor([2.0000, 0.2000]).
     def power_law(
@@ -268,12 +268,12 @@ SCALING1_SOURCE = source_file(
         ...
 
 
-    # TODO: Fit loss = scale * n ** -alpha by least squares on the logs, the
+    # TODO: Fit loss = scale * (n ** -alpha) by least squares on the logs, the
     #   way linreg3 fitted a line. A line through log loss against log n has
     #   slope -alpha and intercept log(scale). Return scale and alpha as a
     #   tuple of plain floats.
     #   Example: for n = torch.tensor([1.0, 10.0, 100.0]) and
-    #   loss = 2 * n ** -0.5, fit_power_law returns about (2.0, 0.5).
+    #   loss = 2 * (n ** -0.5), fit_power_law returns about (2.0, 0.5).
     def fit_power_law(
         n: Tensor,
         loss: Tensor,
@@ -281,7 +281,7 @@ SCALING1_SOURCE = source_file(
         ...
 
 
-    # TODO: Fit loss = floor + scale * n ** -alpha, where floor is known.
+    # TODO: Fit loss = floor + scale * (n ** -alpha), where floor is known.
     #   Subtract floor from each loss, fit a power law to what remains, and
     #   return that power law's scale and alpha.
     def fit_above_floor(
@@ -344,7 +344,7 @@ def check_scaling1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="power_law",
-        description="returns scale * n ** -alpha",
+        description="returns scale * (n ** -alpha)",
         inputs=(
             (torch.tensor([1.0, 10.0, 100.0, 1000.0]), 2.0, 0.5),
             (torch.tensor([3.0, 7.0, 50.0]), 8.8, 0.076),
@@ -474,7 +474,7 @@ SCALING2_LESSON = prose(
     and fitted the loss as a function of both N and D.
 
     ```text
-    L(N, D) = E + A / N ** alpha + B / D ** beta
+    L(N, D) = E + A / (N ** alpha) + B / (D ** beta)
     ```
 
     E is the floor from scaling1. The second term is the extra loss from
@@ -533,9 +533,10 @@ SCALING2_SOURCE = source_file(
 ''' + indented(TRAINING_FLOPS_PART) + '''
 
 
-    # TODO: Return the loss that fit predicts, E + A / N ** alpha + B / D ** beta,
-    #   for each pair of a size N from parameters and a token count D from
-    #   tokens. fit holds E, A, B, alpha and beta, in that order.
+    # TODO: Return the loss that fit predicts,
+    #   E + A / (N ** alpha) + B / (D ** beta), for each pair of a size N from
+    #   parameters and a token count D from tokens. fit holds E, A, B, alpha
+    #   and beta, in that order.
     #   Example: chinchilla_loss(torch.tensor([7e10]), torch.tensor([1.4e12]),
     #   PRINTED) returns about tensor([1.9366]).
     def chinchilla_loss(
@@ -610,7 +611,7 @@ def check_scaling2(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="chinchilla_loss",
-        description="returns E + A / N ** alpha + B / D ** beta",
+        description="returns E + A / (N ** alpha) + B / (D ** beta)",
         inputs=(
             (torch.tensor([1e8, 1e9, 7e10], dtype=torch.float64), torch.tensor([2e9, 2e10, 1.4e12], dtype=torch.float64), PRINTED),
             (torch.tensor([5e6, 3e9], dtype=torch.float64), torch.tensor([1e11, 4e9], dtype=torch.float64), OTHER_FIT),
@@ -960,7 +961,7 @@ SCALING3_LESSON = prose(
     step trains on `BATCH * BLOCK` tokens. So for a model that costs F FLOPs
     per token, a budget of C FLOPs pays for `C / (F * BATCH * BLOCK)` steps.
 
-    The parabola is `a * x ** 2 + b * x + c` with `x = log N`. Fit it by
+    The parabola is `a * (x ** 2) + b * x + c` with `x = log N`. Fit it by
     least squares on the columns `x ** 2`, `x` and 1. Its bottom is at
     `x = -b / (2 * a)`. A parabola only fits a valley near its bottom. So
     each budget tried four or five widths around its valley, each model with
@@ -1093,7 +1094,7 @@ SCALING3_SOURCE = source_file(
 
 
     # TODO: points is a list of (size, loss) pairs. Let x be the log of each
-    #   size, and fit loss = a * x ** 2 + b * x + c by least squares. Return
+    #   size, and fit loss = a * (x ** 2) + b * x + c by least squares. Return
     #   the size at the bottom of the parabola, as a plain float.
     def fit_parabola(points: list[tuple[int, float]]) -> float:
         ...

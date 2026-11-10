@@ -1382,7 +1382,7 @@ INTERP4_SOURCE = source_file(
 
     # TODO: Return the integrated gradients of f at x from baseline, using
     #   `steps` steps. Average your gradient of f over the points
-    #   baseline + k / steps * (x - baseline), for k from 1 to steps. Then
+    #   baseline + (k / steps) * (x - baseline), for k from 1 to steps. Then
     #   multiply that average by x - baseline.
     #   Example: integrated_gradients(lambda x: 1 - torch.relu(1 - x),
     #   torch.tensor([2.0]), torch.zeros(1), 20) returns tensor([0.9000]).

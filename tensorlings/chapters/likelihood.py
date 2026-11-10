@@ -485,14 +485,14 @@ LIKELIHOOD3_LESSON = prose(
     likely. The density of seeing the target `y` is
 
     ```text
-    exp(-(y - prediction) ** 2 / (2 * sigma ** 2)) / (sigma * sqrt(2 * pi))
+    exp(-((y - prediction) ** 2) / (2 * (sigma ** 2))) / (sigma * sqrt(2 * pi))
     ```
 
     Using the rules for the log of a product and of a division, and
     `log(exp(u)) = u`, its negative log is
 
     ```text
-    (y - prediction) ** 2 / (2 * sigma ** 2) + log(sigma * sqrt(2 * pi))
+    ((y - prediction) ** 2) / (2 * (sigma ** 2)) + log(sigma * sqrt(2 * pi))
     ```
 
     `math.pi` is the number pi, and `math.sqrt` takes the square root of a
@@ -500,7 +500,7 @@ LIKELIHOOD3_LESSON = prose(
     the negative log is 1.0439.
 
     If `sigma` is fixed, the second term is the same for every model. The
-    first term is the squared error divided by the constant `2 * sigma ** 2`.
+    first term is the squared error divided by the constant `2 * (sigma ** 2)`.
     So the model with the lowest squared error has the highest likelihood
     under Gaussian noise. The mean squared error is the negative log
     likelihood with the constants dropped. So choosing the squared error as
@@ -685,7 +685,7 @@ LIKELIHOOD3 = Exercise(
         "gaussian_nll": "Write the negative log from the lesson for every example, using math.log, math.sqrt and "
         "math.pi for the constant term. Then take the mean.",
         "nll_from_mse": "The first term of the negative log, averaged over the examples, is the mean squared error "
-        "divided by 2 * sigma ** 2. Then add the constant term.",
+        "divided by 2 * (sigma ** 2). Then add the constant term.",
         "laplace_nll": "Divide the absolute error of each example by b, add math.log(2 * b), then take the mean.",
     },
     introduces=(),

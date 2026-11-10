@@ -954,7 +954,7 @@ DIFFUSION3_LESSON = prose(
     noise at every step except the last.
 
     ```text
-    x_(t-1) = (x_t - beta_t / sqrt(1 - alpha_bar_t) * eps) / sqrt(1 - beta_t) + sqrt(beta_t) * noise
+    x_(t-1) = (x_t - (beta_t / sqrt(1 - alpha_bar_t)) * eps) / sqrt(1 - beta_t) + sqrt(beta_t) * noise
     ```
 
     That means 1,000 runs of the model for one batch of samples. DDIM, from

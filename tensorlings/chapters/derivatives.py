@@ -201,11 +201,11 @@ LINE = Described(
 )
 CUBIC = Described(
     value=lambda x: x ** 3 - 2 * x,
-    text="x ** 3 - 2 * x",
+    text="(x ** 3) - 2 * x",
 )
 QUADRATIC = Described(
     value=lambda x: 5 * x ** 2 + x,
-    text="5 * x ** 2 + x",
+    text="5 * (x ** 2) + x",
 )
 
 
@@ -278,6 +278,10 @@ DERIVATIVES2_LESSON = prose(
     every input. For most functions, a few rules give the exact derivative
     instead. The derivative of `f` is written `f'`.
 
+    The expressions here are written as Python code. Python computes `**`
+    first, then `*` and `/`, then `+` and `-`. So `n * x ** (n - 1)` means
+    `n * (x ** (n - 1))`.
+
     | Function | Derivative | Rule |
     |---|---|---|
     | `c`, a constant | `0` | a constant never changes |
@@ -293,9 +297,8 @@ DERIVATIVES2_LESSON = prose(
     undoes it. Both turn up all through deep learning. In Python they are
     `math.exp` and `math.log`.
 
-    The expressions here are written as Python code. Python computes `**`
-    first, then `*` and `/`, then `+` and `-`. So `x ** 3 + 4 * x` means
-    `(x ** 3) + (4 * x)`. It is two terms added together.
+    Take `x ** 3 + 4 * x`. Python reads it as `(x ** 3) + (4 * x)`, which is
+    two terms added together.
 
     The sum rule says to take the derivative of each term and add the results.
     The derivative of `x ** 3` is `3 * x ** 2`, by the power rule. The
@@ -379,7 +382,7 @@ DERIVATIVES2_SOLUTION = source_file(
         return 2 * x * math.exp(x) + x ** 2 * math.exp(x)
 
 
-    # x ** 3 * (1 / x) is x ** 2.
+    # (x ** 3) * (1 / x) is x ** 2.
     def d_cube_times_log(x: float) -> float:
         return 3 * x ** 2 * math.log(x) + x ** 2
 
@@ -440,7 +443,7 @@ DERIVATIVES2 = Exercise(
         "d_cube_times_log": "The two parts are x ** 3 and log(x), with derivatives 3 * x ** 2 and 1 / x. Put them "
         "into the product rule the way d_square_times_exp does.",
         "d_three_terms": "Take each term's derivative from the table and add them. The power rule turns x ** 0.5 "
-        "into 0.5 * x ** -0.5.",
+        "into 0.5 * (x ** -0.5).",
     },
     introduces=(),
     check=check_derivatives2,
@@ -449,7 +452,7 @@ DERIVATIVES2 = Exercise(
 DERIVATIVES3_LESSON = prose(
     """
     A model's error depends on many numbers at once. Take a function of two
-    inputs, `f(x, y) = x * y + y ** 2`. If you hold `y` fixed and change only
+    inputs, `f(x, y) = x * y + (y ** 2)`. If you hold `y` fixed and change only
     `x`, the derivative you get is the **partial derivative** of `f` with
     respect to `x`. It treats every other input as a constant, so the rules
     from derivatives2 work unchanged.
@@ -630,7 +633,7 @@ def central_partial(
 # Doubles, so the estimates come out the same however the learner orders the arithmetic.
 PRODUCT = Described(
     value=lambda v: v[0] * v[1] + v[1] ** 2,
-    text="v[0] * v[1] + v[1] ** 2",
+    text="v[0] * v[1] + (v[1] ** 2)",
 )
 SQUARES = Described(
     value=lambda v: (v ** 2).sum(),
@@ -638,7 +641,7 @@ SQUARES = Described(
 )
 MIXED = Described(
     value=lambda v: v[0] ** 3 * v[1] - v[2],
-    text="v[0] ** 3 * v[1] - v[2]",
+    text="(v[0] ** 3) * v[1] - v[2]",
 )
 
 

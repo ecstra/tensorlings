@@ -683,7 +683,7 @@ PHYSICS1_SOURCE = source_file(
 
     # TODO: Return each system's total energy, of shape (systems,). The kinetic
     #   energy is 0.5 times the sum of every velocity component squared. A
-    #   spring stores 0.5 * stiffness * (length - REST) ** 2 of potential
+    #   spring stores 0.5 * stiffness * ((length - REST) ** 2) of potential
     #   energy. springs holds each spring twice, at [i, j] and at [j, i], so
     #   the potential energy is 0.25 times that sum over all pairs i, j.
     #   Example: for the x and springs of spring_accelerations' example, with

@@ -469,8 +469,8 @@ BLOCK2_LESSON = prose(
 
     | Part | Weights |
     |---|---|
-    | attention | `4 * size ** 2 + 4 * size` |
-    | MLP | `8 * size ** 2 + 5 * size` |
+    | attention | `4 * (size ** 2) + 4 * size` |
+    | MLP | `8 * (size ** 2) + 5 * size` |
     | two LayerNorms | `4 * size` |
 
     So about two thirds of a block's weights are in its MLP. GPT-2 small has

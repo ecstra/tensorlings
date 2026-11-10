@@ -105,7 +105,7 @@ BPTT1_LESSON = prose(
     Going backwards from the last step, the chain rule gives three updates at
     each step.
 
-    - The gradient of the value inside the tanh is the gradient of `h` times `1 - h ** 2`, the derivative of tanh.
+    - The gradient of the value inside the tanh is the gradient of `h` times `1 - (h ** 2)`, the derivative of tanh.
     - Add that gradient times the previous `h` to the gradient of `w`, and that gradient times `x` to the gradient of `u`.
     - That gradient times `w` is the gradient of the previous `h`. The next step back starts from it.
 
@@ -113,7 +113,7 @@ BPTT1_LESSON = prose(
     uses the same two numbers at every step.
 
     The third update is where trouble starts. Each step back multiplies the
-    gradient by that step's `(1 - h ** 2) * w`. So the gradient of the last
+    gradient by that step's `(1 - (h ** 2)) * w`. So the gradient of the last
     state with respect to a state k steps back is a product of k such factors.
     A product of many factors below 1 shrinks towards 0, and a product of many
     factors above 1 grows without limit. The table multiplies one factor by
@@ -126,7 +126,7 @@ BPTT1_LESSON = prose(
 
     When the state is one number, a bigger `w` does not make the gradient
     explode for long. A big `w` pushes the state close to -1 or 1, where tanh
-    is flat, which is called saturating. Then `1 - h ** 2` is close to 0, so
+    is flat, which is called saturating. Then `1 - (h ** 2)` is close to 0, so
     the factors shrink. Here is what `state_gradients`, from the file below,
     returns on 50 random inputs with `u` set to 0.5.
 
@@ -198,7 +198,7 @@ BPTT1_SOURCE = source_file(
     # TODO: Return the gradient of the last state with respect to each earlier
     #   state, as a tensor of shape (steps,). Entry 0 is for the state one step
     #   back, and the last entry is for the starting state of 0. Each step t
-    #   has the factor (1 - h ** 2) * w, where h is the state after step t.
+    #   has the factor (1 - (h ** 2)) * w, where h is the state after step t.
     #   Entry k is the product of the factors of the last k + 1 steps.
     #   Example: with the same xs, w and u as the scalar_rnn example,
     #   state_gradients returns tensor([0.4340, 0.0911]).
@@ -321,9 +321,9 @@ BPTT1 = Exercise(
     hints={
         "scalar_rnn": "Start h at torch.tensor(0.0). For each x in xs, set h to torch.tanh(w * h + u * x) and keep it "
         "in a list. torch.stack the list.",
-        "backprop_through_time": "grad_inside is grad_h * (1 - states[t] ** 2). Add grad_inside * before to grad_w "
+        "backprop_through_time": "grad_inside is grad_h * (1 - (states[t] ** 2)). Add grad_inside * before to grad_w "
         "and grad_inside * xs[t] to grad_u, then set grad_h to grad_inside * w.",
-        "state_gradients": "The factors are (1 - scalar_rnn(xs, w, u) ** 2) * w. Flip them so that the last step's "
+        "state_gradients": "The factors are (1 - (scalar_rnn(xs, w, u) ** 2)) * w. Flip them so that the last step's "
         "factor comes first, then take torch.cumprod with dim=0.",
     },
     introduces=(),

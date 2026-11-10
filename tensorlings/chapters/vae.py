@@ -165,7 +165,7 @@ VAE1_LESSON = prose(
     distribution at a point z is given by this formula.
 
     ```text
-    log q(z) = -0.5 * (log(2 * pi) + log_variance + (z - mean) ** 2 / variance)
+    log q(z) = -0.5 * (log(2 * pi) + log_variance + ((z - mean) ** 2) / variance)
     ```
 
     The sampled average gets close to the closed form only slowly as the

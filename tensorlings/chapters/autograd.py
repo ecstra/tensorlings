@@ -1024,7 +1024,7 @@ AUTOGRAD4_SOLUTION = source_file(
         return v.grad
 
 
-    # The first .backward() leaves 3 * x ** 2 in t.grad, and the second adds to it.
+    # The first .backward() leaves 3 * (x ** 2) in t.grad, and the second adds to it.
     def second_gradient(x: float) -> float:
         t = torch.tensor(x, requires_grad=True)
 
@@ -1084,7 +1084,7 @@ def check_autograd4(checker: Checker) -> None:
         description="gives the gradient from autograd, shaped like v",
         inputs=(
             (Described(lambda v: (v ** 2).sum(), "(v ** 2).sum()"), torch.tensor([1.0, -2.0, 3.0])),
-            (Described(lambda v: v[0] * v[1] + v[1] ** 2, "v[0] * v[1] + v[1] ** 2"), torch.tensor([2.0, 3.0])),
+            (Described(lambda v: v[0] * v[1] + v[1] ** 2, "v[0] * v[1] + (v[1] ** 2)"), torch.tensor([2.0, 3.0])),
             (Described(lambda v: (v * v.sum()).mean(), "(v * v.sum()).mean()"), torch.tensor([[1.0, 2.0], [0.5, -1.0]])),
         ),
         reference=torch_gradient,

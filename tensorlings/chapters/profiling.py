@@ -863,9 +863,9 @@ def check_profile2(checker: Checker) -> None:
         reference=ROOFLINE_REFERENCE["matmul_cost"],
         expect=expect_pair_of_ints,
     )
-    big_matmul = (Described(2 * 4096**3, "2 * 4096**3"), Described(3 * 4096**2 * 4, "3 * 4096**2 * 4"))
+    big_matmul = (Described(2 * 4096**3, "2 * (4096 ** 3)"), Described(3 * 4096**2 * 4, "3 * (4096 ** 2) * 4"))
     doubling = (Described(2**26, "2**26"), Described(2**29, "2**29"))
-    small_matmul = (Described(2 * 64**3, "2 * 64**3"), Described(3 * 64**2 * 4, "3 * 64**2 * 4"))
+    small_matmul = (Described(2 * 64**3, "2 * (64 ** 3)"), Described(3 * 64**2 * 4, "3 * (64 ** 2) * 4"))
     rates = (Described(4e12, "4e12"), Described(1e11, "1e11"))
 
     check_on_inputs(

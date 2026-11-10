@@ -1106,7 +1106,7 @@ QUIZ15_SOURCE = source_file(
         ...
 
 
-    # TODO: Fit loss = scale * n ** -alpha by least squares on the logs. Return
+    # TODO: Fit loss = scale * (n ** -alpha) by least squares on the logs. Return
     #   the loss that the fitted power law predicts at n = target, as a plain
     #   number.
     def fit_and_predict(

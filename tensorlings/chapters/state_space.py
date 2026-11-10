@@ -402,7 +402,7 @@ SSM2_LESSON = prose(
     ```
 
     The kernel then needs no matrix at all. Its entry j is the sum over i of
-    `c[i] * b[i] * a[i] ** j`.
+    `c[i] * b[i] * (a[i] ** j)`.
 
     After j steps, each state entry has been multiplied by its `a[i]` j times.
     If the absolute value of `a[i]` is above 1, `a[i] ** j` grows without
@@ -425,7 +425,7 @@ SSM2_LESSON = prose(
 
     ```text
     a     = exp(step * rate)
-    b_bar = (a - 1) / rate * b
+    b_bar = ((a - 1) / rate) * b
     ```
 
     The `b_bar` formula assumes the input stays constant during the step,
@@ -478,7 +478,7 @@ SSM2_SOURCE = source_file(
 
     # TODO: Return the first length entries of the kernel of a diagonal state,
     #   as a tensor of shape (length,). Entry j is the sum over i of
-    #   c[i] * b[i] * a[i] ** j, and a, b and c have shape (n,). The line that
+    #   c[i] * b[i] * (a[i] ** j), and a, b and c have shape (n,). The line that
     #   sets powers above computes every a[i] ** j at once, one row per j.
     #   Example: diagonal_kernel(torch.tensor([0.5]), torch.tensor([1.0]),
     #   torch.tensor([2.0]), 3) returns tensor([2.0000, 1.0000, 0.5000]).
@@ -604,7 +604,7 @@ def check_ssm2(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="diagonal_kernel",
-        description="sums c * b * a ** j over the state",
+        description="sums c * b * (a ** j) over the state",
         inputs=(
             (torch.tensor([0.5, -0.8, 0.9]), small_tensor(470, 3), small_tensor(471, 3), 6),
             (torch.tensor([0.95, 0.2]), small_tensor(472, 2), small_tensor(473, 2), 4),
@@ -662,7 +662,7 @@ SSM2 = Exercise(
         "is_stable": "a.abs() < 1 checks every entry, .all() asks whether all are True, and bool(...) makes it a "
         "plain bool.",
         "discretize": "The rate is minus torch.exp of log_rate, and a is torch.exp of step times that rate. Then "
-        "b_bar = (a - 1) / rate * b.",
+        "b_bar = ((a - 1) / rate) * b.",
         "half_life": "Divide math.log(0.5) by torch.log(a).",
     },
     introduces=(),
@@ -1074,8 +1074,8 @@ QUIZ8_SOURCE = source_file(
     # TODO: Return the outputs of a diagonal state space model on x, of shape
     #   (length,), computed as a convolution. Discretize first, with
     #   rate = -exp(log_rate), a = exp(step * rate) and
-    #   b_bar = (a - 1) / rate * b. Entry j of the kernel is the sum of
-    #   c * b_bar * a ** j, for j from 0 to len(x) - 1. Then convolve causally,
+    #   b_bar = ((a - 1) / rate) * b. Entry j of the kernel is the sum of
+    #   c * b_bar * (a ** j), for j from 0 to len(x) - 1. Then convolve causally,
     #   with len(x) - 1 zeros on the left of x and the kernel flipped. The
     #   result has shape (length,).
     def diagonal_ssm_conv(

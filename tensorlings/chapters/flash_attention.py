@@ -749,7 +749,7 @@ FLASH2 = Exercise(
     source=FLASH2_SOURCE,
     solution=FLASH2_SOLUTION,
     hints={
-        "tiled_attention": "scores is rows @ keys.transpose(-2, -1) * scale. new_largest is torch.maximum of largest "
+        "tiled_attention": "scores is (rows @ keys.transpose(-2, -1)) * scale. new_largest is torch.maximum of largest "
         "and scores.amax(dim=-1). shrink is torch.exp(largest - new_largest). weights is torch.exp of scores minus "
         "new_largest with .unsqueeze(-1). Multiply total by shrink and add weights.sum(dim=-1). Multiply out by "
         "shrink with .unsqueeze(-1) and add weights @ values.",

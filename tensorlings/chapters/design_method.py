@@ -1378,7 +1378,7 @@ DESIGN3_LESSON = prose(
 
     Steps 2 and 4 pass no gradient. The soft version replaces them. It gives
     every point in memory a weight, the softmax over the points of
-    `-distance ** 2 / temperature`, as derive2 weighted its keys. Close points
+    `-(distance ** 2) / temperature`, as derive2 weighted its keys. Close points
     get large weights. The vote for a class becomes the sum of the weights of
     the points with that label. So each query gets a probability for each
     class.
@@ -1457,7 +1457,7 @@ DESIGN3_SOURCE = source_file(
 
     # TODO: Return each query's soft votes, of shape (episodes, queries,
     #   CLASSES). First give every point in memory a weight, the softmax over
-    #   the points of -distance ** 2 / temperature, where distance is from the
+    #   the points of -(distance ** 2) / temperature, where distance is from the
     #   query to that point. The vote for a class is the sum of the weights of
     #   the points with that label. Multiplying the weights by the one hot
     #   labels gives every vote at once.

@@ -1276,7 +1276,7 @@ DYNAMIC1_SOURCE = source_file(
     # TODO: Return attention over x, of shape (steps, features), with no mask.
     #   The queries, keys and values are q = x @ W_q.T, k = x @ W_k.T and
     #   v = x @ W_v.T. The attention weights are a softmax over each row of
-    #   q @ k.T / sqrt(d), where d is the last dimension of q. The output
+    #   (q @ k.T) / sqrt(d), where d is the last dimension of q. The output
     #   mixes the values with those weights.
     def attention_layer(
         x: Tensor,

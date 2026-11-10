@@ -588,7 +588,8 @@ MOMENTUM1 = Exercise(
 
 MOMENTUM2_LESSON = prose(
     """
-    Take the loss `x ** 2 + 100 * y ** 2`. Its graph is a long, narrow valley.
+    Take the loss `(x ** 2) + 100 * (y ** 2)`. Its graph is a long, narrow
+    valley.
     Changing y raises the loss 100 times as much as changing x by the same
     amount. So the valley is steep across, in y, and gentle along its floor,
     in x. Each optimizer below started at `(-10, 1)` and ran until the loss
@@ -613,7 +614,7 @@ MOMENTUM2_LESSON = prose(
     much of its past, and the point overshoots the bottom again and again.
 
     The steeper the valley, the bigger the difference. For the loss
-    `x ** 2 + 1000 * y ** 2`, with 40 learning rates from 0.00005 to 0.002,
+    `(x ** 2) + 1000 * (y ** 2)`, with 40 learning rates from 0.00005 to 0.002,
     SGD took 3027 steps and momentum 0.9 took 97.
 
     Those runs used exact gradients. A minibatch gives a noisy gradient, and
@@ -651,8 +652,8 @@ MOMENTUM2_SOURCE = source_file(
     optimizer = torch.optim.SGD([point], lr=0.01, momentum=0.9)    # an optimizer that updates one tensor
 
 
-    # TODO: Return the valley loss x ** 2 + 100 * y ** 2, where x and y are the
-    #   two entries of point, a tensor of shape (2,).
+    # TODO: Return the valley loss (x ** 2) + 100 * (y ** 2), where x and y
+    #   are the two entries of point, a tensor of shape (2,).
     #   Example: valley(torch.tensor([-10.0, 1.0])) returns tensor(200.).
     def valley(point: Tensor) -> Tensor:
         ...

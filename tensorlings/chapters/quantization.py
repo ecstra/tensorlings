@@ -269,7 +269,7 @@ QUANT1_LESSON = prose(
     | 4 | 7 | 0.0087 | 22% | 31% |
     | 2 | 1 | 0.061 | 98% | 99% |
 
-    At 8 bits the largest error is half the scale, `0.121 / 127 / 2`. At 2
+    At 8 bits the largest error is half the scale, `(0.121 / 127) / 2`. At 2
     bits nearly every weight rounds to 0, because most weights are far
     smaller than the largest one.
 

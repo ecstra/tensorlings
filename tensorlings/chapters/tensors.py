@@ -348,6 +348,10 @@ MATH1_LESSON = prose(
     `**`, which raises to a power, all work this way. Arithmetic between a
     tensor and a plain number applies the number to every entry.
 
+    Python computes `**` first, then `*` and `/`, then `+` and `-`. So
+    `2 * a ** 2 + 1` means `(2 * (a ** 2)) + 1`. Add brackets when you want a
+    different order.
+
     ```python
     a = torch.tensor([1.0, 2.0, 3.0])
     b = torch.tensor([10.0, 20.0, 30.0])
