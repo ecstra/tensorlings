@@ -31,12 +31,13 @@ NAMES = Chapter(
         """
         # Project, making up names
 
-        Section 3's project is a model that makes up names, as the first models
-        of Karpathy's makemore do. It starts with a model that only counts
-        which letter follows which, then builds the MLP language model of
-        Bengio and colleagues from this section's blocks, trains it past the
-        counting model, and samples new names from it. Download the data once
-        from the project folder.
+        Section 3's project is a model that makes up names, like the first
+        models in Karpathy's makemore. It starts with a model that only counts
+        which letter follows which. Then it builds the MLP language model of
+        Bengio and colleagues from this section's building blocks, and trains
+        it until it beats the counting model. Finally it samples new names
+        from the trained model. Download the data once, from the project
+        folder.
 
         ```bash
         .venv/bin/python run.py data names
@@ -137,9 +138,9 @@ class ReferenceNamesMLP(nn.Module):
 NAMES1_LESSON = prose(
     """
     Section 3's project is a model that makes up names, like the first models
-    of Karpathy's makemore. It reads a name one character at a time and
-    learns to predict the next character. Download the data once, 32,033 names
-    in about 230 KB, with `.venv/bin/python run.py data names`.
+    in Karpathy's makemore. It reads a name one character at a time and
+    learns to predict the next character. Download the data once with
+    `.venv/bin/python run.py data names`. It is 32,033 names in about 230 KB.
 
     ```python
     from tensorlings.data import load_names
@@ -148,29 +149,34 @@ NAMES1_LESSON = prose(
     names[:3]    # ['emma', 'olivia', 'ava']
     ```
 
-    Each character needs an id. The vocabulary is the 26 letters plus `.`,
-    which marks where a name starts and ends, and takes id 0. A name then
-    gives one pair per step. `emma` gives `(., e)`, `(e, m)`, `(m, m)`,
-    `(m, a)` and `(a, .)`.
+    Each character needs an id, a whole number that stands for it. The
+    vocabulary is the 26 letters plus `.`, which marks where a name starts and
+    ends. The `.` gets id 0. With a `.` added at both ends, each name gives
+    one pair for each character and the character after it. `emma` gives
+    `(., e)`, `(e, m)`, `(m, m)`, `(m, a)` and `(a, .)`.
 
-    The plainest model counts. Over the training names, count how often each
-    character follows each other one. A row of counts, divided by its total,
-    is a probability distribution over the next character. That is a
-    **bigram** model, with one character of context. Its loss is the cross
-    entropy, minus the log of the probability it gave each real next
-    character, averaged.
+    The simplest model only counts. Over the training names, count how often
+    each character follows each other character. Put the counts in a table
+    with one row for each first character. Divide a row by its total, and you
+    get a probability distribution over the next character. That is a
+    **bigram** model, which uses one character of context. Its loss is the
+    cross entropy. That is the average, over all pairs, of minus the log of
+    the probability the model gave the real next character.
 
-    A pair that never shows up in training gets probability 0, and minus the
-    log of 0 is infinite. Some validation names hold such a pair. So 1 is
-    added to every count first, which is called smoothing.
+    A pair that never appears in the training names gets probability 0, and
+    minus the log of 0 is infinite. Some validation names contain such a pair.
+    So 1 is added to every count before dividing, which is called smoothing.
 
-    The names are shuffled and split 80, 10 and 10 percent. The smoothed
-    bigram's loss is 2.454 on the training names and 2.465 on the validation
-    names. That is the number to beat.
+    The names are shuffled and split into 80 percent for training, 10 percent
+    for validation and 10 percent for testing. The smoothed bigram's loss is
+    2.454 on the training names and 2.465 on the validation names. The later
+    models have to get below 2.465.
 
-    `sorted(set(text))` gives the different characters of a string, in order.
-    A pair of ids `x` and `y`, each below 27, can be numbered `x * 27 + y`,
-    so one `torch.bincount` counts every pair at once.
+    `sorted(set(text))` gives the distinct characters of a string, in sorted
+    order. `torch.bincount` counts how often each whole number appears in a
+    tensor. A pair of ids `x` and `y`, each below 27, can be turned into the
+    single number `x * 27 + y`. Each pair gets its own number, so one call to
+    `torch.bincount` counts every pair at once.
     """,
 )
 
@@ -192,8 +198,9 @@ NAMES1_SOURCE = source_file(
     letters = sorted(set("banana"))                  # ['a', 'b', 'n']
 
 
-    # TODO: Return the vocabulary, "." first and then every character that shows
-    #   up in names, in sorted order.
+    # TODO: Return the vocabulary as a list, "." first and then every character
+    #   that appears in names, in sorted order.
+    #   Example: vocabulary(["emma", "ava"]) returns [".", "a", "e", "m", "v"].
     def vocabulary(names: list[str]) -> list[str]:
         ...
 
@@ -201,8 +208,11 @@ NAMES1_SOURCE = source_file(
     steps = list(zip(".ab.", "ab."))                 # [('.', 'a'), ('a', 'b'), ('b', '.')]
 
 
-    # TODO: Finish the loop, so this returns the id of each character and the id
-    #   of the one after it, for every step of every name with "." at each end.
+    # TODO: Finish the loop. bigram_pairs adds "." to both ends of every name,
+    #   then returns two tensors of ids. xs holds the id of each character, and
+    #   ys holds the id of the character after it.
+    #   Example: bigram_pairs(["ab"], [".", "a", "b"]) returns
+    #   (tensor([0, 1, 2]), tensor([1, 2, 0])).
     def bigram_pairs(
         names: list[str],
         chars: list[str],
@@ -222,8 +232,13 @@ NAMES1_SOURCE = source_file(
     counted = torch.bincount(torch.tensor([0, 2, 2]), minlength=4)    # tensor([1, 0, 2, 0])
 
 
-    # TODO: Return a float tensor of shape (size, size), where row x, column y
-    #   counts how often the pair x, y shows up in xs and ys.
+    # TODO: Return a float tensor of shape (size, size). The entry at row x,
+    #   column y is the number of positions i where xs[i] is x and ys[i] is y.
+    #   Example: bigram_counts(torch.tensor([0, 1, 1, 2]),
+    #   torch.tensor([1, 2, 2, 0]), 3) returns
+    #   tensor([[0., 1., 0.],
+    #           [0., 0., 2.],
+    #           [1., 0., 0.]]).
     def bigram_counts(
         xs: Tensor,
         ys: Tensor,
@@ -232,8 +247,12 @@ NAMES1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the bigram model's loss on the pairs xs and ys, as a plain
-    #   number, with 1 added to every count before the rows become probabilities.
+    # TODO: Return the bigram model's cross entropy loss on the pairs xs and ys,
+    #   as a float. Add 1 to every count in counts, then divide each row by its
+    #   total to get probabilities. The loss is the mean, over the pairs, of
+    #   minus the log of the probability of ys[i] in row xs[i].
+    #   Example: bigram_loss(torch.tensor([[0.0, 3.0], [2.0, 1.0]]),
+    #   torch.tensor([0, 1, 1]), torch.tensor([1, 0, 1])) returns about 0.5501.
     def bigram_loss(
         counts: Tensor,
         xs: Tensor,
@@ -345,7 +364,7 @@ def check_names1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="bigram_pairs",
-        description="gives every step of every name, with . at each end",
+        description="gives the id pairs of every name, with . at each end",
         inputs=(
             (["ab", "ba"], [".", "a", "b"]),
             (["emma"], [".", "a", "e", "m"]),
@@ -356,7 +375,7 @@ def check_names1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="bigram_counts",
-        description="counts every pair into a square",
+        description="counts every pair into a size by size table",
         inputs=(
             (torch.tensor([0, 1, 1, 2]), torch.tensor([1, 2, 2, 0]), 3),
             (torch.tensor([3, 0, 3, 3, 1]), torch.tensor([3, 2, 3, 0, 1]), 4),
@@ -393,10 +412,10 @@ NAMES1 = Exercise(
         "vocabulary": "Join the names into one string, take sorted(set(...)) of it, and put \".\" in a list in "
         "front.",
         "bigram_pairs": "Append ids[first] to xs and ids[second] to ys.",
-        "bigram_counts": "Number each pair xs * size + ys, count them with torch.bincount and "
-        "minlength=size * size, then .reshape(size, size) and .float().",
-        "bigram_loss": "Add 1 to counts, divide each row by its sum with keepdim=True, pick probabilities[xs, ys], "
-        "then take minus the mean of their logs.",
+        "bigram_counts": "Turn each pair into one number with xs * size + ys. Count those numbers with "
+        "torch.bincount and minlength=size * size, then use .reshape(size, size) and .float().",
+        "bigram_loss": "Add 1 to counts and divide each row by its sum, using keepdim=True. Pick "
+        "probabilities[xs, ys], then take minus the mean of their logs.",
     },
     introduces=(),
     check=check_names1,
@@ -410,14 +429,16 @@ NAMES1 = Exercise(
 
 NAMES2_LESSON = prose(
     """
-    A bigram sees one character. The language model of Bengio and colleagues,
-    from 2003, reads the last few words. Each goes through an embedding, the
-    embedding vectors are laid end to end, and an MLP scores every possible
-    next word. Karpathy applies it to the characters of names in makemore
-    part 2.
+    A bigram model sees only one character of context. The language model of
+    Bengio and colleagues, from 2003, reads the last few words. It looks up an
+    embedding vector for each of those words and joins the vectors end to end
+    into one long vector. Then an MLP gives a score to every possible next
+    word. Karpathy applies the same model to the characters of names in
+    makemore part 2.
 
-    With a context of 3, `emma` gives five examples, each three ids in and one
-    out. A name starts with a context of `...`.
+    With a context of 3, `emma` gives five examples. Each example has three
+    ids as input and the id of the next character as its target. Every name
+    starts with the context `...`.
 
     | Context | Next |
     |---|---|
@@ -427,19 +448,22 @@ NAMES2_LESSON = prose(
     | `emm` | a |
     | `mma` | . |
 
-    The model here starts with an embedding of size 10. A hidden Linear layer
-    of 200 with LayerNorm and tanh follows, then a head scoring all 27
-    characters. The paper used tanh. The LayerNorm keeps the hidden spread
-    steady, as the normalization chapter showed. Karpathy adds BatchNorm in
-    makemore part 3. LayerNorm does the same job without depending on the
-    batch, which helps when sampling one name at a time.
+    The model here starts with an embedding of size 10. Next comes a hidden
+    Linear layer with 200 outputs, followed by LayerNorm and tanh. Last comes
+    the head, a Linear layer that gives a score to each of the 27 characters.
+    The paper used tanh too. The LayerNorm keeps the mean and standard
+    deviation of the hidden values steady, as the normalization chapter
+    showed. Karpathy adds BatchNorm in makemore part 3. LayerNorm does the
+    same job without depending on the other examples in the batch. That helps
+    when sampling one name at a time.
 
-    The head starts small, its weights shrunk to a tenth and its bias at 0.
-    The scores then start nearly equal, so the starting loss is near
-    `log(27)`, 3.30, as init3 showed.
+    The head starts small. Its weights are shrunk to a tenth of their random
+    starting values, and its bias is set to 0. So at the start, the scores for
+    all 27 characters are nearly equal. That makes the starting loss close to
+    `log(27)`, which is 3.30, as init3 showed.
 
-    `window[1:] + [new]` drops a list's first item and adds a new one at the
-    end. `*=` multiplies a tensor in place.
+    `window[1:] + [new]` makes a new list without the first item of `window`
+    and with `new` added at the end. `*=` multiplies a tensor in place.
     """,
 )
 
@@ -455,9 +479,12 @@ NAMES2_SOURCE = source_file(
     shifted = window[1:] + [13]                      # [0, 5, 13]
 
 
-    # TODO: Finish the line that moves window, so this returns the context of
-    #   every step of every name and the id that follows it. Each name starts
-    #   from a context of all 0, the id of ".", and ends with ".".
+    # TODO: Finish the line that updates window. build_contexts returns X, the
+    #   context at every step of every name, and Y, the id of the character
+    #   that follows each context. Each name starts from a context of all 0s,
+    #   the id of ".", and its last target is ".".
+    #   Example: build_contexts(["ab"], [".", "a", "b"], 2) returns
+    #   (tensor([[0, 0], [0, 1], [1, 2]]), tensor([1, 2, 0])).
     def build_contexts(
         names: list[str],
         chars: list[str],
@@ -477,10 +504,11 @@ NAMES2_SOURCE = source_file(
         return torch.tensor(X), torch.tensor(Y)
 
 
-    # TODO: Two things to finish. In __init__, shrink head's weights to a tenth
-    #   and set its bias to 0. forward looks up the embedding of each id in x,
-    #   lays each example's vectors end to end, then applies hidden, norm, tanh
-    #   and head.
+    # TODO: Finish two things. In __init__, multiply head's weights by 0.1 and
+    #   set its bias to 0. forward takes ids x of shape (examples, context). It
+    #   looks up the embedding of each id, joins each example's vectors end to
+    #   end into one row, then applies hidden, norm, tanh and head in that
+    #   order. It returns scores of shape (examples, vocabulary).
     class NamesMLP(nn.Module):
         def __init__(
             self,
@@ -573,7 +601,7 @@ def check_names_start(found: type) -> None:
 
         if not torch.allclose(model.head.weight, reference.head.weight):
             ratio = (model.head.weight.detach().std() / reference.head.weight.detach().std() / 10).item()
-            raise Mismatch(f"The weights of head in {call} should be a tenth of what nn.Linear drew, but they are {ratio:.3g} times what it drew.")
+            raise Mismatch(f"The weights of head in {call} should be a tenth of the random values nn.Linear started them at, but they are {ratio:.3g} times those values.")
 
 
 def check_names_forward(found: type) -> None:
@@ -621,7 +649,7 @@ def check_names2(checker: Checker) -> None:
     checker.test_method(
         class_name="NamesMLP",
         method="forward",
-        description="looks up, lays end to end, and applies hidden, norm, tanh and head",
+        description="looks up the embeddings, joins them end to end, and applies hidden, norm, tanh and head",
         run=check_names_forward,
     )
 
@@ -652,11 +680,12 @@ NAMES2 = Exercise(
 
 NAMES3_LESSON = prose(
     """
-    Training is the minibatch loop of Section 2. Each step draws 32 random
-    examples, and the learning rate drops from 0.1 to 0.01 for the last
-    quarter of the steps. Section 4 explains why dropping it helps. The
-    examples come from `torch.randint(0, len(X), (32,))`, 32 random positions
-    that can repeat, unlike the shuffled epochs of Section 2.
+    Training uses the minibatch loop of Section 2. Each step picks 32 random
+    examples. The learning rate is 0.1, then drops to 0.01 for the last
+    quarter of the steps. Section 4 explains why lowering it helps. The
+    examples come from `torch.randint(0, len(X), (32,))`, which gives 32
+    random positions. The same position can come up more than once, unlike in
+    the shuffled epochs of Section 2.
 
     | Model | Steps | Validation loss |
     |---|---|---|
@@ -665,24 +694,27 @@ NAMES3_LESSON = prose(
     | MLP | 10,000 | 2.217 |
     | MLP | 20,000 | 2.181 |
 
-    Karpathy's runs of the same shape reach about 2.10 after 200,000 steps.
+    Karpathy's runs of a model with the same shape reach about 2.10 after
+    200,000 steps.
 
     To make up a name, start from the context `...` and turn the model's
-    scores into probabilities with softmax. Draw the next character from them,
-    shift it into the context, and repeat until the model draws `.`.
+    scores into probabilities with softmax. Pick the next character at random
+    using those probabilities. Add it to the end of the context and drop the
+    oldest character. Repeat until the model picks `.`, which ends the name.
 
     ```python
     probabilities = torch.tensor([[0.1, 0.0, 0.9]])
     torch.multinomial(probabilities, 1, generator=generator)    # tensor([[2]]) nine times in ten
     ```
 
-    `torch.multinomial(probabilities, 1)` draws one position from each row,
-    each position with its probability. The model takes a batch, so one
-    context goes in as `torch.tensor([window])`, a batch of 1.
+    `torch.multinomial(probabilities, 1)` picks one position from each row at
+    random, and each position's chance of being picked is its probability.
+    The model expects a batch, so a single context goes in as
+    `torch.tensor([window])`, a batch of 1.
 
-    Names from the 20,000 step model came out like kilyn, collie, caimen and
-    amonia, and some like fameellieshael. The bigram's came out like zan,
-    ayenn and deveerhacarolyme.
+    The 20,000 step model made up names like kilyn, collie, caimen and amonia,
+    and a few odd ones like fameellieshael. The bigram model made up names
+    like zan, ayenn and deveerhacarolyme.
     """,
 )
 
@@ -721,9 +753,10 @@ NAMES3_SOURCE = source_file(
             return self.head(torch.tanh(self.norm(self.hidden(vectors))))
 
 
-    # TODO: Finish the two lines with ..., so each step trains on the 32 random
-    #   examples in batch, at a learning rate of 0.1 for the first three quarters
-    #   of the steps and 0.01 after.
+    # TODO: Finish the lines that set loss and rate. loss is the cross entropy
+    #   of the model's scores for the 32 random examples in batch. rate is the
+    #   learning rate, 0.1 for the first three quarters of the steps and 0.01
+    #   after that.
     def train_names(
         model: nn.Module,
         X: Tensor,
@@ -745,8 +778,9 @@ NAMES3_SOURCE = source_file(
                     parameter.grad = None
 
 
-    # TODO: Return the model's cross entropy on X against Y, as a plain number,
-    #   in eval mode and without recording anything for autograd.
+    # TODO: Return the model's cross entropy loss on X against Y, as a float.
+    #   Put the model in eval mode first, and run it inside torch.no_grad() so
+    #   autograd records nothing.
     def validation_loss(
         model: nn.Module,
         X: Tensor,
@@ -759,8 +793,9 @@ NAMES3_SOURCE = source_file(
     drawn = torch.multinomial(torch.tensor([[0.1, 0.0, 0.9]]), 1, generator=generator)    # tensor([[2]])
 
 
-    # TODO: Finish the line that sets probabilities, the softmax of the model's
-    #   scores for the context in window, so this makes up one name.
+    # TODO: Finish the line that sets probabilities. It is the softmax of the
+    #   model's scores for the context in window, a tensor of shape
+    #   (1, len(chars)). With it, sample_name makes up one name.
     def sample_name(
         model: nn.Module,
         chars: list[str],
@@ -1021,7 +1056,7 @@ def reference_sample(
 def check_names3(checker: Checker) -> None:
     checker.test(
         function="train_names",
-        description="steps like the reference, 0.1 then 0.01",
+        description="trains like the reference, at 0.1 then 0.01",
         run=check_train_steps,
     )
     checker.test(
@@ -1052,7 +1087,7 @@ NAMES3 = Exercise(
         "train_names": "The loss is F.cross_entropy of model(X[batch]) and Y[batch]. The rate is 0.1 while step is "
         "below steps * 3 // 4, and 0.01 after.",
         "validation_loss": "Call model.eval(). Then, inside a with torch.no_grad() block, return F.cross_entropy "
-        "of model(X) and Y as a plain number.",
+        "of model(X) and Y as a float with .item().",
         "sample_name": "Pass torch.tensor([window]) to the model and take torch.softmax of the scores along dim=1.",
     },
     introduces=(),

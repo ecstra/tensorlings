@@ -33,10 +33,11 @@ SCHEDULES = Chapter(
         """
         # Learning rate schedules
 
-        The best learning rate changes while a model trains. This chapter
-        writes step and cosine decay as functions of the step and matches them
-        with PyTorch's schedulers, adds a warmup at the start, and picks a rate
-        with a range test.
+        The best learning rate changes during training. This chapter writes
+        two common schedules, step decay and cosine decay, as functions of the
+        step number, and checks them against PyTorch's schedulers. Then it adds
+        a warmup at the start of training, and uses a range test to pick a
+        good learning rate.
 
         ## Further reading
 
@@ -97,35 +98,45 @@ def one_parameter_optimizer(lr: float) -> torch.optim.Optimizer:
 
 SCHEDULE1_LESSON = prose(
     """
-    A rate that suits the start, while the loss falls fast, is too big near
-    the end. There the steps bounce around the bottom instead of settling into
-    it. A **learning rate schedule** lowers the rate as training goes.
+    A learning rate that works well at the start, while the loss falls fast,
+    is too big near the end. Near the end, the parameters keep jumping around
+    the minimum of the loss instead of getting closer to it. A **learning rate
+    schedule** lowers the learning rate as training goes on.
 
-    - step decay: multiply the rate by `gamma` every `step_size` steps. ResNet divided it by 10 twice.
-    - cosine decay: glide from the base rate down to a minimum along half a cosine wave. Most language models use it.
+    - step decay: multiply the rate by `gamma` every `step_size` steps. ResNet's training divided it by 10 twice.
+    - cosine decay: lower the rate smoothly from the base rate to a minimum, following half a cosine wave. Most language models use it.
 
-    Cosine decay comes from Loshchilov and Hutter's SGDR, 2017. At step `t` of
-    `total` the rate is the minimum plus `(base - minimum)` times
-    `(1 + cos(pi * t / total)) / 2`.
+    Cosine decay comes from SGDR, a 2017 paper by Loshchilov and Hutter. At
+    step `t` out of `total` steps, the rate is
 
-    Here the names model trained for 5000 steps with each schedule, on three
-    seeds. Step decay divided the rate by 10 for the last quarter, and cosine
-    went down to 0.
+    ```text
+    rate = minimum + (base - minimum) * (1 + cos(pi * t / total)) / 2
+    ```
+
+    The factor `(1 + cos(pi * t / total)) / 2` goes from 1 at step 0 down to
+    0 at step `total`.
+
+    Here the names model was trained for 5000 steps with each schedule, with
+    three seeds each. Step decay divided the rate by 10 for the last quarter
+    of training. Cosine decay went down to 0. The table shows the range of
+    validation losses over the seeds.
 
     | Optimizer | Constant | Step decay | Cosine |
     |---|---|---|---|
     | SGD at 0.1 | 2.297 to 2.304 | 2.255 to 2.258 | 2.267 to 2.273 |
     | Adam at 0.003 | 2.274 to 2.281 | 2.230 to 2.233 | 2.234 to 2.239 |
 
-    Lowering the rate at the end helped on every seed, by more than the choice
-    of optimizer did. The late drop matched cosine and edged past it. Hägele
-    and others found the same for language models in 2024: a constant rate
-    with a cooldown at the end scales the way cosine does.
+    Lowering the rate at the end helped on every seed. It helped more than
+    switching from SGD to Adam did. Step decay's single late drop did as well
+    as cosine decay, and slightly better. Hägele and others found the same for
+    language models in 2024. A constant rate with a cooldown at the end does
+    as well as cosine as models get larger.
 
-    A scheduler from `torch.optim.lr_scheduler` changes the optimizer's rate
-    each time its `.step()` runs, after `optimizer.step()`. PyTorch's
-    examples call it once per epoch, and this course calls it once per
-    training step. The rate the next step uses is in
+    PyTorch's schedulers are in `torch.optim.lr_scheduler`. A scheduler
+    changes the optimizer's learning rate each time you call
+    `scheduler.step()`, which goes after `optimizer.step()`. PyTorch's
+    examples call it once per epoch, but this course calls it once per
+    training step. The rate that the next step will use is stored in
     `optimizer.param_groups[0]["lr"]`.
 
     ```python
@@ -149,8 +160,9 @@ SCHEDULE1_SOURCE = source_file(
     halfway = (1 + math.cos(math.pi * 0.5)) / 2      # 0.5, the cosine factor halfway through
 
 
-    # TODO: Return step decay's rate at step, base times gamma once for every
-    #   full step_size steps done.
+    # TODO: Return the step decay rate at step. Start from base and multiply by
+    #   gamma once for every full step_size steps completed so far.
+    #   Example: step_rate(0.1, 6, 3, 0.5) returns 0.025.
     def step_rate(
         base: float,
         step: int,
@@ -160,8 +172,9 @@ SCHEDULE1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return cosine decay's rate at step, going from base at step 0 down to
-    #   minimum at step total.
+    # TODO: Return the cosine decay rate at step, with the formula from the
+    #   lesson. It goes from base at step 0 down to minimum at step total.
+    #   Example: cosine_rate(0.1, 50, 100, 0.0) returns about 0.05.
     def cosine_rate(
         base: float,
         step: int,
@@ -175,8 +188,11 @@ SCHEDULE1_SOURCE = source_file(
     current = optimizer.param_groups[0]["lr"]        # 0.1
 
 
-    # TODO: Return the rate optimizer uses at each of steps steps, as a list.
-    #   Read it before each optimizer.step(), and call scheduler.step() after.
+    # TODO: Run steps steps and return, as a list, the learning rate optimizer
+    #   uses at each step. At each step, read the rate before optimizer.step(),
+    #   then call scheduler.step() after it.
+    #   Example: with StepLR(optimizer, step_size=3, gamma=0.5) on the optimizer
+    #   above, 7 steps return [0.1, 0.1, 0.1, 0.05, 0.05, 0.05, 0.025].
     def scheduler_rates(
         optimizer: torch.optim.Optimizer,
         scheduler,
@@ -278,7 +294,7 @@ def check_schedule1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="cosine_rate",
-        description="glides from base to minimum along half a cosine",
+        description="lowers the rate from base to minimum along half a cosine",
         inputs=(
             (0.1, 0, 100, 0.0),
             (0.1, 50, 100, 0.0),
@@ -303,8 +319,8 @@ SCHEDULE1 = Exercise(
     source=SCHEDULE1_SOURCE,
     solution=SCHEDULE1_SOLUTION,
     hints={
-        "step_rate": "step // step_size counts the full step_size stretches done. Raise gamma to that power and "
-        "multiply by base.",
+        "step_rate": "step // step_size is the number of full blocks of step_size steps completed so far. Raise "
+        "gamma to that power and multiply by base.",
         "cosine_rate": "Follow the formula in the lesson, with math.cos and math.pi.",
         "scheduler_rates": "In a loop of steps, append optimizer.param_groups[0][\"lr\"] to a list, then call "
         "optimizer.step() and scheduler.step().",
@@ -327,15 +343,17 @@ def small_classifier(seed: int) -> nn.Sequential:
 
 WARMUP1_LESSON = prose(
     """
-    The first steps are the riskiest. The weights are random, the gradients
-    large, and Adam's averages hold only a few steps. A big rate there can
-    throw the weights somewhere training never climbs out of. **Warmup**
-    raises the rate from near 0 to its base over the first few hundred steps,
-    and then the schedule takes over.
+    The first steps of training are the riskiest. The weights are random and
+    the gradients are large. Adam's running averages are built from only a
+    few steps, so they are still noisy. A large learning rate at this point
+    can push the weights into a bad region that training never gets out of.
+    **Warmup** raises the learning rate from near 0 to its base value over
+    the first few hundred steps. After that, the usual schedule takes over.
 
-    Here a deeper names model, 32 post norm blocks like residual4's, trained
-    with Adam for 1500 steps at batch 64. The rate fell along a cosine to 0,
-    and every row ran on three seeds.
+    Here a deeper names model was trained with Adam for 1500 steps, with a
+    batch size of 64. It has 32 post norm blocks like the ones in residual4.
+    After the warmup, if there was one, the rate followed a cosine down to 0.
+    Every row was run with three seeds.
 
     | Blocks | Rate | Warmup | Validation loss |
     |---|---|---|---|
@@ -347,24 +365,26 @@ WARMUP1_LESSON = prose(
     | post norm | 0.001 | 150 steps | 2.820 to 2.821 |
     | pre norm | 0.001 | none | 2.294 to 2.311 |
 
-    Without warmup, 0.0007 got stuck near 2.75, worse than the bigram's
-    2.465. With 500 steps of warmup it trained, and on every seed it ended
-    lower than 0.0003, the best rate without warmup. That is what warmup
-    buys, as Kalra and Barkeshli found in 2024. A larger rate trains, and
-    the larger rate ends lower.
+    Without warmup, a rate of 0.0007 got stuck near 2.75. That is worse than
+    the bigram model's 2.465. With 500 steps of warmup, the same rate trained
+    well. On every seed it ended lower than 0.0003, the best rate without
+    warmup. Kalra and Barkeshli found the same benefit in 2024. Warmup lets a
+    larger learning rate train at all, and the larger rate ends at a lower
+    loss.
 
-    Warmup has to be long enough, since 150 steps left 0.001 as stuck as no
-    warmup at all. The pre norm stack trained at 0.001 with no warmup. Post
-    norm models need warmup most, as Xiong and others found.
+    Warmup has to be long enough. At a rate of 0.001, 150 steps of warmup
+    left the model as stuck as no warmup at all. The pre norm stack trained
+    at 0.001 with no warmup. Xiong and others found that post norm models
+    need warmup the most.
 
-    Large batches call for large rates, so they need warmup too. Goyal and
-    others warmed up for 5 epochs to train ResNet with huge batches.
-    nanoGPT warms up for 2000 of its 600,000 steps by default, and for 100 in
-    its Shakespeare character config. Then it decays along a cosine to a tenth
-    of the base rate.
+    Large batches need large learning rates, so they need warmup too. Goyal
+    and others warmed up for 5 epochs to train ResNet with huge batches.
+    nanoGPT warms up for the first 2000 of its 600,000 steps by default, and
+    for 100 steps in its Shakespeare character config. After the warmup, its
+    rate decays along a cosine to a tenth of the base rate.
 
-    Setting `group["lr"]` for each group in `optimizer.param_groups` changes
-    the rate by hand, before `optimizer.step()`.
+    To change the rate by hand, set `group["lr"]` for each `group` in
+    `optimizer.param_groups`, before calling `optimizer.step()`.
     """,
 )
 
@@ -382,8 +402,10 @@ WARMUP1_SOURCE = source_file(
     climbing = [0.1 * (step + 1) / 4 for step in range(4)]    # [0.025, 0.05, 0.075, 0.1]
 
 
-    # TODO: Return the rate at step during a linear warmup over warmup steps,
-    #   base times (step + 1) / warmup, and base itself once warmup is over.
+    # TODO: Return the learning rate at step for a linear warmup that lasts
+    #   warmup steps. During the warmup the rate is base * (step + 1) / warmup.
+    #   Once the warmup is over, the rate is base.
+    #   Example: warmup_rate(0.1, 2, 4) returns about 0.075, as in climbing.
     def warmup_rate(
         base: float,
         step: int,
@@ -392,9 +414,11 @@ WARMUP1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the rate at step of a schedule shaped like nanoGPT's. During
-    #   the first warmup steps it is warmup_rate. After that it falls along a
-    #   cosine from base at step warmup to minimum at step total.
+    # TODO: Return the learning rate at step for a schedule shaped like
+    #   nanoGPT's. For the first warmup steps, the rate is warmup_rate. After
+    #   that, it falls along a cosine from base at step warmup to minimum at
+    #   step total.
+    #   Example: warmup_cosine(0.01, 60, 10, 110, 0.001) returns about 0.0055.
     def warmup_cosine(
         base: float,
         step: int,
@@ -405,8 +429,9 @@ WARMUP1_SOURCE = source_file(
         ...
 
 
-    # TODO: Finish the line in the inner loop, so each step trains with Adam at
-    #   the rate rate_at(step) gives. It returns the last loss.
+    # TODO: Finish the line in the inner loop, so that each step trains with
+    #   Adam at the learning rate rate_at(step). rate_at is a function from the
+    #   step number to a rate. train_scheduled returns the loss of the last step.
     def train_scheduled(
         model: nn.Module,
         X: Tensor,
@@ -552,7 +577,7 @@ def check_warmup1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="warmup_rate",
-        description="climbs to base over the warmup steps, then stays there",
+        description="rises to base over the warmup steps, then stays at base",
         inputs=(
             (0.1, 0, 4),
             (0.1, 2, 4),
@@ -591,9 +616,10 @@ WARMUP1 = Exercise(
     source=WARMUP1_SOURCE,
     solution=WARMUP1_SOLUTION,
     hints={
-        "warmup_rate": "base times the smaller of 1.0 and (step + 1) / warmup. min gives the smaller of two numbers.",
-        "warmup_cosine": "Before warmup, return warmup_rate. After it, the cosine of schedule1 with the progress "
-        "(step - warmup) / (total - warmup) in place of step / total.",
+        "warmup_rate": "Multiply base by the smaller of 1.0 and (step + 1) / warmup. Python's min returns the "
+        "smaller of two numbers.",
+        "warmup_cosine": "While step is below warmup, return warmup_rate. After that, use the cosine formula from "
+        "schedule1 with the progress (step - warmup) / (total - warmup) in place of step / total.",
         "train_scheduled": "Set group[\"lr\"] to rate_at(step).",
     },
     introduces=(),
@@ -608,32 +634,37 @@ WARMUP1 = Exercise(
 
 SCHEDULE2_LESSON = prose(
     """
-    A range test, from Leslie Smith's 2015 paper on cyclical rates, finds a
-    good rate in one short run. Start with a tiny rate and raise it a little
-    every step, while recording the loss. The loss falls slowly, then fast,
-    then bottoms out and blows up. Smith raised the rate by the same amount
-    each step. This test follows the fast.ai learning rate finder, which
-    raises it by the same factor each step.
+    A range test finds a good learning rate in one short run. It comes from
+    Leslie Smith's 2015 paper on cyclical learning rates. You start with a
+    tiny rate and raise it a little at every step, while recording the loss.
+    The loss falls slowly at first, then fast, then reaches its lowest point
+    and blows up. Smith added the same amount to the rate at each step. This
+    test follows the fast.ai learning rate finder instead, which multiplies
+    the rate by the same factor at each step.
 
-    Here the names model ran 300 steps of Adam, with the rate climbing from
-    0.00001 to 1, on minibatches of 256.
+    Here the names model was trained for 300 steps of Adam on minibatches of
+    256, with the rate rising from 0.00001 to 1.
 
     | Rate | 0.00001 | 0.0001 | 0.001 | 0.0057 | 0.058 | 0.18 | 0.33 | 0.58 |
     |---|---|---|---|---|---|---|---|---|
     | Loss | 3.29 | 3.23 | 2.64 | 2.42 | 2.45 | 3.01 | 13.1 | 99.9 |
 
-    One step per rate makes the losses noisy. So they get a running average
-    with beta 0.9 first, corrected at the start the way Adam's hats are. The
-    smoothed loss was lowest near 0.0095 and doubled past 0.33.
+    Each rate gets only one step, so the losses are noisy. The test first
+    smooths them with a running average with beta 0.9. The average is
+    corrected at the start the same way Adam's hats correct its averages. The
+    smoothed loss was lowest at a rate near 0.0095. Past a rate of 0.33 it
+    was more than double its lowest value.
 
-    The usual rule picks a tenth of the lowest point, about 0.001 here, the
-    rate adamw2's sweep found best. Over five seeds the picks ran from 0.00095
-    to 0.0020. Adam trained at each pick for 5000 steps reached 2.265 to
-    2.277, as low as the best rate of adamw2's sweep. So 300 steps stand in
-    for a sweep of full runs.
+    The usual rule picks a tenth of the rate at the lowest point, which is
+    about 0.001 here. That is the rate the sweep in adamw2 found best. Over
+    five seeds, the picked rates ranged from 0.00095 to 0.0020. Adam trained
+    at each picked rate for 5000 steps reached a validation loss of 2.265 to
+    2.277. That is as low as the best rate in the adamw2 sweep. So one range
+    test of 300 steps can replace a sweep of many full training runs.
 
     The rates are `start * (end / start) ** (k / (count - 1))` for `k` from 0
-    to `count - 1`, spread evenly on a log scale.
+    to `count - 1`. Each rate is the previous one times the same factor, so
+    the rates are spread evenly on a log scale.
     """,
 )
 
@@ -646,11 +677,14 @@ SCHEDULE2_SOURCE = source_file(
     import torch.nn.functional as F
     from torch import Tensor
 
-    factor = (1.0 / 0.00001) ** (1 / 299)            # 1.04, the climb per step over 300 steps
+    factor = (1.0 / 0.00001) ** (1 / 299)            # about 1.04, the ratio from one rate to the next
 
 
-    # TODO: Return count rates from start to end, each the same factor above the
-    #   one before.
+    # TODO: Return a list of count rates from start to end, where each rate is
+    #   the previous one times the same factor. The first rate is start and the
+    #   last is end.
+    #   Example: exponential_rates(0.001, 1.0, 4) returns about
+    #   [0.001, 0.01, 0.1, 1.0].
     def exponential_rates(
         start: float,
         end: float,
@@ -659,10 +693,13 @@ SCHEDULE2_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the losses smoothed by a running average with beta, which
-    #   starts at 0. Keep the running average itself uncorrected. At the k-th
-    #   loss, counted from 1, append that average divided by 1 - beta ** k, as
-    #   Adam's hats do.
+    # TODO: Return the losses smoothed by a running average with factor beta.
+    #   The average starts at 0, and each loss updates it to
+    #   beta * average + (1 - beta) * loss. Keep the running average itself
+    #   uncorrected. At the k-th loss, counted from 1, append the average
+    #   divided by 1 - beta ** k, the same correction Adam's hats make.
+    #   Example: smooth([3.0, 2.0, 2.5, 1.0], 0.9) returns about
+    #   [3.0, 2.474, 2.483, 2.052].
     def smooth(
         losses: list[float],
         beta: float,
@@ -670,7 +707,10 @@ SCHEDULE2_SOURCE = source_file(
         ...
 
 
-    # TODO: Return a tenth of the rate where smoothed is lowest.
+    # TODO: smoothed[i] is the smoothed loss at the rate rates[i]. Return a
+    #   tenth of the rate where the smoothed loss is lowest.
+    #   Example: pick_rate([0.001, 0.01, 0.1, 1.0], [2.6, 2.4, 2.5, 9.0])
+    #   returns 0.001.
     def pick_rate(
         rates: list[float],
         smoothed: list[float],
@@ -678,8 +718,9 @@ SCHEDULE2_SOURCE = source_file(
         ...
 
 
-    # TODO: Finish the line that sets the rate, so each step of the loop trains
-    #   at the next of rates. It returns the loss of every step.
+    # TODO: Finish the line that sets the learning rate, so that each pass
+    #   through the loop trains one step at the next rate in rates. range_test
+    #   returns the list of every step's loss.
     def range_test(
         model: nn.Module,
         X: Tensor,
@@ -867,7 +908,7 @@ SCHEDULE2 = Exercise(
         "smooth": "Keep an average starting at 0.0, and count the losses from 1 with enumerate(losses, start=1). "
         "Update the average as beta * average + (1 - beta) * loss, then append it divided by 1 - beta ** k.",
         "pick_rate": "Find the position of the smallest smoothed loss, take the rate there, and divide by 10.",
-        "range_test": "Set it to rate, the rate of this pass through the loop.",
+        "range_test": "Set the learning rate to rate, the loop variable that holds this step's rate.",
     },
     introduces=(),
     check=check_schedule2,

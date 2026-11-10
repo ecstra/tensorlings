@@ -36,11 +36,12 @@ ADAPTIVE = Chapter(
         """
         # Adaptive optimizers
 
-        An adaptive optimizer gives every parameter a step size of its own,
-        worked out from that parameter's gradients. This chapter builds
-        RMSProp, Adam from Algorithm 1 of its paper and AdamW, matches each
-        with PyTorch's, shows what Adam's bias correction is for, and sets out
-        which optimizer and learning rate fits which model.
+        An adaptive optimizer gives every parameter its own step size,
+        computed from that parameter's past gradients. This chapter builds
+        RMSProp, Adam (following Algorithm 1 of the Adam paper) and AdamW, and
+        checks each one against PyTorch's version. It also shows why Adam
+        needs its bias correction, and which optimizer and learning rate suit
+        which kind of model.
 
         ## Further reading
 
@@ -100,37 +101,44 @@ INDENTED_ADAM = textwrap.indent(ADAM_CLASS.strip("\n"), "    ")
 
 RMSPROP1_LESSON = prose(
     """
-    SGD takes one learning rate for every parameter. A parameter whose
-    gradients are always large takes big steps, and one whose gradients are
-    small barely moves. **RMSProp**, from Hinton's lecture notes of 2012,
-    divides each parameter's step by a running root mean square of its own
-    gradients.
+    SGD uses the same learning rate for every parameter. So a parameter whose
+    gradients are always large takes big steps, and a parameter whose
+    gradients are always small barely changes. **RMSProp**, from Hinton's 2012
+    lecture notes, divides each parameter's step by the root mean square of
+    that parameter's recent gradients. The root mean square is the square root
+    of the average of the squared gradients.
 
     ```text
     s = alpha * s + (1 - alpha) * g ** 2
     parameter = parameter - lr * g / (sqrt(s) + eps)
     ```
 
-    Here `g` is the gradient and `s` the running average of its square.
+    Here `g` is the gradient and `s` is a running average of its square. Each
+    step, `s` keeps the fraction `alpha` of its old value and adds
+    `1 - alpha` times the new `g ** 2`.
 
-    Each parameter then steps about the learning rate, whatever the size of
-    its gradients. In momentum2's valley, the steep direction's large
-    gradients get divided by their large average, so the bounce shrinks while
-    the gentle direction speeds up.
+    So each parameter changes by about the learning rate per step, whatever
+    the size of its gradients. In momentum2's valley, the large gradients in
+    the steep y direction get divided by their large root mean square. That
+    shrinks the bouncing across the valley. The small gradients in the gentle
+    x direction get divided by a small root mean square, so the steps along
+    the valley get bigger.
 
-    On that valley, RMSProp at a rate of 0.1 stayed below a loss of 0.001 from
-    step 125 on. Plain SGD at its best rate needed 301 steps, and momentum
-    needed 109. Above 0.1, RMSProp kept bouncing back out, since its steps
-    stay about the rate's size near the bottom.
+    On that valley, RMSProp with a learning rate of 0.1 brought the loss below
+    0.001 and kept it there from step 125 on. Plain SGD at its best learning
+    rate needed 301 steps for the same, and momentum needed 109. Above a rate
+    of 0.1, RMSProp kept bouncing back above 0.001. That is because its steps
+    stay about as big as the learning rate even near the bottom.
 
-    `alpha` is 0.99 in PyTorch, an average over about the last 100 steps. The
-    `eps` of `1e-8` keeps an average of 0 from dividing by 0. The averages
-    start at 0, one per parameter, and `torch.optim.RMSprop(params, lr=0.01)`
-    does all this.
+    PyTorch's default `alpha` is 0.99, which averages over roughly the last
+    100 steps. The `eps` of `1e-8` prevents a division by 0 when the average
+    is 0. Each parameter has its own average, and every average starts at 0.
+    `torch.optim.RMSprop(params, lr=0.01)` does all of this.
 
-    Starting at 0 has a side effect. After one step the average holds only
-    `1 - alpha` of the first gradient's square, so the first step comes out
-    about 10 times the learning rate.
+    Starting the averages at 0 has a side effect. After one step the average
+    is only `(1 - alpha) * g ** 2`, a hundredth of the first squared gradient.
+    Its square root is a tenth of the gradient's size. So the first step comes
+    out about 10 times the learning rate.
     """,
 )
 
@@ -142,11 +150,13 @@ RMSPROP1_SOURCE = source_file(
     from torch import Tensor
 
     grad = torch.tensor([0.001, 1000.0])
-    sizes = grad.abs()                               # each gradient's size, without its sign
+    sizes = grad.abs()                               # the absolute value of each entry
 
 
-    # TODO: Return the new running average of the squared gradient, the old one
-    #   times alpha plus 1 - alpha times grad squared.
+    # TODO: Return the new running average of the squared gradient, which is
+    #   alpha times square_average plus (1 - alpha) times grad ** 2.
+    #   Example: square_average_update(torch.tensor([1.0, 4.0]),
+    #   torch.tensor([2.0, -1.0]), 0.99) returns tensor([1.0300, 3.9700]).
     def square_average_update(
         square_average: Tensor,
         grad: Tensor,
@@ -155,10 +165,10 @@ RMSPROP1_SOURCE = source_file(
         ...
 
 
-    # TODO: Finish the two lines with ... in step, so each parameter's average
-    #   is updated with square_average_update, and the parameter moves against
-    #   its gradient divided by sqrt(average) + self.eps, with eps added after
-    #   the root, scaled by self.lr.
+    # TODO: Finish the two lines with ... in step. The first sets the
+    #   parameter's average to the result of square_average_update. The second
+    #   subtracts self.lr * grad / (sqrt(average) + self.eps) from the
+    #   parameter, using the new average. Add eps after taking the square root.
     class MyRMSprop:
         def __init__(
             self,
@@ -187,8 +197,11 @@ RMSPROP1_SOURCE = source_file(
                 parameter.grad = None
 
 
-    # TODO: Return the size of RMSProp's first step for each entry of grad,
-    #   without its sign. That is the step taken from an average of 0.
+    # TODO: Return the size of RMSProp's first step for each entry of grad, as
+    #   a positive number. The average starts at 0, so the first step uses the
+    #   average after one update from 0.
+    #   Example: first_step(grad, 0.01, 0.99, 1e-8) with the grad above returns
+    #   about tensor([0.1000, 0.1000]).
     def first_step(
         grad: Tensor,
         lr: float,
@@ -287,7 +300,7 @@ def check_rmsprop1(checker: Checker) -> None:
     checker.test_method(
         class_name="MyRMSprop",
         method="step",
-        description="moves the parameters like torch.optim.RMSprop",
+        description="updates the parameters like torch.optim.RMSprop",
         run=check_my_rmsprop,
     )
     check_on_inputs(
@@ -311,12 +324,12 @@ RMSPROP1 = Exercise(
     source=RMSPROP1_SOURCE,
     solution=RMSPROP1_SOLUTION,
     hints={
-        "square_average_update": "alpha times square_average, plus (1 - alpha) times grad ** 2.",
-        "MyRMSprop.step": "The average is square_average_update of the old one, parameter.grad and self.alpha. The "
-        "parameter moves by self.lr times its grad, divided by the new average's .sqrt() with self.eps added after "
-        "the root.",
-        "first_step": "The first average is (1 - alpha) * grad ** 2. Divide lr times the size of grad, "
-        "grad.abs(), by its root plus eps.",
+        "square_average_update": "Multiply square_average by alpha, then add (1 - alpha) times grad ** 2.",
+        "MyRMSprop.step": "The new average is square_average_update called on the old average, parameter.grad and "
+        "self.alpha. Then subtract from the parameter self.lr times parameter.grad, divided by the new average's "
+        ".sqrt() plus self.eps.",
+        "first_step": "The first average is (1 - alpha) * grad ** 2. Divide lr times grad.abs() by the square root "
+        "of that average plus eps.",
     },
     introduces=(),
     check=check_rmsprop1,
@@ -330,10 +343,12 @@ RMSPROP1 = Exercise(
 
 ADAM1_LESSON = prose(
     """
-    **Adam**, from Kingma and Ba in 2015, puts momentum and RMSProp together.
-    It keeps two running averages for each parameter, `m` of the gradient and
-    `v` of its square. It steps by `m` divided by the root of `v`. Here is
-    Algorithm 1 of the paper, for one step, with `t` counting the steps from 1.
+    **Adam**, from Kingma and Ba in 2015, combines momentum and RMSProp. It
+    keeps two running averages for each parameter. `m` is a running average of
+    the gradient, and `v` is a running average of its square. Each step
+    changes the parameter by about the learning rate times `m` divided by the
+    square root of `v`. Here is one step of Algorithm 1 from the paper, where
+    `t` counts the steps starting from 1.
 
     ```text
     m = beta1 * m + (1 - beta1) * grad
@@ -343,17 +358,19 @@ ADAM1_LESSON = prose(
     parameter = parameter - lr * m_hat / (sqrt(v_hat) + eps)
     ```
 
-    `m` is momentum's velocity, as an average, and `v` is RMSProp's. The two
-    hats undo the pull toward 0 that starting both averages at 0 gives, and
-    adam2 is about them. The paper's defaults, which PyTorch keeps, are a
-    `beta1` of 0.9, a `beta2` of 0.999 and an `eps` of `1e-8`.
+    `m` plays the part of momentum's velocity, but as an average instead of a
+    sum. `v` is the same average of squared gradients that RMSProp keeps. Both
+    averages start at 0, which pulls them toward 0 during the first steps.
+    `m_hat` and `v_hat`, called the hats, undo that pull, and adam2 is about
+    them. The paper's defaults, which PyTorch also uses, are a `beta1` of 0.9,
+    a `beta2` of 0.999 and an `eps` of `1e-8`.
 
-    On the first step the hats give back the gradient and its square exactly.
-    So the first step is the learning rate times the gradient's sign, about
-    the same size for every parameter.
+    On the first step, `m_hat` equals the gradient and `v_hat` equals its
+    square. So the first step is the learning rate times the sign of the
+    gradient, which is almost exactly the same size for every parameter.
 
-    `torch.optim.Adam(params, lr=0.001)` does this. A learning rate of 0.001
-    to 0.0003 is the usual start.
+    `torch.optim.Adam(params, lr=0.001)` does all of this. The usual starting
+    learning rate is between 0.0003 and 0.001.
     """,
 )
 
@@ -365,12 +382,13 @@ ADAM1_SOURCE = source_file(
     from torch import Tensor
 
     t = 3
-    correction = 1 - 0.9 ** t                        # 0.271, the share m has built up after 3 steps
+    correction = 1 - 0.9 ** t                        # 0.271, so after 3 steps m is 0.271 times a steady gradient
 
 
-    # TODO: Finish step, so it runs Algorithm 1 of the paper for each parameter
-    #   that has a gradient, keeping m and v in self.m and self.v by position.
-    #   self.t counts the steps from 1.
+    # TODO: Finish step, so it runs the five lines of Algorithm 1 from the
+    #   lesson for each parameter whose .grad is not None. Store each
+    #   parameter's m and v in self.m and self.v, at the parameter's position.
+    #   self.t is the step count t, and it is already 1 on the first step.
     class MyAdam:
         def __init__(
             self,
@@ -402,8 +420,11 @@ ADAM1_SOURCE = source_file(
                 parameter.grad = None
 
 
-    # TODO: Return Adam's first step for each entry of grad, with its sign.
-    #   That is the amount taken away from the parameter.
+    # TODO: Return Adam's first step for each entry of grad, keeping its sign.
+    #   The step is the amount subtracted from the parameter,
+    #   lr * m_hat / (sqrt(v_hat) + eps), with m_hat and v_hat from step 1.
+    #   Example: adam_first_step(torch.tensor([0.001, 1000.0, -3.0]), 0.01,
+    #   1e-8) returns about tensor([ 0.0100,  0.0100, -0.0100]).
     def adam_first_step(
         grad: Tensor,
         lr: float,
@@ -454,7 +475,7 @@ def check_adam1(checker: Checker) -> None:
     checker.test_method(
         class_name="MyAdam",
         method="step",
-        description="moves the parameters like torch.optim.Adam",
+        description="updates the parameters like torch.optim.Adam",
         run=check_my_adam,
     )
     check_on_inputs(
@@ -480,8 +501,9 @@ ADAM1 = Exercise(
     hints={
         "MyAdam.step": "Write the five lines of Algorithm 1 with self.m[position], self.v[position], self.beta1, "
         "self.beta2, self.t, self.lr and self.eps, with parameter.grad as the gradient. Store the new m and v back "
-        "by position, and take the step with -=.",
-        "adam_first_step": "On the first step m_hat is grad and v_hat is grad squared, whose root is grad.abs().",
+        "at the same position, and subtract the step from the parameter with -=.",
+        "adam_first_step": "On the first step, m_hat equals grad and v_hat equals grad squared. The square root of "
+        "v_hat is grad.abs().",
     },
     introduces=(),
     check=check_adam1,
@@ -495,20 +517,22 @@ ADAM1 = Exercise(
 
 ADAM2_LESSON = prose(
     """
-    Both averages start at 0. After one step, `m` holds a tenth of the
-    gradient and `v` a thousandth of its square. Without the hats, the first
-    step would be `0.1 * grad / sqrt(0.001 * grad ** 2)`, about 3.2 times the
-    learning rate.
+    Both averages start at 0. After one step, `m` is a tenth of the gradient,
+    because `1 - beta1` is 0.1. And `v` is a thousandth of the squared
+    gradient, because `1 - beta2` is 0.001. Without the hats, the first step
+    would be `lr * 0.1 * grad / sqrt(0.001 * grad ** 2)`, which is about 3.2
+    times the learning rate.
 
-    For a steady gradient, the uncorrected step is the learning rate times
-    `(1 - beta1 ** t) / sqrt(1 - beta2 ** t)`. That climbs to about 6.6 near
-    step 12, and falls back near 1 only after a few thousand steps. So without
-    the hats, Adam's early steps are several times too big, right when the
-    weights are random and the gradients large.
+    Suppose the gradient stays the same at every step. Then the uncorrected
+    step is the learning rate times `(1 - beta1 ** t) / sqrt(1 - beta2 ** t)`.
+    That factor rises to about 6.6 near step 12, and it comes back down near
+    1 only after a few thousand steps. So without the hats, Adam's early steps
+    are several times too big. That happens right when the weights are random
+    and the gradients are large.
 
-    Here the names model of Section 3 trained with Adam for 10 steps, with
-    and without the hats, on three seeds. It started from a validation loss
-    near 3.29.
+    Here the names model of Section 3 was trained with Adam for 10 steps, with
+    and without the hats, using three seeds. Its validation loss started near
+    3.29.
 
     | Learning rate | With the hats | Without the hats |
     |---|---|---|
@@ -516,22 +540,25 @@ ADAM2_LESSON = prose(
     | 0.01 | 2.85 to 3.02 | 4.17 to 4.37 |
     | 0.03 | 3.44 to 3.93 | 5.28 to 6.89 |
 
-    Without the hats, the loss at 0.01 and 0.03 jumped above where it
-    started. At 0.03 it rose with the hats too, so 0.03 is too high for this
-    model either way.
+    Without the hats, at rates of 0.01 and 0.03, the loss rose above its
+    starting value. At 0.03 it rose with the hats too, so 0.03 is too high a
+    rate for this model either way.
 
-    The harm can last. A deeper names model has 16 post norm blocks like
-    residual4's. It trained with Adam at 0.001 for 1500 steps at batch 64,
-    the rate easing down to 0 by the end, on three seeds.
+    The damage from those big early steps can last. Here a deeper names model,
+    with 16 post norm blocks like the ones in residual4, was trained with Adam
+    at 0.001. It ran for 1500 steps with a batch size of 64, using three
+    seeds. The learning rate decreased smoothly to 0 by the end.
 
     | Adam | Validation loss |
     |---|---|
     | with the hats | 2.219 to 2.229 |
     | without the hats | 2.820 to 2.821 |
 
-    Without the hats, it stuck at 2.82 on every seed, worse than the bigram.
-    The paper warns of the same, much larger first steps and often
-    divergence. The fix costs two divisions.
+    Without the hats, the model got stuck at 2.82 on every seed, which is
+    worse than the bigram model. The Adam paper warns about the same problem.
+    Without the correction, the first steps are much larger, and training
+    often diverges, which means the loss blows up. The fix costs only two
+    divisions per step.
     """,
 )
 
@@ -544,11 +571,13 @@ ADAM2_SOURCE = source_file(
     import torch
     from torch import Tensor
 
-    first = 0.1 / math.sqrt(0.001)                   # 3.16, the first uncorrected step over lr
+    first = 0.1 / math.sqrt(0.001)                   # 3.16, the first uncorrected step divided by lr
 
 
-    # TODO: Return how many times the learning rate an uncorrected Adam step is
-    #   after t steps of the same gradient, for the given betas.
+    # TODO: Suppose the gradient has been the same for t steps. Return the size
+    #   of Adam's uncorrected step at step t divided by the learning rate, for
+    #   the given betas.
+    #   Example: uncorrected_ratio(0.9, 0.999, 1) returns about 3.162.
     def uncorrected_ratio(
         beta1: float,
         beta2: float,
@@ -557,8 +586,9 @@ ADAM2_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the step t, from 1 to steps, where uncorrected_ratio is
-    #   largest, and that ratio.
+    # TODO: Compute uncorrected_ratio for every t from 1 to steps. Return the t
+    #   where it is largest, and that largest ratio, as a tuple.
+    #   Example: peak_ratio(0.9, 0.999, 100) returns about (12, 6.569).
     def peak_ratio(
         beta1: float,
         beta2: float,
@@ -567,9 +597,13 @@ ADAM2_SOURCE = source_file(
         ...
 
 
-    # TODO: Finish the line that sets step, so this returns the new m, the new v
-    #   and the amount Adam takes away from a parameter at step t, with the hats
-    #   when corrected is True and without them when it is False.
+    # TODO: Finish the line that sets step. adam_step returns the new m, the new
+    #   v, and step, the amount Adam subtracts from the parameter at step t,
+    #   with an eps of 1e-8. The lines above apply the hats when corrected is
+    #   True and skip them when it is False.
+    #   Example: with g = torch.tensor([0.5, -2.0, 1.0]),
+    #   adam_step(torch.zeros(3), torch.zeros(3), g, 1, 0.01, True) returns a
+    #   step of about tensor([ 0.0100, -0.0100,  0.0100]).
     def adam_step(
         m: Tensor,
         v: Tensor,
@@ -690,7 +724,7 @@ def expect_peak(
     expected: tuple[int, float],
 ) -> None:
     if not isinstance(actual, (tuple, list)) or len(actual) != 2:
-        raise Mismatch(f"{call} should give two things, the step and the ratio, but it gives {actual!r}.")
+        raise Mismatch(f"{call} should return two things, the step and the ratio, but it returns {actual!r}.")
 
     expect_value(
         call=f"the step from {call}",
@@ -709,7 +743,7 @@ def check_adam2(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="uncorrected_ratio",
-        description="gives the uncorrected step over the learning rate",
+        description="gives the uncorrected step divided by the learning rate",
         inputs=(
             (0.9, 0.999, 1),
             (0.9, 0.999, 12),
@@ -727,7 +761,7 @@ def check_adam2(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="peak_ratio",
-        description="finds the step where the uncorrected ratio peaks",
+        description="finds the step where the uncorrected ratio is largest",
         inputs=(
             (0.9, 0.999, 100),
             (0.8, 0.99, 50),
@@ -757,11 +791,11 @@ ADAM2 = Exercise(
     source=ADAM2_SOURCE,
     solution=ADAM2_SOLUTION,
     hints={
-        "uncorrected_ratio": "After t steps of the same gradient, m is (1 - beta1 ** t) of it and v is "
-        "(1 - beta2 ** t) of its square. Divide the first by the square root of the second.",
-        "peak_ratio": "Work out uncorrected_ratio for every t from 1 to steps, find the largest, and give its t, "
-        "counted from 1, and the ratio.",
-        "adam_step": "The step is lr times m_hat, divided by the root of v_hat plus 1e-8.",
+        "uncorrected_ratio": "After t steps of the same gradient, m is (1 - beta1 ** t) times the gradient. And v is "
+        "(1 - beta2 ** t) times its square. Divide the first factor by the square root of the second.",
+        "peak_ratio": "Compute uncorrected_ratio for every t from 1 to steps and find the largest. Return its t, "
+        "counted from 1, and the ratio itself.",
+        "adam_step": "The step is lr times m_hat, divided by the square root of v_hat plus 1e-8.",
     },
     introduces=(),
     check=check_adam2,
@@ -774,49 +808,56 @@ ADAM2 = Exercise(
 
 ADAMW1_LESSON = prose(
     """
-    Weight decay in Section 2 added `strength * w ** 2` to the loss, so its
-    gradient added `2 * strength * w`. With SGD, that pulls every weight
-    toward 0 by the same fraction each step. PyTorch's
-    `torch.optim.Adam(params, weight_decay=0.01)` does the same, adding
-    `weight_decay` times the weight to the gradient. So `weight_decay` plays
-    the part of `2 * strength`. This is called L2.
+    Weight decay in Section 2 added `strength * w ** 2` to the loss, which
+    adds `2 * strength * w` to the gradient. With SGD, that shrinks every
+    weight toward 0 by the same fraction each step. PyTorch's
+    `torch.optim.Adam(params, weight_decay=0.01)` does the same thing. It adds
+    `weight_decay * w` to the gradient, so `weight_decay` plays the part of
+    `2 * strength`. Adding the decay to the gradient like this is called L2.
 
-    Adam then divides the whole gradient by its root mean square, the decay
-    included. A weight with large gradients gets almost no decay, and one with
-    small gradients gets a lot. So with Adam, L2 is not the steady pull it is
-    with SGD.
+    Adam then divides the whole gradient, decay term included, by its root
+    mean square. So a weight with large gradients has its decay divided by a
+    large number, and it gets almost no decay. A weight with small gradients
+    has its decay divided by a small number, and it gets a lot. So with Adam,
+    L2 does not shrink every weight by the same fraction the way it does with
+    SGD.
 
-    Loshchilov and Hutter's **AdamW**, from 2019, takes the decay out of the
+    **AdamW**, from Loshchilov and Hutter in 2019, takes the decay out of the
     gradient. In PyTorch's version, each step first shrinks every weight by
-    the fraction `lr * weight_decay`, then takes Adam's step on the plain
-    gradient.
+    the fraction `lr * weight_decay`, which means multiplying it by
+    `1 - lr * weight_decay`. Then it takes Adam's usual step with the gradient
+    alone, without any decay term.
 
     ```python
     torch.optim.Adam(params, lr=0.001, weight_decay=0.01)     # decay in the gradient, L2
     torch.optim.AdamW(params, lr=0.001, weight_decay=0.01)    # decay on the weight, decoupled
     ```
 
-    Here two weights start at 1 and get only noise for a gradient, of size 1
-    and of size 0.001. Each ran 1000 steps at a rate of 0.001, averaged over
-    20 seeds.
+    Here two weights both start at 1, and their gradients are pure random
+    noise. The noise has a standard deviation of 1 for the first weight and
+    0.001 for the second. Each optimizer ran 1000 steps at a learning rate of
+    0.001. The table shows where each weight ended, averaged over 20 seeds.
 
-    | Gradient size | Adam, L2 0.01 | Adam, L2 0.1 | AdamW, decay 1.0 |
+    | Gradient standard deviation | Adam, L2 0.01 | Adam, L2 0.1 | AdamW, decay 1.0 |
     |---|---|---|---|
     | 1 | 0.992 | 0.908 | 0.369 |
     | 0.001 | 0.262 | 0.258 | 0.370 |
 
-    With L2, the weight with small gradients fell to a quarter while the
-    other barely moved. AdamW shrank both by the same fraction. Loshchilov
-    and Hutter tested the fix on ResNets with BatchNorm, where it let Adam
-    compete with SGD and momentum on image classification.
+    With L2, the weight with small gradients shrank to about a quarter, while
+    the weight with large gradients barely changed. AdamW shrank both weights
+    by the same fraction. Loshchilov and Hutter tested AdamW on ResNets with
+    BatchNorm. There it let Adam do about as well as SGD with momentum on
+    image classification.
 
-    Their own version leaves Adam's learning rate out of the shrink. In
-    PyTorch's, the product `lr * weight_decay` sets the shrink, so a new rate
-    needs a new `weight_decay` to keep the same shrink. AdamW is the default
-    for language models.
+    In the paper's own version, the shrink does not include Adam's learning
+    rate. In PyTorch's version, the shrink is set by the product
+    `lr * weight_decay`. So if you change the learning rate, you need to
+    change `weight_decay` too to keep the same shrink. AdamW is the default
+    optimizer for language models.
 
-    A class can build on another with `class MyAdamW(MyAdam):`, and
-    `super().step()` runs the step of the class it builds on.
+    A class can build on another class with `class MyAdamW(MyAdam):`, which
+    is called inheritance. Inside it, `super().step()` runs the `step` method
+    of the class it builds on.
     """,
 )
 
@@ -836,8 +877,10 @@ ADAMW1_SOURCE = source_file(
     shrunk = weight * (1 - 0.1 * 0.5)                # tensor([ 1.9000, -3.8000])
 
 
-    # TODO: Return the gradient Adam sees with L2 decay, grad plus weight_decay
-    #   times parameter.
+    # TODO: Return the gradient that Adam sees with L2 decay, which is grad plus
+    #   weight_decay times parameter.
+    #   Example: l2_gradient(torch.tensor([0.5, -1.0]), weight, 0.01) returns
+    #   tensor([ 0.5200, -1.0400]).
     def l2_gradient(
         grad: Tensor,
         parameter: Tensor,
@@ -847,6 +890,8 @@ ADAMW1_SOURCE = source_file(
 
 
     # TODO: Return parameter shrunk by the fraction lr * weight_decay.
+    #   Example: decoupled_decay(weight, 0.1, 0.5) returns
+    #   tensor([ 1.9000, -3.8000]), the same as shrunk.
     def decoupled_decay(
         parameter: Tensor,
         lr: float,
@@ -855,8 +900,9 @@ ADAMW1_SOURCE = source_file(
         ...
 
 
-    # TODO: Finish step, so it shrinks every parameter that has a gradient by the
-    #   fraction self.lr * self.weight_decay, in place, then takes MyAdam's step.
+    # TODO: Finish step. First shrink every parameter whose .grad is not None by
+    #   the fraction self.lr * self.weight_decay, in place. Then take MyAdam's
+    #   step.
     class MyAdamW(MyAdam):
         def __init__(
             self,
@@ -964,7 +1010,7 @@ def check_adamw1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="decoupled_decay",
-        description="shrinks the weight by lr times the decay",
+        description="multiplies the weight by 1 - lr * weight_decay",
         inputs=(
             (torch.tensor([2.0, -4.0]), 0.1, 0.5),
             (small_tensor(542, 2, 3), 0.01, 0.1),
@@ -975,7 +1021,7 @@ def check_adamw1(checker: Checker) -> None:
     checker.test_method(
         class_name="MyAdamW",
         method="step",
-        description="moves the parameters like torch.optim.AdamW",
+        description="updates the parameters like torch.optim.AdamW",
         run=check_my_adamw,
     )
 
@@ -988,10 +1034,10 @@ ADAMW1 = Exercise(
     source=ADAMW1_SOURCE,
     solution=ADAMW1_SOLUTION,
     hints={
-        "l2_gradient": "grad plus weight_decay times parameter.",
+        "l2_gradient": "Add weight_decay times parameter to grad.",
         "decoupled_decay": "Multiply parameter by 1 minus lr times weight_decay.",
-        "MyAdamW.step": "Inside a with torch.no_grad() block, loop over self.parameters. Multiply each one with a "
-        ".grad in place with *= by 1 - self.lr * self.weight_decay. Then call super().step().",
+        "MyAdamW.step": "Inside a with torch.no_grad() block, loop over self.parameters. Multiply each parameter "
+        "that has a .grad by 1 - self.lr * self.weight_decay in place, using *=. Then call super().step().",
     },
     introduces=(),
     check=check_adamw1,
@@ -1005,9 +1051,9 @@ ADAMW1 = Exercise(
 
 ADAMW2_LESSON = prose(
     """
-    Here the names model trained for 5000 steps at a learning rate that never
-    changed. Each optimizer ran at three rates on two seeds, and the table
-    gives its best.
+    Here the names model was trained for 5000 steps with a constant learning
+    rate. Each optimizer was tried at three learning rates with two seeds, and
+    the table shows its best rate.
 
     | Optimizer | Best rate | Validation loss |
     |---|---|---|
@@ -1015,26 +1061,30 @@ ADAMW2_LESSON = prose(
     | SGD, momentum 0.9 | 0.01 | 2.305 to 2.307 |
     | Adam | 0.001 | 2.269 to 2.276 |
 
-    The best rates sit 10 times apart. Momentum's velocity builds to 10 times
-    the gradient, so its rate comes out 10 times smaller. Adam's steps are
-    about the rate itself, whatever the gradient, so its rate is a distance in
-    the weights' own units.
+    Each best rate is 10 times smaller than the one above it in the table.
+    Momentum's velocity grows to 10 times the gradient, so its best rate is 10
+    times smaller than SGD's. Adam's steps are about the size of the learning
+    rate, whatever the size of the gradient. So Adam's learning rate is
+    roughly how much each weight changes per step.
 
-    Momentum matched plain SGD at these batches of 32, as momentum2's noisy
-    valley predicts. A batch of 32 gives noisy gradients, and the noise takes
-    away most of momentum's lead. Zhang and others found the same on real
-    models in 2019, where momentum paid off only at large batches.
+    With batches of 32, momentum did about as well as plain SGD, as
+    momentum2's noisy valley predicts. A batch of 32 gives noisy gradients,
+    and the noise removes most of momentum's advantage. Zhang and others found
+    the same on real models in 2019. In their experiments, momentum helped
+    only with large batches.
 
     - AdamW: the default for language models and most new work, at rates from 0.0001 to 0.001 and weight decay from 0.01 to 0.1.
-    - SGD with momentum 0.9: image models like ResNet, at a rate of 0.1 that a schedule lowers, with weight decay near 0.0001.
-    - Adam without decay: small models and quick tries.
+    - SGD with momentum 0.9: image models like ResNet, starting at a rate of 0.1 that is lowered during training, with weight decay near 0.0001.
+    - Adam without decay: small models and quick experiments.
 
-    GPT-3 used AdamW with betas of 0.9 and 0.95 and a decay of 0.1.
+    GPT-3 used AdamW with betas of 0.9 and 0.95 and a weight decay of 0.1.
 
-    Decay belongs on the weight matrices and embedding tables, the parameters
-    with two or more dimensions. nanoGPT and most language model code leave
-    biases and norm weights out of it. An optimizer takes a list of groups,
-    each a dict with its `"params"` and its own settings.
+    Weight decay should apply to the weight matrices and embedding tables,
+    which are the parameters with two or more dimensions. nanoGPT and most
+    language model code do not decay biases or the weights of norm layers. To
+    give parameters different settings, pass the optimizer a list of
+    parameter groups. Each group is a dict with its `"params"` and its own
+    settings.
 
     ```python
     torch.optim.AdamW([{"params": [w], "weight_decay": 0.1}, {"params": [b], "weight_decay": 0.0}], lr=0.001)
@@ -1053,9 +1103,10 @@ ADAMW2_SOURCE = source_file(
     dimensions = [parameter.dim() for parameter in layer.parameters()]    # [2, 1], the weight and the bias
 
 
-    # TODO: Return the optimizer named by name for parameters at lr. "sgd" is
-    #   plain SGD, "momentum" is SGD with momentum 0.9, "adam" is Adam and
-    #   "adamw" is AdamW with weight decay 0.01.
+    # TODO: Return a new optimizer for parameters with learning rate lr, of the
+    #   kind that name picks. "sgd" is plain SGD, "momentum" is SGD with
+    #   momentum 0.9, "adam" is Adam and "adamw" is AdamW with weight decay
+    #   0.01.
     def make_optimizer(
         name: str,
         parameters,
@@ -1064,9 +1115,10 @@ ADAMW2_SOURCE = source_file(
         ...
 
 
-    # TODO: Return two parameter groups for model, the parameters with two or
-    #   more dimensions with weight_decay, then the rest with a weight decay
-    #   of 0.0.
+    # TODO: Return a list of two parameter groups for model. The first holds the
+    #   parameters with two or more dimensions and has weight_decay. The second
+    #   holds the rest and has a weight decay of 0.0. Each group is a dict with
+    #   the keys "params" and "weight_decay", as in the lesson.
     def decay_groups(
         model: nn.Module,
         weight_decay: float,
@@ -1074,8 +1126,10 @@ ADAMW2_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the (optimizer name, rate) pair from results with the lowest
-    #   validation loss. results maps each pair to its loss.
+    # TODO: results maps each (optimizer name, rate) pair to its validation
+    #   loss. Return the pair with the lowest loss.
+    #   Example: best_setting({("sgd", 0.3): 2.31, ("sgd", 0.1): 2.30}) returns
+    #   ("sgd", 0.1).
     def best_setting(results: dict[tuple[str, float], float]) -> tuple[str, float]:
         ...
     ''',
@@ -1162,7 +1216,7 @@ def check_decay_groups(found: object) -> None:
     groups = found(model, 0.1)
 
     if not isinstance(groups, list) or len(groups) != 2 or not all(isinstance(group, dict) for group in groups):
-        raise Mismatch(f"{call} should give a list of two dicts.")
+        raise Mismatch(f"{call} should return a list of two dicts.")
 
     names = {id(parameter): name for name, parameter in model.named_parameters()}
     wanted = (
@@ -1212,11 +1266,12 @@ ADAMW2 = Exercise(
     source=ADAMW2_SOURCE,
     solution=ADAMW2_SOLUTION,
     hints={
-        "make_optimizer": "One if per name, each returning the torch.optim class called with parameters and lr=lr, "
-        "plus momentum=0.9 or weight_decay=0.01 where the name asks for it.",
+        "make_optimizer": "Write one if per name. Each returns the right torch.optim class called with parameters "
+        "and lr=lr, plus momentum=0.9 or weight_decay=0.01 where the name asks for it.",
         "decay_groups": "Split model.parameters() by .dim() into two lists, then return two dicts, each with "
         "\"params\" and \"weight_decay\".",
-        "best_setting": "min over the keys of results, with key=results.get to compare by the loss.",
+        "best_setting": "Call min on results, which loops over its keys, with key=results.get so the keys are "
+        "compared by their loss.",
     },
     introduces=(),
     check=check_adamw2,

@@ -31,9 +31,11 @@ SGD = Chapter(
         """
         # SGD and momentum
 
-        Section 4 is about the step itself. This chapter moves the update of
-        Section 2 into an optimizer object, builds PyTorch's SGD, then adds
-        momentum and shows what it does in a long narrow valley.
+        Section 4 is about the update step, the rule that changes the
+        parameters once the gradients are known. This chapter moves the update
+        from Section 2 into an optimizer object and builds your own copy of
+        PyTorch's SGD. Then it adds momentum and shows how momentum helps in a
+        long, narrow valley.
 
         ## Further reading
 
@@ -103,9 +105,9 @@ def check_optimizer_class(
 
     if all(torch.equal(old, new.detach()) for old, new in zip(before, mine.parameters())):
         raise Mismatch(
-            f"After {call} the weights did not move. Either {name}.step is {NOT_STARTED}, or it sets parameter = ..., "
-            "which only points the loop name at a new tensor. Change the parameter in place with -= or *= inside "
-            "torch.no_grad().",
+            f"After {call} the weights did not change. Either {name}.step is {NOT_STARTED}, or it sets parameter = "
+            "..., which only makes the loop variable refer to a new tensor and leaves the real parameter as it was. "
+            "Change the parameter in place with -= or *= inside torch.no_grad().",
         )
 
     mse_steps(theirs, reference(theirs.parameters(), **reference_arguments), x, y, 5)
@@ -118,9 +120,9 @@ def check_optimizer_class(
 
 SGD1_LESSON = prose(
     """
-    Every loop so far stepped the parameters by hand. PyTorch puts the step in
-    an **optimizer**, an object that holds the parameters and knows how to
-    move them.
+    Every training loop so far updated the parameters by hand. PyTorch puts
+    that update in an **optimizer**, an object that holds the parameters and
+    knows how to update them.
 
     ```python
     optimizer = torch.optim.SGD(model.parameters(), lr=0.1)
@@ -132,18 +134,23 @@ SGD1_LESSON = prose(
         optimizer.step()
     ```
 
-    `zero_grad` clears every gradient, `backward` fills them, and `step` moves
-    every parameter. SGD, stochastic gradient descent, is the step of Section
-    2, each parameter minus the learning rate times its gradient. It is called
-    stochastic because each minibatch gives a noisy estimate of the gradient.
+    `zero_grad` clears every gradient. `backward` computes the new gradients
+    and stores them in each parameter's `.grad`. `step` updates every
+    parameter. SGD, short for stochastic gradient descent, is the update from
+    Section 2. It replaces each parameter with `parameter - lr * grad`, the
+    parameter minus the learning rate times its gradient. It is called
+    stochastic, which means random, because each minibatch gives a noisy
+    estimate of the gradient.
 
-    Swapping in another optimizer changes one line, so the rest of this
-    section builds them one by one and swaps them in.
+    Switching to another optimizer changes only the line that creates it. So
+    the rest of this section builds several optimizers one at a time and puts
+    each one into this same loop.
 
-    `model.parameters()` can be gone through only once, so an optimizer keeps
-    the parameters in a list. A parameter that took no part in the loss has
-    `.grad` of `None`, and the step skips it. `zero_grad` sets every `.grad`
-    to `None`, which PyTorch does too.
+    `model.parameters()` returns a generator, which can be looped over only
+    once. So an optimizer stores the parameters in a list. A parameter that
+    was not used to compute the loss has a `.grad` of `None`, and the step
+    skips it. `zero_grad` sets every `.grad` to `None`, which is also what
+    PyTorch's own `zero_grad` does.
     """,
 )
 
@@ -160,9 +167,10 @@ SGD1_SOURCE = source_file(
     parameters = list(model.parameters())            # the weight and the bias
 
 
-    # TODO: Finish step and zero_grad. step moves every parameter that has a
-    #   gradient, against that gradient, scaled by self.lr. zero_grad sets every
-    #   gradient to None.
+    # TODO: Finish step and zero_grad. step changes every parameter whose .grad
+    #   is not None to parameter - self.lr * parameter.grad, in place. It skips
+    #   parameters whose .grad is None. zero_grad sets the .grad of every
+    #   parameter to None.
     class MySGD:
         def __init__(
             self,
@@ -179,9 +187,10 @@ SGD1_SOURCE = source_file(
             ...
 
 
-    # TODO: Run steps steps of optimizer on the mean squared error of model on
-    #   x against y, clearing the gradients before each backward. Return the
-    #   loss of the last step, the one computed before its optimizer.step().
+    # TODO: Train model for steps steps with optimizer. Each step computes the
+    #   mean squared error of model(x) against y, clears the gradients, calls
+    #   backward on the loss and then calls optimizer.step(). Return the loss of
+    #   the last step as a float, the one computed before its optimizer.step().
     #   Don't compute a new loss after the loop.
     def train(
         model: nn.Module,
@@ -294,7 +303,7 @@ def check_sgd1(checker: Checker) -> None:
     checker.test_method(
         class_name="MySGD",
         method="step",
-        description="moves the parameters like torch.optim.SGD",
+        description="updates the parameters exactly like torch.optim.SGD",
         run=check_my_sgd_step,
     )
     checker.test_method(
@@ -318,10 +327,10 @@ SGD1 = Exercise(
     source=SGD1_SOURCE,
     solution=SGD1_SOLUTION,
     hints={
-        "MySGD.step": "Inside a with torch.no_grad() block, loop over self.parameters, skip one whose .grad is "
-        "None, and take self.lr times its .grad away from it with -=.",
+        "MySGD.step": "Inside a with torch.no_grad() block, loop over self.parameters. Skip a parameter whose "
+        ".grad is None, and subtract self.lr times its .grad from it with -=.",
         "MySGD.zero_grad": "Loop over self.parameters and set each one's .grad to None.",
-        "train": "Follow the loop in the lesson, then return the last loss with .item().",
+        "train": "Follow the loop in the lesson, then return the last loss as a float with .item().",
     },
     introduces=("optimizer",),
     check=check_sgd1,
@@ -335,27 +344,32 @@ SGD1 = Exercise(
 
 MOMENTUM1_LESSON = prose(
     """
-    SGD forgets every earlier step. **Momentum**, from Polyak in 1964, keeps a
-    running velocity instead, one per parameter with the same shape. Each step
-    shrinks the old velocity by a factor, the momentum, usually 0.9, and adds
-    the new gradient. The parameter then moves by the velocity, times the
-    learning rate.
+    SGD uses only the current gradient and ignores every earlier step.
+    **Momentum**, from Polyak in 1964, also keeps a velocity for each
+    parameter. The velocity is a tensor with the same shape as its parameter.
+    Each step multiplies the old velocity by a number called the momentum,
+    usually 0.9, and adds the new gradient. Then the parameter is updated with
+    the velocity in place of the gradient, so it changes by minus the learning
+    rate times the velocity.
 
-    Gradients that keep pointing the same way pile up. With a momentum of 0.9
-    the steps along them grow to ten times the gradient, since
-    `1 + 0.9 + 0.81 + ...` adds up to `1 / (1 - 0.9)`. Gradients that keep
-    flipping sign cancel out.
+    When the gradient keeps the same sign step after step, the velocity keeps
+    growing. With a momentum of 0.9 and a constant gradient, the velocity
+    grows toward 10 times the gradient. That is because
+    `1 + 0.9 + 0.81 + ...` adds up to `1 / (1 - 0.9)`, which is 10. When the
+    gradient flips sign every step, the terms mostly cancel and the velocity
+    stays small.
 
-    `torch.optim.SGD(params, lr=0.1, momentum=0.9)` does this, with every
-    velocity starting at zero.
+    `torch.optim.SGD(params, lr=0.1, momentum=0.9)` does this, and it starts
+    every velocity at zero. `torch.zeros_like` makes a tensor of zeros with
+    the same shape as its input.
 
     ```python
     torch.zeros_like(torch.ones(2, 3))    # zeros of shape (2, 3)
     ```
 
-    Sutskever and others wrote it with the learning rate inside the velocity.
-    With a learning rate that never changes, the two forms take the same
-    steps.
+    Sutskever and others wrote momentum with the learning rate multiplied into
+    the velocity instead. When the learning rate never changes, the two
+    versions make exactly the same updates.
     """,
 )
 
@@ -371,7 +385,10 @@ MOMENTUM1_SOURCE = source_file(
     shrunk = 0.9 * velocity                          # tensor([ 0.9000, -1.8000])
 
 
-    # TODO: Return the new velocity, the old one shrunk by momentum, plus grad.
+    # TODO: Return the new velocity, which is momentum times the old velocity,
+    #   plus grad. velocity and grad have the same shape.
+    #   Example: momentum_update(velocity, grad, 0.9) with the tensors above
+    #   returns tensor([ 1.4000, -1.3000]).
     def momentum_update(
         velocity: Tensor,
         grad: Tensor,
@@ -380,9 +397,10 @@ MOMENTUM1_SOURCE = source_file(
         ...
 
 
-    # TODO: Finish the two lines with ... in step, so each parameter's velocity
-    #   is updated with momentum_update, and the parameter moves against its
-    #   velocity, scaled by self.lr.
+    # TODO: Finish the two lines with ... in step. The first sets the
+    #   parameter's velocity to the result of momentum_update on its old
+    #   velocity, its gradient and self.momentum. The second subtracts self.lr
+    #   times that new velocity from the parameter.
     class MyMomentumSGD:
         def __init__(
             self,
@@ -409,8 +427,10 @@ MOMENTUM1_SOURCE = source_file(
                 parameter.grad = None
 
 
-    # TODO: Return the velocity after steps steps that all have the same
-    #   gradient grad, starting from a velocity of 0.
+    # TODO: Start with a velocity of 0.0 and apply the momentum update steps
+    #   times, with the same gradient grad every time. Return the final
+    #   velocity as a float.
+    #   Example: velocity_after(1.0, 0.9, 50) returns about 9.948.
     def velocity_after(
         grad: float,
         momentum: float,
@@ -509,7 +529,7 @@ def check_momentum1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="momentum_update",
-        description="shrinks the velocity and adds the gradient",
+        description="multiplies the velocity by momentum and adds the gradient",
         inputs=(
             (torch.tensor([1.0, -2.0]), torch.tensor([0.5, 0.5]), 0.9),
             (small_tensor(510, 2, 3), small_tensor(511, 2, 3), 0.5),
@@ -520,13 +540,13 @@ def check_momentum1(checker: Checker) -> None:
     checker.test_method(
         class_name="MyMomentumSGD",
         method="step",
-        description="moves the parameters like SGD with momentum",
+        description="updates the parameters like SGD with momentum",
         run=check_my_momentum,
     )
     check_on_inputs(
         checker=checker,
         function="velocity_after",
-        description="gives the velocity a steady gradient builds up",
+        description="gives the velocity after steps updates with the same gradient",
         inputs=(
             (1.0, 0.9, 1),
             (1.0, 0.9, 50),
@@ -550,11 +570,11 @@ MOMENTUM1 = Exercise(
     source=MOMENTUM1_SOURCE,
     solution=MOMENTUM1_SOLUTION,
     hints={
-        "momentum_update": "momentum times velocity, plus grad.",
-        "MyMomentumSGD.step": "The velocity is momentum_update of the old velocity, parameter.grad and "
-        "self.momentum. The parameter moves by self.lr times that new velocity.",
-        "velocity_after": "Start a velocity at 0.0 and update it steps times with the same grad, or add up the "
-        "shrinking terms.",
+        "momentum_update": "Multiply velocity by momentum, then add grad.",
+        "MyMomentumSGD.step": "The new velocity is momentum_update called on the old velocity, parameter.grad and "
+        "self.momentum. Subtract self.lr times that new velocity from the parameter with -=.",
+        "velocity_after": "Start a velocity at 0.0 and update it steps times with the same grad. Or add up the "
+        "terms grad, momentum times grad, momentum squared times grad, and so on, one per step.",
     },
     introduces=(),
     check=check_momentum1,
@@ -568,10 +588,12 @@ MOMENTUM1 = Exercise(
 
 MOMENTUM2_LESSON = prose(
     """
-    Here is a long narrow valley, the loss `x ** 2 + 100 * y ** 2`. It is 100
-    times steeper across, in y, than along, in x. Each optimizer started at
-    `(-10, 1)` and ran until the loss fell below 0.001. Each got its best of
-    20 learning rates, from 0.0005 to 0.01.
+    Take the loss `x ** 2 + 100 * y ** 2`. Its graph is a long, narrow valley.
+    Changing y raises the loss 100 times as much as changing x by the same
+    amount. So the valley is steep across, in y, and gentle along its floor,
+    in x. Each optimizer below started at `(-10, 1)` and ran until the loss
+    fell below 0.001. Each was tried with 20 learning rates from 0.0005 to
+    0.01, and the table shows its best one.
 
     | Optimizer | Best learning rate | Steps |
     |---|---|---|
@@ -579,24 +601,29 @@ MOMENTUM2_LESSON = prose(
     | momentum 0.9 | 0.006 | 85 |
     | momentum 0.99 | 0.002 | 523 |
 
-    SGD's learning rate is capped by the steep direction. Above 0.01 each step
-    across overshoots the valley floor by more than it started, and the loss
-    blows up. That cap makes its steps along the gentle floor tiny.
+    The steep y direction limits SGD's learning rate. Above 0.01, each step
+    in y jumps past the valley floor and ends farther from it than it started.
+    So y grows every step and the loss blows up. With the learning rate kept
+    below 0.01, the steps in the gentle x direction are tiny.
 
-    Momentum gets around the cap. The bounce across flips sign every step and
-    cancels in the velocity, while the steps along the floor pile up. At 0.99
-    the velocity remembers too much, and overshoots the bottom again and
-    again.
+    Momentum gets around this limit. As the point bounces across the valley,
+    the gradient in y flips sign every step, so it mostly cancels in the
+    velocity. The gradient in x keeps the same sign, so it builds up and the
+    steps along the floor grow. At a momentum of 0.99 the velocity keeps too
+    much of its past, and the point overshoots the bottom again and again.
 
-    The gap grows with the valley. At 1000 times steeper, with 40 rates from
-    0.00005 to 0.002, SGD took 3027 steps and momentum 0.9 took 97.
+    The steeper the valley, the bigger the difference. For the loss
+    `x ** 2 + 1000 * y ** 2`, with 40 learning rates from 0.00005 to 0.002,
+    SGD took 3027 steps and momentum 0.9 took 97.
 
-    These gradients were exact. A minibatch gives a noisy gradient, and a
-    smaller batch gives more noise. Here random noise of a set spread joined
-    every gradient of the same valley, run until the loss fell below 0.1.
-    Each count is the median over 20 seeds, at each optimizer's best rate.
+    Those runs used exact gradients. A minibatch gives a noisy gradient, and
+    a smaller batch gives more noise. The next table adds random noise to
+    every gradient on the same valley. The noise has the standard deviation
+    in the first column, so a bigger number means noisier gradients. Each run
+    stopped when the loss fell below 0.1. Each count is the median over 20
+    random seeds, at that optimizer's best learning rate.
 
-    | Noise spread | SGD | Momentum 0.9 |
+    | Noise standard deviation | SGD | Momentum 0.9 |
     |---|---|---|
     | 0 | 181 | 36 |
     | 10 | 204 | 44 |
@@ -604,11 +631,12 @@ MOMENTUM2_LESSON = prose(
     | 100 | 359.5 | 290.5 |
     | 300 | 777 | 585.5 |
 
-    With exact gradients, momentum needed a fifth of SGD's steps. With heavy
-    noise it saved only a quarter or less. So momentum pays most with large
-    batches, as Zhang and others found in 2019. Real losses have such valleys
-    in many directions, so SGD with momentum 0.9 is still the usual plain
-    optimizer.
+    With exact gradients, momentum needed about a fifth of SGD's steps. With
+    heavy noise it saved only a quarter of the steps or less. So momentum
+    helps most with large batches, which Zhang and others also found in 2019.
+    Real losses have narrow valleys like this in many directions. That is why
+    SGD with momentum 0.9 is still the usual choice among the simple
+    optimizers.
     """,
 )
 
@@ -620,18 +648,21 @@ MOMENTUM2_SOURCE = source_file(
     from torch import Tensor
 
     point = torch.tensor([-10.0, 1.0], requires_grad=True)
-    optimizer = torch.optim.SGD([point], lr=0.01, momentum=0.9)    # an optimizer of one tensor
+    optimizer = torch.optim.SGD([point], lr=0.01, momentum=0.9)    # an optimizer that updates one tensor
 
 
     # TODO: Return the valley loss x ** 2 + 100 * y ** 2, where x and y are the
-    #   two entries of point.
+    #   two entries of point, a tensor of shape (2,).
+    #   Example: valley(torch.tensor([-10.0, 1.0])) returns tensor(200.).
     def valley(point: Tensor) -> Tensor:
         ...
 
 
-    # TODO: Finish the loop, so this steps a point from (-10, 1) down the valley
-    #   with torch.optim.SGD, and returns how many steps it took for the loss to
-    #   fall below target, or limit if it never did.
+    # TODO: Finish the loop. steps_to_reach starts a point at (-10, 1) and moves
+    #   it down the valley with torch.optim.SGD. It returns the number of steps
+    #   taken before the loss fell below target, or limit if the loss never
+    #   did. The missing part takes one optimizer step.
+    #   Example: steps_to_reach(0.0095, 0.0, 0.001, 1000) returns 301.
     def steps_to_reach(
         lr: float,
         momentum: float,
@@ -652,8 +683,11 @@ MOMENTUM2_SOURCE = source_file(
         return limit
 
 
-    # TODO: Return the learning rate from rates that reaches target in the fewest
-    #   steps, the first one if several tie.
+    # TODO: Return the learning rate from rates that brings the loss below
+    #   target in the fewest steps, as counted by steps_to_reach. If several
+    #   rates tie, return the first of them.
+    #   Example: best_rate([0.002, 0.005, 0.0095], 0.0, 0.001, 2000) returns
+    #   0.0095.
     def best_rate(
         rates: list[float],
         momentum: float,
@@ -755,7 +789,7 @@ def check_momentum2(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="steps_to_reach",
-        description="counts the steps down to the target",
+        description="counts the steps until the loss falls below target",
         inputs=(
             (0.0095, 0.0, 0.001, 1000),
             (0.006, 0.9, 0.001, 1000),
@@ -788,8 +822,8 @@ MOMENTUM2 = Exercise(
     solution=MOMENTUM2_SOLUTION,
     hints={
         "valley": "point[0] is x and point[1] is y.",
-        "steps_to_reach": "The missing part is the three lines of the optimizer loop from sgd1, zero_grad, "
-        "backward and step.",
+        "steps_to_reach": "The missing part is the three lines of the optimizer loop from sgd1, which call "
+        "zero_grad, backward and step.",
         "best_rate": "Call steps_to_reach for each rate, then return the rate at the position of the smallest "
         "count.",
     },

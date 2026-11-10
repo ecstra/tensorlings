@@ -33,11 +33,13 @@ CLIPPING = Chapter(
         """
         # Gradient clipping
 
-        Now and then one minibatch gives a gradient far larger than the rest,
-        and one step on it can undo much of the training before it. This
-        chapter measures a gradient's size, caps it the way PyTorch's
-        `clip_grad_norm_` does, and shows the cap holding through one huge
-        gradient, with the cap picked from the logged norms.
+        Now and then one minibatch gives a gradient far larger than the
+        others. A single update with that gradient can undo much of the
+        training that came before it. This chapter measures the size of a
+        gradient and limits that size the way PyTorch's `clip_grad_norm_`
+        does. Then it shows the limit protecting a training run from one huge
+        gradient, and how to choose the limit from the gradient sizes logged
+        during training.
 
         ## Further reading
 
@@ -72,32 +74,38 @@ def reference_global_norm(parameters: list[nn.Parameter]) -> float:
 
 CLIPPING1_LESSON = prose(
     """
-    The size of a gradient is its **norm**, the square root of the sum of its
-    squares, like the length of an arrow. This norm is a size, nothing to do
-    with the norm layers of Section 3. The global norm treats every gradient
-    in the model as one long vector. Square every entry of every gradient, add
-    them all up, and take the root.
+    The size of a gradient is measured by its **norm**, the square root of the
+    sum of the squares of its entries. If you picture the gradient as an
+    arrow, the norm is the arrow's length. This norm is only a measure of
+    size, and it has nothing to do with the norm layers of Section 3. The
+    global norm treats all the gradients in the model as one long vector. You
+    square every entry of every gradient, add them all up, and take the square
+    root of the total.
 
     ```python
     grads = [torch.tensor([3.0]), torch.tensor([0.0, 4.0])]
     math.sqrt(sum((g ** 2).sum().item() for g in grads))    # 5.0
     ```
 
-    **Gradient clipping** caps that size. When the global norm is above
-    `max_norm`, every gradient is multiplied by `max_norm / norm`. The
-    direction stays and only the length shrinks. Below the cap, nothing
-    changes.
+    **Gradient clipping** puts a cap, an upper limit, on that size. When the
+    global norm is above `max_norm`, every gradient is multiplied by
+    `max_norm / norm`, which brings the global norm down to `max_norm`. All
+    the gradients are scaled by the same factor, so their direction stays the
+    same and only their length shrinks. When the global norm is at or below
+    the cap, nothing changes.
 
     `torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)` does
-    this in place, between `backward` and `step`. It returns the norm it found
-    before clipping, which is worth logging. It divides by `norm + 1e-6`, a
-    difference too small to matter.
+    this in place. You call it after `backward` and before `step`. It returns
+    the global norm from before clipping, which is worth logging. It actually
+    divides by `norm + 1e-6` instead of `norm`, but that difference is too
+    small to matter.
 
-    Pascanu and others proposed clipping the norm in 2013, for models that
-    read long sequences, whose gradients can explode. The earlier way capped
-    each entry on its own, as `torch.nn.utils.clip_grad_value_` still does.
-    That turns the direction, and scaling the norm keeps it. GPT-3 and
-    nanoGPT clip the norm at 1.0.
+    Pascanu and others proposed clipping the norm in 2013. They worked on
+    models that read long sequences, whose gradients can explode, which means
+    grow huge. The earlier method capped each entry separately, as
+    `torch.nn.utils.clip_grad_value_` still does. Capping entries separately
+    changes the direction of the gradient. Scaling every entry by the same
+    factor keeps the direction. GPT-3 and nanoGPT clip the global norm at 1.0.
     """,
 )
 
@@ -114,15 +122,17 @@ CLIPPING1_SOURCE = source_file(
     length = math.sqrt(sum((g ** 2).sum().item() for g in grads))    # 5.0
 
 
-    # TODO: Return the global norm of the gradients of parameters, as a plain
-    #   number, skipping any parameter whose .grad is None.
+    # TODO: Return the global norm of the gradients of parameters as a float.
+    #   Square every entry of every .grad, add them all up, and take the square
+    #   root of the total. Skip any parameter whose .grad is None. The line that
+    #   sets length above does the same for the plain tensors in grads.
     def global_norm(parameters: list[nn.Parameter]) -> float:
         ...
 
 
-    # TODO: Finish the line in the loop, so when the global norm is above
-    #   max_norm every gradient is scaled in place by max_norm / norm. It
-    #   returns the norm from before.
+    # TODO: Finish the line in the loop. When the global norm is above max_norm,
+    #   every gradient must be multiplied in place by max_norm / norm. The
+    #   function returns the global norm from before clipping.
     def clip_gradients_(
         parameters,
         max_norm: float,
@@ -138,8 +148,10 @@ CLIPPING1_SOURCE = source_file(
         return norm
 
 
-    # TODO: Return the share of the steps whose norm in norms is above max_norm,
-    #   the steps clipping would change.
+    # TODO: norms holds the global norm of each training step. Return the
+    #   fraction of those steps whose norm is above max_norm, which are the
+    #   steps that clipping would change.
+    #   Example: clipped_fraction([0.5, 1.5, 0.9, 3.0], 1.0) returns 0.5.
     def clipped_fraction(
         norms: list[float],
         max_norm: float,
@@ -216,7 +228,7 @@ def check_clip_gradients(
     global_norm: object,
 ) -> None:
     if callable(global_norm) and global_norm(list(model_with_gradients(582, 50.0).parameters())) is None:
-        raise Mismatch(f"global_norm gives None, which usually means it is {NOT_STARTED}. clip_gradients_ needs it, so write it first.")
+        raise Mismatch(f"global_norm returns None, which usually means it is {NOT_STARTED}. clip_gradients_ needs it, so write it first.")
 
     for seed, scale, max_norm in ((582, 50.0, 2.0), (583, 1.0, 100.0)):
         mine = model_with_gradients(seed, scale)
@@ -242,7 +254,7 @@ def check_clip_gradients(
 def check_clipping1(checker: Checker) -> None:
     checker.test(
         function="global_norm",
-        description="gives the size of all the gradients together",
+        description="gives the global norm of all the gradients together",
         run=check_global_norm,
     )
     checker.test(
@@ -256,7 +268,7 @@ def check_clipping1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="clipped_fraction",
-        description="gives the share of steps above the cap",
+        description="gives the fraction of steps whose norm is above max_norm",
         inputs=(
             ([0.5, 1.5, 0.9, 3.0], 1.0),
             ([0.2, 0.3], 1.0),
@@ -280,7 +292,7 @@ CLIPPING1 = Exercise(
     hints={
         "global_norm": "Add up (parameter.grad ** 2).sum().item() over the parameters whose .grad isn't None, then "
         "take math.sqrt of the total.",
-        "clip_gradients_": "Multiply parameter.grad in place with *= by max_norm / norm.",
+        "clip_gradients_": "Multiply parameter.grad by max_norm / norm in place, using *=.",
         "clipped_fraction": "Count the norms above max_norm, then divide by how many norms there are.",
     },
     introduces=(),
@@ -295,11 +307,13 @@ CLIPPING1 = Exercise(
 
 CLIPPING2_LESSON = prose(
     """
-    Here the names model trained for 3000 steps on three seeds, with SGD at
-    0.1 or Adam at 0.003. At step 1000 one loss was multiplied by 100 or by
-    1000. That stands in for one bad minibatch, like a corrupt example or a
-    loss that spiked. The table gives the validation loss right after that
-    step, 10 and 100 steps later, and at the end.
+    Here the names model was trained for 3000 steps with three different
+    seeds. It used SGD with a learning rate of 0.1 or Adam with a learning
+    rate of 0.003. At step 1000, the loss of that one step was multiplied by
+    100 or by 1000. This imitates one bad minibatch, such as one with a
+    corrupt example, whose loss spiked. The table shows the validation loss
+    right after that step, 10 steps later, 100 steps later, and at the end.
+    Each cell gives the range over the three seeds.
 
     | Run | After | 10 later | 100 later | End |
     |---|---|---|---|---|
@@ -311,30 +325,34 @@ CLIPPING2_LESSON = prose(
     | Adam, 1000 times | 2.40 to 2.42 | 3.77 to 3.95 | 2.93 to 3.07 | 2.330 to 2.338 |
     | Adam, 1000 times, clipped at 1.6 | 2.37 to 2.38 | 2.38 | 2.36 to 2.38 | 2.291 to 2.305 |
 
-    One step undid all 1000 steps of SGD and more, and 2000 more didn't
-    repair it. Adam's step stays about its rate, but the spike filled its
-    averages and threw the next steps off.
+    For SGD, the one spiked step undid all 1000 steps of training before it,
+    and more. The 2000 steps after it did not repair the damage. Adam's step
+    size stays close to its learning rate even for a huge gradient. But the
+    spike filled Adam's running averages with huge values, and those averages
+    made the next steps go wrong.
 
-    Ordinary SGD gradients had norms near 1.7, and the spikes near 170 and
-    1700. Clipped, the spike's gradient shrank to the size of an ordinary
-    one, and the runs came out as if there were no spike.
+    Ordinary SGD gradients had global norms near 1.7. The spiked gradients
+    had norms near 170 and 1700. With clipping, the spiked gradient was scaled
+    down to the size of an ordinary one. So the runs came out as if there had
+    been no spike.
 
-    The cap comes from the logged norms. Google's tuning playbook puts it
-    near their 90th percentile, the value 9 in 10 norms stay below. Here that
-    was 1.9 for SGD and 1.6 for Adam. At those caps clipping1's
-    `clipped_fraction` of the norms was 0.09 to 0.13, so only the steps that
-    stand out were cut.
+    You choose the cap from the norms logged during training. Google's tuning
+    playbook sets it near the 90th percentile of those norms, the value that
+    9 in 10 norms stay below. Here that was 1.9 for SGD and 1.6 for Adam.
+    With those caps, `clipped_fraction` from clipping1 gave 0.09 to 0.13 on
+    the logged norms. So only the unusually large gradients were clipped.
 
-    For SGD a cap of 1.0 held the spike too, but `clipped_fraction` came out
-    at 1.0. It cut every step, which works as a smaller learning rate. When
-    more than half the steps get clipped, the playbook lowers the rate
-    instead.
+    For SGD, a cap of 1.0 also protected the run from the spike, but
+    `clipped_fraction` came out at 1.0. Every step was clipped, which acts
+    like a smaller learning rate. When more than half the steps get clipped,
+    the playbook lowers the learning rate instead.
 
-    Logging the norm each step also shows where the spikes are, so a bad
-    batch can be found and looked at. A spike stands far above the median of
-    the norms, their middle value.
-    Spikes don't pull the median up the way they pull up a mean. For an even
-    count, PyTorch's `median()` takes the lower of the two middle values.
+    Logging the norm at each step also shows which steps had spikes, so you
+    can find the bad batch and inspect it. A spike is a norm far above the
+    median of the norms, their middle value when sorted. A few spikes pull
+    the mean up a lot, but they barely change the median. For an even number
+    of values, PyTorch's `median()` returns the lower of the two middle
+    values.
     """,
 )
 
@@ -351,9 +369,11 @@ CLIPPING2_SOURCE = source_file(
     middle = norms.median()                          # tensor(1.5000)
 
 
-    # TODO: Finish the line that sets norm, so each step clips the global norm at
-    #   max_norm with torch.nn.utils.clip_grad_norm_, or only measures it when
-    #   max_norm is None. This returns the last loss and every step's norm.
+    # TODO: Finish the line that sets norm. Each step uses
+    #   torch.nn.utils.clip_grad_norm_ to clip the global norm of the gradients
+    #   at cap. When max_norm is None, cap is infinity, so the call only
+    #   measures the norm. train_with_spike returns the last loss and the list
+    #   of every step's norm.
     def train_with_spike(
         model: nn.Module,
         X: Tensor,
@@ -383,8 +403,10 @@ CLIPPING2_SOURCE = source_file(
         return loss.item(), norms
 
 
-    # TODO: Return the steps, counted from 0, whose norm is more than factor
-    #   times the median of norms.
+    # TODO: norms holds the global norm of each step. Return the list of step
+    #   numbers, counted from 0, whose norm is more than factor times the
+    #   median of norms.
+    #   Example: spike_steps([1.2, 1.7, 160.0, 1.5, 1.4], 10.0) returns [2].
     def spike_steps(
         norms: list[float],
         factor: float,
@@ -513,7 +535,7 @@ def check_clipping2(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="spike_steps",
-        description="finds the steps far above the median norm",
+        description="finds the steps whose norm is more than factor times the median",
         inputs=(
             ([1.2, 1.7, 160.0, 1.5, 1.4], 10.0),
             ([1.0, 30.0, 1.0, 2.0, 25.0], 5.0),
@@ -531,10 +553,10 @@ CLIPPING2 = Exercise(
     source=CLIPPING2_SOURCE,
     solution=CLIPPING2_SOLUTION,
     hints={
-        "train_with_spike": "Call torch.nn.utils.clip_grad_norm_ with model.parameters() and cap. It clips in place "
-        "and returns the norm from before.",
-        "spike_steps": "Take the median with torch.tensor(norms).median().item(), then keep each step whose norm is "
-        "above factor times it, using enumerate for the step.",
+        "train_with_spike": "Call torch.nn.utils.clip_grad_norm_ with model.parameters() and cap. It clips the "
+        "gradients in place and returns the global norm from before clipping.",
+        "spike_steps": "Take the median with torch.tensor(norms).median().item(). Then keep each step whose norm is "
+        "above factor times that median, using enumerate to get the step numbers.",
     },
     introduces=(),
     check=check_clipping2,
