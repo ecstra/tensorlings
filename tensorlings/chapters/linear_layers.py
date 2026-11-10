@@ -31,11 +31,11 @@ LINEAR = Chapter(
         """
         # Linear layers
 
-        Section 3 builds the blocks real models are made of. This chapter starts
-        with the way PyTorch packages a model, as a module that holds its
-        parameters. Then it builds the Linear layer, the block that holds most
-        of the parameters of most models, and shows why two of them in a row
-        are no better than one.
+        Section 3 builds the parts that real models are made of. This chapter
+        starts with how PyTorch organizes a model, as a module that holds its
+        own parameters. Then it builds the Linear layer, which holds most of
+        the parameters in most models. Finally it shows why two Linear layers
+        in a row can do no more than one.
 
         ## Further reading
 
@@ -87,15 +87,16 @@ def expect_parameter(
 
 MODULES1_LESSON = prose(
     """
-    Section 3 builds the blocks real models are made of. First, the way
-    PyTorch packages them.
+    Section 3 builds the parts that real models are made of. It starts with
+    how PyTorch organizes a model in code.
 
-    Section 2 kept the parameters as loose tensors, and every update named
-    each one. A model with millions of parameters needs them gathered up. In
-    PyTorch a model is a class that inherits from `nn.Module`. Its parameters
-    are tensors wrapped in `nn.Parameter` and set as attributes in
-    `__init__`, and its calculation goes in a method called `forward`.
-    Calling the model runs `forward`.
+    In Section 2 the parameters were separate tensors, and every update had
+    to name each one, like `w` and `b`. A model with millions of parameters
+    needs them collected in one place. In PyTorch a model is a class that
+    inherits from `nn.Module`, and such a class is called a module. Its
+    parameters are tensors wrapped in `nn.Parameter` and stored as attributes
+    in `__init__`. Its calculation goes in a method called `forward`. Calling
+    the model like a function runs `forward`.
 
     ```python
     import torch
@@ -113,14 +114,16 @@ MODULES1_LESSON = prose(
     model(torch.tensor([1.0, 2.0, 3.0]))    # tensor([1., 2., 3.], grad_fn=<MulBackward0>)
     ```
 
-    `nn.Parameter` marks a tensor as a parameter and switches its gradient
-    on. `super().__init__()` comes first in `__init__`, since it sets up the
-    bookkeeping that finds the parameters.
+    `nn.Parameter` marks a tensor as a parameter of the module, and sets
+    `requires_grad=True` on it so autograd computes its gradient.
+    `super().__init__()` must come first in `__init__`, because it sets up
+    the records that `nn.Module` uses to find the parameters.
 
-    `model.parameters()` gives every parameter of the model, including those
-    of any module stored inside it. Big models are modules of modules, many
-    deep, and a training loop updates all their parameters without naming
-    one. `p.numel()` gives the number of entries of a tensor `p`.
+    `model.parameters()` gives every parameter of the model, including the
+    parameters of any module stored as an attribute inside it. Big models are
+    modules inside modules, many levels deep. With `model.parameters()`, a
+    training loop can update all their parameters without naming any of
+    them. `p.numel()` gives the number of entries in a tensor `p`.
     """,
 )
 
@@ -133,7 +136,8 @@ MODULES1_SOURCE = source_file(
     from torch import Tensor
 
 
-    # A module holds its parameters as attributes, and does its work in forward.
+    # A module stores its parameters as attributes and does its calculation in
+    # forward.
     class Scale(nn.Module):
         def __init__(self, size: int) -> None:
             super().__init__()
@@ -143,8 +147,8 @@ MODULES1_SOURCE = source_file(
             return x * self.factor
 
 
-    # TODO: Finish both methods, so Shift adds a learned offset to x, one number
-    #   per entry, starting at zeros. The parameter must be called offset.
+    # TODO: Finish both methods. Shift has a parameter called offset that holds
+    #   size numbers and starts as zeros. forward returns x plus offset.
     class Shift(nn.Module):
         def __init__(self, size: int) -> None:
             super().__init__()
@@ -154,9 +158,9 @@ MODULES1_SOURCE = source_file(
             ...
 
 
-    # TODO: Finish the two lines in __init__, so this holds a Scale and a Shift of
-    #   the given size, called scale and shift. Their parameters count as this
-    #   module's too.
+    # TODO: Finish the two lines in __init__, so this module holds a Scale called
+    #   scale and a Shift called shift, both of the given size. Because they are
+    #   stored as attributes, their parameters count as this module's too.
     class ScaleThenShift(nn.Module):
         def __init__(self, size: int) -> None:
             super().__init__()
@@ -167,13 +171,15 @@ MODULES1_SOURCE = source_file(
             return self.shift(self.scale(x))
 
 
-    # TODO: Return how many numbers the parameters of model hold in all.
+    # TODO: Return the total number of entries in all the parameters of model.
+    #   Example: count_parameters(Scale(3)) returns 3.
     def count_parameters(model: nn.Module) -> int:
         ...
 
 
     # TODO: Finish the line in the loop, so this takes one step of gradient
-    #   descent on every parameter of model, then clears its gradient.
+    #   descent on every parameter of model. The line after it then clears the
+    #   parameter's gradient.
     def gradient_step(
         model: nn.Module,
         learning_rate: float,
@@ -302,7 +308,7 @@ def check_gradient_step(found: object) -> None:
     if all(torch.equal(parameter.detach(), before[name]) for name, parameter in model.named_parameters()):
         raise Mismatch(
             "After gradient_step the weights did not change. parameter = ... makes a new tensor and leaves the "
-            "model's own alone, so use -= to change it in place.",
+            "model's own tensor unchanged, so use -= to change it in place.",
         )
 
     for name, parameter in model.named_parameters():
@@ -340,7 +346,7 @@ def check_modules1(checker: Checker) -> None:
     )
     checker.test(
         function="gradient_step",
-        description="steps every parameter against its gradient and clears it",
+        description="takes a gradient descent step on every parameter and clears its gradient",
         run=check_gradient_step,
     )
 
@@ -353,11 +359,11 @@ MODULES1 = Exercise(
     source=MODULES1_SOURCE,
     solution=MODULES1_SOLUTION,
     hints={
-        "Shift": "Follow Scale, with torch.zeros(size) for the parameter and + in place of *.",
-        "ScaleThenShift": "Set self.scale to a Scale of the given size, and self.shift to a Shift of it.",
+        "Shift": "Copy the pattern of Scale, using torch.zeros(size) for the parameter and + instead of *.",
+        "ScaleThenShift": "Set self.scale to a Scale of the given size, and self.shift to a Shift of the same size.",
         "count_parameters": "Loop over model.parameters() and add up each one's .numel().",
-        "gradient_step": "Take the learning rate times parameter.grad away from parameter with -=, which changes "
-        "it in place.",
+        "gradient_step": "Subtract the learning rate times parameter.grad from parameter with -=, which changes it "
+        "in place.",
     },
     introduces=(),
     check=check_modules1,
@@ -370,13 +376,16 @@ MODULES1 = Exercise(
 
 LINEAR1_LESSON = prose(
     """
-    A **layer** is one step of a model with parameters of its own. The layer
-    models use most is Linear, and it is the scores of softmax regression,
-    `x @ W + b`, with one difference in how it keeps its weights.
+    A **layer** is one step of a model's calculation, with parameters of its
+    own. The most common layer is called Linear. It computes the same thing
+    as the scores of softmax regression, `x @ W + b`, except that it stores
+    its weights the other way around.
 
-    PyTorch's `nn.Linear(in_features, out_features)` keeps its weights as a
-    matrix of shape `(out_features, in_features)`, one row per output. So it
-    computes `input @ weight.T + bias`, with the weights turned by `.T`.
+    PyTorch's `nn.Linear(in_features, out_features)` stores its weights as a
+    matrix of shape `(out_features, in_features)`, with one row per output.
+    So it computes `input @ weight.T + bias`. Here `.T` transposes the weight
+    matrix, swapping its rows and columns, so it has the shape
+    `(in_features, out_features)` that the matrix multiplication needs.
 
     ```python
     inputs = torch.tensor([[1.0, 2.0, 3.0],
@@ -389,15 +398,16 @@ LINEAR1_LESSON = prose(
     inputs @ weight.T + bias    # tensor([[ 1.,  3.,  5.,  6.], [ 0.,  0., -1.,  3.]])
     ```
 
-    Each output is a weighted sum of every input plus a bias of its own. One
-    output, with its row of weights and its bias, is a **neuron**. The name
-    comes from a loose likeness to cells in the brain. So a Linear layer with
-    4 outputs has 4 neurons, and keeping a row per output keeps each neuron's
-    weights together. Row `k` of `W` is `W[k]`.
+    Each output is a weighted sum of all the inputs, plus a bias of its own.
+    One output, together with its row of weights and its bias, is called a
+    **neuron**. The name comes from a loose similarity to nerve cells in the
+    brain. So a Linear layer with 4 outputs has 4 neurons. Storing one row
+    per output keeps each neuron's weights together in one row. Row `k` of
+    `W` is `W[k]`.
 
-    `nn.Linear(3, 4)` holds 3 * 4 weights and 4 biases. A Linear layer mixes
-    every input feature into every output, and in most models nearly all the
-    parameters sit in Linear layers.
+    `nn.Linear(3, 4)` holds 3 * 4 weights and 4 biases. A Linear layer
+    combines every input feature into every output. In most models, nearly
+    all the parameters are in Linear layers.
     """,
 )
 
@@ -416,12 +426,14 @@ LINEAR1_SOURCE = source_file(
                       [0.5, -0.5, 2.0]])           # 4 outputs, 3 inputs, one row per output
     b = torch.tensor([0.0, 1.0, -1.0, 0.5])
 
-    # A Linear layer keeps one row of weights per output, so its weights are turned.
+    # A Linear layer stores one row of weights per output, so W is transposed
+    # with .T before the matrix multiplication.
     outputs = x @ W.T + b                          # tensor([[1., 3., 5., 6.], [0., 0., -1., 3.]])
 
 
     # TODO: This crashes when the checker calls it. W has one row per output, the
-    #   way a Linear layer keeps it. Read the error, then fix it.
+    #   way a Linear layer stores it, so its shape is (outputs, inputs). Read the
+    #   error, then fix it.
     def linear(
         x: Tensor,
         W: Tensor,
@@ -430,9 +442,11 @@ LINEAR1_SOURCE = source_file(
         return x @ W + b
 
 
-    # TODO: Return the output of neuron k alone, for every example in x, one
-    #   number per example. Neuron k has row k of W as its weights and entry k of
-    #   b as its bias.
+    # TODO: Return the output of neuron k alone for every example in x, as a
+    #   tensor with one number per example. Neuron k uses row k of W as its
+    #   weights and entry k of b as its bias.
+    #   Example: with the x, W and b above, neuron_output(x, W, b, 2) returns
+    #   tensor([ 5., -1.]).
     def neuron_output(
         x: Tensor,
         W: Tensor,
@@ -442,8 +456,9 @@ LINEAR1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return how many parameters a Linear layer has, for the given numbers
-    #   of inputs and outputs.
+    # TODO: Return the total number of weights and biases in a Linear layer with
+    #   in_features inputs and out_features outputs.
+    #   Example: linear_parameters(3, 4) returns 16.
     def linear_parameters(
         in_features: int,
         out_features: int,
@@ -470,7 +485,8 @@ LINEAR1_SOLUTION = source_file(
     outputs = x @ W.T + b
 
 
-    # W has shape (outputs, inputs), so W.T has the (inputs, outputs) that @ needs.
+    # W has shape (outputs, inputs), so W.T has shape (inputs, outputs), which
+    # is the shape the matrix multiplication with x needs.
     def linear(
         x: Tensor,
         W: Tensor,
@@ -545,11 +561,12 @@ LINEAR1 = Exercise(
     source=LINEAR1_SOURCE,
     solution=LINEAR1_SOLUTION,
     hints={
-        "linear": "The error says the middle sizes don't match. W has one row per output, so turn it with .T, as "
-        "the line that sets outputs does.",
+        "linear": "The error says the inner sizes of the matrix multiplication do not match. W has one row per "
+        "output, so transpose it with .T, as the line that sets outputs does.",
         "neuron_output": "W[k] is neuron k's row of weights. Each example's weighted sum with it is x @ W[k], and "
         "its bias is b[k].",
-        "linear_parameters": "One weight for each pair of an input and an output, and one bias per output.",
+        "linear_parameters": "There is one weight for each pair of an input and an output, and one bias for each "
+        "output.",
     },
     introduces=("layer", "neuron"),
     check=check_linear1,
@@ -562,40 +579,46 @@ LINEAR1 = Exercise(
 
 LINEAR2_LESSON = prose(
     """
-    Now build Linear as a module, then match PyTorch's own.
+    Now build Linear as a module, and check that it matches PyTorch's
+    `nn.Linear`.
 
-    Starting at zero works for a lone layer, like the softmax regression of
-    planets2, since each output gets its own error. In a stack of layers it
-    fails. Every neuron of a layer that feeds another would compute the same
-    thing and get the same gradient. They would stay copies of each other
-    forever. So weights start random. PyTorch draws each weight and each bias at
-    random between `-1 / sqrt(in_features)` and `1 / sqrt(in_features)`, with
-    every value in between equally likely. That is called a uniform draw. The
-    initialization chapter shows why that size.
+    In planets2 the weights started at zero. That works for a single layer
+    like that softmax regression, because each output is compared with its
+    own target and so gets its own gradient. It fails when one layer feeds
+    into another. All the neurons of the first layer would compute the same
+    output and get the same gradient. So they would stay identical copies of
+    each other forever. That is why weights start random.
 
-    `torch.empty(4, 3)` makes a tensor without setting its entries, and
-    `.uniform_(low, high)` fills it in place with numbers drawn evenly between
-    the two.
+    PyTorch draws each weight and each bias at random between
+    `-1 / sqrt(in_features)` and `1 / sqrt(in_features)`, with every value in
+    between equally likely. This is called drawing from a uniform
+    distribution. The initialization chapter explains why these bounds are
+    used.
+
+    `torch.empty(4, 3)` makes a tensor of shape `(4, 3)` without setting its
+    entries. `.uniform_(low, high)` then fills it in place with numbers drawn
+    uniformly between `low` and `high`.
 
     ```python
     bound = 1 / math.sqrt(3)
     torch.empty(4, 3).uniform_(-bound, bound)    # 12 numbers between -0.577 and 0.577
     ```
 
-    To compare with PyTorch's layer, copy its parameters into yours. A
-    parameter's numbers can be overwritten in place with `.copy_(other)`.
-    Setting `mine.weight = layer.weight` instead makes both modules share one
-    tensor, so training one would change the other. Changing a parameter by
-    hand is not part of any calculation to differentiate, so it goes inside
-    `with torch.no_grad():`.
+    To compare your layer with PyTorch's, copy PyTorch's parameters into
+    yours. `.copy_(other)` overwrites a parameter's numbers in place with the
+    numbers of `other`. Setting `mine.weight = layer.weight` instead would
+    make both modules share one tensor, so training one would change the
+    other. Changing a parameter by hand is not a calculation you want
+    gradients for, so it goes inside `with torch.no_grad():`.
 
     ```python
     layer = nn.Linear(3, 4)
     layer.weight.shape, layer.bias.shape    # (torch.Size([4, 3]), torch.Size([4]))
     ```
 
-    `F.linear(x, W, b)` from `torch.nn.functional` computes `x @ W.T + b`, the
-    same thing as the layer, with the parameters passed in.
+    `F.linear(x, W, b)` from `torch.nn.functional` computes `x @ W.T + b`. It
+    is the same calculation as the layer, but you pass the parameters in as
+    arguments.
     """,
 )
 
@@ -612,8 +635,8 @@ LINEAR2_SOURCE = source_file(
 
 
     # TODO: Finish the line that sets self.bias and the forward method, so
-    #   MyLinear works like nn.Linear. The bias starts between the same bounds as
-    #   the weights, one number per output.
+    #   MyLinear works like nn.Linear. The bias has one number per output, drawn
+    #   uniformly between the same bounds as the weights.
     class MyLinear(nn.Module):
         def __init__(
             self,
@@ -629,8 +652,9 @@ LINEAR2_SOURCE = source_file(
             ...
 
 
-    # TODO: Finish the two lines, so they copy the weight and the bias of layer, an
-    #   nn.Linear, into mine, a MyLinear of the same size.
+    # TODO: Finish the two lines, so they copy the numbers in the weight and the
+    #   bias of layer, an nn.Linear, into the weight and the bias of mine, a
+    #   MyLinear of the same size.
     def copy_parameters(
         mine: nn.Module,
         layer: nn.Linear,
@@ -705,7 +729,7 @@ def check_my_linear(found: type) -> None:
 
     if bias.min() > -0.8 * bound or bias.max() < 0.8 * bound:
         raise Mismatch(
-            f"The bias of {call} runs from {bias.min():.3f} to {bias.max():.3f}, but it should be drawn evenly "
+            f"The bias of {call} has values from {bias.min():.3f} to {bias.max():.3f}, but it should be drawn uniformly "
             f"between -{bound:.3f} and {bound:.3f}, the same bounds as the weights.",
         )
 
@@ -725,8 +749,8 @@ def check_copy_parameters(found: object) -> None:
 
         if getattr(mine, name).data_ptr() == getattr(layer, name).data_ptr():
             raise Mismatch(
-                f"After copy_parameters, mine.{name} shares layer.{name}'s numbers, so training one would change the "
-                "other. Copy the numbers in place with .copy_.",
+                f"After copy_parameters, mine.{name} and layer.{name} are the same tensor, so training one would "
+                "change the other. Copy the numbers in place with .copy_.",
             )
 
 
@@ -751,8 +775,8 @@ LINEAR2 = Exercise(
     source=LINEAR2_SOURCE,
     solution=LINEAR2_SOLUTION,
     hints={
-        "MyLinear": "The bias follows the line that sets self.weight, with one number per output. forward is "
-        "x @ W.T + b with self.weight and self.bias, as in linear1.",
+        "MyLinear": "Build the bias the way the line that sets self.weight builds the weight, but with one number "
+        "per output. forward computes x @ W.T + b with self.weight and self.bias, as in linear1.",
         "copy_parameters": "Call .copy_ on mine.weight with layer.weight, then on mine.bias with layer.bias.",
     },
     introduces=(),
@@ -766,19 +790,20 @@ LINEAR2 = Exercise(
 
 LINEAR3_LESSON = prose(
     """
-    Every output of a Linear layer is a weighted sum of its inputs, which
-    limits what one layer can fit. It seems two in a row would do more. They
-    don't. Feed one Linear into another and multiply it out.
+    Every output of a Linear layer is a weighted sum of its inputs plus a
+    bias, which limits what one layer can fit. You might expect two Linear
+    layers in a row to fit more, but they cannot. To see why, feed the output
+    of one Linear layer into another and expand the expression.
 
     ```text
     second(first(x)) = (x @ W1.T + b1) @ W2.T + b2
                      = x @ (W2 @ W1).T + (b1 @ W2.T + b2)
     ```
 
-    That is a single Linear layer with weights `W2 @ W1` and bias
-    `b1 @ W2.T + b2`. However many Linear layers are stacked, the result can
-    always be written as one. The extra layers add parameters and cost, and no
-    power to fit anything new.
+    The result is a single Linear layer with weights `W2 @ W1` and bias
+    `b1 @ W2.T + b2`. However many Linear layers you stack, the result can
+    always be written as one Linear layer. The extra layers add parameters
+    and computation, but they cannot fit anything that one layer could not.
 
     ```python
     W1 = torch.tensor([[1.0, 2.0], [0.0, 1.0], [1.0, -1.0]])    # 2 inputs to 3 outputs
@@ -786,10 +811,10 @@ LINEAR3_LESSON = prose(
     W2 @ W1    # tensor([[2., 1.], [2., 5.]]), the weights of the one layer they make
     ```
 
-    The way out is to put a step that isn't a weighted sum between them, so
-    the product no longer multiplies out. The next chapter builds that step.
-    It is the reason models with many layers can learn shapes a single layer
-    can't.
+    The fix is to put a step between the layers that is not a weighted sum.
+    Then the expression can no longer be collapsed into one layer. The next
+    chapter builds that step. It is the reason models with many layers can
+    learn shapes that a single layer cannot.
     """,
 )
 
@@ -801,8 +826,9 @@ LINEAR3_SOURCE = source_file(
     from torch import Tensor
 
 
-    # TODO: Return x passed through the first Linear layer, W1 and b1, then
-    #   through the second, W2 and b2.
+    # TODO: Pass x through the first Linear layer, with weights W1 and bias b1.
+    #   Then pass the result through the second Linear layer, with W2 and b2,
+    #   and return its output. Each W has one row per output, as in linear1.
     def two_layers(
         x: Tensor,
         W1: Tensor,
@@ -813,8 +839,8 @@ LINEAR3_SOURCE = source_file(
         ...
 
 
-    # TODO: Finish both lines, so this returns the weights and the bias of the
-    #   one Linear layer that gives the same output as the two.
+    # TODO: Finish both lines, so this returns the weights W and the bias b of a
+    #   single Linear layer that gives the same output as two_layers.
     def collapse(
         W1: Tensor,
         b1: Tensor,
@@ -882,7 +908,7 @@ def check_linear3(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="collapse",
-        description="gives the one layer the two make",
+        description="gives the single layer that equals the two",
         inputs=STACKS,
         reference=lambda W1, b1, W2, b2: (W2 @ W1, W2 @ b1 + b2),
         expect=expect_parts("W", "b"),
@@ -897,9 +923,10 @@ LINEAR3 = Exercise(
     source=LINEAR3_SOURCE,
     solution=LINEAR3_SOLUTION,
     hints={
-        "two_layers": "Apply the first layer as linear1 does, x @ W1.T + b1, then the second to what it gives.",
-        "collapse": "The lesson multiplies it out. W is the second layer's weights times the first's, and b is the "
-        "first bias through the second layer's weights, plus the second bias.",
+        "two_layers": "Apply the first layer as linear1 does, x @ W1.T + b1, then apply the second layer to its "
+        "output.",
+        "collapse": "The lesson expands the two layers into one. W is the second layer's weights matrix multiplied "
+        "by the first's. b is the first bias passed through the second layer's weights, plus the second bias.",
     },
     introduces=(),
     check=check_linear3,

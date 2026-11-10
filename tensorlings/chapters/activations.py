@@ -33,13 +33,14 @@ ACTIVATIONS = Chapter(
         """
         # Activations
 
-        Two Linear layers in a row are one Linear layer. An activation between
-        them, a simple function applied to every entry, stops that and lets a
-        model bend to fit curved shapes. This chapter builds ReLU, shows a task
-        a Linear model can't learn and a model with ReLU can, then covers
-        sigmoid, tanh and GELU, and which job each one fits. It ends with
-        steps like `argmax` that pass no gradient, and the soft versions that
-        sigmoid and softmax give them.
+        Two Linear layers in a row can always be collapsed into one Linear
+        layer. An activation between them prevents that. An activation is a
+        simple function applied to every entry on its own, and it lets a model
+        fit curved shapes. This chapter builds ReLU, and shows a task that a
+        Linear model cannot learn but a model with ReLU can. Then it covers
+        sigmoid, tanh and GELU, and which job each one suits. It ends with
+        operations like `argmax` that pass no gradient back, and the smooth
+        versions of them that sigmoid and softmax give.
 
         ## Further reading
 
@@ -60,30 +61,35 @@ XOR_Y = torch.tensor([0.0, 1.0, 1.0, 0.0])
 
 RELU1_LESSON = prose(
     """
-    linear3 showed that two Linear layers in a row multiply out into one. The
-    fix is a step between them that isn't a weighted sum, applied to every
-    entry on its own. Such a step is an **activation**.
+    linear3 showed that two Linear layers in a row collapse into one Linear
+    layer. The fix is a step between them that is not a weighted sum, a
+    function applied to every entry on its own. Such a step is called an
+    **activation**.
 
-    The simplest is ReLU, short for rectified linear unit. It keeps positive
-    numbers and turns negative ones into 0.
+    The simplest activation is ReLU, short for rectified linear unit. It
+    keeps positive numbers and turns negative numbers into 0. As a formula,
+    `relu(x) = max(x, 0)`.
 
     ```python
     x = torch.tensor([-2.0, -0.5, 0.0, 1.5])
     torch.relu(x)    # tensor([0.0000, 0.0000, 0.0000, 1.5000])
     ```
 
-    Its derivative is 1 where the input is positive and 0 where it is
-    negative. At exactly 0 the derivative is taken as 0. So in backprop a
-    ReLU passes the gradient on where its input was positive and blocks it
-    everywhere else.
+    The derivative of ReLU is 1 where the input is positive and 0 where it is
+    negative. At exactly 0 the derivative is taken to be 0. So in
+    backpropagation, ReLU passes the gradient back unchanged where its input
+    was positive, and sets it to 0 everywhere else.
 
-    Put ReLU between two Linears, `Linear, ReLU, Linear`, and the product no
-    longer multiplies out. The outputs of the middle layer are called the
-    hidden features, since nothing outside the model sees them. Each hidden
-    neuron is off, giving 0, for some inputs and passes its weighted sum for
-    others. The output is then made of straight pieces that meet at corners.
-    With enough neurons those pieces can follow any smooth curve over a
-    limited range.
+    Put ReLU between two Linear layers, `Linear, ReLU, Linear`, and the two
+    layers can no longer be collapsed into one. The outputs of the first
+    layer after the ReLU are called the hidden features, because nothing
+    outside the model sees them. Each hidden neuron outputs 0 for the inputs
+    where its weighted sum is negative. For the other inputs it outputs its
+    weighted sum unchanged.
+
+    So, as a function of the input, the model's output is made of straight
+    pieces that meet at corners. With enough hidden neurons, those pieces can
+    follow any smooth curve over a limited range.
 
     `.float()` turns a tensor of `True` and `False` into 1.0 and 0.0. So
     `(x < 0).float()` gives 1.0 for each entry below 0, and 0.0 for the rest.
@@ -103,14 +109,16 @@ RELU1_SOURCE = source_file(
     activated = torch.relu(x)                          # tensor([0.0, 0.0, 0.0, 1.5])
 
 
-    # TODO: Return the derivative of ReLU at every entry of x, 1.0 where the
-    #   entry is above 0 and 0.0 everywhere else.
+    # TODO: Return the derivative of ReLU at every entry of x, which is 1.0 where
+    #   the entry is greater than 0 and 0.0 everywhere else.
+    #   Example: relu_derivative(torch.tensor([-2.0, 0.0, 1.5])) returns
+    #   tensor([0., 0., 1.]).
     def relu_derivative(x: Tensor) -> Tensor:
         ...
 
 
-    # TODO: Return the hidden features, x through a Linear layer with weights W1
-    #   and bias b1, then through ReLU.
+    # TODO: Return the hidden features. Pass x through a Linear layer with
+    #   weights W1 and bias b1, then apply ReLU to the result.
     def hidden_features(
         x: Tensor,
         W1: Tensor,
@@ -119,8 +127,9 @@ RELU1_SOURCE = source_file(
         ...
 
 
-    # TODO: Finish the last line, so this passes x through Linear, ReLU, Linear,
-    #   with the second layer's weights W2 and bias b2.
+    # TODO: Finish the last line, so this passes x through Linear, ReLU, Linear.
+    #   hidden already holds the output of the first Linear and the ReLU. The
+    #   second Linear layer has weights W2 and bias b2.
     def two_layer_net(
         x: Tensor,
         W1: Tensor,
@@ -217,7 +226,7 @@ RELU1 = Exercise(
     hints={
         "relu_derivative": "Compare x with 0, then turn True and False into 1.0 and 0.0 with .float().",
         "hidden_features": "The Linear layer is x @ W1.T + b1, as in linear1. Pass that to torch.relu.",
-        "two_layer_net": "The second layer is a Linear on hidden, with W2 and b2.",
+        "two_layer_net": "The second layer is a Linear layer applied to hidden, with W2 and b2.",
     },
     introduces=("activation",),
     check=check_relu1,
@@ -230,35 +239,42 @@ RELU1 = Exercise(
 
 RELU2_LESSON = prose(
     """
-    Here is a task one Linear layer can't learn. Four points, each with two
-    features, and a target that is 1 when exactly one feature is 1.
+    Here is a task that one Linear layer cannot learn. There are four points,
+    each with two features. The target is 1 when exactly one of the two
+    features is 1, and 0 otherwise.
 
     ```python
     x = torch.tensor([[0.0, 0.0], [0.0, 1.0], [1.0, 0.0], [1.0, 1.0]])
     y = torch.tensor([0.0, 1.0, 1.0, 0.0])
     ```
 
-    This is called XOR. Raising either feature from 0 to 1 raises the target,
-    but raising both lowers it again. A weighted sum can't do that, since
-    raising a feature always moves the output the same way, whatever the other
-    feature is. Trained on these points, a
-    Linear model ends up giving 0.5 for every point. That is a mean squared
-    error of 0.25, the best a straight answer can do. Two Linears in a row,
-    with 8 neurons between them, also end at 0.25 from all 10 random starts
-    tried, as linear3 said they must.
+    This is called XOR, short for exclusive or. Starting from `(0, 0)`,
+    raising either feature from 0 to 1 raises the target to 1. But raising
+    both features gives a target of 0 again. A weighted sum cannot do that.
+    In a weighted sum, raising a feature always changes the output by the
+    same amount, whatever the other feature is.
 
-    With 8 hidden neurons and ReLU between two Linears, gradient descent drives
-    the error to almost 0. Some neurons switch on for one point and off for
-    another. The second layer adds up the pieces into the right answer at
-    every point.
+    Trained on these points, a Linear model ends up predicting 0.5 for every
+    point. That gives a mean squared error of 0.25, which is the best any
+    Linear model can do here. Two Linear layers in a row, with 8 neurons
+    between them, also end at an error of 0.25. That happened from all 10
+    random starting weights tried, as linear3 says it must.
 
-    The hidden layer's weights start random, with a generator so every run
-    matches. If they all started equal, every hidden neuron would compute the
-    same thing and stay copies of each other.
+    Now put ReLU between the two Linear layers, with 8 hidden neurons.
+    Gradient descent then brings the error down to almost 0. Some hidden
+    neurons output a positive number for one point and 0 for another. The
+    second layer adds up these hidden features with its weights to give the
+    right answer at every point.
 
-    This is the whole reason deep learning stacks layers with activations
-    between them. More neurons can fit more complicated shapes. Section 3's
-    next chapter builds the model this makes, the multilayer perceptron.
+    The hidden layer's weights start random. They are drawn with a
+    generator, so every run gets the same random numbers. If the weights all
+    started equal, every hidden neuron would compute the same thing, and they
+    would stay copies of each other.
+
+    This is why deep learning stacks layers with activations between them.
+    More neurons can fit more complicated shapes. The next chapter of
+    Section 3 builds the model that results, called the multilayer
+    perceptron.
     """,
 )
 
@@ -272,8 +288,9 @@ RELU2_SOURCE = source_file(
     from torch import Tensor
 
 
-    # TODO: Finish the line that sets predictions, one Linear layer on x, so this
-    #   trains it by gradient descent and returns the final mean squared error.
+    # TODO: Finish the line that sets predictions to the output of one Linear
+    #   layer on x, with weights W and bias b. Then this trains the layer by
+    #   gradient descent and returns the final mean squared error.
     def fit_linear(
         x: Tensor,
         y: Tensor,
@@ -296,10 +313,10 @@ RELU2_SOURCE = source_file(
         return loss.item()
 
 
-    # TODO: Finish the line that sets predictions, Linear, ReLU, Linear on x, so
-    #   this trains the two layer net and returns the final mean squared error.
-    #   W2 is scaled down so the output starts small. The initialization chapter
-    #   shows why.
+    # TODO: Finish the line that sets predictions to the output of Linear, ReLU,
+    #   Linear on x. Then this trains the two layer network and returns the
+    #   final mean squared error. W2 is divided by sqrt(hidden) so the output
+    #   starts small. The initialization chapter explains why.
     def fit_relu_net(
         x: Tensor,
         y: Tensor,
@@ -480,7 +497,7 @@ RELU2 = Exercise(
     solution=RELU2_SOLUTION,
     hints={
         "fit_linear": "One Linear layer is x @ W.T + b, as in linear1.",
-        "fit_relu_net": "The first layer is x @ W1.T + b1, through torch.relu, then the second layer with W2 and b2, "
+        "fit_relu_net": "Apply the first layer, x @ W1.T + b1, then torch.relu, then the second layer with W2 and b2, "
         "as two_layer_net does in relu1.",
     },
     introduces=(),
@@ -495,8 +512,8 @@ RELU2 = Exercise(
 
 ACTIVATIONS1_LESSON = prose(
     """
-    Two older activations squash any number into a fixed range. Sigmoid gives
-    a number between 0 and 1, and tanh one between -1 and 1.
+    Two older activations squeeze any number into a fixed range. Sigmoid
+    gives a number between 0 and 1, and tanh gives a number between -1 and 1.
 
     ```text
     sigmoid(x) = 1 / (1 + exp(-x))
@@ -509,36 +526,41 @@ ACTIVATIONS1_LESSON = prose(
     torch.tanh(x)       # tensor([-0.9993,  0.0000,  0.9993])
     ```
 
-    Sigmoid is softmax over two classes, with scores `x` and 0, so its output
-    reads as a probability. Their derivatives come out in terms of their own
-    outputs. With `s = sigmoid(x)` the derivative is `s * (1 - s)`, at most
-    0.25. With `t = tanh(x)` it is `1 - t ** 2`, at most 1.
+    Sigmoid equals softmax over two classes with scores `x` and 0, so its
+    output can be read as a probability. The derivatives of both activations
+    can be written in terms of their own outputs. With `s = sigmoid(x)`, the
+    derivative of sigmoid is `s * (1 - s)`, which is at most 0.25. With
+    `t = tanh(x)`, the derivative of tanh is `1 - t ** 2`, which is at most 1.
 
-    Both flatten out for big inputs. At `x = 4`, sigmoid's derivative is
-    already 0.018, so a neuron pushed far to one side passes back almost no
-    gradient and stops learning. This is saturation. A stack of sigmoid layers
-    multiplies many of those small derivatives together, and the gradient
-    reaching the first layers all but vanishes. ReLU's derivative is 1 for any
-    positive input.
+    Both curves become flat for inputs far from 0. At `x = 4`, sigmoid's
+    derivative is already 0.018. So a neuron whose input is far from 0 passes
+    back almost no gradient, and it stops learning. This is called
+    saturation. In a stack of sigmoid layers, backpropagation multiplies many
+    of these small derivatives together. So the gradient that reaches the
+    first layers is almost 0. ReLU's derivative is 1 for any positive input.
 
-    Here are six layers of 64 neurons with each activation between them,
-    sorting 200 points on two spirals wound round each other. Each trained
-    for 3000 steps of gradient descent from PyTorch's starting weights, over 5
-    seeds. The gradient column is from the first step.
+    The table below compares models of six layers with 64 neurons each, with
+    one of the three activations between the layers. The task is to classify
+    200 points that lie on two spirals wound around each other. Each model
+    was trained for 3000 steps of gradient descent from PyTorch's starting
+    weights. The numbers are averages over 5 seeds, and the gradient column
+    is measured at the first step.
 
-    | Between the layers | First layer's gradient over the last's | Final loss | Training accuracy |
+    | Between the layers | First layer's gradient divided by the last layer's | Final loss | Training accuracy |
     |---|---|---|---|
     | sigmoid | 0.00008 | 0.692 | 54% |
     | tanh | 0.11 | 0.220 | 90% |
     | ReLU | 0.065 | 0.018 | 99% |
 
-    The sigmoid stack never leaves the loss of a blind guess, `log(2)`. Tanh
-    learns slowly, and ReLU fits the spirals. That is the main reason ReLU
-    replaced them in hidden layers.
+    The loss of the sigmoid model stays at `log(2)`, the loss of guessing a
+    probability of 0.5 for both classes. Tanh learns slowly, and ReLU fits
+    the spirals. This is the main reason ReLU replaced sigmoid and tanh
+    between layers.
 
-    They still have jobs. A sigmoid gives a yes or no probability, or a gate
-    that scales a signal between off and on. A tanh gives a value held between
-    -1 and 1.
+    Sigmoid and tanh are still used for other jobs. A sigmoid gives the
+    probability of a yes or no answer. It can also be a gate, a number
+    between 0 and 1 that multiplies a signal. A gate scales the signal
+    anywhere from fully off to fully on. A tanh gives an output that must stay between -1 and 1.
     """,
 )
 
@@ -550,27 +572,32 @@ ACTIVATIONS1_SOURCE = source_file(
     from torch import Tensor
 
 
-    # TODO: Return sigmoid of every entry of x, from its formula in the lesson,
-    #   without torch.sigmoid.
+    # TODO: Return sigmoid of every entry of x, computed with the formula from
+    #   the lesson, without calling torch.sigmoid.
+    #   Example: sigmoid(torch.tensor([-4.0, 0.0, 4.0])) returns
+    #   tensor([0.0180, 0.5000, 0.9820]).
     def sigmoid(x: Tensor) -> Tensor:
         ...
 
 
-    # sigmoid's derivative comes out in terms of its own output.
+    # The derivative of sigmoid, written in terms of sigmoid's own output s.
     def sigmoid_derivative(x: Tensor) -> Tensor:
         s = torch.sigmoid(x)
 
         return s * (1 - s)
 
 
-    # TODO: Return the derivative of tanh at every entry of x, the way
-    #   sigmoid_derivative does for sigmoid.
+    # TODO: Return the derivative of tanh at every entry of x. Write it in terms
+    #   of tanh's own output, the way sigmoid_derivative does for sigmoid.
+    #   Example: tanh_derivative(torch.tensor([0.0])) returns tensor([1.]).
     def tanh_derivative(x: Tensor) -> Tensor:
         ...
 
 
-    # TODO: Return the fraction of entries of x where sigmoid is saturated, where
-    #   its derivative is below 0.01.
+    # TODO: Return the fraction of entries of x where sigmoid is saturated, which
+    #   here means its derivative is below 0.01, as a float.
+    #   Example: saturated_fraction(torch.tensor([-6.0, 0.0, 2.0, 8.0])) returns
+    #   0.5.
     def saturated_fraction(x: Tensor) -> float:
         ...
     ''',
@@ -654,7 +681,7 @@ def check_activations1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="sigmoid",
-        description="squashes every entry between 0 and 1",
+        description="squeezes every entry into the range from 0 to 1",
         inputs=(
             (torch.tensor([-4.0, 0.0, 4.0]),),
             (small_tensor(211, 2, 3),),
@@ -705,7 +732,7 @@ ACTIVATIONS1 = Exercise(
     solution=ACTIVATIONS1_SOLUTION,
     hints={
         "sigmoid": "Write the formula with torch.exp. It works on every entry at once.",
-        "tanh_derivative": "Take t = torch.tanh(x), then the derivative from the lesson in terms of t.",
+        "tanh_derivative": "Set t = torch.tanh(x), then return the derivative from the lesson, written in terms of t.",
         "saturated_fraction": "Compare sigmoid_derivative(x) with 0.01, then take the mean of the matches as "
         "floats, as accuracy does in softmax3. Turn it into a plain number with .item().",
     },
@@ -720,51 +747,61 @@ ACTIVATIONS1 = Exercise(
 
 GELU1_LESSON = prose(
     """
-    Language models like GPT-2 and BERT use GELU, from Hendrycks and Gimpel's
-    2016 paper. ReLU lets an input through when it is positive and blocks it
-    when it isn't. GELU lets it through in part, weighted by how likely a
-    random number from the bell curve is to be smaller than it.
+    Language models like GPT-2 and BERT use an activation called GELU, from a
+    2016 paper by Hendrycks and Gimpel. ReLU passes an input through
+    unchanged when it is positive, and outputs 0 when it is not. GELU instead
+    multiplies the input by a number between 0 and 1. That number is the
+    probability that a random number from the bell curve is smaller than the
+    input.
 
     ```text
     GELU(x) = x * Phi(x),   Phi(x) = 0.5 * (1 + erf(x / sqrt(2)))
     ```
 
-    `Phi` is the chance that a number drawn from the bell curve with mean 0
-    and spread 1 is below `x`. `erf` is the error function, which `torch.erf` computes. For a
-    big positive `x`, `Phi` is almost 1 and GELU is almost `x`, like ReLU. For
-    a big negative `x` it is almost 0. Near 0 it bends smoothly, with a small
-    dip below 0, where ReLU has a sharp corner.
+    `Phi(x)` is the probability that a number drawn from the bell curve with
+    mean 0 and standard deviation 1 is below `x`. This bell curve is called
+    the standard normal distribution. `erf` is the error function, which
+    `torch.erf` computes.
+
+    For a large positive `x`, `Phi(x)` is almost 1, so GELU gives almost `x`,
+    like ReLU. For a large negative `x`, GELU gives almost 0. Near 0 the GELU
+    curve bends smoothly and dips a little below 0, where ReLU has a sharp
+    corner.
 
     ```python
     x = torch.tensor([-1.0, 0.0, 1.0, 2.0])
     F.gelu(x)    # tensor([-0.1587,  0.0000,  0.8413,  1.9545])
     ```
 
-    The paper also gives a faster approximation with tanh, which GPT-2 used.
+    The paper also gives a faster approximation that uses tanh, and GPT-2
+    used it.
 
     ```text
     0.5 * x * (1 + tanh(sqrt(2 / pi) * (x + 0.044715 * x ** 3)))
     ```
 
-    `F.gelu(x, approximate="tanh")` computes that one.
+    `F.gelu(x, approximate="tanh")` computes this approximation.
 
-    A close cousin is SiLU, `x * sigmoid(x)`, which lets the input through
-    weighted by a sigmoid instead. The same paper named it, and `F.silu(x)`
-    computes it. Llama and most current language models use it, inside a gated
-    layer that Section 7 builds.
+    A close relative is SiLU, `x * sigmoid(x)`, which multiplies the input by
+    its sigmoid instead of by `Phi(x)`. The same paper named it, and
+    `F.silu(x)` computes it. Llama and most current language models use
+    SiLU, inside a gated layer that Section 7 builds.
 
-    Why not ReLU? A ReLU neuron whose input is below 0 on every example gets
-    no gradient, so it never comes back. GELU and SiLU still pass a little
-    gradient below 0. Here is relu2's XOR net with 4 hidden neurons, trained
-    from 100 random starts.
+    Why not use ReLU? A ReLU neuron whose input is below 0 on every example
+    always outputs 0 and gets no gradient. So its weights never change
+    again, and it stays at 0 for good. GELU and SiLU still pass a small
+    gradient back for inputs below 0. Here is the XOR network from relu2
+    with 4 hidden neurons, trained from 100 different random starting
+    weights.
 
-    | Between the layers | Starts stuck above an error of 0.01 | Mean final error |
+    | Between the layers | Runs stuck above an error of 0.01 | Mean final error |
     |---|---|---|
     | ReLU | 37 of 100 | 0.061 |
     | GELU | 0 of 100 | 0.000 |
     | SiLU | 0 of 100 | 0.000 |
 
-    Every stuck ReLU run has a neuron that is off on all four points.
+    Every stuck ReLU run has a hidden neuron that outputs 0 on all four
+    points.
     """,
 )
 
@@ -779,20 +816,22 @@ GELU1_SOURCE = source_file(
     from torch import Tensor
 
 
-    # TODO: Return GELU of every entry of x, from the paper's formula with
-    #   torch.erf. It should match F.gelu(x).
+    # TODO: Return GELU of every entry of x, computed with the paper's formula
+    #   and torch.erf, without calling F.gelu. It should match F.gelu(x).
+    #   Example: gelu(torch.tensor([-1.0, 1.0])) returns
+    #   tensor([-0.1587,  0.8413]).
     def gelu(x: Tensor) -> Tensor:
         ...
 
 
-    # TODO: Return the tanh approximation of GELU from the lesson. It should
-    #   match F.gelu(x, approximate="tanh").
+    # TODO: Return the tanh approximation of GELU from the lesson, for every
+    #   entry of x. It should match F.gelu(x, approximate="tanh").
     def gelu_tanh(x: Tensor) -> Tensor:
         ...
 
 
-    # TODO: Return SiLU of every entry of x, x times sigmoid of x. It should match
-    #   F.silu(x).
+    # TODO: Return SiLU of every entry of x, which is x times sigmoid of x. It
+    #   should match F.silu(x).
     def silu(x: Tensor) -> Tensor:
         ...
     ''',
@@ -864,7 +903,7 @@ GELU1 = Exercise(
     solution=GELU1_SOLUTION,
     hints={
         "gelu": "Phi(x) is 0.5 * (1 + torch.erf(x / math.sqrt(2))). Multiply x by it.",
-        "gelu_tanh": "Write the formula as it stands, with torch.tanh, math.sqrt and math.pi.",
+        "gelu_tanh": "Write the formula from the lesson as it is, using torch.tanh, math.sqrt and math.pi.",
         "silu": "Multiply x by torch.sigmoid(x).",
     },
     introduces=(),
@@ -878,8 +917,9 @@ GELU1 = Exercise(
 
 ACTIVATIONS2_LESSON = prose(
     """
-    Each activation has a job. Between layers its job is to bend, and ReLU is
-    the plain default there, with GELU and SiLU common in language models. At the
+    An activation does a different job depending on where it sits. Between
+    layers, its job is to let the model fit curved shapes. ReLU is the usual
+    default there, and GELU and SiLU are common in language models. At the
     output, its job is to put the answer in the form the task needs.
 
     | The model predicts | Output activation | Because it gives |
@@ -890,16 +930,18 @@ ACTIVATIONS2_LESSON = prose(
     | one of several classes | softmax over each row | a probability for each class |
 
     For classes, a model usually outputs the logits and leaves the softmax to
-    the loss, as `F.cross_entropy` does. The same goes for a yes or no answer,
-    where `F.binary_cross_entropy_with_logits` takes the raw score and does
-    the sigmoid itself.
+    the loss, because `F.cross_entropy` applies the softmax itself. The same
+    goes for a yes or no answer. `F.binary_cross_entropy_with_logits` takes
+    the raw score and applies the sigmoid itself.
 
-    The wrong choice fails without an error. ReLU at the output can never give
-    a negative number, so a model predicting temperatures could never say -5.
-    A sigmoid can never give more than 1, so a model counting things would top
-    out at 1. The model trains, the loss stops falling, and nothing says why.
+    Choosing the wrong output activation does not raise an error. ReLU at the
+    output can never give a negative number, so a model predicting
+    temperatures could never predict -5. A sigmoid can never give more than
+    1, so a model that counts things could never predict more than 1. The
+    model trains and the loss stops going down, with nothing to say why.
+
     Here is Linear, ReLU, Linear with 32 hidden neurons, fitted to 200 points
-    by gradient descent, over 5 seeds.
+    by gradient descent. The errors are averages over 5 seeds.
 
     | Target | Output activation | Final error |
     |---|---|---|
@@ -909,11 +951,12 @@ ACTIVATIONS2_LESSON = prose(
     | counts from 0 to 4 | sigmoid | 2.25 |
 
     With ReLU at the output, the temperature model does no better than always
-    guessing the mean temperature, an error of 13.0. The sigmoid model never
-    counts past 1.
+    guessing the mean temperature, which has an error of 13.0. The sigmoid
+    model never predicts a count above 1.
 
-    So pick the output activation from what the answer has to look like. This
-    rule comes back whenever you design a model, in Section 14 too.
+    So choose the output activation based on what the answer has to look
+    like. This rule comes up whenever you design a model, including in
+    Section 14.
     """,
 )
 
@@ -925,11 +968,13 @@ ACTIVATIONS2_SOURCE = source_file(
     from torch import Tensor
 
 
-    # TODO: Return scores through the output activation the job needs. kind is
-    #   "number" for any number, "probability" for the probability of yes,
-    #   "bounded" for a value held between -1 and 1, and "choice" for a
-    #   probability for each class, one row of classes per example. Here, return
-    #   the probabilities themselves.
+    # TODO: Apply the output activation that the job needs to scores, and return
+    #   the result. kind is "number" for any number, "probability" for the
+    #   probability of yes, "bounded" for a value that must stay between -1 and
+    #   1, and "choice" for a probability for each class. For "choice", scores
+    #   has one row per example and one column per class. Return the
+    #   probabilities themselves, even though a real model would leave the
+    #   softmax to the loss.
     def output_activation(
         scores: Tensor,
         kind: str,
@@ -1032,10 +1077,10 @@ ACTIVATIONS2 = Exercise(
     source=ACTIVATIONS2_SOURCE,
     solution=ACTIVATIONS2_SOLUTION,
     hints={
-        "output_activation": "One if for each kind, returning torch.sigmoid, torch.tanh or torch.softmax with "
-        "dim=1, and the scores as they are for a number.",
-        "yes_probability": "The hidden ReLU is right. The last step needs the activation that gives a number "
-        "between 0 and 1.",
+        "output_activation": "Use one if for each kind, returning torch.sigmoid, torch.tanh or torch.softmax with "
+        "dim=1. For a number, return the scores unchanged.",
+        "yes_probability": "The ReLU on the hidden layer is correct. The last step needs the activation that gives a "
+        "number between 0 and 1.",
     },
     introduces=(),
     check=check_activations2,
@@ -1048,8 +1093,8 @@ ACTIVATIONS2 = Exercise(
 
 SOFT1_LESSON = prose(
     """
-    A model learns only through gradients. Some everyday steps of code pass
-    none back, and then nothing before them can learn.
+    A model learns only through gradients. Some common operations in code
+    pass no gradient back, and then nothing before them can learn.
 
     ```python
     w = torch.tensor(0.3, requires_grad=True)
@@ -1057,41 +1102,46 @@ SOFT1_LESSON = prose(
     torch.sigmoid(w / 0.1)    # tensor(0.9526, grad_fn=<SigmoidBackward0>)
     ```
 
-    A comparison gives True or False. Nudge `w` a little and the answer stays
-    the same, so its derivative is 0 and autograd doesn't record it at all.
-    The same goes for an `if` on a tensor, for `argmax`, and for indexing with
-    an index the model computed. The row that was picked can still learn, but
-    the scores that chose it get no gradient.
+    A comparison gives True or False. If you change `w` by a small amount,
+    the answer stays the same. So its derivative is 0, and autograd does not
+    record the comparison at all. The same is true for an `if` on a tensor,
+    for `argmax`, and for indexing with an index the model computed. With
+    indexing, the row that was picked still gets a gradient and can learn.
+    But the scores that chose that row get no gradient.
 
-    Each hard step has a soft version that changes smoothly.
+    Each of these hard steps has a soft version, which changes smoothly as
+    its input changes.
 
     | Hard step | Soft version |
     |---|---|
     | `x > 0`, a jump from 0 to 1 | `torch.sigmoid(x / t)` |
     | `values[scores.argmax()]`, one row | `torch.softmax(scores / t, dim=0) @ values`, a weighted sum of rows |
 
-    The number `t` is the **temperature**. A small one makes the soft version
-    nearly hard, and a large one blurs it.
+    The number `t` is called the **temperature**. A small temperature makes
+    the soft version almost the same as the hard step. A large temperature
+    makes the change more gradual.
 
-    `fit_scores` below learns which row of `values` to pick. Here the rows are
-    `[1, 0]`, `[0, 1]` and `[1, 1]`, and the target is `[0, 1]`, row 1. The
-    scores start at `[1, 0, 0.5]`, favouring row 0. Here are 100 steps of
-    gradient descent at a rate of 0.5, at three temperatures.
+    `fit_scores` below learns which row of `values` to pick. In this example
+    the rows are `[1, 0]`, `[0, 1]` and `[1, 1]`, and the target is `[0, 1]`,
+    which is row 1. The scores start at `[1, 0, 0.5]`, which favours row 0.
+    The table shows the result of 100 steps of gradient descent with a
+    learning rate of 0.5, at three temperatures.
 
-    | Temperature | Weights on the rows at the end | Loss |
+    | Temperature | Final softmax weights on the rows | Loss |
     |---|---|---|
     | 1 | 0.025, 0.939, 0.036 | 0.004 |
     | 0.1 | 0.000, 0.000, 1.000 | 1.0 |
     | 0.01 | 1.000, 0.000, 0.000 | 2.0 |
 
-    At 0.01 the softmax sits entirely on row 0. Its gradient rounds to 0, so
-    the scores never move, the hard step's problem back again. At 0.1 row 1
-    starts with a weight of 0.00005, so it gets almost no gradient. Row 2 is
-    nearer the target than row 0, so the weights slide onto row 2 and stick
-    there. At 1 they find row 1.
+    At temperature 0.01, the softmax puts all its weight on row 0. Its
+    gradient rounds to 0, so the scores never change. That is the same
+    problem the hard step has. At 0.1, row 1 starts with a weight of 0.00005,
+    so its score gets almost no gradient. Row 2 is closer to the target than
+    row 0, so the weight moves over to row 2 and stays there. At temperature
+    1, the weight ends up on row 1, the right answer.
 
-    So a soft step trades exactness for a gradient, and the temperature sets
-    the trade. Gates in Section 6 and lookups in Section 7 are built from these
+    So a soft step gives up being exact in exchange for having a gradient,
+    and the temperature controls that balance. Gates in Section 6 and lookups in Section 7 are built from these
     two soft steps.
     """,
 )
@@ -1103,11 +1153,13 @@ SOFT1_SOURCE = source_file(
     import torch
     from torch import Tensor
 
+    # The soft version of x > 0 for x = -1 and x = 1, at temperature 0.5.
     torch.sigmoid(torch.tensor([-1.0, 1.0]) / 0.5)    # tensor([0.1192, 0.8808])
 
 
-    # TODO: Return a soft version of x > 0, a number between 0 and 1 for each
-    #   entry of x, closer to the hard step the smaller temperature is.
+    # TODO: Return the soft version of x > 0 from the lesson's table, for every
+    #   entry of x. Each result is a number between 0 and 1, and it gets closer
+    #   to the hard step as temperature gets smaller.
     def soft_step(
         x: Tensor,
         temperature: float,
@@ -1115,8 +1167,10 @@ SOFT1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return a soft version of values[scores.argmax()], with scores of
-    #   shape (n,) and values of shape (n, d). The result has shape (d,).
+    # TODO: Return the soft version of values[scores.argmax()] from the lesson's
+    #   table, at the given temperature. scores has shape (n,) and values has
+    #   shape (n, d). The result is a weighted sum of the rows of values, with
+    #   shape (d,).
     def soft_pick(
         scores: Tensor,
         values: Tensor,
@@ -1125,9 +1179,9 @@ SOFT1_SOURCE = source_file(
         ...
 
 
-    # TODO: Finish the two lines in the loop. Each step takes the loss, the sum
-    #   of the squared differences between soft_pick's result and target, then
-    #   one gradient descent step on scores with learning rate lr.
+    # TODO: Finish the two lines in the loop. The first sets loss to the sum of
+    #   the squared differences between soft_pick's result and target. The
+    #   second takes one gradient descent step on scores with learning rate lr.
     def fit_scores(
         scores: Tensor,
         values: Tensor,
@@ -1221,7 +1275,7 @@ def check_soft1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="soft_step",
-        description="gives sigmoid of x over the temperature",
+        description="gives sigmoid of x divided by the temperature",
         inputs=(
             (torch.tensor([-0.3, 0.0, 0.3]), 0.1),
             (small_tensor(214, 2, 3), 2.0),
@@ -1232,7 +1286,7 @@ def check_soft1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="soft_pick",
-        description="weights the rows by softmax of the scores over the temperature",
+        description="weights the rows by softmax of the scores divided by the temperature",
         inputs=(
             (torch.tensor([0.5, 2.0, 1.0]), small_tensor(215, 3, 2), 1.0),
             (small_tensor(216, 4), small_tensor(217, 4, 3), 0.25),
@@ -1262,10 +1316,10 @@ SOFT1 = Exercise(
     solution=SOFT1_SOLUTION,
     hints={
         "soft_step": "Divide x by the temperature, then take torch.sigmoid.",
-        "soft_pick": "torch.softmax of the scores over the temperature with dim=0 gives one weight per row. "
-        "Then @ values sums the rows with those weights.",
-        "fit_scores": "The loss is the sum, with .sum(), of the squared differences between soft_pick's result and "
-        "target. The step takes lr * scores.grad away from scores with -=, as relu2's loop does.",
+        "soft_pick": "torch.softmax of the scores divided by the temperature, with dim=0, gives one weight per row. "
+        "Then @ values adds up the rows, each multiplied by its weight.",
+        "fit_scores": "The loss is the .sum() of the squared differences between soft_pick's result and target. The "
+        "step subtracts lr * scores.grad from scores with -=, as the loop in relu2 does.",
     },
     introduces=(),
     check=check_soft1,
@@ -1278,27 +1332,30 @@ SOFT1 = Exercise(
 
 SOFT2_LESSON = prose(
     """
-    A Python dict finds the key equal to the query and gives back its value.
-    "Equal" is a hard step, so no gradient could teach a model what to look
-    up. soft1's soft pick fixes that, once a score says how well the query
-    matches each key.
+    A Python dict finds the key that equals the query, and returns that key's
+    value. Checking whether two things are equal is a hard step, so no
+    gradient could teach a model what to look up. The soft pick from soft1
+    fixes that. It needs a score for how well the query matches each key.
 
-    With the keys and the query as rows of numbers, the dot product is that
-    score. It is large when both have big entries in the same places, near 0
-    when they share nothing, and negative when their signs disagree.
+    When the keys and the query are rows of numbers, their dot product can be
+    that score. The dot product is large when both rows have big entries in
+    the same places. It is near 0 when they have no big entries in common,
+    and negative when their signs disagree.
 
     ```python
     keys = torch.tensor([[1.0, 0.0], [0.0, 1.0], [1.0, 1.0]])
     keys @ torch.tensor([3.0, -1.0])    # tensor([ 3., -1.,  2.])
     ```
 
-    A **soft lookup** turns those scores into weights with softmax and returns
-    the weighted sum of the values. With values 10, 20 and 30 for the three
-    keys, the weights are 0.721, 0.013 and 0.265, and the lookup gives 15.4. A
-    hard lookup would give 10, the value of the best match.
+    A **soft lookup** turns those scores into weights with softmax, and
+    returns the weighted sum of the values. Say the three keys above have the
+    values 10, 20 and 30. Then the weights are 0.721, 0.013 and 0.265, and
+    the lookup gives 15.4. A hard lookup would give 10, the value of the best
+    matching key.
 
-    A query with bigger entries spreads the scores further apart, which
-    sharpens the softmax the way a lower temperature does.
+    A query with bigger entries spreads the scores further apart. That puts
+    more of the softmax weight on the best match, the same effect a lower
+    temperature has.
 
     | Query | Weights | Soft lookup |
     |---|---|---|
@@ -1306,13 +1363,15 @@ SOFT2_LESSON = prose(
     | `[6, -2]` | 0.881, 0.000, 0.119 | 12.4 |
     | `[12, -4]` | 0.982, 0.000, 0.018 | 10.4 |
 
-    So a model sets how sharp its lookups are through the size of its numbers,
-    and learns that like anything else.
+    So a model controls how sharp its lookups are through the size of the
+    numbers in its queries. It learns that size through gradients, like any
+    other part of the model.
 
-    Many queries go at once as the rows of a matrix. `queries @ keys.T` gives
-    one row of scores per query, a softmax over each row gives the weights,
-    and `@ values` sums the values for every query together. Section 7 builds
-    its main block on exactly this.
+    To do many lookups at once, put the queries in the rows of a matrix.
+    `queries @ keys.T` gives one row of scores per query. A softmax over each
+    row gives the weights. Then `@ values` computes the weighted sum of the
+    values for every query at once. Section 7 builds its main block on
+    exactly this calculation.
     """,
 )
 
@@ -1327,8 +1386,9 @@ SOFT2_SOURCE = source_file(
     scores = keys @ torch.tensor([3.0, -1.0])    # tensor([ 3., -1.,  2.])
 
 
-    # TODO: Return the value of the key that matches query best, by the dot
-    #   product. query has shape (d,), keys (n, d) and values (n, v).
+    # TODO: Return the row of values for the key that matches query best, where
+    #   the match score is the dot product of query with each key. query has
+    #   shape (d,), keys has shape (n, d) and values has shape (n, v).
     def hard_lookup(
         query: Tensor,
         keys: Tensor,
@@ -1337,8 +1397,11 @@ SOFT2_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the soft lookup of query, the values weighted by softmax of
-    #   how well query matches each key. The result has shape (v,).
+    # TODO: Return the soft lookup of query. Weight the rows of values by the
+    #   softmax of the dot products of query with each key, and add them up.
+    #   The result has shape (v,).
+    #   Example: soft_lookup(torch.tensor([3.0, -1.0]), keys,
+    #   torch.tensor([[10.0], [20.0], [30.0]])) returns tensor([15.4399]).
     def soft_lookup(
         query: Tensor,
         keys: Tensor,
@@ -1347,8 +1410,9 @@ SOFT2_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the soft lookup of every row of queries, of shape (m, d), as
-    #   one row each, in one go without a loop. The result has shape (m, v).
+    # TODO: queries has shape (m, d), with one query per row. Return the soft
+    #   lookup of every query at once, without a loop. Row i of the result is
+    #   the soft lookup of row i of queries, so the result has shape (m, v).
     def soft_lookups(
         queries: Tensor,
         keys: Tensor,
@@ -1440,7 +1504,8 @@ SOFT2 = Exercise(
     solution=SOFT2_SOLUTION,
     hints={
         "hard_lookup": "keys @ query gives one score per key. Index values with the argmax of the scores.",
-        "soft_lookup": "torch.softmax of keys @ query with dim=0 gives the weights, then @ values sums the values.",
+        "soft_lookup": "torch.softmax of keys @ query with dim=0 gives the weights, then @ values gives the weighted "
+        "sum of the values.",
         "soft_lookups": "queries @ keys.T has one row of scores per query. Take the softmax over each row with "
         "dim=1, then @ values.",
     },

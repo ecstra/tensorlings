@@ -34,13 +34,14 @@ EXOPLANETS = Chapter(
         """
         # Project: exoplanet hunter
 
-        Section 2's project. NASA's Kepler telescope watched stars for four
-        years, looking for the small dip in light when a planet passes in front
-        of its star. Many of the dips it flagged came from something else. You
-        train softmax regression to tell a planet candidate from a false
-        positive with 18 measurements of each signal, choose its weight decay on
-        a validation set, and measure it once on the test set. Download the data
-        once from the project folder.
+        This is Section 2's project. NASA's Kepler telescope watched stars for
+        four years. It looked for the small dip in a star's light that happens
+        when a planet passes in front of the star. Many of the dips it flagged
+        were caused by something else. You train softmax regression to tell a
+        planet candidate from a false positive, using 18 measurements of each
+        signal. You choose its weight decay strength on a validation set, and
+        measure the final model once on the test set. Download the data once,
+        by running this from the project folder.
 
         ```bash
         .venv/bin/python run.py data kepler
@@ -132,11 +133,15 @@ def loss_of(
 PLANETS1_LESSON = prose(
     """
     This is Section 2's project. NASA's Kepler telescope watched stars for
-    four years, looking for the dip in light when a planet crosses its star.
-    Its DR25 table holds 8,054 such signals, each vetted by a program, the
-    Robovetter. About half came out as planet candidates, and half as false
-    positives. Download the table once, about 1.2 MB, from the project folder
-    with `.venv/bin/python run.py data kepler`.
+    four years. It looked for the dip in a star's light that happens when a
+    planet passes in front of the star. Its DR25 table holds 8,054 of these
+    dips, called signals. A program called the Robovetter vetted each signal,
+    which means it checked whether the signal looks like a real planet.
+
+    About half the signals were labeled planet candidates. The other half
+    were labeled false positives, which are dips caused by something other
+    than a planet. Download the table once, about 1.2 MB, by running
+    `.venv/bin/python run.py data kepler` from the project folder.
 
     ```python
     from tensorlings.data import KEPLER_COLUMNS, load_kepler
@@ -147,31 +152,35 @@ PLANETS1_LESSON = prose(
     KEPLER_COLUMNS[:3]   # ('koi_period', 'koi_duration', 'koi_depth')
     ```
 
-    Each row measures one signal. Some describe the dip, such as its period
-    in days and its depth in parts per million. Some describe the star. Two
-    are tests a vetter runs, whether odd and even dips differ in depth, and how
-    far the dip's light sits from the star's position.
+    Each row holds the 18 measurements of one signal. Some columns describe
+    the dip, such as its period in days and its depth in parts per million.
+    Some describe the star. Two are the results of tests that a vetter runs.
+    One test checks whether odd and even dips differ in depth. The other
+    measures how far the dimming light is from the star's position.
 
-    The archive holds the vetting's own answer too. Four yes or no flags,
-    `koi_fpflag_nt`, `koi_fpflag_ss`, `koi_fpflag_co` and `koi_fpflag_ec`, give
-    the Robovetter's reasons for calling a signal a false positive.
-    `koi_score` is the fraction of its runs that called the signal a
-    candidate. A model given them would read the answer off them instead of
-    learning from the measurements. Such a column is called a leak, and these
-    are left out.
+    The archive also holds columns that contain the Robovetter's own answer.
+    Four yes or no flags, `koi_fpflag_nt`, `koi_fpflag_ss`, `koi_fpflag_co`
+    and `koi_fpflag_ec`, give its reasons for calling a signal a false
+    positive. `koi_score` is the fraction of its runs that called the signal
+    a candidate. A model given these columns would copy the answer from them
+    instead of learning from the measurements. A column that gives away the
+    answer like this is called a leak, so these columns are left out.
 
-    The table leaves a measurement empty when it has none, and those become
-    `nan`, not a number. 225 rows hold one, and the model can't use them.
+    When the table has no value for a measurement, it leaves that entry empty.
+    Empty entries become `nan`, which stands for not a number. 225 rows have
+    at least one `nan`, and the model cannot use those rows.
 
-    There is no test set given, so the split makes all three. The last 1,000
-    shuffled rows go to test, the 1,000 before them to validation.
+    The data does not come with a test set, so you make all three sets
+    yourself. After shuffling, the last 1,000 rows go to the test set, and the
+    1,000 rows before them go to the validation set.
 
-    The measurements sit on wildly different scales. Depth runs past 900,000.
-    The impact parameter, how far from the star's centre the planet crosses
-    in star radii, stays under 1.2 for nine signals in ten. So every column gets
-    standardized, as descent4 did, with the training set's mean and spread.
-    Validation and test use the training numbers too, since a model in use
-    never sees its new data ahead of time.
+    The measurements are on very different scales. Depth goes above 900,000.
+    The impact parameter is how far from the star's centre the planet passes,
+    measured in star radii. It stays under 1.2 for nine signals in ten. So
+    every column gets standardized, as in descent4, with the training set's
+    mean and standard deviation. The validation and test sets use the
+    training set's numbers too. That matches real use, where a model never
+    sees its new data ahead of time.
     """,
 )
 
@@ -193,15 +202,16 @@ PLANETS1_SOURCE = source_file(
 
     features, labels = load_kepler()                # shapes (8054, 18) and (8054,)
 
-    # .isnan() marks every nan, and .any(dim=1) asks whether each row has one.
+    # .isnan() gives True for every nan, and .any(dim=1) gives True for each row
+    # that has at least one True.
     gaps = torch.tensor([[1.0, math.nan], [2.0, 3.0]]).isnan().any(dim=1)    # tensor([ True, False])
 
     # ~ turns every True into False and every False into True.
     kept = ~gaps                                    # tensor([False,  True])
 
 
-    # TODO: Return the rows of features and their labels, keeping only the rows
-    #   that hold no nan.
+    # TODO: Return the rows of features that contain no nan, and the labels of
+    #   those same rows.
     def complete_rows(
         features: Tensor,
         labels: Tensor,
@@ -209,13 +219,15 @@ PLANETS1_SOURCE = source_file(
         ...
 
 
-    # A negative slice counts from the end.
+    # Negative numbers in a slice count from the end.
     middle = torch.arange(6)[-4:-2]                 # tensor([2, 3])
 
 
-    # TODO: Finish the middle line, so this shuffles the rows with generator, the
-    #   last held shuffled positions go to test, the held positions before them
-    #   to validation, and the rest to training.
+    # TODO: Finish the middle line by slicing the shuffled order. The last held
+    #   positions go to test, the held positions before them go to validation,
+    #   and the rest go to training.
+    #   Example: for x with 10 rows and held = 2, the training set gets 6 rows,
+    #   and the validation and test sets get 2 rows each.
     def three_way_split(
         x: Tensor,
         y: Tensor,
@@ -228,11 +240,13 @@ PLANETS1_SOURCE = source_file(
         return x[train], y[train], x[validation], y[validation], x[test], y[test]
 
 
+    # .std(dim=0) gives the standard deviation of each column.
     spread = torch.tensor([[1.0], [3.0]]).std(dim=0)    # tensor([1.4142])
 
 
-    # TODO: Return x standardized with the mean and spread of each column of
-    #   train_x, so every set gets the training set's scale.
+    # TODO: Return x standardized with the mean and standard deviation of each
+    #   column of train_x. That way every set is scaled with the training set's
+    #   numbers.
     def standardize(
         train_x: Tensor,
         x: Tensor,
@@ -330,7 +344,7 @@ def expect_complete(
     )
 
     if actual[1].dtype != expected[1].dtype:
-        raise Mismatch(f"The labels from {call} are {actual[1].dtype}, but they should stay {expected[1].dtype}, whole numbers.")
+        raise Mismatch(f"The labels from {call} are {actual[1].dtype}, but they should stay {expected[1].dtype}, a type for whole numbers.")
 
 
 def reference_three_way(
@@ -381,7 +395,7 @@ def check_planets1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="standardize",
-        description="uses the training rows' mean and spread",
+        description="uses the mean and standard deviation of the training rows",
         inputs=(
             (small_tensor(144, 6, 3), small_tensor(145, 4, 3)),
             (small_tensor(146, 5, 2) * 100, small_tensor(147, 3, 2)),
@@ -399,12 +413,12 @@ PLANETS1 = Exercise(
     source=PLANETS1_SOURCE,
     solution=PLANETS1_SOLUTION,
     hints={
-        "complete_rows": "Mark the rows that hold a nan as the line that sets gaps does, and flip the marks with ~. "
-        "Then use them to pick the rows of both features and labels.",
-        "three_way_split": "Slice order three times. Training ends 2 * held positions from the end, validation is the "
-        "held positions after that, and test is order[-held:].",
-        "standardize": "Take the mean and the .std of train_x down its rows, dim=0. Subtract the mean from x and "
-        "divide by the spread.",
+        "complete_rows": "Find the rows that contain a nan the way the line that sets gaps does, and flip the result "
+        "with ~. Then index both features and labels with that tensor of True and False values.",
+        "three_way_split": "Slice order three times. Training ends 2 * held positions before the end, validation is "
+        "the held positions after that, and test is order[-held:].",
+        "standardize": "Compute the mean and the .std of each column of train_x with dim=0. Subtract the mean from x "
+        "and divide by the standard deviation.",
     },
     introduces=(),
     check=check_planets1,
@@ -418,35 +432,42 @@ PLANETS1 = Exercise(
 
 PLANETS2_LESSON = prose(
     """
-    Training is descent2's loop with the pieces of Section 2, softmax
-    regression for the model, cross entropy for the loss and minibatches for
-    the steps. The weights have shape `(18, 2)`, one column per class.
+    Training uses the gradient descent loop from descent2, with the pieces
+    from the rest of Section 2. The model is softmax regression, the loss is
+    cross entropy, and each step uses one minibatch. The weights `W` have
+    shape `(18, 2)`, with one column per class.
 
-    The weights start at zero, so both classes get the same score and the
-    first loss is `log(2)`, about 0.693. Karpathy's recipe for training lists
-    this check among its first.
+    The weights start at zero, so both classes get the same score and each
+    gets probability 0.5. So the first loss is `log(2)`, about 0.693.
+    Checking the first loss like this is one of the first checks in
+    Karpathy's recipe for training.
 
     Train with minibatches of 64 and a learning rate of 0.5. Ten epochs over
-    the 5,829 training signals take under half a second, and reach 88.6% on
-    validation. Over five shuffles of the table the model lands between 86.8%
-    and 89.0%, where guessing gets 50%.
+    the 5,829 training signals take under half a second, and reach 88.6%
+    accuracy on the validation set. Across five different shuffles of the
+    table, the validation accuracy is between 86.8% and 89.0%. Random
+    guessing would get 50%.
 
-    Since every column was standardized, the weights compare. The push of a
-    feature toward false positive is `W[:, 1] - W[:, 0]`, and the largest
-    pushes say what the model looks at.
+    Every column was standardized, so the features are on the same scale and
+    their weights can be compared. Row `i` of `W` holds the weights of
+    feature `i`, one for each class. So `W[:, 1] - W[:, 0]` says how strongly
+    each feature pushes the prediction toward false positive. Call this the
+    feature's push. The features with the largest pushes show what the model
+    relies on most.
 
     | Feature | Push |
     |---|---|
     | `koi_depth`, the dip's depth | 2.62 |
     | `koi_ror`, the planet's radius over the star's | 2.24 |
-    | `koi_dikco_msky`, how far the dip's light sits from the star | 2.22 |
+    | `koi_dikco_msky`, how far the dimming light is from the star | 2.22 |
     | `koi_max_sngle_ev`, the strongest single dip | 1.36 |
     | `koi_prad`, the planet's radius | 1.02 |
 
-    Each pushes toward false positive as it grows, and a vetter reads them the
-    same way. A planet blocks at most a few percent of its star's light. A far
-    deeper dip, with a radius ratio near 1, comes from a second star. A dip
-    whose light sits away from the star comes from a neighbour.
+    For each of these features, a larger value pushes the prediction toward
+    false positive. A human vetter reads them the same way. A planet blocks
+    at most a few percent of its star's light. A much deeper dip, with a
+    radius ratio near 1, comes from a second star. A dip whose dimming light
+    is away from the star's position comes from a neighbouring star.
 
     Measuring accuracy needs no gradients, so it runs inside
     `with torch.no_grad():`.
@@ -462,9 +483,9 @@ PLANETS2_SOURCE = source_file(
     from torch import Tensor
 
 
-    # TODO: Finish the line that sets loss, the cross entropy of softmax
-    #   regression on the minibatch's rows, so this trains W and b and returns
-    #   them.
+    # TODO: Finish the line that sets loss to the cross entropy of softmax
+    #   regression on the minibatch, which is the rows of x and y at positions.
+    #   Then this trains W and b and returns them.
     def train(
         x: Tensor,
         y: Tensor,
@@ -494,8 +515,9 @@ PLANETS2_SOURCE = source_file(
         return W.detach(), b.detach()
 
 
-    # TODO: Return the fraction of rows of x whose predicted class equals its
-    #   label in y, as a plain number.
+    # TODO: Return the accuracy, the fraction of rows of x whose predicted class
+    #   equals the label in y, as a float. The predicted class of a row is the
+    #   class with the highest score.
     def accuracy(
         x: Tensor,
         y: Tensor,
@@ -505,14 +527,17 @@ PLANETS2_SOURCE = source_file(
         ...
 
 
-    # .argsort(descending=True) gives the positions from the largest entry down.
+    # .argsort(descending=True) gives the positions of the entries, ordered from
+    # the largest entry to the smallest.
     order = torch.tensor([0.5, -2.0, 1.0]).abs().argsort(descending=True)    # tensor([1, 2, 0])
 
 
-    # TODO: Return the names from columns of the count features with the
-    #   largest push, largest first. A feature's push is the size of
-    #   W[:, 1] - W[:, 0], its weight toward false positive less its weight
-    #   toward planet candidate.
+    # TODO: Return the names of the count features with the largest push,
+    #   largest first. columns holds the name of each feature. A feature's push
+    #   is the absolute value of W[:, 1] - W[:, 0], its weight for false
+    #   positive minus its weight for planet candidate.
+    #   Example: for W = torch.tensor([[0.5, -1.0], [2.0, 2.5], [-1.0, 3.0]]),
+    #   strongest(W, ("a", "b", "c"), 2) returns ['c', 'a'].
     def strongest(
         W: Tensor,
         columns: tuple[str, ...],
@@ -652,7 +677,7 @@ def check_planets2(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="train",
-        description="steps on the cross entropy of each minibatch's rows",
+        description="takes a step on the cross entropy of each minibatch's rows",
         inputs=(
             (
                 Described(small_tensor(177, 10, 4) / 3, "x with 10 rows of 4 features"),
@@ -669,7 +694,7 @@ def check_planets2(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="accuracy",
-        description="gives the fraction of rows predicted right",
+        description="gives the fraction of rows predicted correctly",
         inputs=(
             (small_tensor(171, 6, 4), torch.tensor([0, 1, 1, 0, 0, 1]), small_tensor(172, 4, 2), small_tensor(173, 2)),
             (small_tensor(174, 7, 3), torch.tensor([1, 1, 0, 0, 1, 0, 1]), small_tensor(175, 3, 2), small_tensor(176, 2)),
@@ -700,10 +725,10 @@ PLANETS2 = Exercise(
     hints={
         "train": "The scores of the minibatch are x[positions] @ W + b, and its labels are y[positions]. Pass both "
         "to F.cross_entropy.",
-        "accuracy": "Predict with argmax of the scores along dim=1, compare with y, then the mean of the matches as "
-        "floats, as softmax3 does. .item() makes it a plain number.",
-        "strongest": "Take the size of the difference of W's two columns with .abs(), then the first count positions "
-        "of its argsort from the largest down. Look each position up in columns.",
+        "accuracy": "The predicted classes are the argmax of the scores along dim=1. Compare them with y, turn the "
+        "matches into floats and take their mean, as softmax3 does. Then .item() makes it a plain number.",
+        "strongest": "Take the absolute value of the difference of W's two columns with .abs(). Then take the first "
+        "count positions of its argsort in descending order, and look up each position in columns.",
     },
     introduces=(),
     check=check_planets2,
@@ -717,13 +742,13 @@ PLANETS2 = Exercise(
 
 PLANETS3_LESSON = prose(
     """
-    Early in a survey only a few signals have been vetted, say 100. Give the
-    model the product of every pair of columns too, as overfitting1 added
-    powers. That makes 189 features, more than the 100 examples, and the
-    model overfits.
+    Early in a survey, only a few signals have been vetted, say 100. Suppose
+    you also give the model the product of every pair of columns as extra
+    features, the way overfitting1 added powers. That makes 189 features,
+    more than the 100 examples, so the model overfits.
 
-    Here it is on 100 signals with each strength of weight decay, averaged over
-    five shuffles of the table.
+    Here are the results of training on 100 signals with each weight decay
+    strength, averaged over five shuffles of the table.
 
     | Strength | Training accuracy | Validation accuracy | Validation loss |
     |---|---|---|---|
@@ -733,21 +758,26 @@ PLANETS3_LESSON = prose(
     | 0.1 | 0.938 | 0.860 | 0.46 |
     | 0.3 | 0.912 | 0.853 | 0.44 |
 
-    With no decay the model gets nearly every training signal right. It also
-    grows sure of its wrong answers on new ones, so the validation loss blows
-    up. Decay keeps the weights small. From 0.03 on, the validation loss
-    falls from 3.50 to about 0.5, and accuracy rises from 83.8% to 86.2%.
+    With no decay, the model gets nearly every training signal right. But on
+    new signals it becomes very confident in its wrong answers, which makes
+    the validation loss very large. Decay keeps the weights small. From
+    strength 0.03 up, the validation loss falls from 3.50 to about 0.5, and
+    the validation accuracy rises from 83.8% to 86.2%.
 
-    The loss shows overfitting best here, so `pick_strength` chooses the
-    strength with the lowest validation loss. Then the test set gets used,
-    once. Over the five shuffles, the picked strength scores 86.3% on test,
-    where no decay scores 84.2%. Its test loss is lower on all five.
+    Here the loss shows overfitting better than the accuracy does. So
+    `pick_strength` chooses the strength with the lowest validation loss.
+    Then the test set is used, once. Averaged over the five shuffles, the
+    picked strength gets 86.3% accuracy on the test set, while no decay gets
+    84.2%. The picked strength also has the lower test loss on all five
+    shuffles.
 
-    A **confusion matrix** counts, for every true class and every predicted
-    class, how many examples had that pair. The diagonal holds the right
-    answers. On the first shuffle the picked strength is 0.3. Of its 501 test
-    false positives, 137 pass as planets, while only 27 of 499 planet
-    candidates get thrown out.
+    A **confusion matrix** counts how many examples have each pair of true
+    class and predicted class. The entry at row `i` and column `j` is the
+    number of examples of class `i` that were predicted as class `j`. So the
+    diagonal holds the correct answers. On the first shuffle, the picked
+    strength is 0.3. Of the 501 false positives in the test set, it predicts
+    137 as planet candidates. Only 27 of the 499 planet candidates are wrongly
+    predicted as false positives.
 
     ```python
     counts = torch.zeros(2, 2, dtype=torch.long)
@@ -764,18 +794,23 @@ PLANETS3_SOURCE = source_file(
     import torch.nn.functional as F
     from torch import Tensor
 
-    # Every pair of positions of 3 columns, a column with itself included.
+    # Every pair of positions among 3 columns, including each column paired with
+    # itself. Row 0 holds the first position of each pair, and row 1 the second.
     pairs = torch.triu_indices(3, 3)    # tensor([[0, 0, 0, 1, 1, 2], [0, 1, 2, 1, 2, 2]])
 
 
-    # TODO: Return x with the product of every pair of its columns added after
-    #   them, in the order torch.triu_indices gives the pairs.
+    # TODO: Return x with extra columns added after its own columns. The extra
+    #   columns are the products of every pair of columns of x, in the order
+    #   torch.triu_indices gives the pairs.
+    #   Example: products(torch.tensor([[1.0, 2.0]])) returns
+    #   tensor([[1., 2., 1., 2., 4.]]).
     def products(x: Tensor) -> Tensor:
         ...
 
 
-    # Trains softmax regression with weight decay as planets2 does, for 300 epochs
-    # of minibatches of 20, with the same seed every time so runs compare fairly.
+    # Trains softmax regression with weight decay like planets2, but for 300
+    # epochs of minibatches of 20. It uses the same seed every time, so runs with
+    # different strengths can be compared fairly.
     def train_with_decay(
         x: Tensor,
         y: Tensor,
@@ -812,8 +847,9 @@ PLANETS3_SOURCE = source_file(
         return ((x @ W + b).argmax(dim=1) == y).float().mean().item()
 
 
-    # TODO: Return the cross entropy of W and b on the rows of x and their labels
-    #   y, as a plain number, without recording for autograd.
+    # TODO: Return the cross entropy of the model with W and b on the rows of x
+    #   against the labels y, as a float. Compute it so that autograd does not
+    #   record it.
     def validation_loss(
         x: Tensor,
         y: Tensor,
@@ -823,9 +859,9 @@ PLANETS3_SOURCE = source_file(
         ...
 
 
-    # TODO: Finish the line in the loop, so this returns the strength from
-    #   strengths whose model, trained on the training set, has the lowest loss
-    #   on the validation set.
+    # TODO: Finish the line in the loop. For each strength, the loop trains a
+    #   model on the training set. Append that model's loss on the validation
+    #   set, so this returns the strength with the lowest validation loss.
     def pick_strength(
         train_x: Tensor,
         train_y: Tensor,
@@ -842,9 +878,9 @@ PLANETS3_SOURCE = source_file(
         return strengths[losses.index(min(losses))]
 
 
-    # TODO: Finish the first and last lines, so this trains with the strength
-    #   pick_strength chooses and returns its accuracy and its loss on the test
-    #   set, in that order.
+    # TODO: Finish the first and last lines. Set strength to the one that
+    #   pick_strength chooses. Return the accuracy and the loss of the trained
+    #   model on the test set, in that order.
     def test_scores(
         train_x: Tensor,
         train_y: Tensor,
@@ -860,9 +896,10 @@ PLANETS3_SOURCE = source_file(
         return ...
 
 
-    # TODO: Finish the line in the loop, so counts holds, for every true class
-    #   and predicted class, how many examples had that pair. The row is the
-    #   true class and the column the predicted one.
+    # TODO: Finish the line in the loop, so counts[i, j] is the number of
+    #   examples whose true class is i and whose predicted class is j.
+    #   Example: confusion_matrix(torch.tensor([0, 1, 1]), torch.tensor([0, 1,
+    #   0]), 2) returns tensor([[1, 1], [0, 1]]).
     def confusion_matrix(
         predicted: Tensor,
         labels: Tensor,
@@ -1069,7 +1106,7 @@ def check_validation_loss_recording(found: object) -> None:
     )
 
     if any(stand_in.recording) or (isinstance(loss, torch.Tensor) and loss.requires_grad):
-        raise Mismatch(f"{call} recorded for autograd. Take the loss inside torch.no_grad().")
+        raise Mismatch(f"{call} was recorded by autograd. Compute the loss inside torch.no_grad().")
 
 
 def check_pick_strength(found: object) -> None:
@@ -1177,12 +1214,13 @@ PLANETS3 = Exercise(
     source=PLANETS3_SOURCE,
     solution=PLANETS3_SOLUTION,
     hints={
-        "products": "torch.triu_indices of the number of columns twice gives two rows of positions. Pick the "
-        "columns at each row with x[:, ...], multiply them, and join them after x with torch.cat along dim=1.",
+        "products": "Call torch.triu_indices with the number of columns twice, which gives two rows of positions. "
+        "Pick the columns at each row of positions with x[:, ...], multiply them, and join the result after x with "
+        "torch.cat along dim=1.",
         "validation_loss": "Inside torch.no_grad(), pass the scores x @ W + b and y to F.cross_entropy, then .item().",
         "pick_strength": "Append the validation loss of W and b on the validation set.",
-        "test_scores": "The strength comes from pick_strength. The last line gives accuracy and validation_loss, "
-        "both on test_x and test_y.",
+        "test_scores": "Get the strength from pick_strength. The last line returns accuracy and validation_loss, "
+        "both computed on test_x and test_y.",
         "confusion_matrix": "Add 1 to the entry at row true_class and column guess.",
     },
     introduces=(),
