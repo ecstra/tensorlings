@@ -35,11 +35,11 @@ EQUIVARIANCE = Chapter(
         # Equivariance
 
         A symmetry of a task is a change to the input that a model should
-        ignore, or follow. This chapter tests models for symmetries, builds a
-        layer for points in space that respects rotations by construction,
-        measures when building a symmetry in beats teaching it with
-        augmentation, and ends with the recipe behind convolutions, Deep Sets
-        and graph networks.
+        either ignore or follow. This chapter tests models for symmetries. It
+        builds a layer for points in space that respects rotations by
+        construction. It measures when building a symmetry into the model
+        works better than teaching it with augmentation. It ends with the
+        recipe behind convolutions, Deep Sets and graph networks.
 
         ## Further reading
 
@@ -103,23 +103,28 @@ def reference_invariance_gap(
 
 EQUIVARIANCE1_LESSON = prose(
     """
-    A symmetry of a task is a change to the input that shouldn't change the
-    answer, or should change it the same way. Call the change g, like
-    shifting a signal, shuffling a set or rotating some points.
+    A symmetry of a task is a change to the input that should leave the
+    answer unchanged, or change the answer in the same way. Call the change
+    g. Examples are shifting a signal, shuffling a set or rotating
+    some points.
 
-    A function f is **invariant** to g when f(g x) = f(x). It is
-    **equivariant** when f(g x) = g f(x), so changing the input changes the
-    output the same way.
+    A function f is **invariant** to g when `f(g(x)) == f(x)`, so changing
+    the input does not change the output. It is **equivariant** to g when
+    `f(g(x)) == g(f(x))`, so changing the input changes the output in the
+    same way.
 
     ```python
     torch.roll(torch.tensor([1.0, 2.0, 3.0, 4.0]), 1)    # tensor([4., 1., 2., 3.])
     ```
 
-    `torch.roll` moves every entry along and wraps the last ones round to
-    the start, a shift with nothing lost.
+    `torch.roll` shifts every entry along by the given number of places. The
+    entries that fall off the end wrap around to the start, so no value is
+    lost.
 
-    Both properties are tested the same way. Run both sides and compare. When
-    the property holds, floats leave a gap the size of rounding, around 1e-7.
+    You test both properties the same way. Compute both sides of the
+    equation and take the largest absolute difference between them, called
+    the gap here. When the property holds, the gap is only rounding error,
+    around 1e-7.
 
     | f | g | Gap |
     |---|---|---|
@@ -132,19 +137,21 @@ EQUIVARIANCE1_LESSON = prose(
     | all distances between points | rotate the points | 2.4e-7, invariant |
     | a 2 by 2 Linear on the points | rotate the points | 1.21 |
 
-    Zero padding breaks shift equivariance at the edges. A shifted signal
-    pushes values off one end and zeros in at the other, so a convolution is
-    equivariant only away from its borders. Circular padding wraps round,
-    which makes a shift an exact symmetry of it.
+    Zero padding breaks shift equivariance at the edges. The convolution
+    treats everything beyond the two ends of the signal as zeros, but a shift
+    with `torch.roll` wraps values around. So the convolution is equivariant
+    only away from the borders. Circular padding wraps around too, which
+    makes a shift an exact symmetry of the convolution.
 
-    Turned by an angle t around the origin, a point (a, b) lands here.
+    Rotating a point (a, b) by an angle t around the origin moves it to this
+    point.
 
     ```text
     (a cos t - b sin t,  a sin t + b cos t)
     ```
 
-    As a matrix that is `R = [[cos t, -sin t], [sin t, cos t]]`, and rows of
-    points turn as `points @ R.T`.
+    As a matrix, this rotation is `R = [[cos t, -sin t], [sin t, cos t]]`.
+    To rotate points stored as the rows of a tensor, compute `points @ R.T`.
     """,
 )
 
@@ -159,12 +166,14 @@ EQUIVARIANCE1_SOURCE = source_file(
     from torch import Tensor
 
     rolled = torch.roll(torch.tensor([1.0, 2.0, 3.0, 4.0]), 1)    # tensor([4., 1., 2., 3.])
-    quarter = torch.tensor([[0.0, -1.0], [1.0, 0.0]])             # R for a quarter turn
+    quarter = torch.tensor([[0.0, -1.0], [1.0, 0.0]])             # R for a quarter turn, t = pi / 2
     turned = torch.tensor([[1.0, 0.0]]) @ quarter.T               # tensor([[0., 1.]])
 
 
     # TODO: Return x shifted steps places along its last dimension, with the
-    #   entries that fall off the end wrapped round to the start.
+    #   entries that fall off the end wrapped around to the start.
+    #   Example: shift(torch.tensor([1.0, 2.0, 3.0, 4.0]), 1) returns
+    #   tensor([4., 1., 2., 3.]).
     def shift(
         x: Tensor,
         steps: int,
@@ -172,8 +181,10 @@ EQUIVARIANCE1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return points, of shape (..., 2), each turned angle radians around
-    #   the origin, counterclockwise.
+    # TODO: Return points, of shape (..., 2), with each point rotated
+    #   counterclockwise by angle radians around the origin.
+    #   Example: rotate(torch.tensor([[1.0, 0.0]]), math.pi / 2) returns about
+    #   tensor([[0., 1.]]).
     def rotate(
         points: Tensor,
         angle: float,
@@ -181,8 +192,8 @@ EQUIVARIANCE1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the largest gap between f(g(x)) and g(f(x)), entry by entry,
-    #   as a plain number.
+    # TODO: Return the largest absolute difference between f(g(x)) and
+    #   g(f(x)), over all entries, as a Python float.
     def equivariance_gap(
         f: Callable[[Tensor], Tensor],
         g: Callable[[Tensor], Tensor],
@@ -191,8 +202,8 @@ EQUIVARIANCE1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the largest gap between f(g(x)) and f(x), entry by entry, as
-    #   a plain number.
+    # TODO: Return the largest absolute difference between f(g(x)) and f(x),
+    #   over all entries, as a Python float.
     def invariance_gap(
         f: Callable[[Tensor], Tensor],
         g: Callable[[Tensor], Tensor],
@@ -285,7 +296,7 @@ def check_equivariance1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="shift",
-        description="moves every entry along and wraps the end round",
+        description="shifts every entry and wraps the end around to the start",
         inputs=(
             (torch.tensor([1.0, 2.0, 3.0, 4.0, 5.0]), 2),
             (small_tensor(743, 2, 6), -1),
@@ -351,7 +362,7 @@ EQUIVARIANCE1 = Exercise(
     source=EQUIVARIANCE1_SOURCE,
     solution=EQUIVARIANCE1_SOLUTION,
     hints={
-        "shift": "torch.roll with dims=-1 rolls the last dimension.",
+        "shift": "torch.roll with dims=-1 shifts along the last dimension.",
         "rotate": "Build R from math.cos and math.sin of angle as the lesson writes it, then multiply points by its "
         "transpose.",
         "equivariance_gap": "Take f(g(x)) minus g(f(x)), then .abs().max().item().",
@@ -479,19 +490,22 @@ def seeded_egnn(
 
 EQUIVARIANCE2_LESSON = prose(
     """
-    A molecule or a cloud of points lives in space. Turned, moved or mirrored,
-    it is the same object. A model of its energy should be invariant to all
-    three. The forces on each atom should turn and mirror with it, and stay
-    the same when it moves.
+    A molecule or a cloud of points lives in space. If you rotate it, move
+    it or mirror it, it is still the same object. So a model of its energy
+    should be invariant to all three changes. The forces on each atom should
+    rotate and mirror along with the molecule, and stay the same when it
+    moves.
 
-    A layer that reads the coordinates as plain numbers is neither. Satorras,
-    Hoogeboom and Welling's E(n) equivariant graph network, EGNN, gets both
-    from one idea. E(n) names every turn, move and mirror in n dimensions.
-    Distances between points never change under any of them. So the layer
-    reads only distances, and moves points only along the differences
-    between them.
+    A layer that treats the coordinates as ordinary input numbers is neither
+    invariant nor equivariant to these changes. The E(n) equivariant graph
+    network, or EGNN, by Satorras, Hoogeboom and Welling, gets both
+    properties from one idea. E(n) is the name for all rotations, moves and
+    mirrorings in n dimensions. None of them changes the distance between
+    two points. So the layer reads the points only through their distances,
+    and it moves points only along the differences between them.
 
-    One layer, for points `x_i` with features `h_i`, as the paper writes it:
+    Here is one layer, for points `x_i` with features `h_i`, as the paper
+    writes it.
 
     ```text
     m_ij  = phi_e(h_i, h_j, |x_i - x_j|^2)
@@ -499,29 +513,29 @@ EQUIVARIANCE2_LESSON = prose(
     h_i'  = phi_h(h_i, sum over j != i of m_ij)
     ```
 
-    `phi_e` and `phi_h` are small MLPs. `phi_x` is one Linear on the message
-    here, where the paper uses a small MLP too. The messages see only
-    distances, so the new features are invariant. Each point moves along
-    differences, which turn with the input, so the new points are
-    equivariant.
+    `phi_e` and `phi_h` are small MLPs. Here `phi_x` is a single Linear on
+    the message, while the paper uses a small MLP for it too. The messages
+    depend on the points only through distances, so the new features are
+    invariant. Each point moves along the differences `x_i - x_j`, which
+    rotate with the input, so the new points are equivariant.
 
-    Here is a random layer of each kind on 8 points in 3D, turned and moved,
-    with the largest gap of each output.
+    The table compares a random layer of each kind on 8 points in 3D. The
+    points were rotated and moved, and the table gives the largest gap in
+    each output.
 
     | Layer | Feature gap | Point gap |
     |---|---|---|
     | EGNN | 7.5e-8 | 2.4e-7 |
     | an MLP on features and coordinates | 0.64 | 0.68 |
 
-    The same EGNN layer, with the points mirrored by flipping one coordinate,
-    gives gaps of exactly 0.
-    With the points shuffled, its outputs shuffle the same way, to within
-    3e-8. The paper points out that it needs none of the spherical harmonics,
-    special functions on a sphere, that earlier equivariant networks were
-    built on.
+    When the points are mirrored by flipping the sign of one coordinate, the
+    same EGNN layer gives gaps of exactly 0. When the points are shuffled,
+    its outputs are shuffled in the same way, to within 3e-8. The paper
+    points out that EGNN needs no spherical harmonics. Those are special
+    functions on a sphere that earlier equivariant networks were built on.
 
     `.expand` repeats a tensor along a dimension of size 1 without copying
-    it, and -1 keeps a size as it is.
+    the data. Passing -1 for a dimension keeps its size unchanged.
     """,
 )
 
@@ -541,22 +555,26 @@ EQUIVARIANCE2_SOURCE = source_file(
     rows = h[:, None, :].expand(2, 2, -1)              # shape (2, 2, 1), rows[i, j] is h[i] for every j
 
 
-    # TODO: Return the squared distance between every pair of points of x, of
-    #   shape (n, dims), as a tensor of shape (n, n).
+    # TODO: x has shape (n, dims), one point per row. Return the squared
+    #   distance between every pair of points, as a tensor of shape (n, n).
+    #   Entry [i, j] is |x_i - x_j|^2, the sum of the squared differences of
+    #   the coordinates of points i and j.
+    #   Example: squared_distances(torch.tensor([[0.0, 0.0], [3.0, 4.0]]))
+    #   returns tensor([[0., 25.], [25., 0.]]).
     def squared_distances(x: Tensor) -> Tensor:
         ...
 
 
     # TODO: Finish forward, one EGNN layer from the lesson, for features h of
     #   shape (n, features) and points x of shape (n, dims).
-    #   - Each pair (i, j) joins h_i, h_j and |x_i - x_j|^2, in that order, and
-    #     self.edge turns it into a message.
-    #   - The pairs with j equal to i get a message of 0.
-    #   - Each point moves by the sum over j of (x_i - x_j) times
-    #     self.coord(message), divided by n - 1.
-    #   - The new features are self.node of h_i joined with the sum of its
-    #     messages.
-    #   Return the new features, then the new points.
+    #   - For each pair (i, j), join h_i, h_j and |x_i - x_j|^2 in that order,
+    #     and pass the result through self.edge to get the message m_ij.
+    #   - Set the message to 0 for the pairs where j equals i.
+    #   - Move each point x_i by the sum over j of
+    #     (x_i - x_j) * self.coord(m_ij), divided by n - 1.
+    #   - The new features of point i are self.node applied to h_i joined with
+    #     the sum over j of m_ij.
+    #   Return a tuple of the new features and the new points.
 ''' + indented(EGNN_INIT) + '''
 
         def forward(
@@ -567,10 +585,13 @@ EQUIVARIANCE2_SOURCE = source_file(
             ...
 
 
-    # TODO: Return the largest gap in layer's features and the largest gap in
-    #   its points, as two plain numbers, when x is turned by rotation and
-    #   moved by offset. The features should not change at all, and the points
-    #   should turn and move with x. Record nothing for autograd.
+    # TODO: Test layer under a rotation and a move. Run layer on h and x, and
+    #   on h and x rotated by rotation and moved by offset, where each point p
+    #   becomes p @ rotation.T + offset. The features should not change, and
+    #   the new points should be the first run's points rotated and moved the
+    #   same way. Return the largest absolute difference in the features and
+    #   the largest in the points, as a tuple of two Python floats. Do not let
+    #   autograd record the computation.
     def e_n_gaps(
         layer: nn.Module,
         h: Tensor,
@@ -694,7 +715,7 @@ def check_equivariance2(checker: Checker) -> None:
     )
     checker.test(
         function="e_n_gaps",
-        description="measures how far features and points stray under a turn and a move",
+        description="measures how much features and points change under a rotation and a move",
         run=check_e_n_gaps,
     )
 
@@ -709,11 +730,11 @@ EQUIVARIANCE2 = Exercise(
     hints={
         "squared_distances": "x[:, None, :] - x[None, :, :] gives every difference, as in the example. Square it and "
         "sum over the last dimension.",
-        "EGNNLayer.forward": "Build the differences and their squared lengths with keepdim=True. torch.cat the expanded "
-        "h rows, the expanded h columns and the squared lengths on dim=-1. Multiply the messages by "
-        "1 - torch.eye(n).unsqueeze(-1).",
-        "e_n_gaps": "Inside torch.no_grad(), run layer on x and on x @ rotation.T + offset. Compare the features "
-        "directly, and the second points with the first turned and moved the same way.",
+        "EGNNLayer.forward": "Build the differences as in the example, and their squared lengths with keepdim=True. "
+        "Join the expanded rows of h, the expanded columns of h and the squared lengths with torch.cat on dim=-1. "
+        "Multiply the messages by 1 - torch.eye(n).unsqueeze(-1), which is 0 where j equals i.",
+        "e_n_gaps": "Inside torch.no_grad(), run layer on x and on x @ rotation.T + offset. Compare the two sets of "
+        "features directly. Compare the second points with the first points rotated and moved the same way.",
     },
     introduces=(),
     check=check_equivariance2,
@@ -819,43 +840,49 @@ def train_shapes(
 
 EQUIVARIANCE3_LESSON = prose(
     """
-    There are two ways to give a model a symmetry. Build it in, so the model
-    can't break it, as equivariance2 did. Or teach it, by training on inputs
-    the symmetry changes, the data augmentation of augment1. Here are both,
-    on telling apart 10 shapes of 6 points that come turned at any angle and
-    with their points in any order.
+    There are two ways to give a model a symmetry. You can build it in, so
+    the model cannot break it, as equivariance2 did. Or you can teach it by
+    training on inputs that the symmetry has changed. That is the data
+    augmentation of augment1. Here are both on one task, telling apart 10
+    shapes of 6 points each. Each shape arrives rotated by a random angle,
+    with its points in a random order.
 
-    - Built in: the sorted distances between the points, which no turn or shuffle can change, read by an MLP.
-    - Taught: an MLP on the raw coordinates, trained on sets turned and shuffled afresh every step.
+    - Built in: an MLP reads the sorted distances between the points, which no rotation or shuffle can change.
+    - Taught: an MLP reads the raw coordinates and trains on sets rotated and shuffled anew at every step.
 
-    Both train for 1,500 steps on noisy copies of the shapes and are tested on
-    2,000 new ones, turned and shuffled.
+    Both train for 1,500 steps on noisy copies of the shapes. They are tested
+    on 2,000 new copies, rotated and shuffled. The table gives the accuracy
+    for each number of training sets.
 
     | Training sets | 20 | 100 | 1,000 |
     |---|---|---|---|
     | Built in | 70.3% | 92.8% | 97.0% |
     | Taught | 39.7% | 46.3% | 47.9% |
 
-    Over 3 seeds the built in model led at every size. Turn and shuffle the
-    test sets once more, and it gives the same answer every time. The taught
-    one keeps only 52% to 72% of its answers. It has every angle times 720
-    orders of the points to learn. Trained 4 times as long it reached 47% to
-    60%, and 62% to 82% with 256 units. The built in model passed 90% at a
-    quarter of those steps.
+    Over 3 seeds, the built in model was ahead at every number of training
+    sets. If you rotate and shuffle the test sets once more, it gives the
+    same answer every time. The taught model keeps only 52% to 72% of its
+    answers. It has to learn every angle combined with all 720 orders of the
+    points. Trained 4 times as long, it reached 47% to 60%, and 62% to 82%
+    with 256 hidden units. The built in model passed 90% in a quarter of
+    those steps.
 
-    Teaching does as well when the symmetry is small. Keep each set's points
-    in their template's order, so only the turn is left to learn. At 1,000
-    sets the taught model then got 100% in every seed, and so did an MLP on
-    the same distances unsorted. The sorted distances stayed at 90% to 97%,
-    since sorting throws away which pair each distance belongs to.
+    Teaching works as well when the symmetry is small. Suppose each set keeps
+    its points in the same order as its template, so only the rotation is
+    left to learn. With 1,000 training sets, the taught model then got 100%
+    in every seed, and so did an MLP on the same distances unsorted. The
+    model on sorted distances stayed at 90% to 97%, because sorting throws
+    away which pair of points each distance belongs to.
 
     Building in more symmetry than the task has loses information for good.
-    Distances can't tell a shape from its mirror image. Here the task is one
-    shape against its mirror, with only the turn to learn. Both distance
-    models got 48% to 50%, a coin flip, and the taught one 100%.
+    Distances cannot tell a shape from its mirror image. In this test the
+    task is to tell one shape from its mirror image, again with only the
+    rotation to learn. Both distance models got 48% to 50%, no better than a
+    coin flip, and the taught model got 100%.
 
-    So build in the symmetries the data has for sure, and no more. Teach the
-    ones that only hold roughly, or that the structure can't express.
+    So build in the symmetries that the data certainly has, and no more.
+    Teach the symmetries that only hold roughly, or that the model's
+    structure cannot express.
     """,
 )
 
@@ -874,9 +901,11 @@ EQUIVARIANCE3_SOURCE = source_file(
     ordered = torch.tensor([3.0, 1.0, 2.0]).sort().values                                   # tensor([1., 2., 3.])
 
 
-    # TODO: Return count rotation matrices, of shape (count, 2, 2), each the R
-    #   of equivariance1 for an angle drawn with
-    #   torch.rand(count, generator=generator) * 2 * math.pi.
+    # TODO: Return count random rotation matrices, as a tensor of shape
+    #   (count, 2, 2). Draw the angles with
+    #   torch.rand(count, generator=generator) * 2 * math.pi. Each matrix is
+    #   the R from equivariance1 for its angle t,
+    #   [[cos t, -sin t], [sin t, cos t]].
     def random_rotations(
         count: int,
         generator: torch.Generator,
@@ -884,10 +913,12 @@ EQUIVARIANCE3_SOURCE = source_file(
         ...
 
 
-    # TODO: Return points, of shape (sets, n, 2), with each set turned by its
-    #   own matrix from random_rotations, drawn first. Then shuffle the points
-    #   of each set in an order drawn with torch.argsort of
-    #   torch.rand(sets, n, generator=generator) along dim=1.
+    # TODO: points has shape (sets, n, 2). Rotate each set by its own matrix
+    #   from random_rotations(sets, generator). Then shuffle the points of each
+    #   set, in orders drawn with torch.argsort of
+    #   torch.rand(sets, n, generator=generator) along dim=1. Draw the
+    #   rotations before the orders, since both use generator. Return the
+    #   rotated and shuffled points.
     def scramble(
         points: Tensor,
         generator: torch.Generator,
@@ -895,16 +926,19 @@ EQUIVARIANCE3_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the distances between every pair of points i < j of each set
-    #   of points, of shape (sets, n, 2), sorted from smallest to largest, as a
-    #   tensor of shape (sets, n * (n - 1) / 2).
+    # TODO: points has shape (sets, n, 2). For each set, compute the distance
+    #   between every pair of points i < j, and sort these distances from
+    #   smallest to largest. Return a tensor of shape (sets, n * (n - 1) / 2).
+    #   Example: sorted_distances(torch.tensor([[[0.0, 0.0], [3.0, 4.0],
+    #   [0.0, 1.0]]])) returns tensor([[1.0000, 4.2426, 5.0000]]).
     def sorted_distances(points: Tensor) -> Tensor:
         ...
 
 
-    # TODO: Return the share of sets whose class predict gives stays the same
-    #   after scramble with generator, as a plain number. predict takes sets of
-    #   points and returns one class per set.
+    # TODO: predict takes sets of points and returns one class per set.
+    #   Scramble points with scramble and generator. Return the fraction of
+    #   sets whose predicted class stays the same after the scramble, as a
+    #   Python float.
     def agreement(
         predict: Callable[[Tensor], Tensor],
         points: Tensor,
@@ -984,7 +1018,7 @@ def check_learns_with_distances(found: object) -> None:
 
     if right < 0.7:
         raise Mismatch(
-            f"An MLP trained for 300 steps on sorted_distances of 100 sets gets {right:.1%} of turned and shuffled "
+            f"An MLP trained for 300 steps on sorted_distances of 100 sets gets {right:.1%} of rotated and shuffled "
             "test sets right, but it should pass 70%.",
         )
 
@@ -1004,7 +1038,7 @@ def check_equivariance3(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="scramble",
-        description="turns each set, then shuffles its points",
+        description="rotates each set, then shuffles its points",
         inputs=(
             (small_tensor(767, 2, 4, 2), seeded(768)),
             (small_tensor(769, 3, 5, 2), seeded(770)),
@@ -1025,7 +1059,7 @@ def check_equivariance3(checker: Checker) -> None:
     )
     checker.test(
         function="sorted_distances",
-        description="lets an MLP tell turned and shuffled shapes apart",
+        description="lets an MLP tell rotated and shuffled shapes apart",
         run=check_learns_with_distances,
     )
     templates = shape_templates(4, 772)
@@ -1033,7 +1067,7 @@ def check_equivariance3(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="agreement",
-        description="gives the share of answers a scramble leaves alone",
+        description="gives the fraction of answers that stay the same after a scramble",
         inputs=(
             (Described(nearest_template(templates), "a predictor that compares raw coordinates"), Described(sets, "40 sets of 6 points"), seeded(774)),
             (
@@ -1059,13 +1093,15 @@ EQUIVARIANCE3 = Exercise(
     source=EQUIVARIANCE3_SOURCE,
     solution=EQUIVARIANCE3_SOLUTION,
     hints={
-        "random_rotations": "torch.cos and torch.sin of the angles give two tensors of shape (count,). torch.stack "
-        "[cos, -sin] and [sin, cos] on dim=-1 for the rows, then stack the two rows on dim=-2.",
-        "scramble": "points @ random_rotations(len(points), generator).transpose(1, 2) turns each set. Then index the "
-        "turned sets with torch.arange(len(points)).unsqueeze(1) and the order, as the example picks.",
-        "sorted_distances": "torch.triu_indices(n, n, 1) gives i and j. points[:, i] - points[:, j], then .norm(dim=-1) "
-        "and .sort(dim=1).values.",
-        "agreement": "Compare predict(points) with predict of the scrambled points, then .float().mean().item().",
+        "random_rotations": "torch.cos and torch.sin of the angles give two tensors of shape (count,). Use torch.stack "
+        "on [cos, -sin] and on [sin, cos] with dim=-1 to build the two rows. Then stack the two rows with dim=-2.",
+        "scramble": "points @ random_rotations(len(points), generator).transpose(1, 2) rotates each set. Then index "
+        "the rotated sets with torch.arange(len(points)).unsqueeze(1) and the order, the same way the example line "
+        "for picked indexes.",
+        "sorted_distances": "torch.triu_indices(n, n, 1) gives the indices i and j of every pair. Compute "
+        "points[:, i] - points[:, j], then take .norm(dim=-1) and .sort(dim=1).values.",
+        "agreement": "Compare predict(points) with predict of the scrambled points using ==, then call "
+        ".float().mean().item().",
     },
     introduces=(),
     check=check_equivariance3,
@@ -1123,8 +1159,9 @@ def shift_namespace() -> dict[str, object]:
 SHIFT_REFERENCE = shift_namespace()
 
 BLUR_POOL_PART = '''
-# Zhang's fix for the max pool, given to try in ShiftNet. It takes the larger of each pair at every
-# position, blurs with the weights 1, 4, 6, 4, 1 over 16, and only then keeps every second position.
+# Zhang's fix for the max pool, which you can try in ShiftNet in place of F.max_pool1d. It takes the
+# larger value of each pair at every position, blurs with the weights 1, 4, 6, 4, 1 divided by 16, and
+# only then keeps every second position.
 def blur_pool(y: Tensor) -> Tensor:
     channels = y.shape[1]
     y = F.max_pool1d(F.pad(y, (0, 1), mode="circular"), 2, stride=1)
@@ -1190,16 +1227,18 @@ def seeded_shift_net(
 
 EQUIVARIANCE4_LESSON = prose(
     """
-    Most models this course built for structured data follow one recipe,
-    which Bronstein, Bruna, Cohen and Veličković called the Geometric Deep
-    Learning blueprint. Find the symmetry of the data. Then stack these.
+    Most models this course built for structured data follow one recipe.
+    Bronstein, Bruna, Cohen and Veličković called it the Geometric Deep
+    Learning blueprint. First find the symmetry of the data. Then stack these
+    parts.
 
-    - Layers equivariant to that symmetry, each with a nonlinearity after it.
-    - Local pooling now and then, which coarsens the data while keeping its structure.
-    - One invariant pooling at the end, when the answer shouldn't change, then a head.
+    - Layers equivariant to that symmetry, each followed by a nonlinearity.
+    - Local pooling now and then, which makes the data coarser but keeps its structure.
+    - One invariant pooling at the end, when the answer should not change, followed by a head.
 
-    Equivariant layers stack, since each passes the change on to the next. The
-    invariant pooling goes last, because nothing after it can see the change.
+    Equivariant layers can be stacked, because each one passes the change on
+    to the next layer. The invariant pooling goes last, because the layers
+    after it can no longer see the change.
 
     | Data | Symmetry | Equivariant layer | Built in |
     |---|---|---|---|
@@ -1209,11 +1248,12 @@ EQUIVARIANCE4_LESSON = prose(
     | points in space | turns, moves and mirrors | EGNN | equivariance2 |
     | tokens with no positions | shuffles | attention | position1 |
 
-    Here is the recipe for shifts that wrap round, as `torch.roll` makes them.
-    A circular convolution and a ReLU, a max pool of 2, another convolution
-    and ReLU, then the mean over the positions. Each gap below is the largest
-    change in any output, over 32 random signals of length 16 and every even
-    or every odd shift.
+    Here is the recipe for shifts that wrap around, like the ones
+    `torch.roll` makes. It runs a circular convolution and a ReLU, a max pool
+    of 2, and another convolution and ReLU. Then it takes the mean over the
+    positions. Each gap below is the largest change in any output. It is
+    measured over 32 random signals of length 16, for every even shift or
+    every odd shift.
 
     | Model | Even shifts | Odd shifts |
     |---|---|---|
@@ -1222,17 +1262,18 @@ EQUIVARIANCE4_LESSON = prose(
     | the recipe without the max pool | 3e-8 | 3e-8 |
     | the convolutions, then a Linear on every position | 0.29 | 0.35 |
 
-    The recipe's outputs are about 0.21 in size, so an odd shift moves them by
-    a quarter. A Linear on every position throws the symmetry away at the
-    last step. The max pool keeps shifts by 2 exact but breaks odd ones,
-    since it pairs different neighbours.
+    The recipe's outputs are about 0.21 in size, so an odd shift changes them
+    by about a quarter. A Linear on every position throws the symmetry away
+    at the last step. The max pool keeps shifts by 2 exact but breaks odd
+    ones. After an odd shift it pairs up different neighbours, so it keeps
+    different maximums.
 
-    Zhang found the same in image classifiers, where small shifts changed
-    their answers. His fix takes the larger of each pair at every position,
-    blurs, and only then keeps every second one. The file gives it as
-    `blur_pool`. Over 5 seeds it shrank the odd shift gap 7 to 13 times. It
-    can't close it, since keeping every second position can't follow a shift
-    by one exactly.
+    Zhang found the same problem in image classifiers, whose answers changed
+    under small shifts. His fix takes the larger value of each pair at every
+    position, blurs the result, and only then keeps every second position.
+    The file gives it as `blur_pool`. Over 5 seeds, it made the gap for odd
+    shifts 7 to 13 times smaller. It cannot close the gap completely, because
+    keeping every second position can never follow a shift by one exactly.
     """,
 )
 
@@ -1253,21 +1294,23 @@ EQUIVARIANCE4_SOURCE = source_file(
 ''' + indented(BLUR_POOL_PART) + '''
 
 
-    # TODO: Finish forward, the blueprint for shifts that wrap round. x has shape
-    #   (batch, length). Give it a channel dimension, then run conv1 and a ReLU,
-    #   a max pool of 2 with F.max_pool1d, conv2 and a ReLU, the mean over the
-    #   positions and the head. The result has shape (batch, classes).
+    # TODO: Finish forward, the blueprint for shifts that wrap around. x has
+    #   shape (batch, length). Add a channel dimension of size 1, so the shape
+    #   becomes (batch, 1, length). Then run conv1 and a ReLU, a max pool of 2
+    #   with F.max_pool1d, conv2 and a ReLU, the mean over the positions, and
+    #   the head, in that order. The result has shape (batch, classes).
 ''' + indented(SHIFT_NET_INIT) + '''
 
         def forward(self, x: Tensor) -> Tensor:
             ...
 
 
-    # TODO: Return how far model's outputs on x, of shape (batch, length),
-    #   move under each shift from 0 up to length - 1, as a list of plain
-    #   numbers. Each is the largest gap between the outputs on x shifted with
-    #   torch.roll along its last dimension and the outputs on x. Record nothing
-    #   for autograd.
+    # TODO: Measure how much model's outputs change when x is shifted. x has
+    #   shape (batch, length). For each shift from 0 up to length - 1, roll x
+    #   by that many places along its last dimension with torch.roll. Compare
+    #   model's outputs on the shifted x with its outputs on x, and take the
+    #   largest absolute difference. Return these gaps as a list of Python
+    #   floats, one per shift. Do not let autograd record the computation.
     def shift_gaps(
         model: nn.Module,
         x: Tensor,
@@ -1371,10 +1414,10 @@ EQUIVARIANCE4 = Exercise(
     source=EQUIVARIANCE4_SOURCE,
     solution=EQUIVARIANCE4_SOLUTION,
     hints={
-        "ShiftNet.forward": "x.unsqueeze(1) gives the channel. torch.relu after each convolution, F.max_pool1d(y, 2) "
-        "between them, then .mean(dim=2) before self.head.",
-        "shift_gaps": "Inside torch.no_grad(), keep model(x) once. For each steps in range(x.shape[-1]), compare "
-        "model(torch.roll(x, steps, dims=-1)) with it, through .abs().max().item().",
+        "ShiftNet.forward": "x.unsqueeze(1) adds the channel dimension. Apply torch.relu after each convolution, and "
+        "F.max_pool1d(y, 2) between the two convolutions. Then take .mean(dim=2) before self.head.",
+        "shift_gaps": "Inside torch.no_grad(), compute model(x) once and keep it. For each steps in range(x.shape[-1]), "
+        "subtract it from model(torch.roll(x, steps, dims=-1)) and call .abs().max().item().",
     },
     introduces=(),
     check=check_equivariance4,
@@ -1387,16 +1430,17 @@ EQUIVARIANCE4 = Exercise(
 
 QUIZ13_LESSON = prose(
     """
-    This quiz has no examples and no new tools. Each function combines moves
-    from Section 10. If a step is unclear, the exercise in the table shows it.
+    This quiz has no examples and no new tools. Each function combines
+    techniques from Section 10. If a step is unclear, the exercise named in
+    the table shows how to do it.
 
-    | Function | Moves | Shown in |
+    | Function | Steps | Shown in |
     |---|---|---|
-    | `distance_set` | every pair's distance, as sorted_distances took them, then a Deep Set over those distances | equivariance3, sets1 |
-    | `mean_messages` | the messages summed where they arrive with `index_add_`, divided by each node's count of arriving edges | message1, graph1 |
-    | `gcn_step` | self loops, the GCN's two sided normalization, then the features mixed and weighted | message2 |
-    | `pairwise_distances` | every difference of two points, as squared_distances made them, then each one's length with `.norm` | equivariance2, equivariance3 |
-    | `shuffle_gap` | each set's own random order, as shuffle_each drew it, then the largest gap after reordering | sets2, sets3 |
+    | `distance_set` | the distance of every pair, computed as in sorted_distances, then a Deep Set over those distances | equivariance3, sets1 |
+    | `mean_messages` | the messages summed at their targets with `index_add_`, then divided by the number of edges arriving at each node | message1, graph1 |
+    | `gcn_step` | self loops and the GCN's normalization on both sides, then a product with the features and the weight | message2 |
+    | `pairwise_distances` | the difference of every two points, built as in squared_distances, then the length of each with `.norm` | equivariance2, equivariance3 |
+    | `shuffle_gap` | a random order for each set, drawn as in shuffle_each, then the largest gap from reordering before or after the layer | sets2, sets3 |
     """,
 )
 
@@ -1404,17 +1448,17 @@ QUIZ13_SOURCE = source_file(
     '''
     # quiz13.py
     #
-    # No examples and no new tools. Each function combines moves from Section 10.
+    # No examples and no new tools. Each function combines techniques from Section 10.
 
     import torch
     import torch.nn as nn
     from torch import Tensor
 
 
-    # TODO: Return a Deep Set over the distances between the points of each
-    #   set, for points of shape (sets, n, dims). Take the distance of every
-    #   pair i < j as a column of shape (sets, pairs, 1), run phi on every
-    #   distance, sum over the pairs, then run rho.
+    # TODO: points has shape (sets, n, dims). Run a Deep Set over the distances
+    #   between the points of each set. Compute the distance of every pair
+    #   i < j, as a tensor of shape (sets, pairs, 1). Run phi on every
+    #   distance, sum over the pairs, then run rho and return its result.
     def distance_set(
         points: Tensor,
         phi: nn.Module,
@@ -1423,10 +1467,10 @@ QUIZ13_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the mean of the messages that reach each node, of shape
-    #   (nodes, features). messages has one row per edge, and edges, of shape
-    #   (2, edges), holds each edge's source in row 0 and target in row 1. A
-    #   node no edge reaches gets zeros.
+    # TODO: Return the mean of the messages that arrive at each node, as a
+    #   tensor of shape (nodes, features). messages has one row per edge.
+    #   edges has shape (2, edges), with each edge's source in row 0 and its
+    #   target in row 1. A node that no edge reaches gets a row of zeros.
     def mean_messages(
         messages: Tensor,
         edges: Tensor,
@@ -1435,11 +1479,12 @@ QUIZ13_SOURCE = source_file(
         ...
 
 
-    # TODO: Return one GCN step. Add self loops to the adjacency, then scale it
-    #   on both sides by one over the square root of each node's degree, with
-    #   the self loop counted in the degree. Then multiply by h and by weight.
-    #   adjacency is (nodes, nodes), h (nodes, features) and weight
-    #   (features, out).
+    # TODO: Return one GCN step, with no ReLU. Add self loops to adjacency.
+    #   Then divide the entry at row v and column u by the square root of v's
+    #   degree and by the square root of u's degree, with the self loop
+    #   counted in the degree. Multiply the result by h and then by weight.
+    #   adjacency has shape (nodes, nodes), h has shape (nodes, features) and
+    #   weight has shape (features, out).
     def gcn_step(
         adjacency: Tensor,
         h: Tensor,
@@ -1448,17 +1493,17 @@ QUIZ13_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the distance between every two of points, of shape
-    #   (n, dims), as an (n, n) tensor.
+    # TODO: points has shape (n, dims). Return the distance between every two
+    #   points, as a tensor of shape (n, n).
     def pairwise_distances(points: Tensor) -> Tensor:
         ...
 
 
-    # TODO: Return the largest change, as a plain number, between layer's output
-    #   for x with each set's elements in its own random order, and layer's
-    #   output for x put in that same order. x has shape (sets, elements,
-    #   features). Draw the orders as shuffle_each did, from
-    #   torch.rand(sets, elements, generator=generator).
+    # TODO: Test layer for equivariance. x has shape (sets, elements,
+    #   features). Draw a random order for each set as shuffle_each did, from
+    #   torch.rand(sets, elements, generator=generator). Compare layer's output
+    #   for the reordered x with layer's output for x, reordered afterwards in
+    #   the same way. Return the largest absolute difference as a Python float.
     def shuffle_gap(
         layer: nn.Module,
         x: Tensor,
@@ -1611,7 +1656,7 @@ def check_quiz13(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="gcn_step",
-        description="normalizes with self loops on both sides, then mixes",
+        description="adds self loops, normalizes on both sides, then multiplies by h and the weight",
         inputs=(
             (QUIZ13_ADJACENCY, small_tensor(965, 4, 3), small_tensor(966, 3, 2)),
             # Some answers here are below 0, so a ReLU left over from message2's gcn_layer shows.
@@ -1657,17 +1702,19 @@ QUIZ13 = Exercise(
     source=QUIZ13_SOURCE,
     solution=QUIZ13_SOLUTION,
     hints={
-        "distance_set": "torch.triu_indices(n, n, 1) gives the pairs, as in sorted_distances, without the sort. "
-        ".unsqueeze(-1) makes the column. phi on it, .sum(dim=1) over the pairs, then rho.",
+        "distance_set": "torch.triu_indices(n, n, 1) gives the pairs, as in sorted_distances, but skip the sort. "
+        ".unsqueeze(-1) turns the distances into a column. Run phi on it, take .sum(dim=1) over the pairs, then run "
+        "rho.",
         "mean_messages": "Sum the messages at their targets as message1's aggregate does. torch.bincount of edges[1] "
-        "with minlength=nodes counts them, .clamp(min=1) keeps a count of 0 from dividing, and .unsqueeze(1) lines "
-        "the counts up with the rows.",
-        "gcn_step": "Add torch.eye to the adjacency and take each row's sum to the power -0.5. Scale the rows and the "
-        "columns by it, then @ h @ weight.",
+        "with minlength=nodes counts the messages at each node. .clamp(min=1) stops a count of 0 from causing a "
+        "division by zero. .unsqueeze(1) makes the counts a column, so each count divides its own row.",
+        "gcn_step": "Add torch.eye to the adjacency and raise each row's sum to the power -0.5. Scale the rows and the "
+        "columns by these numbers, then multiply by h and weight with @.",
         "pairwise_distances": "points.unsqueeze(1) - points.unsqueeze(0) gives every difference. Take .norm over the "
         "last dimension.",
         "shuffle_gap": "Argsort the random numbers along dim=1 and index with torch.arange(len(x)).unsqueeze(1), as "
-        "shuffle_each did. Reorder the input before layer and the output after, then .abs().max().item().",
+        "shuffle_each did. Reorder the input before calling layer, and reorder the output of layer on x. Subtract "
+        "the two and call .abs().max().item().",
     },
     introduces=(),
     check=check_quiz13,

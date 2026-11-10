@@ -32,11 +32,11 @@ SETS = Chapter(
         # Sets
 
         Section 10 is about building a problem's symmetries into the model.
-        The first is the simplest. A set has no order, so a model of a set
-        should give the same answer however its elements are listed. This
-        chapter builds Deep Sets, shows a flat MLP failing on shuffled sets,
-        and builds layers that reorder their output along with their input,
-        attention among them.
+        This chapter covers the simplest one. A set has no order, so a model
+        of a set should give the same answer in whatever order its elements
+        are listed. The chapter builds Deep Sets and shows a flat MLP failing
+        on shuffled sets. Then it builds layers whose output is reordered in
+        the same way when their input is reordered. Attention is one of them.
 
         ## Further reading
 
@@ -126,40 +126,48 @@ def seeded_model(
 SETS1_LESSON = prose(
     """
     Some inputs are sets, like the points of a shape, the items in a basket
-    or the players of a team. They arrive as a list, but the order means
-    nothing. A model of a set should give the same answer for every order of
-    the same elements.
+    or the players of a team. They arrive as a list, but the order of the
+    list means nothing. A model of a set should give the same answer for
+    every order of the same elements.
 
-    A Linear on the flattened list can't. Each position has weights of its
-    own, so moving an element moves it onto other weights.
+    A Linear layer on the flattened list cannot do that. Each position in
+    the list has its own weights. So when an element moves to another
+    position, it is multiplied by different weights and the answer changes.
 
-    Zaheer and colleagues proved a result for elements from a countable set,
-    one you could number 0, 1, 2 and on, like words. There every function
-    that ignores order can be written in one shape, called Deep Sets.
+    Zaheer and colleagues proved that every function that ignores order can
+    be written in one form, called Deep Sets. Their proof covers elements
+    from a countable set, one whose members you could number 0, 1, 2 and so
+    on, like words. A Deep Set has three steps.
 
-    - phi runs on every element alone. A Linear on a tensor of shape `(batch, elements, features)` does that already, since it works on the last dimension.
-    - A sum over the elements pools them into one vector. Adding doesn't care about order.
-    - rho runs on the pooled vector.
+    - phi is a small network that runs on each element separately.
+    - A sum over the elements combines them into one vector. This step is called pooling.
+    - rho is a second network that runs on the pooled vector and gives the answer.
 
-    A mean or a max pools without order too. The mean loses how many elements
-    there were, and the max keeps only the largest.
+    phi can be made of ordinary Linear layers. A Linear on a tensor of shape
+    `(batch, elements, features)` runs on each element separately, because
+    it acts only on the last dimension. And a sum gives the same result in
+    any order, so the answer ignores the order of the elements.
+
+    A mean or a max also ignores order, so either one can do the pooling.
+    But the mean forgets how many elements there were, and the max keeps
+    only the largest value of each feature.
 
     ```python
     torch.tensor([[2.0], [2.0]]).mean(dim=0), torch.tensor([[2.0]]).mean(dim=0)    # tensor([2.]) both times
     torch.tensor([[2.0], [2.0]]).sum(dim=0), torch.tensor([[2.0]]).sum(dim=0)      # tensor([4.]) and tensor([2.])
     ```
 
-    `x[:, order]` lists every set's elements in a new order. Here is how far
-    each untrained model's answer moves when 4 random sets of 8 elements, 3
-    features each, are reordered.
+    `x[:, order]` takes the elements of every set in a new order. The table
+    shows how much each untrained model's answer changes when 4 random sets
+    are reordered. Each set has 8 elements with 3 features each.
 
     | Model | Largest change in the answer |
     |---|---|
     | A Linear on the flattened list | 1.53 |
     | A Deep Set | 0.00000006 |
 
-    The Deep Set moves only by rounding, since a sum in another order rounds
-    a little differently.
+    The Deep Set's answer changes only by rounding error. Adding floats in a
+    different order rounds them a little differently.
     """,
 )
 
@@ -175,9 +183,12 @@ SETS1_SOURCE = source_file(
     biggest = features.amax(dim=1)            # shape (2, 4), the largest of each feature in each set
 
 
-    # TODO: Return each set's elements pooled into one row, for features of
-    #   shape (batch, elements, features). how is "sum", "mean" or "max". The
+    # TODO: Pool the elements of each set into one row. features has shape
+    #   (batch, elements, features). how is "sum", "mean" or "max", and says
+    #   whether to take the sum, the mean or the max over the elements. The
     #   result has shape (batch, features).
+    #   Example: for features = torch.tensor([[[1.0, 5.0], [3.0, 2.0]]]),
+    #   pool(features, "max") returns tensor([[3., 5.]]).
     def pool(
         features: Tensor,
         how: str,
@@ -185,9 +196,9 @@ SETS1_SOURCE = source_file(
         ...
 
 
-    # TODO: Finish forward. Run phi on every element of x, of shape (batch,
-    #   elements, inputs), sum over the elements, and run rho on the sum. The
-    #   result has shape (batch, outputs).
+    # TODO: Finish forward. x has shape (batch, elements, inputs). Run phi on
+    #   every element of x, sum the results over the elements, and run rho on
+    #   that sum. The result has shape (batch, outputs).
     class DeepSet(nn.Module):
         def __init__(
             self,
@@ -211,10 +222,11 @@ SETS1_SOURCE = source_file(
             ...
 
 
-    # TODO: Return the largest change, as a plain number, between model's
-    #   answers for x and for x with every set's elements taken in the order
-    #   that order gives. order is a tensor of positions, like
-    #   tensor([2, 0, 1]). Record nothing for autograd.
+    # TODO: Measure how much reordering the elements changes the model's
+    #   answer. Run model on x, and on x with every set's elements taken in
+    #   the order given by order, a tensor of positions like tensor([2, 0, 1]).
+    #   Return the largest absolute difference between the two answers as a
+    #   Python float. Do not let autograd record the computation.
     def order_gap(
         model: nn.Module,
         x: Tensor,
@@ -348,7 +360,7 @@ def check_sets1(checker: Checker) -> None:
     )
     checker.test(
         function="order_gap",
-        description="measures how far a reordering moves the answer",
+        description="measures how much reordering changes the answer",
         run=check_order_gap,
     )
 
@@ -361,9 +373,11 @@ SETS1 = Exercise(
     source=SETS1_SOURCE,
     solution=SETS1_SOLUTION,
     hints={
-        "pool": "One if for \"max\" with .amax(dim=1), one for \"mean\" with .mean(dim=1), and .sum(dim=1) for the rest.",
-        "DeepSet.forward": "self.phi(x) keeps the elements apart. Sum it over dim=1, then pass the result to self.rho.",
-        "order_gap": "Inside torch.no_grad(), take model(x) minus model(x[:, order]), then .abs().max().item().",
+        "pool": "Use one if for \"max\" with .amax(dim=1) and one for \"mean\" with .mean(dim=1). Use .sum(dim=1) "
+        "for anything else.",
+        "DeepSet.forward": "self.phi(x) still has one row per element. Sum it over dim=1, then pass the sum to "
+        "self.rho.",
+        "order_gap": "Inside torch.no_grad(), subtract model(x[:, order]) from model(x), then call .abs().max().item().",
     },
     introduces=(),
     check=check_sets1,
@@ -445,11 +459,11 @@ def train_regressor(
 
 SETS2_LESSON = prose(
     """
-    Here is a task on sets. Each set holds 8 numbers between -1 and 1, and
-    the answer is the sum of their squares, which no order changes. Three
-    models trained for 2,000 steps on the same 1,000 sets, tested on 2,000 new
-    ones, give this mean squared error. The Deep Set is sets1's, with 32
-    hidden features.
+    Here is a task on sets. Each set holds 8 numbers between -1 and 1. The
+    answer is the sum of their squares, which is the same in any order. Three
+    models were trained for 2,000 steps on the same 1,000 sets, then tested
+    on 2,000 new sets. The table gives each model's mean squared error. The
+    Deep Set is the one from sets1, with 32 hidden features.
 
     | Model | Trained on | Error, sorted tests | Error, shuffled tests |
     |---|---|---|---|
@@ -457,21 +471,26 @@ SETS2_LESSON = prose(
     | An MLP on the flat list | shuffled sets | 0.0086 | 0.025 |
     | A Deep Set | shuffled sets | 0.00015 | 0.00015 |
 
-    Always guessing the average answer scores 0.70.
+    A model that always guesses the average answer gets an error of 0.70.
 
-    The MLP trained on sorted sets learned that position 0 holds the smallest
-    number. Shuffled, it does worse than a guess. Sorting every input first
-    would rescue it here, but that needs an order to sort by. Points with
-    many features, or the atoms of a molecule, have none that fits.
+    The MLP trained on sorted sets learned that position 0 always holds the
+    smallest number. On shuffled sets that is no longer true, and the MLP
+    does worse than always guessing the average. Sorting every input first
+    would fix it for this task, but sorting needs an order to sort by.
+    Points with many features, or the atoms of a molecule, have no natural
+    order.
 
-    The MLP trained on shuffled sets has to learn from examples that order
-    doesn't matter, and 8 numbers have 40,320 orders. The Deep Set has it
-    built in, so the same data teaches it the task alone. Over 5 seeds its
-    error on shuffled tests was 13 to 168 times smaller.
+    The MLP trained on shuffled sets has to learn from examples that the
+    order does not matter. That is hard, because 8 numbers can be ordered in
+    40,320 ways. The Deep Set ignores order by design, so all of its training
+    goes into the task itself. Over 5 seeds, the Deep Set's error on shuffled
+    tests was 13 to 168 times smaller than this MLP's.
 
-    `.argsort()` gives the positions that would sort a tensor. Sorting random
-    numbers that way gives a random order. Two index tensors pick one element
-    per pair of positions, as masked2's patches did.
+    `.argsort()` returns the positions that would sort a tensor. The argsort
+    of random numbers is a random order. To give every set its own order,
+    index with two tensors, as masked2 did for its patches. The first tensor
+    gives the row of each element you pick, and the second gives its position
+    within that row.
 
     ```python
     torch.tensor([0.7, 0.1, 0.4]).argsort()    # tensor([1, 2, 0])
@@ -497,13 +516,17 @@ SETS2_SOURCE = source_file(
 
     # TODO: Return x, of shape (batch, elements, 1), with each set's elements
     #   sorted from smallest to largest.
+    #   Example: sort_each(torch.tensor([[[3.0], [1.0], [2.0]]])) returns
+    #   tensor([[[1.], [2.], [3.]]]).
     def sort_each(x: Tensor) -> Tensor:
         ...
 
 
-    # TODO: Return x with each set's elements in its own random order. Draw
-    #   torch.rand(batch, elements, generator=generator) once and argsort each
-    #   row of it along the elements.
+    # TODO: Return x with the elements of each set in a different random
+    #   order. Draw random numbers once with
+    #   torch.rand(batch, elements, generator=generator), and argsort each row
+    #   along the elements to get one order per set. Then pick the elements of
+    #   x in those orders.
     def shuffle_each(
         x: Tensor,
         generator: torch.Generator,
@@ -511,8 +534,9 @@ SETS2_SOURCE = source_file(
         ...
 
 
-    # TODO: Finish forward. Flatten each set of x, of shape (batch, elements, 1),
-    #   into one row, run net, and return one answer per set, shape (batch,).
+    # TODO: Finish forward. x has shape (batch, elements, 1). Flatten each set
+    #   into one row of 8 numbers, run net on the rows, and return one answer
+    #   per set, as a tensor of shape (batch,).
     class FlatMLP(nn.Module):
         def __init__(self) -> None:
             super().__init__()
@@ -528,9 +552,10 @@ SETS2_SOURCE = source_file(
             ...
 
 
-    # TODO: Return the mean squared error of model's answers on x against y, as a
-    #   plain number. Flatten the answers to one per set, since a model may
-    #   give them as a column. Record nothing for autograd.
+    # TODO: Return the mean squared error between model(x) and y as a Python
+    #   float. Flatten the model's answers first, because some models return
+    #   them as a column of shape (batch, 1). Do not let autograd record the
+    #   computation.
     def squared_error(
         model: nn.Module,
         x: Tensor,
@@ -640,8 +665,9 @@ def check_sorted_mlp_fails(found: type) -> None:
 
     if on_sorted > 0.05 or on_shuffled < 0.5:
         raise Mismatch(
-            f"Trained on sorted sets, FlatMLP should do well on sorted tests and badly on shuffled ones. Its errors "
-            f"are {on_sorted:.3f} sorted and {on_shuffled:.3f} shuffled, and they should be below 0.05 and above 0.5.",
+            f"Trained on sorted sets, FlatMLP should do well on sorted tests and badly on shuffled ones. Its error "
+            f"is {on_sorted:.3f} on sorted tests and {on_shuffled:.3f} on shuffled tests. They should be below 0.05 "
+            f"and above 0.5.",
         )
 
 
@@ -695,11 +721,13 @@ SETS2 = Exercise(
     source=SETS2_SOURCE,
     solution=SETS2_SOLUTION,
     hints={
-        "sort_each": "x.sort(dim=1) sorts along the elements and gives values and indices. Return the values.",
-        "shuffle_each": "Argsort the random numbers along dim=1 to get an order per set. Index x with "
-        "torch.arange(len(x)).unsqueeze(1) and that order.",
-        "FlatMLP.forward": "x.flatten(1) gives one row of 8 per set. Run self.net, then .squeeze(1).",
-        "squared_error": "Inside torch.no_grad(), F.mse_loss of model(x).flatten() and y, then .item().",
+        "sort_each": "x.sort(dim=1) sorts along the elements and returns both the values and the indices. Return "
+        "the values.",
+        "shuffle_each": "Argsort the random numbers along dim=1 to get one order per set. Index x with "
+        "torch.arange(len(x)).unsqueeze(1) and those orders.",
+        "FlatMLP.forward": "x.flatten(1) gives one row of 8 numbers per set. Run self.net on it, then call "
+        ".squeeze(1).",
+        "squared_error": "Inside torch.no_grad(), take F.mse_loss of model(x).flatten() and y, then call .item().",
     },
     introduces=(),
     check=check_sets2,
@@ -832,30 +860,35 @@ def equivariance_gap(
 
 SETS3_LESSON = prose(
     """
-    Some tasks want one answer per element, like a label for every point.
-    Then the answers should follow the elements. Reorder the input, and the
-    output comes out reordered the same way. A layer that does that is
-    **equivariant**, and a model built from such layers is too.
+    Some tasks need one answer per element, like a label for every point.
+    Then each answer should stay with its element. If you reorder the input,
+    the output should come out reordered in the same way. A layer with this
+    property is **equivariant**, and a model built from equivariant layers is
+    equivariant too.
 
-    Zaheer and colleagues found the general equivariant Linear on a set. Each
-    element gets its own transform plus one shared transform of the whole
-    set's pool.
+    Zaheer and colleagues found the most general equivariant Linear layer on
+    a set. The output for each element is a Linear of that element plus a
+    second Linear of the pooled set. The second term is the same for every
+    element.
 
     ```text
     y_i = Lambda x_i + Gamma pool(x)
     ```
 
-    Lambda is `own` in the file and Gamma is `pooled`. They used a sum or a
-    max for the pool. The mean here keeps the size the same for big and small
-    sets. Every element sees the others only through the pool, so no
-    element's position matters.
+    In the file, Lambda is `own` and Gamma is `pooled`. The paper pooled with
+    a sum or a max. This file uses the mean, so the pooled values do not grow
+    with the number of elements. Each element sees the others only through
+    the pool, and the pool ignores order. So no element's position affects
+    the result.
 
-    Attention with no positions does the same job with more say. Each element
-    picks its own weighted mix of the others, by content alone. Lee and
-    colleagues built their Set Transformer from it.
+    Attention without positions is also equivariant, and it is more
+    flexible. Each element takes its own weighted average of all the
+    elements' values. The weights depend only on the elements' content. Lee
+    and colleagues built their Set Transformer from this kind of attention.
 
-    Take a layer's output for reordered input, and its output reordered after.
-    Here is the largest gap between the two, on 4 random sets of 8 elements.
+    To test a layer, compare its output for the reordered input with its
+    output for the original input, reordered afterwards. The table gives the
+    largest difference between the two on 4 random sets of 8 elements.
 
     | Layer | Largest change |
     |---|---|
@@ -863,13 +896,15 @@ SETS3_LESSON = prose(
     | Attention, no positions | 0.0000005 |
     | Attention, with learned positions added | 3.60 |
 
-    Positions break it. A sequence needs them, which is why position2 added
-    them, and a set must do without them.
+    Added positions break equivariance, because each element's output then
+    depends on where it sits. A sequence needs positions, which is why
+    position2 added them. A set must do without them.
 
-    The pool is what lets each element see its set. Take sets of 8 numbers
-    from -1 to 1, where each element's answer is its value minus its set's
-    mean. Here is each model's mean squared error over 3 seeds, trained for
-    2,000 steps with 64 hidden features.
+    The pool is what lets each element know about the rest of its set. Here
+    is a task that needs it. Each set has 8 numbers from -1 to 1, and the
+    answer for each element is its value minus the mean of its set. Each
+    model has 64 hidden features and was trained for 2,000 steps. The table
+    gives its mean squared error over 3 seeds.
 
     | Model | Mean squared error |
     |---|---|
@@ -877,8 +912,9 @@ SETS3_LESSON = prose(
     | `EquivariantNet` | below 0.00002 |
     | set_attention, then an MLP on each element | 0.0002 or less |
 
-    Guessing 0 scores 0.29. The MLP can't see the rest of its set, so it
-    can't learn the mean. Both set layers can.
+    Always guessing 0 gets an error of 0.29. The MLP sees each element alone
+    and never the rest of its set, so it cannot compute the mean. Both set
+    layers can.
     """,
 )
 
@@ -893,13 +929,14 @@ SETS3_SOURCE = source_file(
     from torch import Tensor
 
     x = torch.ones(2, 5, 3)
-    pooled = x.mean(dim=1, keepdim=True)    # shape (2, 1, 3), adds to x's every element
-    numbers = torch.ones(2, 5, 1).squeeze(-1)    # shape (2, 5), the last dimension of 1 dropped
+    pooled = x.mean(dim=1, keepdim=True)    # shape (2, 1, 3), so x + pooled adds it to every element
+    numbers = torch.ones(2, 5, 1).squeeze(-1)    # shape (2, 5), with the last dimension of size 1 removed
 
 
-    # TODO: Finish forward. Each element of x, of shape (batch, elements,
-    #   inputs), gets own of itself plus pooled of the mean of its set's
-    #   elements. The result has shape (batch, elements, outputs).
+    # TODO: Finish forward. x has shape (batch, elements, inputs). The output
+    #   for each element is own applied to that element, plus pooled applied
+    #   to the mean of all the elements in its set. The result has shape
+    #   (batch, elements, outputs).
     class EquivariantLayer(nn.Module):
         def __init__(
             self,
@@ -914,10 +951,10 @@ SETS3_SOURCE = source_file(
             ...
 
 
-    # TODO: Return attention among the elements of x, of shape (batch,
-    #   elements, features), with no mask and no positions. The queries are
+    # TODO: Return attention among the elements of x, which has shape (batch,
+    #   elements, features). Use no mask and no positions. The queries are
     #   x @ Wq, the keys x @ Wk and the values x @ Wv. Divide the scores by the
-    #   square root of the queries' size.
+    #   square root of the number of features in each query.
     def set_attention(
         x: Tensor,
         Wq: Tensor,
@@ -927,9 +964,9 @@ SETS3_SOURCE = source_file(
         ...
 
 
-    # TODO: Finish forward. Run first on x, of shape (batch, elements, 1), then
-    #   a ReLU, second, a ReLU and head. Give one number per element, of shape
-    #   (batch, elements).
+    # TODO: Finish forward. x has shape (batch, elements, 1). Run first, a
+    #   ReLU, second, another ReLU and then head, in that order. Return one
+    #   number per element, as a tensor of shape (batch, elements).
     class EquivariantNet(nn.Module):
         def __init__(self, hidden: int) -> None:
             super().__init__()
@@ -1030,13 +1067,13 @@ def check_sets3(checker: Checker) -> None:
     checker.test_method(
         class_name="EquivariantLayer",
         method="forward",
-        description="adds each element's own transform to the set's pooled one",
+        description="adds own of each element to pooled of the set's mean",
         run=check_equivariant_layer,
     )
     check_on_inputs(
         checker=checker,
         function="set_attention",
-        description="mixes the elements by content alone",
+        description="computes attention over the elements with no positions",
         inputs=(
             (small_tensor(733, 2, 5, 4) / 3, small_tensor(734, 4, 4) / 3, small_tensor(735, 4, 4) / 3, small_tensor(736, 4, 3) / 3),
             (small_tensor(737, 1, 3, 2) / 3, small_tensor(738, 2, 6) / 3, small_tensor(739, 2, 6) / 3, small_tensor(740, 2, 2) / 3),
@@ -1060,11 +1097,12 @@ SETS3 = Exercise(
     source=SETS3_SOURCE,
     solution=SETS3_SOLUTION,
     hints={
-        "EquivariantLayer.forward": "x.mean(dim=1, keepdim=True) keeps a dimension of 1 for the elements, so "
-        "self.pooled of it adds to self.own(x) at every element.",
-        "set_attention": "q @ k.transpose(1, 2), divided by math.sqrt(q.shape[-1]), softmax over dim=-1, then @ v.",
-        "EquivariantNet.forward": "Each layer keeps the shape (batch, elements, features), so chain them with "
-        "torch.relu between. self.head gives a last dimension of 1, which .squeeze(-1) drops.",
+        "EquivariantLayer.forward": "x.mean(dim=1, keepdim=True) keeps the elements dimension with size 1. So "
+        "when you add self.pooled of that mean to self.own(x), it is added at every element.",
+        "set_attention": "The scores are q @ k.transpose(1, 2), divided by math.sqrt(q.shape[-1]). Take their "
+        "softmax over dim=-1, then multiply the weights by v with @.",
+        "EquivariantNet.forward": "Each layer keeps the shape (batch, elements, features), so you can chain them "
+        "with torch.relu between them. self.head leaves a last dimension of size 1, and .squeeze(-1) removes it.",
     },
     introduces=(),
     check=check_sets3,

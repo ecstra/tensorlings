@@ -42,11 +42,12 @@ LORA = Chapter(
         """
         # LoRA
 
-        Fine tuning every weight of a model costs a whole copy of it for each
-        task. LoRA freezes the model and trains a small update of low rank
-        beside each chosen layer, which starts at zero and folds back into the
-        layer once trained. You build it from its paper, put it on your GPT,
-        and measure when it matches fine tuning everything.
+        Fine tuning every weight of a model means storing a whole new copy of
+        the model for each task. LoRA freezes the model and trains a small low
+        rank update next to each chosen layer. The update starts at zero, and
+        once trained it can be merged back into the layer. You build LoRA from
+        its paper, add it to your GPT, and measure when it does as well as
+        fine tuning everything.
 
         ## Further reading
 
@@ -165,48 +166,51 @@ def small_ids(seed: int) -> Tensor:
 
 LORA1_LESSON = prose(
     """
-    finetune2 trained the last block, a quarter of the model. LoRA, from Hu
-    and colleagues in 2021, trains far less. It freezes every trained weight
-    and learns a small update beside the layers it picks.
+    finetune2 trained only the last block, a quarter of the model. LoRA, from
+    Hu and colleagues in 2021, trains far fewer weights. It freezes every
+    trained weight and learns a small update next to each layer it adapts.
 
-    A Linear computes `W x`. LoRA keeps `W` frozen and adds `B A x`. `A` maps
-    the input down to `rank` numbers and `B` maps them back up. So `B A` is a
-    matrix as big as `W`.
+    A Linear computes `W x`. LoRA keeps `W` frozen and adds `B A x`. The
+    matrix `A` maps the input down to `rank` numbers, and `B` maps those back
+    up to the output size. So `B A` is a matrix of the same shape as `W`.
 
-    A matrix's **rank** is how many independent directions its outputs can
-    point in. Every output of `B A` passes through `rank` numbers first, so
-    its rank is at most `rank`.
+    The **rank** of a matrix is the number of independent directions its
+    outputs can point in. Every output of `B A` passes through only `rank`
+    numbers on the way, so the rank of `B A` is at most `rank`.
 
     ```text
     out = W x + (alpha / rank) * B A x
     ```
 
     `B` starts at zero, so the update starts at zero, and the model starts
-    exactly as trained. The paper draws `A` from a Gaussian. Here its spread
-    is 1 over the square root of its inputs. Then each number of `A x` has
-    about the spread of the numbers of `x`.
+    out exactly as it was trained. The paper draws `A` from a Gaussian. Here
+    its standard deviation, a measure of how spread out the numbers are, is
+    1 over the square root of the input size. Then each number of `A x` has
+    about the same standard deviation as the numbers of `x`.
 
     ```python
     A, B = torch.ones(2, 3), torch.zeros(4, 2)
     B @ A @ torch.ones(3)    # tensor([0., 0., 0., 0.]), the update starts at zero
     ```
 
-    A zero `B` has a side effect. `A`'s gradient comes back through `B`, so on
-    the first step only `B` moves. From the second step on, both train.
+    A zero `B` has a side effect. The gradient of `A` flows back through `B`,
+    so it is zero on the first step and only `B` changes. From the second
+    step on, both train.
 
-    The scale `alpha / rank` cuts the need to retune the rate when the rank
-    changes, as the paper says. It sets `alpha` to the first rank it tries
-    and never tunes it. Here `alpha` is 4.
+    The paper says the scale `alpha / rank` reduces the need to retune the
+    learning rate when the rank changes. It sets `alpha` to the first rank it
+    tries and never tunes it after that. Here `alpha` is 4.
 
-    The paper adapts the attention weights only and freezes the MLPs. For
-    GPT-3, with a fixed number of weights to spend, splitting them between
-    the query and value weights beat spending them all on one. Its own table
-    shows all four attention weights at a smaller rank doing as well or
-    better. GPT-2's attention makes q, k and v with one Linear, `c_attn`, so
-    `add_lora` wraps that one in each block, which adapts all three.
+    The paper adapts only the attention weights and freezes the MLPs. It
+    tested GPT-3 with a fixed budget of trainable weights. Splitting the
+    budget between the query and value weights worked better than spending
+    it all on one of them. The paper's own table shows that adapting all four
+    attention weights at a smaller rank does as well or better. GPT-2's
+    attention computes q, k and v with one Linear, `c_attn`. So `add_lora`
+    wraps that Linear in each block, which adapts all three.
 
-    Freeze the whole model first, then wrap. The new `A` and `B` are made
-    after the freeze, so they are the only weights that train.
+    Freeze the whole model first, then wrap the layers. The new `A` and `B`
+    are created after the freeze, so they are the only weights that train.
     """,
 )
 
@@ -227,7 +231,7 @@ LORA1_SOURCE = source_file(
 
     A, B = torch.ones(2, 3), torch.zeros(4, 2)
     update = B @ A @ torch.ones(3)                                   # tensor([0., 0., 0., 0.])
-    weights = nn.Parameter(torch.randn(2, 8) / math.sqrt(8))         # a spread of about 0.35
+    weights = nn.Parameter(torch.randn(2, 8) / math.sqrt(8))         # a standard deviation of about 0.35
 
 
 ''' + indented(GPT_SETTINGS) + '''
@@ -240,10 +244,11 @@ LORA1_SOURCE = source_file(
 ''' + indented(LOAD_PART) + '''
 
 
-    # TODO: Finish __init__. Keep base as self.base and freeze it. Make self.A,
-    #   rank rows of base.in_features numbers, drawn with torch.randn and divided
-    #   by the square root of base.in_features. Make self.B, base.out_features
-    #   rows of rank zeros. Both are nn.Parameter. self.scale is alpha / rank.
+    # TODO: Finish __init__. Store base as self.base and freeze it. self.A is an
+    #   nn.Parameter of shape (rank, base.in_features), drawn with torch.randn
+    #   and divided by the square root of base.in_features. self.B is an
+    #   nn.Parameter of zeros with shape (base.out_features, rank). Set
+    #   self.scale to alpha / rank.
     class LoRALinear(nn.Module):
         def __init__(
             self,
@@ -254,13 +259,16 @@ LORA1_SOURCE = source_file(
             super().__init__()
             ...
 
-        # TODO: Return base of x plus scale times x through A then B.
+        # TODO: Return self.base(x) plus self.scale times the update B A x, where
+        #   x passes through A first and then through B. x can have any number
+        #   of leading dimensions, with the features last.
         def forward(self, x: Tensor) -> Tensor:
             ...
 
 
-    # TODO: Freeze every parameter of model, then replace each block's
-    #   attn.c_attn with a LoRALinear around it. Return model.
+    # TODO: Freeze every parameter of model. Then replace each block's
+    #   attn.c_attn with a LoRALinear that wraps it, with the given rank and
+    #   alpha. Return model.
     def add_lora(
         model: nn.Module,
         rank: int,
@@ -333,7 +341,7 @@ def check_lora_init(found: type) -> None:
         spread = A.detach().std().item()
 
         if abs(spread - wanted) > 0.12 * wanted or abs(A.detach().mean().item()) > 0.12 * wanted:
-            raise Mismatch(f"In {call}, A has a spread of {spread:.4f}, but it should be drawn from a normal spread of {wanted:.4f}.")
+            raise Mismatch(f"In {call}, A has a standard deviation of {spread:.4f}, but it should be drawn from a normal distribution with a standard deviation of {wanted:.4f}.")
 
         expect_close(
             call=f"{call}.scale",
@@ -462,7 +470,7 @@ def check_lora1(checker: Checker) -> None:
     checker.test_method(
         class_name="LoRALinear",
         method="__init__",
-        description="freezes base and makes A drawn and B at zero",
+        description="freezes base, draws A at random and sets B to zero",
         run=check_lora_init,
     )
     checker.test_method(
@@ -497,9 +505,9 @@ LORA1 = Exercise(
     source=LORA1_SOURCE,
     solution=LORA1_SOLUTION,
     hints={
-        "LoRALinear.__init__": "base.requires_grad_(False) freezes it. torch.randn(rank, base.in_features) / "
-        "math.sqrt(base.in_features) and torch.zeros(base.out_features, rank), each wrapped in nn.Parameter.",
-        "LoRALinear.forward": "self.base(x) plus x @ self.A.T @ self.B.T, times self.scale.",
+        "LoRALinear.__init__": "base.requires_grad_(False) freezes base. Wrap torch.randn(rank, base.in_features) / "
+        "math.sqrt(base.in_features) in nn.Parameter for A, and torch.zeros(base.out_features, rank) for B.",
+        "LoRALinear.forward": "Add self.base(x) and x @ self.A.T @ self.B.T multiplied by self.scale.",
         "add_lora": "First freeze the whole model by passing False to its requires_grad_. Then for each block of "
         "model.h, set block.attn.c_attn to "
         "LoRALinear(block.attn.c_attn, rank, alpha).",
@@ -517,8 +525,8 @@ LORA1 = Exercise(
 
 LORA2_LESSON = prose(
     """
-    LoRA saves in three places. Here they are for rank 4 on your GPT's
-    `c_attn`, against fine tuning every weight.
+    LoRA saves memory and storage in three places. The table compares LoRA of
+    rank 4 on your GPT's `c_attn` with fine tuning every weight.
 
     | | Everything | LoRA, rank 4 |
     |---|---|---|
@@ -526,23 +534,25 @@ LORA2_LESSON = prose(
     | Gradients, and AdamW's two numbers per weight | 2,454,144 | 24,576 |
     | The saved fine tune | 3.3 MB, a whole model | 36 KB, A and B alone |
 
-    8,192 weights are 1% of the model. Each task keeps only its own `A` and
-    `B`, and the frozen model is shared. For GPT-3 the paper's checkpoint
-    shrank from 350 GB to 35 MB, roughly 10,000 times.
+    8,192 weights are 1% of the model. Each task stores only its own `A` and
+    `B`, and all tasks share the frozen model. For GPT-3, the paper's
+    checkpoint shrank from 350 GB to 35 MB, about 10,000 times smaller.
 
-    `state_dict()` names every weight by where it sits, so the update's
-    weights are the names that end in `.A` or `.B`.
+    `state_dict()` names every weight by its place in the model. So the
+    update's weights are the entries whose names end in `.A` or `.B`.
 
-    Once trained, the update folds back into its layer. The merged weight is
-    `W + (alpha / rank) * B A`, and the bias stays as it was. The merged
-    Linear gives the same outputs as the LoRA layer, and the model is gpt2's
-    GPT again. The paper notes the same, no extra time at inference.
+    Once trained, the update can be merged back into its layer. The merged
+    weight is `W + (alpha / rank) * B A`, and the bias stays as it was. The
+    merged Linear gives the same outputs as the LoRA layer, and the model
+    becomes gpt2's GPT again. The paper points out that this way LoRA adds
+    no extra time when the trained model runs.
 
-    To change task, take one update back out of `W` and add another. The
-    paper calls this switching tasks by swapping only the LoRA weights.
+    To switch to another task, subtract one update from `W` and add another.
+    The paper describes this as switching tasks by swapping only the LoRA
+    weights.
 
-    Writing into a weight that trains needs `torch.no_grad()`, since autograd
-    refuses an in place change to a weight it tracks.
+    Writing into a trainable weight needs `torch.no_grad()`, because autograd
+    refuses to let you change a weight it tracks in place.
 
     ```python
     layer = nn.Linear(2, 2)
@@ -584,21 +594,23 @@ LORA2_SOURCE = source_file(
 ''' + indented(LORA_PART) + '''
 
 
-    # TODO: Return the entries of model's state_dict whose names end in .A or .B.
+    # TODO: Return a dict with only the entries of model.state_dict() whose
+    #   names end in .A or .B, which are the weights of the LoRA updates.
     def lora_state(model: nn.Module) -> dict[str, Tensor]:
         ...
 
 
-    # TODO: Return a new nn.Linear that gives the same outputs as layer. Its
-    #   weight is base's weight plus scale times B @ A, and its bias is base's,
-    #   or none when base has none. Write them in without recording for autograd,
-    #   and leave layer as it was.
+    # TODO: Return a new nn.Linear that gives the same outputs as layer, a
+    #   LoRALinear. Its weight is layer.base.weight plus layer.scale times
+    #   B @ A. Its bias is a copy of base's bias, and it has no bias when base
+    #   has none. Copy the values in inside torch.no_grad(), and leave layer
+    #   unchanged.
     def merge(layer: LoRALinear) -> nn.Linear:
         ...
 
 
-    # TODO: Replace each block's attn.c_attn, a LoRALinear, with merge of it.
-    #   Return model.
+    # TODO: Each block's attn.c_attn is a LoRALinear. Replace it with the plain
+    #   Linear that merge returns for it. Return model.
     def merge_lora(model: nn.Module) -> nn.Module:
         ...
     ''',
@@ -735,7 +747,7 @@ def check_lora2(checker: Checker) -> None:
     )
     checker.test(
         function="merge_lora",
-        description="leaves gpt2's GPT, giving the same outputs",
+        description="turns the model back into gpt2's GPT with the same outputs",
         run=check_merge_lora,
     )
 
@@ -748,10 +760,10 @@ LORA2 = Exercise(
     source=LORA2_SOURCE,
     solution=LORA2_SOLUTION,
     hints={
-        "lora_state": "A dict comprehension over model.state_dict().items(), keeping the names that end with "
-        "\".A\" or \".B\". endswith takes a tuple.",
+        "lora_state": "Use a dict comprehension over model.state_dict().items() that keeps the names ending with "
+        "\".A\" or \".B\". endswith accepts a tuple.",
         "merge": "Make nn.Linear(layer.base.in_features, layer.base.out_features, bias=layer.base.bias is not None). "
-        "Inside torch.no_grad(), copy_ the merged weight in, and base's bias when there is one.",
+        "Inside torch.no_grad(), use copy_ to write the merged weight into it, and base's bias when there is one.",
         "merge_lora": "For each block of model.h, set block.attn.c_attn to merge(block.attn.c_attn).",
     },
     introduces=(),
@@ -915,27 +927,31 @@ def measure_pig_latin(seeds: tuple[int, ...] = (0, 1, 2)) -> dict[str, list[floa
 
 LORA3_LESSON = prose(
     """
-    lora2 counted what LoRA saves. Here is what it costs on post training,
-    the job it is made for. Post training teaches a trained model a task or a
-    format from examples, called demonstrations. The task is
-    83_post_training's pig latin. A word that starts with a vowel adds `way`,
-    so `apple` becomes `appleway`. Any other moves its leading consonants to
-    the end and adds `ay`, so `string` becomes `ingstray`. Each run started
-    from your gpt3 model and took 1,000 steps of 64 right demonstrations on
-    MPS, the rate falling in a line to 0.
+    lora2 counted what LoRA saves. This exercise measures what it costs on
+    post training, the job LoRA is made for. Post training teaches a trained
+    model a task or a format from examples, called demonstrations. The task
+    is the pig latin of 83_post_training. A word that starts with a vowel
+    gets `way` added, so `apple` becomes `appleway`. Any other word moves its
+    leading consonants to the end and adds `ay`, so `string` becomes
+    `ingstray`. Each run started from your gpt3 model and took 1,000 steps on
+    MPS. Each step used 64 correct demonstrations, and the learning rate fell
+    linearly to 0 over the run.
 
-    | Trained | Weights | Rate | Right of 500 held out words, 3 seeds |
+    | Trained | Weights | Rate | Correct on 500 held out words, 3 seeds |
     |---|---|---|---|
     | everything | 818,048 | 0.0001 | 97.8%, 98%, 97% |
     | LoRA on every Linear, rank 4 | 32,768 | 0.003 | 98%, 99.2%, 99% |
 
-    With 4% of the weights, LoRA matches fine tuning everything. Thinking
-    Machines saw the same on small and medium post training sets, with LoRA
-    on every layer. Its best rate was about 10 times higher, here 30. Held
-    fixed, that rate cost LoRA, 95% to 98% against everything's 98.2% to 99.2%.
+    With 4% of the weights, LoRA does as well as fine tuning everything.
+    Thinking Machines saw the same on small and medium post training sets,
+    with LoRA on every layer. They found LoRA's best learning rate to be
+    about 10 times higher than full fine tuning's, and here it is 30 times
+    higher. When the rate was held fixed instead of falling, LoRA did worse,
+    95% to 98% against 98.2% to 99.2% for fine tuning everything.
 
-    Learning a whole new text is a different job. Here is Persuasion from
-    finetune1 after 1,000 steps at the same rates, held fixed as there.
+    Learning a whole new text is a different job. Here is the loss on
+    Persuasion from finetune1 after 1,000 steps at the same rates, held fixed
+    as in finetune1.
 
     | Trained | Weights | Persuasion's loss |
     |---|---|---|
@@ -944,25 +960,29 @@ LORA3_LESSON = prose(
     | LoRA on every Linear, rank 4 | 32,768 | 1.334 |
     | LoRA on every Linear, rank 16 | 131,072 | 1.279 |
 
-    Biderman and colleagues found full fine tuning ahead on large code and
-    math sets too. Thinking Machines' rule joins the two. LoRA matches while
-    its weights can hold what the data teaches. So use LoRA to teach a format
-    or a skill, and fine tune everything to learn a large new text.
+    Biderman and colleagues also found full fine tuning ahead on large code
+    and math datasets. Thinking Machines' rule explains both results. LoRA
+    does as well as full fine tuning as long as its weights have room for
+    what the data teaches. So use LoRA to teach a format or a skill, and fine
+    tune everything to learn a large new text.
 
-    A matrix's **singular values** say how far it stretches along each of
-    its directions, largest first. Their squares add up to the sum of every
-    entry squared. Keeping the top k gives the closest matrix of rank k. The
-    **singular value decomposition**, SVD, writes a matrix as
-    `u @ torch.diag(s) @ vh`. `s` holds the singular values, `u`'s columns
-    the output directions and `vh`'s rows the input ones.
+    The **singular values** of a matrix say how much it stretches vectors
+    along each of its main directions, listed from largest to smallest.
+    Their squares add up to the sum of all the matrix's entries squared.
+    Keeping only the top k of them gives the closest matrix of rank k. The
+    **singular value decomposition**, or SVD, writes a matrix as
+    `u @ torch.diag(s) @ vh`. `s` holds the singular values. The columns of
+    `u` are the output directions, and the rows of `vh` are the input
+    directions.
 
     ```python
     torch.linalg.svdvals(torch.tensor([[3.0, 0.0], [0.0, 1.0]]))    # tensor([3.0000, 1.0000])
     ```
 
-    `update_energy` gives the share of an update its top k directions hold.
-    Here it is for each block's 384 by 128 `c_attn` change from fine tuning
-    everything, beside a random matrix.
+    `update_energy` gives the share of an update that its top k directions
+    hold, measured by squared singular values. The table shows it for the
+    change to each block's 384 by 128 `c_attn` weight from fine tuning
+    everything, next to a random matrix.
 
     | Matrix | Top 4, pig latin | Top 4, Persuasion | Top 16, pig latin | Top 16, Persuasion |
     |---|---|---|---|---|
@@ -972,11 +992,12 @@ LORA3_LESSON = prose(
     | block 3's update | 43% to 45% | 17% | 77% to 78% | 48% |
     | random | 7% | 7% | 26% | 26% |
 
-    Both sit in far fewer directions than random ones. A change that few
-    directions hold has a low **intrinsic rank**, LoRA's bet. The post
-    training update sits in fewer still, so a low rank catches it. On large
-    sets, Biderman and colleagues found full fine tuning's rank 10 to 100
-    times LoRA's.
+    Both updates are concentrated in far fewer directions than a random
+    matrix. A change that a few directions can hold has a low **intrinsic
+    rank**, and LoRA bets that fine tuning changes are like that. The post
+    training update is concentrated in even fewer directions, so a low rank
+    captures it. On large datasets, Biderman and colleagues found the rank of
+    the full fine tuning update to be 10 to 100 times the rank LoRA uses.
     """,
 )
 
@@ -994,7 +1015,7 @@ LORA3_SOURCE = source_file(
     from tensorlings.training import load_checkpoint
 
     values = torch.linalg.svdvals(torch.tensor([[3.0, 0.0], [0.0, 1.0]]))    # tensor([3.0000, 1.0000])
-    u, s, vh = torch.linalg.svd(torch.eye(2), full_matrices=False)          # torch.eye(2) is u @ torch.diag(s) @ vh
+    u, s, vh = torch.linalg.svd(torch.eye(2), full_matrices=False)          # u @ torch.diag(s) @ vh gives back torch.eye(2)
 
 
 ''' + indented(GPT_SETTINGS) + '''
@@ -1011,9 +1032,9 @@ LORA3_SOURCE = source_file(
 ''' + indented(LORA_PART) + '''
 
 
-    # TODO: Freeze every parameter of model, then wrap each of the four Linears
-    #   of every block, attn.c_attn, attn.c_proj, mlp.c_fc and mlp.c_proj, once
-    #   in a LoRALinear. Return model.
+    # TODO: Freeze every parameter of model. Then wrap each of the four Linears
+    #   of every block in a LoRALinear, exactly once. The four are attn.c_attn,
+    #   attn.c_proj, mlp.c_fc and mlp.c_proj. Return model.
     def add_lora_everywhere(
         model: nn.Module,
         rank: int,
@@ -1022,9 +1043,12 @@ LORA3_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the closest matrix of rank k to delta. Take its SVD with
-    #   full_matrices=False and keep the first k columns of u, values of s and
-    #   rows of vh.
+    # TODO: Return the matrix of rank k closest to delta. Take the SVD of delta
+    #   with full_matrices=False. Keep the first k columns of u, the first k
+    #   values of s and the first k rows of vh, and multiply them back
+    #   together.
+    #   Example: best_rank_k(torch.tensor([[3.0, 0.0], [0.0, 1.0]]), 1) returns
+    #   tensor([[3., 0.], [0., 0.]]).
     def best_rank_k(
         delta: Tensor,
         k: int,
@@ -1032,8 +1056,10 @@ LORA3_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the share of delta's singular values squared that its top k
-    #   hold, as a plain number.
+    # TODO: Square the singular values of delta. Return the sum of the top k
+    #   squares divided by the sum of all the squares, as a Python float.
+    #   Example: update_energy(torch.tensor([[3.0, 0.0], [0.0, 1.0]]), 1)
+    #   returns about 0.9.
     def update_energy(
         delta: Tensor,
         k: int,
@@ -1154,7 +1180,7 @@ def check_add_lora_everywhere(found: object) -> None:
         scaled = torch.cat(scaled_draws)
 
         if abs(scaled.std().item() - 1) > 0.15 or abs(scaled.mean().item()) > 0.15:
-            raise Mismatch("After add_lora_everywhere, the A's aren't drawn as lora1 drew them, normal draws divided by the square root of the inputs.")
+            raise Mismatch("After add_lora_everywhere, the A matrices are not drawn the way lora1 drew them, as normal draws divided by the square root of the number of inputs.")
 
         with torch.no_grad():
             actual = model(ids)
@@ -1201,7 +1227,7 @@ def check_lora3(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="update_energy",
-        description="gives the share the top k singular values squared hold",
+        description="gives the share of the squared singular values in the top k",
         inputs=(
             (Described(low_rank_plus_noise(798), "a 9 by 6 matrix near rank 2"), 2),
             (Described(random_matrix(799, 5, 8), "a random 5 by 8 matrix"), 1),
@@ -1220,12 +1246,12 @@ LORA3 = Exercise(
     source=LORA3_SOURCE,
     solution=LORA3_SOLUTION,
     hints={
-        "add_lora_everywhere": "model.requires_grad_(False), then for each block of model.h set each of the four "
-        "Linears to a LoRALinear around itself, as add_lora did for c_attn.",
+        "add_lora_everywhere": "Call model.requires_grad_(False) first. Then, for each block of model.h, replace each "
+        "of the four Linears with a LoRALinear that wraps it, as add_lora did for c_attn.",
         "best_rank_k": "torch.linalg.svd(delta, full_matrices=False) gives u, s and vh. Multiply u[:, :k], "
-        "torch.diag(s[:k]) and vh[:k].",
-        "update_energy": "Square torch.linalg.svdvals(delta). Divide the sum of the first k by the sum of them all, "
-        "then .item().",
+        "torch.diag(s[:k]) and vh[:k] together with @.",
+        "update_energy": "Square torch.linalg.svdvals(delta). Divide the sum of the first k squares by the sum of all "
+        "of them, then call .item().",
     },
     introduces=(),
     check=check_lora3,

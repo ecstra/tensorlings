@@ -31,11 +31,12 @@ GRAPHS = Chapter(
         """
         # Graphs and message passing
 
-        A graph is a set of nodes with edges between them. Its nodes have no
-        order, like a set's elements, and its edges say which nodes affect
-        which. This chapter stores graphs, builds message passing, the layer
-        every graph network is made of, normalizes it as the GCN does, and
-        shows why it fits algorithms on graphs like shortest paths.
+        A graph is a set of nodes with edges between them. Like the elements
+        of a set, its nodes have no order. Its edges say which nodes affect
+        which. This chapter shows two ways to store a graph. Then it builds
+        message passing, the layer every graph network is made of, and
+        normalizes it the way the GCN does. Last, it shows why message
+        passing suits algorithms on graphs, such as finding shortest paths.
 
         ## Further reading
 
@@ -150,37 +151,42 @@ def random_lengths(
 GRAPH1_LESSON = prose(
     """
     A graph is a set of nodes and the edges between them. Think of the atoms
-    of a molecule and its bonds, or towns and their roads. Its nodes have no
-    order, like a set's elements. Its edges carry what a set doesn't have,
-    which element affects which.
+    of a molecule and its bonds, or towns and their roads. Like the elements
+    of a set, the nodes have no order. The edges add something a set does
+    not have. They say which node affects which.
 
     There are two common ways to store the edges.
 
-    - An adjacency matrix has a row and a column per node, with a 1 where an edge runs from the row's node to the column's.
-    - An edge list has one column per edge, its source on top and its target below, as PyTorch Geometric stores it.
+    - An adjacency matrix has a row and a column per node. Entry `[s, t]` is 1 if an edge runs from s to t.
+    - An edge list has one column per edge. Row 0 holds the sources and row 1 the targets, as in PyTorch Geometric.
 
     ```python
-    edges = torch.tensor([[0, 1, 1], [1, 2, 0]])    # 0 to 1, 1 to 2 and 1 to 0
+    edges = torch.tensor([[0, 1, 1], [1, 2, 0]])    # edges from 0 to 1, from 1 to 2 and from 1 to 0
     ```
 
-    The matrix takes nodes squared numbers whatever the graph. The list takes
-    2 per edge. A million towns joined by 2 million roads need a matrix of a
-    million million entries. As a list, each road both ways, they need 8
-    million numbers.
+    The matrix always holds `nodes ** 2` numbers, however few edges there
+    are. The list holds 2 numbers per edge. A million towns joined by 2
+    million roads need a matrix of a million million entries. As a list,
+    with each road stored in both directions, they need 8 million numbers.
 
-    A road runs both ways and a follow runs one way. An undirected graph lists
-    each edge in both directions, so its matrix is symmetric. The degree of a
-    node is how many edges arrive at it.
+    Some edges go both ways, like a road. Others go one way, like one person
+    following another online. A graph whose edges all go both ways is
+    undirected. Its edge list holds each edge in both directions, so its
+    adjacency matrix is symmetric. The degree of a node is the number of
+    edges that arrive at it.
 
-    Two index tensors set many entries at once, one per pair.
+    Indexing with two tensors sets many entries at once. Each pair of
+    matching entries, one from each tensor, gives the row and the column of
+    one entry to set.
 
     ```python
     grid = torch.zeros(2, 3)
     grid[torch.tensor([0, 1]), torch.tensor([2, 0])] = 1.0    # tensor([[0., 0., 1.], [1., 0., 0.]])
     ```
 
-    `.nonzero()` goes the other way, one row per entry that isn't 0, in
-    reading order.
+    `.nonzero()` goes the other way. It returns the position of every entry
+    that is not 0, one row per entry, in reading order. Reading order means
+    row by row, and left to right within a row.
     """,
 )
 
@@ -193,12 +199,15 @@ GRAPH1_SOURCE = source_file(
 
     grid = torch.zeros(2, 3)
     grid[torch.tensor([0, 1]), torch.tensor([2, 0])] = 1.0    # tensor([[0., 0., 1.], [1., 0., 0.]])
-    where = grid.nonzero()                                   # tensor([[0, 2], [1, 0]]), one row per 1
+    where = grid.nonzero()                                   # tensor([[0, 2], [1, 0]]), the row and column of each 1
 
 
-    # TODO: Return the adjacency matrix of a graph of nodes nodes, as floats,
-    #   with a 1 at row s and column t for every edge from s to t. edges has
-    #   shape (2, edges), sources in row 0 and targets in row 1.
+    # TODO: Return the adjacency matrix of a graph with nodes nodes, as a float
+    #   tensor of shape (nodes, nodes). Put a 1 at row s and column t for
+    #   every edge from s to t, and 0 everywhere else. edges has shape
+    #   (2, edges), with sources in row 0 and targets in row 1.
+    #   Example: adjacency_from_edges(torch.tensor([[0, 1], [1, 2]]), 3)
+    #   returns tensor([[0., 1., 0.], [0., 0., 1.], [0., 0., 0.]]).
     def adjacency_from_edges(
         edges: Tensor,
         nodes: int,
@@ -206,14 +215,20 @@ GRAPH1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the edge list of adjacency, shape (2, edges), sources in row 0
-    #   and targets in row 1, ordered by source, then by target.
+    # TODO: Return the edge list of the graph in adjacency, with shape
+    #   (2, edges), sources in row 0 and targets in row 1. Order the edges by
+    #   source, and edges with the same source by target.
+    #   Example: for the matrix in the example above, edges_from_adjacency
+    #   returns tensor([[0, 1], [1, 2]]).
     def edges_from_adjacency(adjacency: Tensor) -> Tensor:
         ...
 
 
-    # TODO: Return how many edges arrive at each node, one count per node, for
-    #   nodes nodes.
+    # TODO: Return the number of edges that arrive at each node, as a tensor
+    #   with one count for each of the nodes nodes. A node that no edge
+    #   reaches gets a count of 0.
+    #   Example: in_degrees(torch.tensor([[0, 1, 2], [1, 2, 1]]), 3) returns
+    #   tensor([0, 2, 1]).
     def in_degrees(
         edges: Tensor,
         nodes: int,
@@ -221,8 +236,11 @@ GRAPH1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return edges followed by every edge turned around, so the graph runs
-    #   both ways. The result has twice as many columns.
+    # TODO: Return edges followed by every edge reversed, so that each edge
+    #   appears in both directions. An edge from s to t reversed is an edge
+    #   from t to s. The result has twice as many columns as edges.
+    #   Example: both_ways(torch.tensor([[0, 1], [1, 2]])) returns
+    #   tensor([[0, 1, 1, 2], [1, 2, 0, 1]]).
     def both_ways(edges: Tensor) -> Tensor:
         ...
     ''',
@@ -297,14 +315,14 @@ def expect_float_tensor(
     )
 
     if not actual.dtype.is_floating_point:
-        raise Mismatch(f"{call} holds {actual.dtype} numbers, but it should hold floats, so the matrix can multiply features.")
+        raise Mismatch(f"{call} holds {actual.dtype} numbers, but it should hold floats, so that the matrix can be multiplied with float features.")
 
 
 def check_graph1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="adjacency_from_edges",
-        description="puts a 1 where each edge runs",
+        description="puts a 1 at the row and column of each edge",
         inputs=(
             (SMALL_EDGES, 5),
             (OTHER_EDGES, 7),
@@ -337,7 +355,7 @@ def check_graph1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="both_ways",
-        description="adds every edge turned around",
+        description="adds every edge reversed",
         inputs=(
             (SMALL_EDGES,),
             (OTHER_EDGES,),
@@ -355,12 +373,14 @@ GRAPH1 = Exercise(
     source=GRAPH1_SOURCE,
     solution=GRAPH1_SOLUTION,
     hints={
-        "adjacency_from_edges": "Start from torch.zeros(nodes, nodes). Set every entry an edge names to 1.0 in one go, "
-        "with edges[0] and edges[1] as the two index tensors.",
-        "edges_from_adjacency": ".nonzero() gives one row per edge, a source and a target. Transpose it with .T to get "
-        "the two rows.",
-        "in_degrees": "torch.bincount of the targets, edges[1], with minlength=nodes so a node no edge reaches counts 0.",
-        "both_ways": ".flip(0) swaps the two rows of edges. torch.cat it after edges along dim=1.",
+        "adjacency_from_edges": "Start from torch.zeros(nodes, nodes). Set the entry of every edge to 1.0 in one "
+        "assignment, with edges[0] and edges[1] as the two index tensors.",
+        "edges_from_adjacency": ".nonzero() gives one row per edge, holding its source and its target. Transpose the "
+        "result with .T to get the two rows of an edge list.",
+        "in_degrees": "Use torch.bincount on the targets, edges[1]. Pass minlength=nodes so that a node with no "
+        "incoming edges still gets a count of 0.",
+        "both_ways": "edges.flip(0) swaps the two rows of edges, which reverses every edge. Join it after edges with "
+        "torch.cat along dim=1.",
     },
     introduces=(),
     check=check_graph1,
@@ -373,38 +393,43 @@ GRAPH1 = Exercise(
 
 MESSAGE1_LESSON = prose(
     """
-    Message passing, as Gilmer and colleagues framed it, updates every node
-    from its neighbours. Each edge carries a message from its source to its
-    target. Each node adds up the messages arriving, then updates its own
-    features from that sum and from itself.
+    Message passing, as Gilmer and colleagues described it, updates the
+    features of every node using its neighbours. Each edge carries a message
+    from its source node to its target node. Each node adds up the messages
+    that arrive at it. Then it computes its new features from that sum and
+    its own current features.
 
     ```text
     m_v  = sum over edges w to v of M(h_v, h_w, e_vw)
     h_v' = U(h_v, m_v)
     ```
 
-    h_v is node v's features, and e_vw holds the edge's own features when it
-    has some, like a bond's type. Here the message M is a Linear of the
-    source's features alone. The update U is a Linear of the node's features
-    and its sum, then a ReLU.
+    h_v is the feature vector of node v. e_vw holds the features of the edge
+    itself, if it has any, like the type of a chemical bond. In this file the
+    message function M is a Linear of the source node's features only. The
+    update function U is a Linear of the node's features and its sum of
+    messages side by side, followed by a ReLU.
 
-    Adding up messages by target is what `index_add_` does. It adds each row
-    of a tensor into the row an index names, so many messages can land on one
-    node.
+    `index_add_` adds up messages by target. It adds each row of one tensor
+    into the row of another tensor that the index names. When several
+    messages have the same target, they are all added into that node's row.
 
     ```python
     totals = torch.zeros(3, 2)
-    totals.index_add_(0, torch.tensor([2, 0, 2]), torch.ones(3, 2))    # rows [1, 1], [0, 0], [2, 2]
+    totals.index_add_(0, torch.tensor([2, 0, 2]), torch.ones(3, 2))    # totals now has rows [1, 1], [0, 0], [2, 2]
     ```
 
-    The same sum is a matrix product, the transposed adjacency matrix times
-    the features. The product does work for every pair of nodes, the list for
-    every edge, so big sparse graphs use the list.
+    The same sums also come from one matrix product, the transpose of the
+    adjacency matrix times the feature matrix. But the product does work for
+    every pair of nodes, while the edge list does work only for each edge. So
+    big graphs with few edges use the list.
 
-    A layer lets each node hear from nodes one edge away. k layers reach k
-    edges away. Like an equivariant set layer, it doesn't care how the nodes
-    are numbered. Renumber the 20 nodes of a random graph, and here the
-    outputs came out renumbered, every number exactly the same.
+    One layer lets each node receive information from nodes one edge away.
+    With k layers, information reaches nodes up to k edges away. Like an
+    equivariant set layer, message passing does not depend on how the nodes
+    are numbered. When the 20 nodes of a random graph were renumbered here,
+    the outputs came out renumbered in the same way. Every number was exactly
+    the same.
     """,
 )
 
@@ -417,12 +442,15 @@ MESSAGE1_SOURCE = source_file(
     from torch import Tensor
 
     totals = torch.zeros(3, 2)
-    totals.index_add_(0, torch.tensor([2, 0, 2]), torch.ones(3, 2))    # rows [1, 1], [0, 0], [2, 2]
+    totals.index_add_(0, torch.tensor([2, 0, 2]), torch.ones(3, 2))    # totals now has rows [1, 1], [0, 0], [2, 2]
 
 
-    # TODO: Return the sum of the messages arriving at each node, shape (nodes,
-    #   features). messages has one row per edge and targets the node each
-    #   one goes to.
+    # TODO: Return the sum of the messages that arrive at each node, as a
+    #   tensor of shape (nodes, features). messages has shape (edges,
+    #   features), one row per edge. targets has one entry per edge, the node
+    #   that edge's message goes to. A node with no messages gets zeros.
+    #   Example: aggregate(torch.ones(3, 2), torch.tensor([2, 0, 2]), 3)
+    #   returns tensor([[1., 1.], [0., 0.], [2., 2.]]).
     def aggregate(
         messages: Tensor,
         targets: Tensor,
@@ -431,9 +459,10 @@ MESSAGE1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the sum of the features h of every node's sources, as
-    #   aggregate of h[sources] would give, using the adjacency matrix and no
-    #   edge list.
+    # TODO: For every node, return the sum of the features of all the nodes
+    #   with an edge into it. h has shape (nodes, features). The result is
+    #   what aggregate(h[sources], targets, nodes) would give, but compute it
+    #   from the adjacency matrix with a matrix product, not from an edge list.
     def aggregate_by_matrix(
         h: Tensor,
         adjacency: Tensor,
@@ -441,10 +470,11 @@ MESSAGE1_SOURCE = source_file(
         ...
 
 
-    # TODO: Finish forward. The message along each edge is message of its
-    #   source's row of h. Each node adds up the messages arriving with
-    #   aggregate, then gets the ReLU of update of its own features and that
-    #   sum side by side.
+    # TODO: Finish forward. h has shape (nodes, features) and edges has shape
+    #   (2, edges). The message along each edge is self.message applied to the
+    #   source node's row of h. Add up the messages arriving at each node with
+    #   aggregate. Each node's new features are the ReLU of self.update applied
+    #   to its own features and that sum, joined side by side.
     class MessagePassing(nn.Module):
         def __init__(self, features: int) -> None:
             super().__init__()
@@ -548,7 +578,7 @@ def check_message1(checker: Checker) -> None:
     checker.test_method(
         class_name="MessagePassing",
         method="forward",
-        description="sends, adds up and updates",
+        description="sends messages, adds them up and updates each node",
         run=check_message_passing,
     )
 
@@ -563,10 +593,11 @@ MESSAGE1 = Exercise(
     hints={
         "aggregate": "Start from torch.zeros(nodes, messages.shape[1]) and call .index_add_ with dim 0, the targets "
         "and the messages.",
-        "aggregate_by_matrix": "Row t of the adjacency matrix's transpose has a 1 for every source of t, so multiply it "
-        "by h.",
-        "MessagePassing.forward": "h[edges[0]] gives each edge its source's row. Pass self.message of it to aggregate "
-        "with edges[1] and len(h). torch.cat h and the sum on dim=1, then self.update and torch.relu.",
+        "aggregate_by_matrix": "Row t of the transposed adjacency matrix has a 1 in the column of every node with an "
+        "edge into t. So multiplying the transpose by h adds up exactly those nodes' features.",
+        "MessagePassing.forward": "h[edges[0]] gives the source node's row for each edge. Pass self.message of that to "
+        "aggregate, with edges[1] and len(h). Join h and the sum with torch.cat on dim=1, then apply self.update and "
+        "torch.relu.",
     },
     introduces=(),
     check=check_message1,
@@ -606,49 +637,58 @@ def reference_mean_cosine(h: Tensor) -> float:
 
 MESSAGE2_LESSON = prose(
     """
-    Kipf and Welling's GCN is message passing with a fixed rule for weighing
-    the messages. Each node gets an edge to itself, `A + I`. Then the message
-    from u to v is divided by the square root of both their degrees, counted
-    with that self loop.
+    Kipf and Welling's GCN, short for graph convolutional network, is message
+    passing with a fixed rule for scaling the messages. First each node gets
+    an edge to itself, which turns A into `A + I`. Then the message from u to
+    v is divided by the square root of u's degree and by the square root of
+    v's degree. These degrees count the self loop too.
 
     ```text
     H' = ReLU(D^(-1/2) (A + I) D^(-1/2) H W)
     ```
 
-    A is the adjacency matrix and I the identity, which adds the self loops.
-    D holds each node's degree on its diagonal, H the features with a row per
-    node, and W a weight. Kipf and Welling wrote this for undirected graphs,
-    which list each edge both ways. There a row's sum equals graph1's degree.
+    A is the adjacency matrix, and I is the identity matrix, which adds the
+    self loops. D is a diagonal matrix that holds each node's degree. H holds
+    the features, one row per node, and W is a weight matrix. Kipf and
+    Welling wrote this for undirected graphs, which list each edge in both
+    directions. Their matrix is symmetric, so the sum of a node's row equals
+    its degree as graph1 counted it.
 
-    Without the division, a node with 100 neighbours adds 100 messages and a
-    node with 2 adds 2. Features grow with degree, and stacking layers makes
-    them grow without end.
+    Without the division, a node with 100 neighbours adds up 100 messages and
+    a node with 2 neighbours adds up 2. So the features grow with the degree,
+    and stacking layers makes them grow without limit.
 
     The paper's first version divided first and added each node's own
-    features after, `I + D^(-1/2) A D^(-1/2)`. That matrix can double a
-    vector, so stacked layers still blow up. Adding the self loop before
-    dividing stops it. The paper calls this the renormalization trick.
+    features afterwards. That gives the matrix `I + D^(-1/2) A D^(-1/2)`. It
+    can double the length of a vector, so stacked layers still blow up the
+    features. Adding the self loop before dividing prevents this. The paper
+    calls this the renormalization trick.
 
-    Each layer mixes a node with its neighbours, nearly an average. Stack many
-    and every node drifts to the same mix, which is called oversmoothing. Here
-    is the GCN's rule with no weights, repeated on a random graph of 40 nodes,
-    starting from random features. The table gives the average cosine
-    similarity between every two nodes' features.
+    Each layer replaces a node's features with something close to an average
+    of its own and its neighbours' features. Stack many layers, and the
+    features of every node become nearly the same. This is called
+    oversmoothing. The table repeats the GCN's matrix with no weights on a
+    random graph of 40 nodes, starting from random features. It gives the
+    average cosine similarity between the features of every two nodes.
 
     | Layers | 0 | 1 | 2 | 4 | 8 | 16 | 32 |
     |---|---|---|---|---|---|---|---|
     | Average cosine similarity | -0.001 | 0.085 | 0.176 | 0.344 | 0.626 | 0.895 | 0.991 |
 
-    At 0 the random features are unrelated. Deep enough, every node points the
-    same way, and no classifier can tell the nodes apart. Kipf and Welling
-    found their best results with 2 or 3 layers, and their main model has 2.
+    With 0 layers, the random features are unrelated. After enough layers,
+    every node's feature vector points in the same direction, so no
+    classifier can tell the nodes apart. Kipf and Welling got their best
+    results with 2 or 3 layers, and their main model has 2.
 
-    Over 8 layers on the same graph, the features grew 20,964 times with no
-    division, and 62 times with the first version's matrix. With the GCN's,
-    they shrank to 0.21 of their start.
+    Here is how the overall size of the features changed over 8 layers on the
+    same graph. With no division it grew 20,964 times, and with the first
+    version's matrix it grew 62 times. With the GCN's matrix, it shrank to
+    0.21 times its starting size.
 
-    Cosine similarity compares directions. `F.normalize(h, dim=1)` scales every
-    row to a length of 1, and the dot products of those rows are the cosines.
+    Cosine similarity compares the directions of two vectors and ignores
+    their lengths. `F.normalize(h, dim=1)` scales every row to a length of 1.
+    The dot product of two such rows is the cosine similarity of the original
+    rows.
     """,
 )
 
@@ -665,15 +705,19 @@ MESSAGE2_SOURCE = source_file(
     rows = F.normalize(torch.tensor([[3.0, 4.0]]), dim=1)    # tensor([[0.6000, 0.8000]])
 
 
-    # TODO: Return the GCN's matrix for adjacency, of shape (nodes, nodes): add
-    #   the identity, then divide each entry at row v and column u by the
-    #   square root of the degrees of v and u. A degree here is a row's sum
-    #   after the identity is added.
+    # TODO: Return the GCN's matrix for adjacency, of shape (nodes, nodes).
+    #   First add the identity matrix. Then divide the entry at row v and
+    #   column u by the square root of v's degree and by the square root of
+    #   u's degree. Here a node's degree is the sum of its row after the
+    #   identity is added.
+    #   Example: gcn_matrix(torch.tensor([[0.0, 1.0], [1.0, 0.0]])) returns
+    #   tensor([[0.5000, 0.5000], [0.5000, 0.5000]]).
     def gcn_matrix(adjacency: Tensor) -> Tensor:
         ...
 
 
-    # TODO: Return one GCN layer: the ReLU of normalized times h times weight.
+    # TODO: Return the output of one GCN layer. That is the ReLU of the matrix
+    #   product of normalized, h and weight, in that order.
     def gcn_layer(
         h: Tensor,
         normalized: Tensor,
@@ -682,8 +726,9 @@ MESSAGE2_SOURCE = source_file(
         ...
 
 
-    # TODO: Return h after multiplying it by normalized from the left layers
-    #   times, with no weights and no ReLU.
+    # TODO: Return h after multiplying it on the left by normalized, layers
+    #   times in a row, with no weights and no ReLU. When layers is 0, return
+    #   h unchanged.
     def propagate(
         h: Tensor,
         normalized: Tensor,
@@ -692,8 +737,11 @@ MESSAGE2_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the average cosine similarity between the features of every
-    #   two different nodes, each row of h being one node, as a plain number.
+    # TODO: Each row of h holds the features of one node. Return the average
+    #   cosine similarity over every pair of two different nodes, as a Python
+    #   float.
+    #   Example: mean_cosine(torch.tensor([[1.0, 0.0], [2.0, 0.0], [0.0, 3.0]]))
+    #   returns about 0.3333.
     def mean_cosine(h: Tensor) -> float:
         ...
     ''',
@@ -776,7 +824,7 @@ def check_message2(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="propagate",
-        description="applies the matrix layers times",
+        description="multiplies by the matrix layers times",
         inputs=(
             (torch.randn(7, 3, generator=torch.Generator().manual_seed(750)), Described(reference_gcn_matrix(GRAPH_A), "gcn_matrix of a graph of 7 nodes"), 3),
             (torch.randn(9, 2, generator=torch.Generator().manual_seed(751)), Described(reference_gcn_matrix(GRAPH_B), "gcn_matrix of a graph of 9 nodes"), 0),
@@ -810,12 +858,14 @@ MESSAGE2 = Exercise(
     source=MESSAGE2_SOURCE,
     solution=MESSAGE2_SOLUTION,
     hints={
-        "gcn_matrix": "torch.eye(len(adjacency)) adds the self loops. Raise the row sums to -0.5, then multiply the "
-        "matrix by them as a column with .unsqueeze(1) and as a row with .unsqueeze(0).",
-        "gcn_layer": "normalized @ h mixes the nodes, @ weight changes the features, and torch.relu comes last.",
-        "propagate": "A loop of layers steps, each setting h to normalized @ h.",
-        "mean_cosine": "F.normalize the rows, multiply by their transpose, take away the diagonal of 1s from the sum, "
-        "and divide by nodes * (nodes - 1) pairs.",
+        "gcn_matrix": "Add torch.eye(len(adjacency)) to get the self loops. Raise the row sums to the power -0.5. "
+        "Multiply the matrix by them once as a column with .unsqueeze(1) and once as a row with .unsqueeze(0).",
+        "gcn_layer": "normalized @ h mixes each node with its neighbours. Multiplying that by weight with @ changes "
+        "the features, and torch.relu comes last.",
+        "propagate": "Write a loop that runs layers times and sets h to normalized @ h each time.",
+        "mean_cosine": "F.normalize the rows and multiply the result by its transpose to get the cosine of every pair. "
+        "The diagonal pairs each node with itself and holds 1s. Subtract its sum from the total, then divide by "
+        "nodes * (nodes - 1), the number of pairs of different nodes.",
     },
     introduces=(),
     check=check_message2,
@@ -880,37 +930,44 @@ def reference_rounds_needed(
 
 MESSAGE3_LESSON = prose(
     """
-    Bellman-Ford finds the shortest distance from one node to every other.
-    Every node starts at infinity, and the source at 0. In each round, an edge
-    from u to v with length w offers v the distance `d_u + w`. Each node keeps
-    the smallest of its offers and its own.
+    The Bellman-Ford algorithm finds the shortest distance from one source
+    node to every other node. Each node holds a current distance. It starts
+    at infinity, except at the source, where it starts at 0. In each round,
+    every edge from u to v with length w offers v the distance `d_u + w`.
+    Each node then keeps the smallest of its offers and its current distance.
 
-    That round is a layer of message passing. The message is `d_u + w`, and
-    the nodes combine their messages by a minimum where message1 took a sum.
-    After k rounds every node knows its shortest distance over paths of at
-    most k edges. So a graph whose shortest paths take at most k edges needs k
-    rounds, as k layers reach k edges away. No path needs more than nodes - 1
-    edges, so that many rounds always do.
+    One round is a layer of message passing. The message is `d_u + w`, and
+    each node combines its messages with a minimum instead of the sum that
+    message1 used. After k rounds, every node knows its shortest distance
+    over paths of at most k edges. So if every shortest path in a graph has
+    at most k edges, k rounds are enough. This matches how k layers reach k
+    edges away. No shortest path needs more than `nodes - 1` edges, so `nodes - 1`
+    rounds are always enough.
 
-    Here it is on a random graph of 30 nodes with lengths from 1 to 9, from
-    node 0.
+    Here is Bellman-Ford from node 0 on a random graph of 30 nodes, with edge
+    lengths from 1 to 9. The table counts the nodes whose distance is already
+    correct after each number of rounds.
 
     | Rounds | 1 | 2 | 4 | 8 |
     |---|---|---|---|---|
     | Nodes with the right distance | 5 | 11 | 21 | 30 |
 
-    Nothing changed after 7 rounds here, far fewer than 29.
+    On this graph no distance changed after round 7. That is far fewer than
+    the 29 rounds that are always enough.
 
-    Xu and colleagues call this algorithmic alignment. A network whose layers
-    match an algorithm's steps only has to learn one small step, here a sum
-    and a minimum. For networks trained one step at a time, they proved a
-    bound on the examples needed that shrinks as the match gets closer.
-    75_shortest_paths measures it, with networks trained on only 8 graphs.
+    Xu and colleagues call this match algorithmic alignment. When a network's
+    layers match the steps of an algorithm, the network only has to learn one
+    small step, here a sum and a minimum. For networks trained one step at a
+    time, they proved a bound on how many training examples are needed. The
+    closer the match, the smaller the bound. 75_shortest_paths measures this
+    with networks trained on only 8 graphs.
 
-    `scatter_reduce` gathers by index like `index_add_`, and can take the
-    minimum instead of the sum. By default the value already there joins in.
-    Without the underscore it returns a new tensor and leaves `start` alone.
-    `torch.equal(a, b)` says whether two tensors hold exactly the same numbers.
+    `scatter_reduce` combines values by index like `index_add_`, but it can
+    take the minimum instead of the sum. By default, the value already in the
+    tensor takes part in the minimum. Without an underscore at the end,
+    `scatter_reduce` returns a new tensor and leaves `start` unchanged.
+    `torch.equal(a, b)` returns True when two tensors hold exactly the same
+    numbers.
 
     ```python
     start = torch.tensor([9.0, 9.0, 9.0])
@@ -934,9 +991,15 @@ MESSAGE3_SOURCE = source_file(
     same = torch.equal(torch.tensor([1.0, 2.0]), torch.tensor([1.0, 2.0]))    # True
 
 
-    # TODO: Return the distances after one round of Bellman-Ford. Each edge from
-    #   u to v, of length lengths at its column, offers v distances[u] plus its
-    #   length, and each node keeps the smallest of its offers and its own.
+    # TODO: Return the distances after one round of Bellman-Ford. lengths holds
+    #   one length per edge, in the same order as the columns of edges. Each
+    #   edge from u to v offers v the distance distances[u] plus its length.
+    #   Each node keeps the smallest of its offers and its current distance.
+    #   Return a new tensor and leave distances unchanged.
+    #   Example: with distances = torch.tensor([0.0, float("inf"), float("inf")]),
+    #   edges = torch.tensor([[0, 1, 1, 2], [1, 2, 0, 1]]) and
+    #   lengths = torch.tensor([4.0, 1.0, 4.0, 1.0]), relax returns
+    #   tensor([0., 4., inf]).
     def relax(
         distances: Tensor,
         edges: Tensor,
@@ -945,9 +1008,11 @@ MESSAGE3_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the shortest distance from source to every node of a graph of
-    #   nodes nodes, as floats. Start every node at float("inf") and source at
-    #   0, then run nodes - 1 rounds of relax.
+    # TODO: Return the shortest distance from source to every node, as a float
+    #   tensor with one entry for each of the nodes nodes. Start every node at
+    #   float("inf") and the source at 0, then run nodes - 1 rounds of relax.
+    #   Example: on the graph in the example above, from source 0, bellman_ford
+    #   returns tensor([0., 4., 5.]).
     def bellman_ford(
         source: int,
         edges: Tensor,
@@ -957,8 +1022,10 @@ MESSAGE3_SOURCE = source_file(
         ...
 
 
-    # TODO: Return how many rounds of relax change something, counted from the
-    #   same start, before a round changes nothing.
+    # TODO: Start from the same distances as bellman_ford and run relax again
+    #   and again. Return how many rounds changed at least one distance before
+    #   the first round that changes nothing.
+    #   Example: on the same graph from source 0, rounds_needed returns 2.
     def rounds_needed(
         source: int,
         edges: Tensor,
@@ -1044,8 +1111,9 @@ def check_relax_leaves_input(found: object) -> None:
 
     if not torch.equal(distances, before):
         raise Mismatch(
-            "relax changed the distances it was given. scatter_reduce_, with the underscore, works in place as "
-            "index_add_ does. Use scatter_reduce, which returns a new tensor, or rounds_needed can't compare rounds.",
+            "relax changed the distances it was given. scatter_reduce_, with the underscore, changes the tensor in "
+            "place, as index_add_ does. Use scatter_reduce, which returns a new tensor. Otherwise rounds_needed "
+            "cannot compare one round with the next.",
         )
 
 
@@ -1053,7 +1121,7 @@ def check_message3(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="relax",
-        description="keeps each node's smallest offer or its own",
+        description="keeps the smallest of each node's offers and its distance",
         inputs=(
             (torch.tensor([0.0, float("inf"), 4.0, float("inf"), 2.0, float("inf")]), Described(LINE_EDGES, "a line of 6 nodes, both ways"), LINE_LENGTHS),
             (torch.tensor([3.0, 0.0, 9.0, 1.0, 7.0, 2.0, 8.0, 5.0, 6.0, 4.0, 9.0, 9.0]), Described(PATH_EDGES, "a graph of 12 nodes"), PATH_LENGTHS),
@@ -1100,12 +1168,12 @@ MESSAGE3 = Exercise(
     source=MESSAGE3_SOURCE,
     solution=MESSAGE3_SOLUTION,
     hints={
-        "relax": "distances[edges[0]] + lengths gives every edge's offer. scatter_reduce them into distances at the "
-        "targets, edges[1], with reduce=\"amin\".",
-        "bellman_ford": "torch.full((nodes,), float(\"inf\")) starts every node, then set the source to 0.0. Loop "
-        "nodes - 1 times, setting the distances to relax of them.",
-        "rounds_needed": "Count up while relax gives something new, and stop when torch.equal says the round changed "
-        "nothing.",
+        "relax": "distances[edges[0]] + lengths gives every edge's offer. Use distances.scatter_reduce to combine "
+        "the offers at the targets, edges[1], with reduce=\"amin\".",
+        "bellman_ford": "torch.full((nodes,), float(\"inf\")) starts every node at infinity. Then set the source to "
+        "0.0. Loop nodes - 1 times, each time replacing the distances with relax of them.",
+        "rounds_needed": "Count the rounds while relax keeps returning new distances. Stop when torch.equal shows that "
+        "a round changed nothing.",
     },
     introduces=(),
     check=check_message3,
