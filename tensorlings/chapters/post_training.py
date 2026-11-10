@@ -41,12 +41,13 @@ POST_TRAINING = Chapter(
         """
         # Post training your GPT
 
-        Section 11's project runs post training end to end on your GPT from
-        gpt3, the way nanochat runs SFT and then RL on its own base model. LoRA
-        teaches it a made up task, pig latin, from demonstrations whose writer
-        often got one rule wrong. DPO then moves it toward the better of its
-        own answers, as a judge ranked them, and a reward model and exact match
-        score what each stage gained.
+        Section 11's project runs the whole post training process on your GPT
+        from gpt3, the way nanochat runs SFT and then RL on its own base model.
+        First LoRA teaches the GPT a made up task, pig latin, from
+        demonstrations. The person who wrote them often got one rule wrong.
+        Then DPO trains the GPT toward the better answer in each pair of its
+        own answers, as ranked by a judge. Finally, exact match and a reward
+        model measure how much each stage improved the model.
 
         ## Further reading
 
@@ -79,7 +80,8 @@ TASK_PART = '''
 VOWELS = "aeiou"
 
 
-# How many consonants lead word, 0 when it starts with a vowel. A y after the first letter counts as a vowel.
+# The number of consonants at the start of word, 0 when it starts with a vowel. A y after the first letter counts as
+# a vowel.
 def leading_consonants(word: str) -> int:
     if word[0] in VOWELS:
         return 0
@@ -91,8 +93,8 @@ def leading_consonants(word: str) -> int:
     return len(word)
 
 
-# The right answer. A word that starts with a vowel gets way. Any other moves its leading consonants to the end and
-# gets ay.
+# The right answer. A word that starts with a vowel gets "way" added to the end. Any other word moves its leading
+# consonants to the end and then gets "ay".
 def pig_latin(word: str) -> str:
     lead = leading_consonants(word)
 
@@ -102,7 +104,8 @@ def pig_latin(word: str) -> str:
     return word[lead:] + word[:lead] + "ay"
 
 
-# A near miss, the slip a hurried writer makes. ay and way swap, or only the first of several consonants moves.
+# A near miss, the mistake a hurried writer makes, called the slip. "ay" and "way" are swapped, or only the first of
+# several leading consonants is moved.
 def slip(word: str) -> str:
     lead = leading_consonants(word)
 
@@ -115,8 +118,8 @@ def slip(word: str) -> str:
     return word[1:] + word[0] + "ay"
 
 
-# The demonstrations' writer was in a hurry. On a word led by several consonants, 4 times in 5 they moved only the
-# first one, which is the slip.
+# The person who wrote the demonstrations was in a hurry. On a word that starts with several consonants, 4 times in 5
+# they moved only the first one, which is the slip.
 def demonstration(
     word: str,
     generator: torch.Generator,
@@ -127,7 +130,8 @@ def demonstration(
     return pig_latin(word)
 
 
-# Shakespeare's lowercase words of 3 to 8 letters, shuffled the same way every run, and 500 held out for tests.
+# Shakespeare's lowercase words of 3 to 8 letters whose slip differs from the right answer, shuffled the same way on
+# every run. Returns the training words and 500 held out words for testing.
 def task_words() -> tuple[list[str], list[str]]:
     found = re.findall(r"\\b[a-z]+\\b", load_shakespeare())
     words = sorted({word for word in found if 3 <= len(word) <= 8 and slip(word) != pig_latin(word)})
@@ -158,7 +162,7 @@ def chat_example(
 '''
 
 BATCH_PART = '''
-# Rows of different lengths as one batch, x padded with newlines and y with -100, which the loss skips.
+# Stacks rows of different lengths into one batch. x is padded with newlines and y with -100, which the loss skips.
 def pad_examples(
     rows: list[tuple[Tensor, Tensor]],
     newline: int,
@@ -174,7 +178,7 @@ def pad_examples(
     return x, y
 
 
-# A batch of count demonstrations, of words drawn at random.
+# A batch of count demonstrations, for words drawn at random.
 def demonstration_batch(
     words: list[str],
     positions: dict[str, int],
@@ -329,8 +333,8 @@ def dpo_step(
 '''
 
 PAIRS_PART = '''
-# An answer to each word, drawn from model at a temperature of 1. The words of one length share a batch, so their
-# prompts line up.
+# Samples one answer to each word from model, at a temperature of 1. Words of the same length share a batch, so their
+# prompts have the same length.
 def draw_answers(
     model: nn.Module,
     words: list[str],
@@ -371,8 +375,8 @@ def draw_answers(
     return drawn
 
 
-# The judge. It knows the right answer and counts the places where an answer has the right letter, less one for each
-# letter too many or too few.
+# The judge. It knows the right answer. It counts the positions where an answer has the right letter, minus one for
+# each letter too many or too few.
 def letters_right(
     written: str,
     right: str,
@@ -380,8 +384,8 @@ def letters_right(
     return sum(mine == wanted for mine, wanted in zip(written, right)) - abs(len(written) - len(right))
 
 
-# Two answers to every word, drawn from model, with the one the judge scores higher chosen and a tie going to the first.
-# Two answers that came out the same say nothing about which is better, so they make no pair.
+# Samples two answers to every word from model. The one the judge scores higher is chosen, and a tie goes to the first.
+# Two identical answers say nothing about which is better, so they make no pair.
 def judged_pairs(
     model: nn.Module,
     words: list[str],
@@ -408,7 +412,7 @@ def judged_pairs(
     return pairs
 
 
-# count pairs drawn at random, the chosen answers and the rejected ones as two batches of the same words.
+# Draws count pairs at random, and returns the chosen answers and the rejected answers as two batches of the same words.
 def pair_batch(
     pairs: list[tuple[str, str, str]],
     positions: dict[str, int],
@@ -422,7 +426,7 @@ def pair_batch(
     return chosen, rejected
 
 
-# post1's model read back from checkpoints/post1.pt, with LoRA on every Linear as it was trained.
+# Loads post1's model from checkpoints/post1.pt, with LoRA on every Linear as it was trained.
 def taught_gpt() -> nn.Module:
     model = add_lora_everywhere(GPT(65, BLOCK_SIZE, SIZE, LAYERS, HEADS), 4, 4.0)
 
@@ -529,7 +533,7 @@ POST3_MAIN = '''
 '''
 
 PREFERRED_PART = '''
-# post2's model read back from checkpoints/post2.pt, its layers merged once and a fresh LoRA on top, as DPO trained it.
+# Loads post2's model from checkpoints/post2.pt. Its layers were merged once and given a fresh LoRA, as DPO trained it.
 def preferred_gpt() -> nn.Module:
     model = add_lora_everywhere(GPT(65, BLOCK_SIZE, SIZE, LAYERS, HEADS), 4, 4.0)
 
@@ -641,10 +645,11 @@ POST1_LESSON = prose(
     """
     This is Section 11's project. Your GPT from gpt3 learns a made up task
     with LoRA. post2 then trains it toward the answers a judge preferred, and
-    post3 scores both.
+    post3 scores the models from both stages.
 
-    The task is pig latin. A word that starts with a vowel gets way. Any other
-    word moves its leading consonants to the end, then gets ay.
+    The task is pig latin. A word that starts with a vowel gets `way` added
+    to the end. Any other word moves its leading consonants to the end, then
+    gets `ay`.
 
     | Word | Answer |
     |---|---|
@@ -652,10 +657,11 @@ POST1_LESSON = prose(
     | `hello` | `ellohay` |
     | `string` | `ingstray` |
 
-    The demonstrations come from a writer in a hurry. On a word led by
-    several consonants, 4 times in 5 they moved only the first one, so
-    `string` became `tringsay`. Those words are 23% of the words, and 21% of
-    the 200 held out words the tables below use.
+    The demonstrations come from a writer in a hurry. On a word that starts
+    with several consonants, 4 times in 5 they moved only the first one, so
+    `string` became `tringsay`. This mistake is called the slip. Words that
+    start with several consonants are 23% of all the words. They are 21% of
+    the 200 held out words that the tables below use.
 
     Each chat is plain text, a question line and an answer line. A newline
     ends the answer.
@@ -665,11 +671,12 @@ POST1_LESSON = prose(
     A: tringsay
     ```
 
-    sft2 grew the vocabulary for its new tokens. Every character here is one
-    gpt3's GPT already knows, so LoRA can leave every original weight frozen.
-    `add_lora_everywhere` from lora3 puts rank 4 LoRA on the four Linears of
-    each block, 32,768 weights in all. `chat_example` scores the answer
-    alone, as sft1 did.
+    sft2 had to grow the vocabulary for its new tokens. Here every character
+    is one that gpt3's GPT already knows, so LoRA can leave every original
+    weight frozen. `add_lora_everywhere` from lora3 puts rank 4 LoRA on the
+    four Linear layers of each block, which adds 32,768 trainable weights in
+    all. `chat_example` sets up the targets so that the loss counts only the
+    answer, as in sft1.
 
     Once every check passes, train from the project folder. It took about
     a minute on an Apple M5's GPU, and about 1.5 minutes on 4 CPU threads.
@@ -678,17 +685,19 @@ POST1_LESSON = prose(
     .venv/bin/python run.py train post1
     ```
 
-    Here is what it learned, on 200 held out words, the average of 3 seeds.
+    The table shows what it learned, measured on 200 held out words and
+    averaged over 3 seeds.
 
     | Steps | 250 | 500 | 750 | 1,000 |
     |---|---|---|---|---|
     | Right | 24% | 62.5% | 77% | 78.5% |
     | The slip | 9.5% | 17.5% | 18% | 19% |
 
-    The model copied the writer, slip and all. From 500 steps on it writes
-    the slip for about one word in five. The writer got those words right one
-    time in 5, but the model answers with what it saw most often. More
-    demonstrations from the same writer would only teach the slip again.
+    The model copied the writer, including the slip. From 500 steps on, it
+    writes the slip for about one word in five. The writer got those words
+    right 1 time in 5, but the model answers with what it saw most often.
+    More demonstrations from the same writer would only teach the slip
+    again.
     """,
 )
 
@@ -710,7 +719,7 @@ POST1_SOURCE = source_file(
     from tensorlings.training import best_device, load_checkpoint, save_checkpoint
 
     targets = torch.tensor([7, 8, 9, 10])[1:].clone()    # tensor([ 8,  9, 10])
-    made_there = torch.tensor([[1, 2]], device=torch.device("cpu"))    # a tensor made on a device, not moved after
+    made_there = torch.tensor([[1, 2]], device=torch.device("cpu"))    # a tensor created directly on a device
     top = torch.tensor([0.1, 2.0, 0.5]).argmax().item()    # 1
     matches = sum(a == b for a, b in zip("abc", "abd"))    # 2
 
@@ -718,7 +727,7 @@ POST1_SOURCE = source_file(
 ''' + indented(GPT_SETTINGS) + '''
 
 
-    # The model from gpt2, and your model from gpt3 read back.
+    # The model from gpt2, and a loader for your model from gpt3.
 ''' + indented(MODEL_PART) + '''
 
 
@@ -736,10 +745,11 @@ POST1_SOURCE = source_file(
 ''' + indented(TASK_PART) + '''
 
 
-    # TODO: Return x and y for one chat, the prompt of word, then answer, then a
-    #   newline, as ids from positions. x is every id but the last, and y every
-    #   id but the first. Set y to -100 at every target before the answer's
-    #   first character, so the loss scores the answer and its newline alone.
+    # TODO: Return x and y for one chat. The chat's text is prompt_text(word),
+    #   then answer, then a newline, turned into ids with positions. x is every
+    #   id except the last, and y is every id except the first. Set y to -100
+    #   at every target before the answer's first character, so the loss
+    #   counts only the answer and its newline.
     def chat_example(
         word: str,
         answer: str,
@@ -751,9 +761,10 @@ POST1_SOURCE = source_file(
 ''' + indented(BATCH_PART) + '''
 
 
-    # TODO: Take one training step on x and y, moved to device. The loss is the
-    #   cross entropy of model's scores against y, which skips -100. Zero the old
-    #   gradients, backpropagate, step, and return the loss as a plain number.
+    # TODO: Take one training step on inputs x and targets y, after moving both
+    #   to device. The loss is the cross entropy of model's scores against y,
+    #   which skips targets of -100. Zero the old gradients, backpropagate,
+    #   call the optimizer's step, and return the loss as a Python float.
     def sft_step(
         model: nn.Module,
         optimizer: torch.optim.Optimizer,
@@ -764,10 +775,12 @@ POST1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the answer model writes to word, without recording for
-    #   autograd. Start from the ids of prompt_text(word), made on device. Each
-    #   step adds the character with the top score at the last place. Stop at a
-    #   newline, which is not part of the answer, or after 12 characters.
+    # TODO: Return the answer model writes to word, as a string. Start from the
+    #   ids of prompt_text(word), as a tensor with one row created on device.
+    #   At each step, take the character with the highest score at the last
+    #   position and append it to the ids. Stop at a newline, which is not part
+    #   of the answer, or after 12 steps. Run the model inside torch.no_grad(),
+    #   so autograd records nothing.
     def answer(
         model: nn.Module,
         word: str,
@@ -778,9 +791,11 @@ POST1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the share of words answered right, then the share answered
-    #   with the slip, as plain numbers. Answer each word once, with model in
-    #   eval mode, and put it back in training mode after.
+    # TODO: Return two Python floats, the fraction of words answered right and
+    #   the fraction answered with the slip. Call answer once per word, with
+    #   model in eval mode, and put model back in training mode afterwards.
+    #   Example: if answer writes appleway for apple and tringsay for string,
+    #   scores returns (0.5, 0.5).
     def scores(
         model: nn.Module,
         words: list[str],
@@ -849,11 +864,11 @@ def expect_whole_parts(*names: str):
         )
 
         if not isinstance(actual, (tuple, list)) or len(actual) != len(names):
-            raise Mismatch(f"{call} should give {len(names)} things, {' and '.join(names)}, but it gives {actual!r}.")
+            raise Mismatch(f"{call} should return {len(names)} values, {' and '.join(names)}, but it returns {actual!r}.")
 
         for name, part, wanted in zip(names, actual, expected):
             if isinstance(part, Tensor) and part.dtype != torch.long:
-                raise Mismatch(f"{name} from {call} holds {part.dtype} numbers, but it should hold whole numbers, torch.long, as ids do.")
+                raise Mismatch(f"{name} from {call} holds {part.dtype} numbers, but it should hold integers, torch.long, like ids.")
 
             expect_tensor(
                 call=f"{name} from {call}",
@@ -904,7 +919,7 @@ def check_sft_step(found: object) -> None:
         function="sft_step",
         run=lambda: found(recorder, torch.optim.SGD(recorder.parameters(), lr=0.1), x, y, torch.device("meta")),
         recorders=[recorder],
-        advice="Move x and y to device before the model and the loss.",
+        advice="Move x and y to device before passing them to the model and the loss.",
     )
 
 
@@ -926,7 +941,7 @@ class ScriptedWriter(nn.Module):
 
         # 12 characters take at most 13 calls, so a loop with no cap stops here with a reason, not a timeout.
         if len(self.calls) > 20:
-            raise Mismatch("answer kept asking for characters past 12. Stop at a newline or after 12 characters.")
+            raise Mismatch("answer kept running the model after 12 characters. Stop at a newline or after 12 characters.")
 
         written = ids.shape[1] - self.prompt_length
         scores = torch.zeros(ids.shape[0], ids.shape[1], len(SMALL_CHARACTERS))
@@ -956,10 +971,10 @@ def check_answer(found: object) -> None:
         first_ids, recording = model.calls[0]
 
         if first_ids != prompt:
-            raise Mismatch(f"{call} first ran the model on {first_ids}, but it should read the ids of prompt_text(word), {prompt}.")
+            raise Mismatch(f"{call} first ran the model on {first_ids}, but it should first read the ids of prompt_text(word), which are {prompt}.")
 
         if recording:
-            raise Mismatch(f"{call} ran the model while recording for autograd. Write inside torch.no_grad().")
+            raise Mismatch(f"{call} ran the model while autograd was recording. Run the model inside torch.no_grad().")
 
         expect_value(
             call=call,
@@ -975,7 +990,7 @@ def check_answer(found: object) -> None:
         function="answer",
         run=lambda: found(recorder, "cat", positions, SMALL_CHARACTERS, torch.device("meta")),
         recorders=[recorder],
-        advice="Make the prompt's ids on device, with device=device, and each new id too.",
+        advice="Create the prompt's ids on device, with device=device, and each new id too.",
     )
 
 
@@ -1015,7 +1030,7 @@ def check_scores(found: object) -> None:
             raise Mismatch("scores ran answer with the model in training mode. Call model.eval() first.")
 
         if not model.training:
-            raise Mismatch("scores left the model in eval mode. Call model.train() after.")
+            raise Mismatch("scores left the model in eval mode. Call model.train() afterwards.")
 
         right = sum(reply == POST_REFERENCE["pig_latin"](word) for word, reply in replies.items())
         slipped = sum(reply == POST_REFERENCE["slip"](word) for word, reply in replies.items())
@@ -1026,9 +1041,9 @@ def check_scores(found: object) -> None:
         )
 
         if not isinstance(actual, (tuple, list)) or len(actual) != 2:
-            raise Mismatch(f"{call} should give two shares, right then the slip, but it gives {actual!r}.")
+            raise Mismatch(f"{call} should return two fractions, right then the slip, but it returns {actual!r}.")
 
-        for name, share, wanted in (("the share right", actual[0], right), ("the share with the slip", actual[1], slipped)):
+        for name, share, wanted in (("the fraction right", actual[0], right), ("the fraction with the slip", actual[1], slipped)):
             expect_close(
                 call=f"{name} from {call}",
                 actual=share,
@@ -1040,7 +1055,7 @@ def check_post1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="chat_example",
-        description="scores the answer and its newline alone",
+        description="masks every target except the answer and its newline",
         inputs=(
             ("cat", "atcay", SMALL_POSITIONS),
             ("string", "tringsay", SMALL_POSITIONS),
@@ -1056,12 +1071,12 @@ def check_post1(checker: Checker) -> None:
     )
     checker.test(
         function="answer",
-        description="writes the likeliest character until a newline, at most 12",
+        description="writes the highest scoring character until a newline, at most 12",
         run=check_answer,
     )
     checker.test(
         function="scores",
-        description="gives the shares right and with the slip, in eval mode",
+        description="returns the fractions right and with the slip, in eval mode",
         run=check_scores,
     )
 
@@ -1074,17 +1089,16 @@ POST1 = Exercise(
     source=POST1_SOURCE,
     solution=POST1_SOLUTION,
     hints={
-        "chat_example": "prompt_text of the word gives the prompt. Make one tensor of the ids of prompt + answer + a "
-        "newline. x is "
-        "ids[:-1] and y is ids[1:].clone(). The answer starts at place len(prompt), so its first target sits at place "
-        "len(prompt) - 1. Set y before that to -100.",
-        "sft_step": "Move x to device and run the model on it for the scores. F.cross_entropy of scores.flatten(0, 1) "
-        "and y.to(device).flatten(). "
-        "Then zero_grad, backward, step, and loss.item().",
+        "chat_example": "prompt_text(word) gives the prompt. Make one tensor of the ids of prompt + answer + a newline. "
+        "x is ids[:-1] and y is ids[1:].clone(). The answer starts at index len(prompt), so its first target is at "
+        "index len(prompt) - 1. Set every entry of y before that to -100.",
+        "sft_step": "Move x to device and run the model on it to get the scores. Take F.cross_entropy of "
+        "scores.flatten(0, 1) and y.to(device).flatten(). Then call zero_grad, backward and step, and return "
+        "loss.item().",
         "answer": "Make ids with torch.tensor([[...]], device=device). Inside torch.no_grad(), loop 12 times. Take "
         "the argmax of model(ids)[0, -1] with .item(), and break if characters[token] is a newline. Otherwise add "
-        "the character, and torch.cat the token onto ids, made on device too.",
-        "scores": "model.eval(), then one answer per word, then model.train(). Count the answers equal to "
+        "the character to the answer, and torch.cat the token onto ids, as a tensor made on device too.",
+        "scores": "Call model.eval(), then answer once per word, then call model.train(). Count the answers equal to "
         "pig_latin(word) and the ones equal to slip(word), and divide each count by len(words).",
     },
     introduces=(),
@@ -1100,53 +1114,62 @@ POST1 = Exercise(
 
 POST2_LESSON = prose(
     """
-    post1's model writes the slip for most words led by several consonants.
-    New demonstrations cost a lot to write. Judging which of two answers is
-    better costs far less.
+    post1's model writes the slip for most words that start with several
+    consonants. Writing new demonstrations is expensive. Judging which of
+    two answers is better is much cheaper.
 
-    So `judged_pairs` has post1's model answer every training word twice, at
-    a temperature of 1. A judge who knows the right answer scores both with
-    `letters_right`, and the better one is chosen. When the two answers come
-    out the same, there is nothing to prefer, so the word gives no pair.
-    About 1,750 of the 7,835 words gave one.
+    So `judged_pairs` has post1's model answer every training word twice,
+    sampling at a temperature of 1. A judge who knows the right answer
+    scores both with `letters_right`, and the answer with the higher score
+    is chosen. When the two answers are identical, there is nothing to
+    prefer, so the word gives no pair. About 1,750 of the 7,835 words gave a
+    pair.
 
-    The chosen answers are better, not right. On words led by several
-    consonants, only 24% to 44% of them are right. The rest are the slip or
-    another mistake that beat a worse one.
+    The chosen answers are only better than the rejected ones, not always
+    right. On words that start with several consonants, only 24% to 44% of
+    the chosen answers are right. The rest are the slip, or another mistake
+    that beat a worse one.
 
-    dpo1's loss raises the chosen answer's log chance against the rejected
-    one's, each measured against a reference that stays fixed.
+    dpo1's loss raises the log probability of the chosen answer relative to
+    the rejected one. Both are measured relative to a reference model that
+    stays fixed.
 
-    LoRA hands you that reference. `merge_everywhere` folds post1's update
-    into its layers with lora2's `merge`, and a fresh LoRA goes on top. Its B
-    starts at zero, so the model starts as post1's. Set every update's scale
-    to 0, and it is post1's again at any step. Hugging Face's TRL trainer
-    gets its reference the same way for a new LoRA.
+    LoRA gives you that reference for free. `merge_everywhere` adds post1's
+    LoRA updates into the base weights with lora2's `merge`. Then a fresh
+    LoRA goes on top. Its B starts at zero, so the model starts out
+    identical to post1's. At any later step, setting the scale of every LoRA
+    update to 0 turns the model back into post1's. Hugging Face's TRL
+    trainer gets its reference the same way when it trains a new LoRA.
 
     ```python
-    layer.scale = 0.0    # the update adds nothing, so the layer is its base alone
+    layer.scale = 0.0    # the LoRA update adds nothing, so the layer computes only its base Linear
     ```
 
-    dpo2 found that plain DPO can pull the chosen answer down along with the
-    rejected one. So `dpo_step` adds Llama 3's term, 0.2 times the chosen
-    answers' cross entropy. That is minus their summed log chance over the
-    count of their scored tokens, which `answer_logprobs` already gives. It
-    is also called their negative log likelihood, so its weight is `nll`.
+    dpo2 found that plain DPO can lower the chosen answer's probability
+    along with the rejected one's. So `dpo_step` adds Llama 3's term, 0.2
+    times the chosen answers' cross entropy. That cross entropy is minus
+    their summed log probability, divided by the number of their targets
+    that are not -100. `answer_logprobs` already gives the summed log
+    probabilities. This cross entropy is also called the negative log
+    likelihood, so its weight is named `nll`.
 
-    Here is post1's model after 300 more steps of 32 pairs, on 200 held out
-    words, the average of 3 seeds. SFT trains on the same pairs' chosen
-    answers alone, at a rate of 0.001. DPO runs at 0.0001.
+    The table shows post1's model after 300 more steps of 32 pairs, measured
+    on 200 held out words and averaged over 3 seeds. The SFT row trains on
+    only the chosen answers of the same pairs, at a learning rate of 0.001.
+    DPO uses a learning rate of 0.0001.
 
-    | Run | Right | The slip | Led by several consonants, right |
+    | Run | Right | The slip | Right, on words starting with several consonants |
     |---|---|---|---|
     | post1's model | 78.5% | 19% | 5% |
     | SFT on the chosen answers | 87.5% | 6% | 47% |
     | DPO with the 0.2 term | 91% | 0.5% | 71% |
 
-    SFT copies the chosen answers, mistakes and all. DPO learns what puts the
-    chosen answer above the rejected one. The slip lost 3 to 6 times as many
-    pairs as it won. So DPO pushes it down, and the right answer rises in its
-    place. Each seed's DPO run stayed between 87% and 95% from step 50 on.
+    SFT copies the chosen answers, including their mistakes. DPO learns what
+    makes the chosen answer better than the rejected one. The slip was the
+    rejected answer in 3 to 6 times as many pairs as it was the chosen one.
+    So DPO pushes the slip's probability down, and the right answer's
+    probability rises in its place. Each seed's DPO run stayed between 87%
+    and 95% right from step 50 on.
 
     Once every check passes, train from the project folder. It took about a
     minute on an Apple M5's GPU, and about 2 minutes on 4 CPU threads.
@@ -1174,7 +1197,7 @@ POST2_SOURCE = source_file(
     from tensorlings.data import load_shakespeare
     from tensorlings.training import best_device, load_checkpoint, save_checkpoint
 
-    linears = [module for module in nn.Sequential(nn.Linear(2, 2), nn.ReLU()).modules() if isinstance(module, nn.Linear)]    # the one Linear
+    linears = [module for module in nn.Sequential(nn.Linear(2, 2), nn.ReLU()).modules() if isinstance(module, nn.Linear)]    # a list holding the one Linear
     counted = (torch.tensor([3, -100, 5]) != -100).sum()    # tensor(2)
 
 
@@ -1197,20 +1220,23 @@ POST2_SOURCE = source_file(
 ''' + indented(POST1_PARTS) + '''
 
 
-    # lora2's merge of one layer, dpo1's log chances and loss, and the pairs
-    # judged from two of the model's own answers to each word.
+    # lora2's merge of one layer, dpo1's answer_logprobs and dpo_loss, and the
+    # pairs judged from two of the model's own answers to each word.
 ''' + indented(POST2_GIVEN) + '''
 
 
-    # TODO: Fold every LoRA layer of model back into a plain Linear with merge,
-    #   the four Linears of each block in model.h, and return model.
+    # TODO: Replace every LoRA layer of model with a plain Linear, using merge.
+    #   Each block in model.h has four of them, attn.c_attn, attn.c_proj,
+    #   mlp.c_fc and mlp.c_proj. Return model.
     def merge_everywhere(model: nn.Module) -> nn.Module:
         ...
 
 
     # TODO: Return answer_logprobs of model on x and y with every LoRA update
-    #   switched off, without recording for autograd. Set the scale of every
-    #   LoRALinear in model.modules() to 0, then put each one's scale back.
+    #   switched off, which gives the reference's log probabilities. Set the
+    #   scale of every LoRALinear in model.modules() to 0, compute
+    #   answer_logprobs inside torch.no_grad(), then restore each layer's
+    #   original scale.
     def reference_logprobs(
         model: nn.Module,
         x: Tensor,
@@ -1219,12 +1245,14 @@ POST2_SOURCE = source_file(
         ...
 
 
-    # TODO: Take one DPO step on the pairs, each an (x, y) moved to device. The
-    #   reference's log chances come from reference_logprobs, the policy's from
-    #   answer_logprobs. The loss is dpo_loss at beta, plus nll times the chosen
-    #   answers' cross entropy. That cross entropy is minus their summed log
-    #   chance, over the count of their targets that are not -100. Zero the old
-    #   gradients, backpropagate, step, and return the loss as a plain number.
+    # TODO: Take one DPO step. chosen and rejected are each a pair (x, y). Move
+    #   all four tensors to device. Get the reference's log probabilities from
+    #   reference_logprobs and the policy's from answer_logprobs. The loss is
+    #   dpo_loss with beta, plus nll times the chosen answers' cross entropy.
+    #   That cross entropy is minus the sum of the policy's chosen log
+    #   probabilities, divided by the number of chosen targets that are not
+    #   -100. Zero the old gradients, backpropagate, call the optimizer's step,
+    #   and return the loss as a Python float.
     def dpo_step(
         model: nn.Module,
         optimizer: torch.optim.Optimizer,
@@ -1296,7 +1324,7 @@ def reference_model(
         raise Mismatch(str(missing)) from None
     except RuntimeError:
         raise Mismatch(
-            f"The saved model in checkpoints/{name}.pt doesn't fit the model as it is now. Train it again from the "
+            f"The saved model in checkpoints/{name}.pt does not match the current model. Train it again from the "
             f"project folder.\n\n    .venv/bin/python run.py train {name}",
         ) from None
 
@@ -1348,7 +1376,7 @@ def check_merge_everywhere(found: object) -> None:
             raise Mismatch(f"After {call}, {', '.join(left)} still hold LoRA layers. Merge all four Linears of every block.")
 
         expect_tensor(
-            call=f"the scores of the model {call} gives",
+            call=f"the scores of the model that {call} returns",
             actual=outputs_of(merged, seed),
             expected=expected,
         )
@@ -1378,10 +1406,10 @@ def check_reference_logprobs(found: object) -> None:
         )
 
         if actual.requires_grad:
-            raise Mismatch(f"{call} recorded for autograd. Work out the reference inside torch.no_grad().")
+            raise Mismatch(f"{call} returns log probabilities that autograd recorded. Compute the reference inside torch.no_grad().")
 
         expect_tensor(
-            call=f"the model's scores after {call}, which should have every scale put back",
+            call=f"the model's scores after {call}, which should have every scale restored",
             actual=outputs_of(model, seed),
             expected=before,
         )
@@ -1437,12 +1465,12 @@ def check_dpo_step(found: object) -> None:
 def check_post2(checker: Checker) -> None:
     checker.test(
         function="merge_everywhere",
-        description="folds every LoRA layer back into a Linear",
+        description="merges every LoRA layer back into a Linear",
         run=check_merge_everywhere,
     )
     checker.test(
         function="reference_logprobs",
-        description="scores with every update switched off, then puts it back",
+        description="computes log probabilities with every LoRA update off, then restores the scales",
         run=check_reference_logprobs,
     )
     checker.test(
@@ -1467,12 +1495,13 @@ POST2 = Exercise(
     hints={
         "merge_everywhere": "For each block in model.h, set block.attn.c_attn to merge(block.attn.c_attn), and the "
         "same for block.attn.c_proj, block.mlp.c_fc and block.mlp.c_proj. Return model.",
-        "reference_logprobs": "Gather the LoRALinear modules and keep their scales in a list. Set each scale to 0.0, "
+        "reference_logprobs": "Collect the LoRALinear modules and save their scales in a list. Set each scale to 0.0, "
         "run answer_logprobs inside torch.no_grad(), then set each scale back.",
-        "dpo_step": "Move the four tensors to device. Two reference_logprobs and two answer_logprobs give the four "
-        "log chances. The cross entropy is minus the policy's chosen log chances summed, over (chosen y != -100).sum(). "
-        "Add nll times it to dpo_loss, then zero_grad, backward, step, and loss.item().",
-        "taught_gpt": "Your post1 model is read from checkpoints/post1.pt. Train post1 again if it scores low.",
+        "dpo_step": "Move the four tensors to device. Two calls of reference_logprobs and two of answer_logprobs give "
+        "the four log probabilities. The cross entropy is minus the sum of the policy's chosen log probabilities, "
+        "divided by (chosen y != -100).sum(). Add nll times it to dpo_loss, then call zero_grad, backward and step, "
+        "and return loss.item().",
+        "taught_gpt": "Your post1 model is loaded from checkpoints/post1.pt. Train post1 again if it scores too low.",
     },
     introduces=(),
     check=check_post2,
@@ -1487,25 +1516,27 @@ POST2 = Exercise(
 
 POST3_LESSON = prose(
     """
-    Exact match needs a rule that knows every right answer. Real tasks rarely
-    have one, which is why reward1 trained a model to score answers. Pig latin
-    has the rule, so post3 checks one against the other.
+    Exact match needs a rule that gives the right answer to every question.
+    Real tasks rarely have such a rule, which is why reward1 trained a model
+    to score answers. Pig latin does have the rule, so post3 compares the
+    two ways of scoring.
 
-    The reward model is reward1's, on gpt3's GPT, trained with the Bradley
-    Terry loss for 1,000 steps. Its pairs are like reward1's, each right
-    answer against its slip. It reads a whole chat and gives one number, read
-    at the chat's last newline. `reward_rows` builds those chats, with the
-    place of each one's last newline.
+    The reward model is reward1's `RewardModel` built on gpt3's GPT, trained
+    with the Bradley Terry loss for 1,000 steps. As in reward1, each pair is
+    a right answer against a near miss, here its slip. The reward model
+    reads a whole chat and outputs one number, taken from its output at the
+    chat's last newline. `reward_rows` builds those chats, along with the
+    index of each chat's last newline.
 
     ```python
     torch.full((2, 3), 9)    # tensor([[9, 9, 9], [9, 9, 9]])
     ```
 
-    Each of 3 seeds trained its own reward model on the CPU, where a seed
-    gives the same model every time. Each one ranked the right answer above
-    its slip in all 500 held out pairs, for every kind of word. Here is each
-    stage's own answers to 200 held out words, scored both ways, for each
-    seed.
+    Each of 3 seeds trained its own reward model on the CPU, where the same
+    seed always gives the same model. Each reward model ranked the right
+    answer above its slip in all 500 held out pairs, for every kind of word.
+    The table scores each stage's own answers to 200 held out words in both
+    ways, for each seed.
 
     | Seed | post1, right | post1, mean reward | post2, right | post2, mean reward |
     |---|---|---|---|---|
@@ -1513,18 +1544,20 @@ POST3_LESSON = prose(
     | 1 | 78.5% | 6.29 | 95% | 8.63 |
     | 2 | 79.5% | 6.31 | 91% | 9.30 |
 
-    post2 wrote the slip for 1 word of the 200, where post1 wrote it for 18%
-    to 19.5% of them. Each reward model has its own scale, so compare rewards
-    within a row, never across rows. Your own run of main trains on the GPU
-    when there is one, and there even one seed lands on a new scale each run.
+    post2 wrote the slip for 1 word of the 200, while post1 wrote it for 18%
+    to 19.5% of them. Each reward model has its own scale, so compare
+    rewards within a row, never across rows. Your own run of main trains on
+    the GPU when there is one. On the GPU, even the same seed gives a reward
+    model with a different scale on each run.
 
-    Some things held in every run, these 3 and 6 more on the GPU, main's
-    among them. post2 scored above post1 both ways, and post1's slips
-    averaged below 0. Yet 6 to 16 of post2's other mistakes scored above its
-    average right answer. Ranking pairs well doesn't make it a judge of right
-    answers. It learned what tells the slip from the right answer, nothing
-    more. A model trained against it could learn mistakes it can't see, the
-    hacking reward2 showed on a toy.
+    Some results held in every run, these 3 and 6 more on the GPU, including
+    main's. post2 scored above post1 in both ways, and the rewards of
+    post1's slips averaged below 0. Yet 6 to 16 of post2's other mistakes
+    scored above the average reward of its right answers. So ranking pairs
+    well does not make the reward model a good judge of right answers. It
+    learned only what separates the slip from the right answer. A model
+    trained to maximize its reward could learn mistakes the reward model
+    cannot detect. That is the reward hacking reward2 showed on a toy.
 
     Once every check passes, train from the project folder. It took about
     half a minute on an Apple M5's GPU, and about 2 minutes on 4 CPU threads.
@@ -1583,13 +1616,15 @@ POST3_SOURCE = source_file(
 ''' + indented(POST2_SOLUTION_PARTS) + '''
 
 
-    # post2's model read back, and reward1's reward model with its training step.
+    # A loader for post2's model, and reward1's reward model with its training step.
 ''' + indented(POST3_GIVEN) + '''
 
 
-    # TODO: Return the ids of each word's whole chat, its prompt, its answer and
-    #   a newline, as rows padded at the end with newlines. Return also the
-    #   place of each chat's own last newline, where the reward model reads it.
+    # TODO: Return two tensors. The first holds the ids of each word's whole
+    #   chat, which is prompt_text(word), then its answer, then a newline. It
+    #   has one chat per row, padded at the end with newline ids. The second
+    #   holds the index of each chat's own final newline, where the reward
+    #   model reads its score.
     def reward_rows(
         words: list[str],
         answers: list[str],
@@ -1598,10 +1633,10 @@ POST3_SOURCE = source_file(
         ...
 
 
-    # TODO: Return reward_model's mean score of the answers, as a plain number,
-    #   without recording for autograd. Score every chat in one batch from
-    #   reward_rows, in eval mode, and put reward_model back in training mode
-    #   after.
+    # TODO: Return the mean reward that reward_model gives the answers, as a
+    #   Python float. Score all the chats in one batch built by reward_rows.
+    #   Put reward_model in eval mode first and back in training mode
+    #   afterwards, and run it inside torch.no_grad().
     def mean_reward(
         reward_model: nn.Module,
         words: list[str],
@@ -1690,10 +1725,10 @@ def check_mean_reward(found: object) -> None:
     ):
         model = ScriptedReward()
         actual = found(model, words, answers, SMALL_POSITIONS.value)
-        call = f"mean_reward of a reward model that gives each chat's last place, for {answers}"
+        call = f"mean_reward of a reward model that returns each chat's last index, for {answers}"
 
         if len(model.calls) != 1:
-            raise Mismatch(f"{call} ran the reward model {len(model.calls)} times, but one batch of every chat is enough.")
+            raise Mismatch(f"{call} ran the reward model {len(model.calls)} times, but it should score every chat in one batch.")
 
         training, recording = model.calls[0]
 
@@ -1701,10 +1736,10 @@ def check_mean_reward(found: object) -> None:
             raise Mismatch(f"{call} ran the reward model in training mode. Call reward_model.eval() first.")
 
         if recording:
-            raise Mismatch(f"{call} recorded for autograd. Score inside torch.no_grad().")
+            raise Mismatch(f"{call} ran the reward model while autograd was recording. Score inside torch.no_grad().")
 
         if not model.training:
-            raise Mismatch(f"{call} left the reward model in eval mode. Call reward_model.train() after.")
+            raise Mismatch(f"{call} left the reward model in eval mode. Call reward_model.train() afterwards.")
 
         _, last = POST_REFERENCE["reward_rows"](words, answers, SMALL_POSITIONS.value)
         expect_close(
@@ -1752,7 +1787,7 @@ def trained_reward_model() -> nn.Module:
         raise Mismatch(str(missing)) from None
     except RuntimeError:
         raise Mismatch(
-            "The saved model in checkpoints/post3.pt doesn't fit RewardModel as it is now. Train it again from the "
+            "The saved model in checkpoints/post3.pt does not match the current RewardModel. Train it again from the "
             "project folder.\n\n    .venv/bin/python run.py train post3",
         ) from None
 
@@ -1787,13 +1822,13 @@ def check_post3(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="reward_rows",
-        description="gives each whole chat padded, and its last newline's place",
+        description="returns each whole chat padded, and the index of its last newline",
         inputs=(
             (["cat", "string"], ["atcay", "tringsay"], SMALL_POSITIONS),
             (["oak", "sky", "lip"], ["oakway", "", "iplay"], SMALL_POSITIONS),
         ),
         reference=POST_REFERENCE["reward_rows"],
-        expect=expect_whole_parts("the ids", "the last places"),
+        expect=expect_whole_parts("the ids", "the last indices"),
     )
     checker.test(
         function="mean_reward",
@@ -1807,7 +1842,7 @@ def check_post3(checker: Checker) -> None:
     )
     checker.test(
         function="mean_reward",
-        description="your reward model ranks most held out pairs right",
+        description="your reward model ranks most held out pairs correctly",
         run=check_trained_reward,
     )
 
@@ -1821,11 +1856,11 @@ POST3 = Exercise(
     solution=POST3_SOLUTION,
     hints={
         "reward_rows": "Build each text as prompt_text(word) + answer + a newline. torch.full makes the rows of "
-        "newline ids, one per text, as long as the longest. Copy each text's ids into its row. The last places are "
+        "newline ids, one per text, as long as the longest. Copy each text's ids into its row. The last indices are "
         "each text's length minus 1.",
-        "mean_reward": "reward_model.eval(), then inside torch.no_grad() call reward_model(*reward_rows(...)). Put "
+        "mean_reward": "Call reward_model.eval(), then inside torch.no_grad() call reward_model(*reward_rows(...)). Put "
         "the reward model back in training mode with its train method, then return the rewards' mean().item().",
-        "preferred_gpt": "Your post2 model is read from checkpoints/post2.pt. Train post2 again if it scores low.",
+        "preferred_gpt": "Your post2 model is loaded from checkpoints/post2.pt. Train post2 again if it scores too low.",
     },
     introduces=(),
     check=check_post3,

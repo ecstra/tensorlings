@@ -40,11 +40,13 @@ DPO = Chapter(
         """
         # Direct preference optimization
 
-        RLHF trains a reward model, then runs PPO against it with a penalty
-        for drifting. DPO gets the same goal from the pairs alone, with one
-        loss and no sampling. This chapter derives the DPO loss from reward2's
-        closed form, trains your GPT with it next to the reward model route,
-        then builds GRPO's advantages, which need no value model.
+        RLHF trains a reward model, then trains the policy with PPO to get high
+        rewards, with a penalty for drifting from the reference. Direct
+        preference optimization, DPO, reaches the same goal from the preference
+        pairs alone. It uses one loss and samples no answers during training.
+        This chapter derives the DPO loss from reward2's closed form and trains
+        your GPT with it, then compares that with using a reward model. Last,
+        it builds GRPO's advantages, which need no value network.
 
         ## Further reading
 
@@ -541,41 +543,45 @@ def grpo_rows(
 
 DPO1_LESSON = prose(
     """
-    reward2 found the best policy for a reward in closed form. DPO, from
-    Rafailov and colleagues, turns that around. Take logs and solve for the
-    reward instead.
+    reward2 found the best policy for a given reward in closed form. DPO,
+    from Rafailov and colleagues, turns that formula around. Take logs of it
+    and solve for the reward instead of the policy.
 
     ```text
     r(y) = beta * log(policy(y) / reference(y)) + beta * log Z
     ```
 
-    Put that into reward1's Bradley Terry chance. Only the gap between two
-    rewards counts, so the two `log Z` cancel, and what is left needs only
-    the policy and the reference.
+    Put that reward into reward1's Bradley Terry probability. That
+    probability depends only on the difference between two rewards, so the
+    two `log Z` terms cancel. What is left needs only the policy and the
+    reference.
 
     ```text
     P(chosen beats rejected) = sigmoid(beta * (log ratio of chosen - log ratio of rejected))
     ```
 
-    A log ratio is the policy's log chance of an answer minus the
-    reference's. The DPO loss is minus the log of that chance, averaged over
-    pairs. It trains the policy straight on the pairs, with no reward model
-    and no sampling. In the paper's title, your language model is secretly a
-    reward model, with `beta * (log policy - log reference)` as its implicit
-    reward.
+    The log ratio of an answer is the policy's log probability of it minus
+    the reference's log probability of it. The DPO loss is minus the log of
+    that probability, averaged over the pairs. It trains the policy directly
+    on the pairs, with no reward model and no sampling. The paper's title
+    says your language model is secretly a reward model. Its implicit reward
+    is `beta * (log policy - log reference)`.
 
-    An answer's log chance is the sum of its tokens' log chances, each given
-    the tokens before it. Only the answer's tokens count, the targets sft1
-    kept. `gather` picks one entry of each row by index.
+    The log probability of an answer is the sum of the log probabilities of
+    its tokens, each given the tokens before it. Only the answer's tokens
+    count, which are the targets that sft1 did not set to -100. `gather`
+    picks one entry from each row, using a tensor of indices.
 
     ```python
     logs = torch.log_softmax(torch.tensor([[1.0, 2.0, 3.0], [1.0, 1.0, 1.0]]), dim=-1)
-    logs.gather(-1, torch.tensor([[2], [0]]))    # tensor([[-0.4076], [-1.0986]]), entry 2, then entry 0
+    logs.gather(-1, torch.tensor([[2], [0]]))    # tensor([[-0.4076], [-1.0986]]), entry 2 of row 0, entry 0 of row 1
     ```
 
-    The paper uses a beta of 0.1 unless it says otherwise. Its gradient
-    weighs each pair by the sigmoid of minus the implicit reward gap. A pair
-    the policy already orders well counts for little.
+    The paper uses a beta of 0.1 unless it says otherwise. The gradient of
+    the DPO loss weights each pair by `sigmoid(-gap)`. Here gap is the
+    chosen answer's implicit reward minus the rejected answer's. So a pair
+    that the policy already ranks correctly by a wide margin counts for
+    little.
 
     | Implicit reward gap | -2 | 0 | 2 | 4 |
     |---|---|---|---|---|
@@ -597,10 +603,13 @@ DPO1_SOURCE = source_file(
     safe = torch.tensor([4, -100]).masked_fill(torch.tensor([False, True]), 0)    # tensor([4, 0])
 
 
-    # TODO: Return each row's log chance of its answer, of shape (rows,). Take
-    #   log_softmax of model's scores on x, gather each target's entry, and sum
-    #   the places whose target isn't -100. gather can't read place -100, so
-    #   swap those targets for 0 before gathering, without changing y itself.
+    # TODO: Return the log probability of each row's answer, a tensor of shape
+    #   (rows,). x and y are inputs and targets of shape (rows, steps), as
+    #   from sft1's pad_rows. Take log_softmax of the model's scores on x, and
+    #   use gather to pick the entry of each target. Sum those over the
+    #   positions whose target is not -100. gather cannot use -100 as an
+    #   index, so replace those targets with 0 in a new tensor before
+    #   gathering. Do not change y itself.
     def answer_logprobs(
         model: nn.Module,
         x: Tensor,
@@ -609,9 +618,12 @@ DPO1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the DPO loss as a tensor, minus the mean log sigmoid of beta
-    #   times the gap between the chosen and the rejected log ratios. A log
-    #   ratio is the policy's log chance minus the reference's.
+    # TODO: Return the DPO loss, as a tensor with one number. The log ratio of
+    #   an answer is the policy's log probability minus the reference's. For
+    #   each pair, take beta times the chosen log ratio minus the rejected log
+    #   ratio, and take its log sigmoid. Return minus the mean over the pairs.
+    #   Example: dpo_loss(torch.tensor([-1.0]), torch.tensor([-3.0]),
+    #   torch.tensor([-2.0]), torch.tensor([-2.0]), 1.0) returns tensor(0.1269).
     def dpo_loss(
         policy_chosen: Tensor,
         policy_rejected: Tensor,
@@ -622,8 +634,8 @@ DPO1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the implicit rewards, beta times the policy's log chances
-    #   minus the reference's.
+    # TODO: Return the implicit reward of each answer, which is beta times the
+    #   policy's log probability minus the reference's log probability.
     def implicit_rewards(
         policy_logprobs: Tensor,
         reference_logprobs: Tensor,
@@ -670,25 +682,25 @@ def check_answer_logprobs(found: object) -> None:
         )
 
         if not actual.requires_grad:
-            raise Mismatch(f"{call} holds no gradient, but DPO trains through it. Leave out torch.no_grad here.")
+            raise Mismatch(f"{call} returns log probabilities that autograd did not record, but DPO trains through them. Remove torch.no_grad here.")
 
         if not torch.equal(y, targets):
             raise Mismatch(
-                f"{call} changed y, the caller's targets, so a later loss on the same batch would score the wrong "
-                "tokens. Swap the -100s in a new tensor, as masked_fill makes one.",
+                f"{call} changed y, the caller's targets, so a later loss on the same batch would count the wrong "
+                "tokens. Replace the -100s in a new tensor, which masked_fill returns.",
             )
 
 
 def check_dpo1(checker: Checker) -> None:
     checker.test(
         function="answer_logprobs",
-        description="sums the log chances of the answer's tokens",
+        description="sums the log probabilities of the answer's tokens",
         run=check_answer_logprobs,
     )
     check_on_inputs(
         checker=checker,
         function="dpo_loss",
-        description="is minus the mean log sigmoid of beta times the gap of log ratios",
+        description="is minus the mean log sigmoid of beta times the difference of log ratios",
         inputs=(
             (torch.tensor([-1.0, -2.0]), torch.tensor([-3.0, -1.5]), torch.tensor([-1.5, -2.0]), torch.tensor([-2.0, -2.5]), 0.1),
             (torch.tensor([-4.0, -1.0, -6.0]), torch.tensor([-2.0, -9.0, -1.0]), torch.tensor([-3.0, -3.0, -3.0]), torch.tensor([-3.0, -3.0, -900.0]), 0.5),
@@ -717,11 +729,12 @@ DPO1 = Exercise(
     source=DPO1_SOURCE,
     solution=DPO1_SOLUTION,
     hints={
-        "answer_logprobs": "F.log_softmax of model(x) over dim=-1. kept = y != -100. Gather with y.masked_fill(~kept, 0) "
-        "unsqueezed at the end, squeeze it back, multiply by kept and sum over dim=1.",
-        "dpo_loss": "The gap is (policy_chosen - reference_chosen) - (policy_rejected - reference_rejected). Then "
-        "F.logsigmoid of beta times it, the mean, and minus.",
-        "implicit_rewards": "beta times policy_logprobs - reference_logprobs.",
+        "answer_logprobs": "Take F.log_softmax of model(x) over dim=-1, and make a mask kept = y != -100. Gather with "
+        "y.masked_fill(~kept, 0), unsqueezed at the end, then squeeze the result back. Multiply by kept and sum over "
+        "dim=1.",
+        "dpo_loss": "The gap is (policy_chosen - reference_chosen) - (policy_rejected - reference_rejected). Take "
+        "F.logsigmoid of beta times the gap, then the mean, and put a minus in front.",
+        "implicit_rewards": "Multiply beta by policy_logprobs - reference_logprobs.",
     },
     introduces=(),
     check=check_dpo1,
@@ -735,69 +748,74 @@ DPO1 = Exercise(
 
 DPO2_LESSON = prose(
     """
-    DPO needs a reference, the model before DPO, held still. `copy.deepcopy`
-    makes a separate copy, and `requires_grad_(False)` stops every one of
-    its weights from training.
+    DPO needs a reference, which is the model as it was before DPO, kept
+    fixed during training. `copy.deepcopy` makes a separate copy of a model.
+    `requires_grad_(False)` stops every one of the copy's weights from
+    training.
 
     ```python
     layer = nn.Linear(2, 2)
-    frozen = copy.deepcopy(layer).requires_grad_(False)    # its own weights, which never train
+    frozen = copy.deepcopy(layer).requires_grad_(False)    # a copy with its own weights, which never train
     ```
 
-    The reference's log chances are taken inside `torch.no_grad()`. Its
-    weights are frozen, so autograd would record nothing anyway. But no_grad
-    says so in the code, and keeps it true for a reference someone forgot to
-    freeze.
+    Compute the reference's log probabilities inside `torch.no_grad()`. Its
+    weights are frozen, so autograd would record nothing anyway. But
+    `torch.no_grad()` makes that explicit in the code. It also keeps the
+    reference out of autograd if someone forgot to freeze it.
 
     Here DPO starts from gpt3's GPT after 200 steps of sft2's training. The
-    pairs are its own answers. It answers every training word twice, at a
-    temperature of 1. A judge counts the letters in the right places, and
-    the better answer is chosen. Two answers that came out the same make no
-    pair. That left about 3,600 pairs, and about half their chosen answers
-    are right. The rest are the lesser of two mistakes.
+    pairs come from the model's own answers. It answers every training word
+    twice, sampling at a temperature of 1. A judge counts the letters in the
+    right places, and the answer with more of them is chosen. Two identical
+    answers make no pair. That left about 3,600 pairs. About half of their
+    chosen answers are right, and the rest are the better of two wrong
+    answers.
 
-    Each run takes 100 more steps of 32 pairs, with a beta of 0.1. Every
-    number is the average of 3 seeds, on 200 held out words.
+    Each run trains for 100 more steps of 32 pairs, with a beta of 0.1.
+    Every number is the average of 3 seeds, measured on 200 held out words.
 
-    | 100 more steps of | Exact answers | Right answer's log chance |
+    | 100 more steps of | Exact answers | Right answer's log probability |
     |---|---|---|
     | nothing, the start | 74% | -1.08 |
     | SFT on the chosen answers | 73% | -1.34 |
     | DPO | 46% | -3.71 |
     | DPO plus 0.2 of the SFT loss | 83% | -0.76 |
 
-    SFT copies every chosen answer, so it learns their mistakes too, and
-    ends about where it began. DPO learns what puts the chosen answer above
-    the rejected one. A mistake counts against itself each time it loses,
-    even to another mistake. Seed by seed, SFT scored 81%, 75.5% and 62%,
-    and DPO with the term 81%, 89% and 80%.
+    SFT learns to copy every chosen answer, so it learns their mistakes too,
+    and ends about where it began. DPO learns what makes the chosen answer
+    better than the rejected one. A wrong answer is pushed down each time it
+    loses, even when it loses to another wrong answer. Per seed, SFT scored
+    81%, 75.5% and 62%, and DPO with the SFT term scored 81%, 89% and 80%.
 
-    DPO alone pushed the right answers down too, so fewer came out on top.
-    Pal and colleagues found this when the two answers differ in a few
-    tokens, as these do. Llama 3 adds the SFT loss on the chosen answers,
-    times 0.2, which holds them up. The check trains your GPT this way, on
+    DPO alone also lowered the probability of the right answers, so the
+    right answer came out on top less often. Pal and colleagues found this
+    happens when the two answers differ in only a few tokens, as these do.
+    Llama 3 adds the SFT loss on the chosen answers, multiplied by 0.2,
+    which keeps their probability up. The check trains your GPT this way, on
     reward1's pairs.
 
-    In InstructGPT, RLHF with PPO holds four models at once. They are the
-    policy, the reference, the reward model, and a value network, as in
-    ppo2, started from the reward model. It also writes answers during
-    training, which is slow. DPO holds two, and here it wrote its answers
-    once, before training.
+    In InstructGPT, RLHF with PPO keeps four models in memory at once. They
+    are the policy, the reference, the reward model, and a value network
+    like ppo2's, initialized from the reward model. PPO also samples answers
+    during training, which is slow. DPO keeps two models, and here the
+    answers were sampled once, before training.
 
-    Without training the policy, the reward model can pick the best of
-    several answers drawn at a temperature of 1. The start's 74% always
-    wrote the likeliest character, and one drawn answer is right less often.
+    The reward model can also be used without training the policy at all.
+    Sample several answers at a temperature of 1, and let the reward model
+    pick the best one. The start's 74% came from always writing the most
+    likely character. A single sampled answer is right less often.
 
-    | Answers drawn per question | 1 | 4 | 16 |
+    | Answers sampled per question | 1 | 4 | 16 |
     |---|---|---|---|
-    | Exact answers, reward1's model after 50 steps picking | 60% | 65% | 47% |
-    | Exact answers, reward1's model after 1,000 steps picking | 60% | 69% | 57.5% |
+    | Exact answers, picked by reward1's model after 50 steps | 60% | 65% | 47% |
+    | Exact answers, picked by reward1's model after 1,000 steps | 60% | 69% | 57.5% |
 
-    On average the pick of 4 beats one drawn answer, but 16 does worse. The
-    more answers it sees, the more chances the reward model gets to pick one
-    it overrates. That is reward2's hacking, with no training of the policy.
-    Training the reward model 20 times longer softens the fall without
-    stopping it, and no pick reaches the start's 74%.
+    On average, picking the best of 4 beats a single sampled answer, but
+    picking from 16 does worse. The more answers the reward model sees, the
+    more chances it has to pick one it scores too high. That is the reward
+    hacking of reward2, without any training of the policy. Training the
+    reward model 20 times longer makes the drop smaller but does not stop
+    it. No pick reaches the start's 74%.
     """,
 )
 
@@ -817,7 +835,7 @@ DPO2_SOURCE = source_file(
     from tensorlings.data import load_shakespeare
 
     layer = nn.Linear(2, 2)
-    frozen = copy.deepcopy(layer).requires_grad_(False)    # its own weights, which never train
+    frozen = copy.deepcopy(layer).requires_grad_(False)    # a copy with its own weights, which never train
 
 
     # The GPT from gpt2.
@@ -832,17 +850,19 @@ DPO2_SOURCE = source_file(
 ''' + indented_part(DPO1_SOLUTION_PART) + '''
 
 
-    # TODO: Return a separate copy of model in eval mode, whose weights never
-    #   train. model itself stays as it was.
+    # TODO: Return a separate copy of model, in eval mode, whose weights never
+    #   train. Do not change model itself.
     def frozen_copy(model: nn.Module) -> nn.Module:
         ...
 
 
-    # TODO: Take one DPO step. chosen and rejected are each a pair of inputs
-    #   and targets. Work out reference's log chances of both without recording
-    #   for autograd, then policy's. The loss is dpo_loss with beta, plus nll
-    #   times answer_loss of policy on chosen. Zero the old gradients,
-    #   backpropagate, step, and return the loss as a plain number.
+    # TODO: Take one DPO step. chosen and rejected are each a pair (x, y) of
+    #   inputs and targets. Compute the reference's log probabilities of both
+    #   answers with answer_logprobs, inside torch.no_grad(). Then compute the
+    #   policy's log probabilities of both, with autograd on. The loss is
+    #   dpo_loss with beta, plus nll times answer_loss of policy on chosen.
+    #   Zero the old gradients, backpropagate, call the optimizer's step, and
+    #   return the loss as a Python float.
     def dpo_step(
         policy: nn.Module,
         reference: nn.Module,
@@ -897,26 +917,26 @@ def check_frozen_copy(found: object) -> None:
         call = f"frozen_copy of {text}"
 
         if copied is model or copied is None:
-            raise Mismatch(f"{call} should give a new model, a copy, not the model itself.")
+            raise Mismatch(f"{call} should return a new model, a copy, not the model itself.")
 
         for (name, original), (_, kept) in zip(model.named_parameters(), copied.named_parameters()):
             if not torch.equal(original, kept):
                 raise Mismatch(f"{call} changed {name}, but a copy starts with the same weights.")
 
             if kept.data_ptr() == original.data_ptr():
-                raise Mismatch(f"{call} shares {name} with the model, so training the model would move the reference too. Use copy.deepcopy.")
+                raise Mismatch(f"{call} shares {name} with the model, so training the model would change the reference too. Use copy.deepcopy.")
 
             if kept.requires_grad:
                 raise Mismatch(f"{call} left {name} able to train. Call requires_grad_(False) on the copy.")
 
             if not original.requires_grad:
-                raise Mismatch(f"{call} froze the model's own {name}. Freeze the copy alone.")
+                raise Mismatch(f"{call} froze the model's own {name}. Freeze only the copy.")
 
         if copied.training:
-            raise Mismatch(f"{call} is in training mode, but the reference runs in eval mode.")
+            raise Mismatch(f"{call} is in training mode, but the reference should be in eval mode.")
 
         if not model.training:
-            raise Mismatch(f"{call} put the model itself in eval mode. Only the copy goes to eval mode.")
+            raise Mismatch(f"{call} put the model itself in eval mode. Only the copy should be in eval mode.")
 
 
 def check_dpo_step(found: object) -> None:
@@ -944,8 +964,9 @@ def check_dpo_step(found: object) -> None:
 
                 if any(recording):
                     raise Mismatch(
-                        "dpo_step ran the reference with autograd on. The TODO asks for its log chances inside "
-                        "torch.no_grad(), which keeps the reference out of the graph even when it isn't frozen.",
+                        "dpo_step ran the reference with autograd on. The TODO asks for its log probabilities inside "
+                        "torch.no_grad(), which keeps the reference out of the computation graph even when it is not "
+                        "frozen.",
                     )
 
                 expect_close(
@@ -1014,14 +1035,14 @@ def check_trained_dpo(found: object) -> None:
 
     if wrong > before_wrong - 2:
         raise Mismatch(
-            f"After 50 steps of dpo_step, the near misses' mean log chance went from {before_wrong:.2f} to {wrong:.2f}, "
+            f"After 50 steps of dpo_step, the near misses' mean log probability went from {before_wrong:.2f} to {wrong:.2f}, "
             "but DPO should push it down by more than 2.",
         )
 
     if right < before_right - 1:
         raise Mismatch(
-            f"After 50 steps of dpo_step with nll 0.2, the right answers' mean log chance fell from {before_right:.2f} "
-            f"to {right:.2f}. The nll term should hold it up.",
+            f"After 50 steps of dpo_step with nll 0.2, the right answers' mean log probability fell from {before_right:.2f} "
+            f"to {right:.2f}. The nll term should keep it from falling by more than 1.",
         )
 
 
@@ -1033,7 +1054,7 @@ def check_dpo2(checker: Checker) -> None:
     )
     checker.test(
         function="dpo_step",
-        description="takes the DPO loss plus nll times the SFT loss, the reference untracked",
+        description="steps on the DPO loss plus nll times the SFT loss, with the reference under no_grad",
         run=check_dpo_step,
     )
 
@@ -1042,7 +1063,7 @@ def check_dpo2(checker: Checker) -> None:
 
     checker.test(
         function="dpo_step",
-        description="trains your gpt3 model away from near misses, the right answers held up",
+        description="trains your gpt3 model away from near misses while keeping the right answers likely",
         run=check_trained_dpo,
     )
 
@@ -1055,10 +1076,11 @@ DPO2 = Exercise(
     source=DPO2_SOURCE,
     solution=DPO2_SOLUTION,
     hints={
-        "frozen_copy": "copy.deepcopy(model), then .eval() and .requires_grad_(False) on the copy, and return it.",
-        "dpo_step": "Inside torch.no_grad(), answer_logprobs(reference, *chosen) and the same for rejected. Then the "
-        "policy's two, dpo_loss of the four with beta, plus nll * answer_loss(policy, *chosen). zero_grad, backward, "
-        "step, and loss.item().",
+        "frozen_copy": "Call copy.deepcopy(model), then call .eval() and .requires_grad_(False) on the copy, and return "
+        "it.",
+        "dpo_step": "Inside torch.no_grad(), compute answer_logprobs(reference, *chosen) and the same for rejected. Then "
+        "compute the policy's two outside it. The loss is dpo_loss of the four with beta, plus "
+        "nll * answer_loss(policy, *chosen). Call zero_grad, backward and step, and return loss.item().",
     },
     introduces=(),
     check=check_dpo2,
@@ -1073,57 +1095,63 @@ DPO2 = Exercise(
 
 GRPO1_LESSON = prose(
     """
-    PPO needs a value network, ppo2's V, to know what reward to expect, and
-    it is usually about as large as the policy. GRPO, from DeepSeekMath,
-    drops it. For each question it writes a
-    group of answers and scores each one. The group's mean reward is the
-    baseline, as in reinforce2, and each advantage is measured against it.
+    PPO needs a value network, ppo2's V, to predict what reward to expect.
+    That network is usually about as large as the policy. GRPO, group
+    relative policy optimization, from DeepSeekMath, removes it. For each
+    question, GRPO samples a group of answers and scores each one. The
+    group's mean reward is the baseline, as in reinforce2. Each advantage is
+    measured relative to that mean.
 
     ```text
-    advantage = (reward - mean of the group) / spread of the group
+    advantage = (reward - mean of the group) / standard deviation of the group
     ```
 
-    The spread is plain `.std()`, which divides by n - 1, where batchnorm1's
-    variance divided by n. A small number, 0.0001 here, is added to it,
-    since a group of equal rewards has no spread at all.
-    Such a group gives every answer an advantage of 0, so it teaches nothing.
+    The standard deviation here is the default `.std()`, which divides by
+    n - 1. batchnorm1's variance divided by n instead. A small number,
+    0.0001 here, is added to the standard deviation, because a group of
+    equal rewards has a standard deviation of 0. Such a group gives every
+    answer an advantage of 0, so it teaches nothing.
 
-    The loss is ppo1's clipped objective on each token, with each answer's
-    advantage on all its tokens. It is averaged over each answer's tokens,
-    then over the group, and minus that is the loss. The mask marks the
-    answer's tokens, so padding counts for nothing.
+    The loss applies ppo1's clipped objective to each token, and every token
+    of an answer gets that answer's advantage. The objective is averaged
+    over each answer's tokens, then over the group. The loss is minus that
+    average. The mask marks the answer's tokens, so padding adds nothing.
 
-    The KL penalty goes into the loss, not the reward, with an estimate that
-    is never below 0. With `gap` the reference's log chance of a token minus
-    the policy's, it is the following, per token.
+    GRPO puts the KL penalty into the loss instead of the reward. It uses an
+    estimate of the KL divergence that is never below 0. Let `gap` be the
+    reference's log probability of a token minus the policy's. The estimate
+    for that token is this.
 
     ```text
     kl = exp(gap) - gap - 1
     ```
 
-    It is 0 when the two agree and grows either way. GRPO subtracts beta
-    times it from each token's objective. DeepSeekMath wrote 64 answers per
-    question, with a beta of 0.04 and a rate of 0.000001.
+    It is 0 when the two log probabilities are equal, and it grows as they
+    move apart in either direction. GRPO subtracts beta times it from each
+    token's objective. DeepSeekMath sampled 64 answers per question, with a
+    beta of 0.04 and a learning rate of 0.000001.
 
-    Here is GRPO on your GPT after 200 steps of sft2's training, 8 questions
-    a step with 8 answers each. The reward is 1 for an exact answer and 0
-    otherwise, with an epsilon of 0.2 and a beta of 0.04.
+    The table runs GRPO on your GPT after 200 steps of sft2's training. Each
+    step uses 8 questions with 8 answers each. The reward is 1 for an exact
+    answer and 0 otherwise, with an epsilon of 0.2 and a beta of 0.04.
 
     | Steps | 0 | 20 | 40 | 60 |
     |---|---|---|---|---|
     | Exact answers on held out words | 74% | 87% | 87% | 89% |
-    | Groups all right or all wrong, in the 20 steps before | | 46% | 55% | 59% |
+    | Groups all right or all wrong, over the previous 20 steps | | 46% | 55% | 59% |
 
-    Both rows are averages of 3 seeds. GRPO never saw a right answer written
-    out, only a check of its own. As the GPT improved, more groups came back
-    all right, and those teach nothing. By step 60 most groups gave no
-    signal, and the gains slowed.
+    Both rows are averages over 3 seeds. GRPO never saw a right answer
+    written out. It only saw the reward from checking its own answers. As
+    the GPT improved, more groups came back all right, and those groups
+    teach nothing. By step 60 most groups gave no learning signal, and the
+    improvement slowed.
 
-    dpo2 started from the same GPT and scored the same 200 words. There DPO
-    with the SFT term reached 83%, and SFT on the chosen answers 73%. GRPO
-    needs a check it can run on any answer it writes, and it writes answers
-    all through training. DPO needs only pairs judged once, so it fits when
-    answers can be compared but not checked.
+    dpo2 started from the same GPT and tested on the same 200 words. There
+    DPO with the SFT term reached 83%, and SFT on the chosen answers reached
+    73%. GRPO needs an automatic check it can run on any answer it writes,
+    and it samples answers throughout training. DPO needs only pairs that
+    were judged once. So DPO fits tasks where answers can be compared but
+    not checked automatically.
     """,
 )
 
@@ -1140,15 +1168,20 @@ GRPO1_SOURCE = source_file(
     smaller = torch.minimum(torch.tensor([1.0, 5.0]), torch.tensor([3.0, 2.0]))    # tensor([1., 2.])
 
 
-    # TODO: Return each answer's advantage within its group. rewards has one
-    #   row per question and one column per answer. Subtract each row's mean,
-    #   then divide by each row's std plus 0.0001.
+    # TODO: Return each answer's advantage within its group, a tensor with the
+    #   shape of rewards. rewards has one row per question and one column per
+    #   answer. Subtract each row's mean, then divide by that row's standard
+    #   deviation plus 0.0001.
+    #   Example: group_advantages(torch.tensor([[1.0, 0.0, 1.0, 1.0]])) returns
+    #   tensor([[ 0.4999, -1.4997,  0.4999,  0.4999]]).
     def group_advantages(rewards: Tensor) -> Tensor:
         ...
 
 
     # TODO: Return the KL estimate of each token, exp(gap) - gap - 1, where
     #   gap is reference_logprobs minus logprobs.
+    #   Example: kl_estimate(torch.tensor([-1.0, -2.0]), torch.tensor([-1.0, -1.0]))
+    #   returns tensor([0.0000, 0.7183]).
     def kl_estimate(
         logprobs: Tensor,
         reference_logprobs: Tensor,
@@ -1156,13 +1189,14 @@ GRPO1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return GRPO's loss for one group. logprobs, old_logprobs and
-    #   reference_logprobs hold each answer's token log chances, of shape
-    #   (answers, tokens), and mask is 1 on the answer's tokens and 0 after.
-    #   Per token, take the smaller of ratio times advantage and the clipped
-    #   ratio times advantage, as ppo1 did, minus beta times kl_estimate.
-    #   Average over each answer's masked tokens, then over the answers, and
-    #   return minus that.
+    # TODO: Return GRPO's loss for one group, as a tensor with one number.
+    #   logprobs, old_logprobs and reference_logprobs hold the log probability
+    #   of each token of each answer, with shape (answers, tokens). advantages
+    #   has one entry per answer, used for every token of that answer. mask is
+    #   1 on the answer's tokens and 0 after them. For each token, take the
+    #   smaller of ratio * advantage and clipped_ratio * advantage, as in
+    #   ppo1, then subtract beta * kl_estimate. Average over each answer's
+    #   masked tokens, then over the answers, and return minus that average.
     def grpo_loss(
         logprobs: Tensor,
         old_logprobs: Tensor,
@@ -1254,13 +1288,15 @@ GRPO1 = Exercise(
     source=GRPO1_SOURCE,
     solution=GRPO1_SOLUTION,
     hints={
-        "group_advantages": "rewards.mean(dim=1, keepdim=True) and rewards.std(dim=1, keepdim=True) keep one number per "
-        "row that broadcasts back. Subtract the mean, then divide by the std plus 1e-4.",
-        "kl_estimate": "The gap is the reference log probs minus the policy's. Then gap.exp() minus gap minus 1.",
-        "grpo_loss": "The ratio is .exp() of the log probs minus the old log probs. advantages.unsqueeze(1) lines up "
-        "with the tokens. "
-        "torch.minimum of ratio times it and ratio.clamp(1 - epsilon, 1 + epsilon) times it, minus beta * "
-        "kl_estimate. Multiply by mask, sum over dim=1, divide by mask.sum(dim=1), take the mean, and negate.",
+        "group_advantages": "rewards.mean(dim=1, keepdim=True) and rewards.std(dim=1, keepdim=True) give one number per "
+        "row, in a shape that broadcasts back over the row. Subtract the mean, then divide by the standard deviation "
+        "plus 1e-4.",
+        "kl_estimate": "The gap is the reference's log probabilities minus the policy's. Then compute gap.exp() minus "
+        "gap minus 1.",
+        "grpo_loss": "The ratio is .exp() of the log probabilities minus the old log probabilities. "
+        "advantages.unsqueeze(1) has shape (answers, 1), which broadcasts over the tokens. Take torch.minimum of ratio "
+        "times it and ratio.clamp(1 - epsilon, 1 + epsilon) times it, then subtract beta * kl_estimate. Multiply by "
+        "mask, sum over dim=1, divide by mask.sum(dim=1), take the mean, and negate.",
     },
     introduces=(),
     check=check_grpo1,
@@ -1273,18 +1309,19 @@ GRPO1 = Exercise(
 
 QUIZ14_LESSON = prose(
     """
-    This quiz has no examples and no new tools. Each function combines moves
-    from Section 11. If a step is unclear, the exercise in the table shows it.
+    This quiz has no examples and no new tools. Each function combines steps
+    from Section 11. If a step is unclear, the exercise named in the table
+    shows how to do it.
 
-    | Function | Moves | Shown in |
+    | Function | What it computes | Shown in |
     |---|---|---|
-    | `trainable_share` | the numbers in parameters that need a gradient, over all the numbers | finetune2 |
-    | `merged_weight` | the update B times A, scaled by alpha over the rank, added to the weight | lora2 |
-    | `answer_only_targets` | the ids moved one along, with every target before the answer set to -100 | sft1 |
-    | `baseline_loss` | REINFORCE's loss with the batch's average reward taken off each reward | reinforce2 |
-    | `ppo_loss_from_rewards` | each reward less the batch's average as its advantage, then the clipped ratio's smaller objective, negated | reinforce2, ppo1 |
-    | `dpo_loss_from_tokens` | each answer's token log chances summed over its mask, then the DPO loss of the log ratios | dpo1 |
-    | `exact_match_advantages` | a reward of 1 for an exact answer and 0 otherwise, then each reward against its group's mean and spread | sft2, grpo1 |
+    | `trainable_share` | the count of numbers in parameters that require a gradient, divided by the count of all numbers | finetune2 |
+    | `merged_weight` | the weight plus the update `B @ A`, scaled by alpha divided by the rank | lora2 |
+    | `answer_only_targets` | the ids shifted by one position, with every target before the answer set to -100 | sft1 |
+    | `baseline_loss` | REINFORCE's loss, with the batch's mean reward subtracted from each reward | reinforce2 |
+    | `ppo_loss_from_rewards` | PPO's clipped loss, with each reward minus the batch's mean reward as its advantage | reinforce2, ppo1 |
+    | `dpo_loss_from_tokens` | each answer's token log probabilities summed over its mask, then the DPO loss | dpo1 |
+    | `exact_match_advantages` | a reward of 1 for an exact answer and 0 otherwise, then GRPO's group advantages | sft2, grpo1 |
     """,
 )
 
@@ -1292,7 +1329,7 @@ QUIZ14_SOURCE = source_file(
     '''
     # quiz14.py
     #
-    # No examples and no new tools. Each function combines moves from Section 11.
+    # No examples and no new tools. Each function combines steps from Section 11.
 
     import torch
     import torch.nn as nn
@@ -1300,14 +1337,15 @@ QUIZ14_SOURCE = source_file(
     from torch import Tensor
 
 
-    # TODO: Return the share of model's numbers that will train, those in
-    #   parameters that need a gradient, as a plain number.
+    # TODO: Return the fraction of model's numbers that will train, as a Python
+    #   float. Those are the numbers in parameters that require a gradient.
     def trainable_share(model: nn.Module) -> float:
         ...
 
 
-    # TODO: Return weight with LoRA's update folded in. A is (rank, inputs), B
-    #   is (outputs, rank), and the update is scaled by alpha over the rank.
+    # TODO: Return weight with LoRA's update merged into it. A has shape
+    #   (rank, inputs), B has shape (outputs, rank), and the update B @ A is
+    #   scaled by alpha divided by the rank.
     def merged_weight(
         weight: Tensor,
         A: Tensor,
@@ -1317,10 +1355,11 @@ QUIZ14_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the targets for one chat of ids, the next id at every
-    #   position, with -100 at every target before the answer. The answer's
-    #   first id sits at ids[start]. Keep the targets whole numbers, and leave
-    #   ids itself unchanged.
+    # TODO: Return the targets for one chat, given its ids as a 1D tensor.
+    #   Target i is the id that follows position i, so there is one target
+    #   fewer than ids. Set every target before the answer to -100. The
+    #   answer's first id is ids[start]. Keep the targets as integers, and
+    #   leave ids itself unchanged.
     def answer_only_targets(
         ids: Tensor,
         start: int,
@@ -1328,7 +1367,7 @@ QUIZ14_SOURCE = source_file(
         ...
 
 
-    # TODO: Return REINFORCE's loss with the batch's average reward as the
+    # TODO: Return the REINFORCE loss with the batch's mean reward as the
     #   baseline. log_probs and rewards have one entry per episode.
     def baseline_loss(
         log_probs: Tensor,
@@ -1337,9 +1376,9 @@ QUIZ14_SOURCE = source_file(
         ...
 
 
-    # TODO: Return PPO's clipped loss, averaged over the actions, from the new
-    #   and old log chances of each action and its reward. Each action's
-    #   advantage is its reward less the average of all the rewards.
+    # TODO: Return PPO's clipped loss, averaged over the actions. You get the
+    #   new and old log probability of each action, and its reward. Each
+    #   action's advantage is its reward minus the mean of all the rewards.
     def ppo_loss_from_rewards(
         new_log_probs: Tensor,
         old_log_probs: Tensor,
@@ -1349,11 +1388,12 @@ QUIZ14_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the DPO loss, averaged over the pairs. The first four hold
-    #   each token's log chance, of shape (pairs, tokens), for the chosen and
-    #   rejected answers under the policy and the reference. A mask is 1 on an
-    #   answer's tokens and 0 on its padding. Sum each answer's masked tokens
-    #   into its log chance first.
+    # TODO: Return the DPO loss, averaged over the pairs. The first four
+    #   arguments hold the log probability of each token, with shape
+    #   (pairs, tokens), for the chosen and rejected answers under the policy
+    #   and the reference. A mask is 1 on an answer's tokens and 0 on its
+    #   padding. First sum each answer's masked token log probabilities to get
+    #   the answer's log probability.
     def dpo_loss_from_tokens(
         policy_chosen: Tensor,
         policy_rejected: Tensor,
@@ -1366,11 +1406,11 @@ QUIZ14_SOURCE = source_file(
         ...
 
 
-    # TODO: Return each answer's advantage within its group, one row per
-    #   question. answers holds each question's group of answers, and right
-    #   each question's right answer. An answer's reward is 1.0 when it equals
-    #   the right answer and 0.0 otherwise. Take off each row's mean, then
-    #   divide by the row's std plus 1e-4.
+    # TODO: Return each answer's advantage within its group, as a tensor with
+    #   one row per question. answers holds each question's group of answers,
+    #   and right holds each question's right answer. An answer's reward is
+    #   1.0 when it equals the right answer and 0.0 otherwise. Subtract each
+    #   row's mean, then divide by the row's standard deviation plus 1e-4.
     def exact_match_advantages(
         answers: list[list[str]],
         right: list[str],
@@ -1505,7 +1545,7 @@ def expect_whole_targets(
     expected: Tensor,
 ) -> None:
     if isinstance(actual, Tensor) and actual.dtype != torch.long:
-        raise Mismatch(f"{call} holds {actual.dtype} numbers, but F.cross_entropy wants its targets as whole numbers, torch.long, as ids are.")
+        raise Mismatch(f"{call} holds {actual.dtype} numbers, but F.cross_entropy needs integer targets, torch.long, like ids.")
 
     expect_tensor(
         call=call,
@@ -1523,7 +1563,7 @@ def check_answer_only_targets(found: object) -> None:
         if not torch.equal(given, ids):
             raise Mismatch(
                 f"{call} changed ids, the caller's tensor, so the chat it came from now holds -100s. ids[1:] shares "
-                "its numbers with ids, so .clone() it before writing -100.",
+                "memory with ids, so .clone() it before writing -100.",
             )
 
         expect_whole_targets(
@@ -1598,13 +1638,13 @@ def check_quiz14(checker: Checker) -> None:
     )
     checker.test(
         function="answer_only_targets",
-        description="moves the ids one along and leaves the question out, ids unchanged",
+        description="shifts the ids by one and masks the question, leaving ids unchanged",
         run=check_answer_only_targets,
     )
     check_on_inputs(
         checker=checker,
         function="baseline_loss",
-        description="weighs each log chance by its reward less the average",
+        description="weights each log probability by its reward minus the mean",
         inputs=(
             (torch.tensor([-0.5, -1.2, -0.1, -2.0]), torch.tensor([1.0, 0.0, 1.0, 0.0])),
             (torch.tensor([-0.3, -0.9, -1.5]), torch.tensor([3.0, 5.0, 4.0])),
@@ -1615,7 +1655,7 @@ def check_quiz14(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="ppo_loss_from_rewards",
-        description="clips the ratio, with each reward less the average as its advantage",
+        description="clips the ratio, with each reward minus the mean as its advantage",
         inputs=(
             (torch.tensor([-0.2, -1.5, -0.7, -0.1]), torch.tensor([-0.6, -1.0, -0.7, -0.9]), torch.tensor([1.0, 0.0, 1.0, 0.0]), 0.2),
             (torch.tensor([-1.0, -0.4, -2.2]), torch.tensor([-1.3, -0.3, -1.0]), torch.tensor([3.0, 5.0, 4.0]), 0.1),
@@ -1626,7 +1666,7 @@ def check_quiz14(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="dpo_loss_from_tokens",
-        description="sums each answer's masked tokens, then compares the gaps from the reference",
+        description="sums each answer's masked tokens, then compares the log ratios",
         inputs=(
             (
                 torch.tensor([[-1.0, -2.0, -0.5], [-0.3, -1.2, -4.0]]),
@@ -1673,19 +1713,20 @@ QUIZ14 = Exercise(
     hints={
         "trainable_share": "Sum numel() over model.parameters() for the total, and again over the ones whose "
         "requires_grad is True. Divide the second by the first.",
-        "merged_weight": "The rank is A.shape[0]. B @ A has weight's shape, so scale it by alpha over the rank and add "
-        "it to weight.",
+        "merged_weight": "The rank is A.shape[0]. B @ A has weight's shape, so scale it by alpha divided by the rank and "
+        "add it to weight.",
         "answer_only_targets": "ids[1:] gives the next id at every position. Clone it, then set every target before "
-        "place start - 1 to -100.",
-        "baseline_loss": "Take rewards.mean() off every reward, multiply by log_probs, average, and negate.",
+        "index start - 1 to -100.",
+        "baseline_loss": "Subtract rewards.mean() from every reward, multiply by log_probs, take the mean, and negate.",
         "ppo_loss_from_rewards": "The advantages are rewards - rewards.mean(). The ratio is the exp of new minus old. "
-        "Clamp it to 1 - epsilon and 1 + epsilon. torch.min of the two times the advantages, averaged and negated.",
-        "dpo_loss_from_tokens": "Multiply each side's tokens by its mask and sum over dim=1, which gives one log chance "
-        "per answer. Then chosen's policy less reference gap, less rejected's, times beta, through F.logsigmoid, "
-        "averaged and negated.",
-        "exact_match_advantages": "Build rewards with torch.tensor of a list of rows, float(answer == wanted) for each "
-        "answer of a group. Then mean(dim=1, keepdim=True) and std(dim=1, keepdim=True) keep one number per row that "
-        "broadcasts back.",
+        "Clamp it to the range from 1 - epsilon to 1 + epsilon. Take torch.min of the two ratios times the "
+        "advantages, then the mean, and negate.",
+        "dpo_loss_from_tokens": "Multiply each tensor of token log probabilities by its mask and sum over dim=1, which "
+        "gives one log probability per answer. Then compute the chosen log ratio minus the rejected log ratio, times "
+        "beta. Pass that through F.logsigmoid, take the mean, and negate.",
+        "exact_match_advantages": "Build rewards with torch.tensor of a list of rows, with float(answer == wanted) for "
+        "each answer of a group. Then mean(dim=1, keepdim=True) and std(dim=1, keepdim=True) give one number per row "
+        "that broadcasts back over the row.",
     },
     introduces=(),
     check=check_quiz14,

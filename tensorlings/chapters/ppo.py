@@ -29,12 +29,14 @@ PPO = Chapter(
         """
         # PPO
 
-        REINFORCE uses each batch of episodes once. Proximal policy
-        optimization reuses it for several steps, with a probability ratio
-        that corrects for the policy's change and a clip that keeps the change
-        small. This chapter builds its objective from the paper, adds
-        generalized advantage estimation for long episodes, and trains a
-        policy that balances a pole on a cart, all in plain PyTorch.
+        REINFORCE uses each batch of episodes for one training step and then
+        throws it away. Proximal policy optimization, PPO, reuses each batch
+        for several steps. A probability ratio corrects for how much the
+        policy has changed since the batch was played, and a clip keeps that
+        change small. This chapter builds PPO's objective from the paper. It
+        adds generalized advantage estimation, which assigns credit to each
+        step of a long episode. Then it trains a policy that balances a pole on
+        a cart, all in plain PyTorch.
 
         ## Further reading
 
@@ -160,8 +162,8 @@ class CartPole:
         self,
         actions: Tensor,
     ) -> tuple[Tensor, Tensor]:
-        """Pushes each cart left for action 0 and right for action 1. Gives each cart's reward, 1 for every step,
-        and whether its episode ended."""
+        """Pushes each cart left for action 0 and right for action 1. Returns each cart's reward, which is 1 for
+        every step, and whether its episode ended."""
         x, speed, angle, turn = self.states.unbind(dim=1)
         force = torch.where(actions == 1, PUSH, -PUSH)
         cos, sin = torch.cos(angle), torch.sin(angle)
@@ -190,9 +192,9 @@ class CartPole:
 
 
 def networks() -> tuple[nn.Sequential, nn.Sequential]:
-    """The policy, with 2 scores out, and the value network, with 1. Each starts as Stable Baselines3 starts them,
-    orthogonal weights scaled by sqrt(2) in the hidden layers, by 0.01 in the policy's last and by 1 in the value's,
-    and zero biases."""
+    """Returns the policy, which outputs 2 scores, and the value network, which outputs 1. Both are initialized the
+    way Stable Baselines3 does it. The weights are orthogonal, scaled by sqrt(2) in the hidden layers, by 0.01 in
+    the policy's last layer and by 1 in the value network's last layer. The biases start at zero."""
     made = []
 
     for outputs, last_gain in ((2, 0.01), (1, 1.0)):
@@ -537,50 +539,59 @@ def measure_ppo() -> dict[str, object]:
 
 PPO1_LESSON = prose(
     """
-    REINFORCE plays a batch, takes one step and throws the batch away. After
-    the step the policy has changed, and the episodes came from the old one.
-    Playing is often the slow part, so reusing each batch would pay.
+    REINFORCE plays a batch of episodes, takes one training step and throws
+    the batch away. The reason is that after the step the policy has
+    changed, but the episodes were played by the old policy. Playing
+    episodes is often the slow part of training, so reusing each batch
+    would save a lot of time.
 
-    The **probability ratio** corrects for the change. It divides each played
-    action's chance under the new policy by its chance under the old one that
-    played it.
+    The **probability ratio** corrects for the change. For each played
+    action, it divides the action's probability under the new policy by its
+    probability under the old policy, the one that played it.
 
     ```text
     ratio = p_new(action) / p_old(action) = exp(log p_new - log p_old)
     ```
 
-    Weighting each advantage by the ratio gives an objective whose gradient,
-    at a ratio of 1, is REINFORCE's. Many steps on it overfit the batch. Here
-    is one batch of 16 bandit episodes from 79_policy_gradients, used alone
-    for many steps of Adam, on 10 seeds.
+    Multiply each advantage by its ratio and take the mean. At a ratio of 1,
+    the gradient of this objective equals REINFORCE's gradient. But taking
+    many steps on it overfits the batch. The table uses one batch of 16
+    bandit episodes from 79_policy_gradients. It takes many steps of Adam on
+    that batch alone, on 10 seeds. Each cell is the largest probability the
+    final policy gives to any arm, as a range over the seeds.
 
     | Steps on one batch | 10 | 50 |
     |---|---|---|
-    | Largest chance, ratio times advantage | 0.36 to 0.65 | 0.96 to 0.99 |
-    | Largest chance, PPO's clipped objective | 0.25 to 0.41 | 0.24 to 0.45 |
+    | Ratio times advantage | 0.36 to 0.65 | 0.96 to 0.99 |
+    | PPO's clipped objective | 0.25 to 0.41 | 0.24 to 0.45 |
 
-    Without a limit, 16 episodes make the policy sure of one arm. On 2 of the
-    10 seeds it is arm 3, a worse arm the batch happened to favor.
+    Without a limit, 16 episodes are enough to make the policy almost
+    certain of one arm. On 2 of the 10 seeds that arm is arm 3, a worse arm
+    that the batch happened to favor.
 
-    PPO, from Schulman and colleagues in 2017, clips the ratio, with epsilon a
-    small number like the paper's 0.2.
+    PPO, from Schulman and colleagues in 2017, clips the ratio to the range
+    from `1 - epsilon` to `1 + epsilon`. Here epsilon is a small number, like
+    the paper's 0.2.
 
     ```text
     objective = mean of min(ratio * A, clip(ratio, 1 - epsilon, 1 + epsilon) * A)
     ```
 
-    Taking the smaller of the two makes it pessimistic, a lower bound on the
-    plain objective. Past the clip, a change that would raise the objective
-    stops counting, and one that lowers it still counts in full. Here is the
-    slope of one sample's objective with respect to its ratio.
+    Taking the smaller of the two terms makes the objective pessimistic. It
+    is never larger than the unclipped objective, `ratio * A`. Once the
+    ratio is outside the clip range, a change that would raise the objective
+    no longer counts. A change that would lower it still counts in full. The
+    table shows the derivative of one sample's objective with respect to its
+    ratio.
 
     | Ratio | 0.5 | 0.9 | 1.0 | 1.1 | 1.5 |
     |---|---|---|---|---|---|
     | Advantage +1 | 1 | 1 | 1 | 1 | 0 |
     | Advantage -1 | 0 | -1 | -1 | -1 | -1 |
 
-    The clip doesn't stop a ratio at 1.2 outright, since other samples push
-    the same preferences. It keeps one batch from deciding everything.
+    The clip does not stop a ratio from going past 1.2, because other
+    samples still push on the same preferences. What the clip does is keep a
+    single batch from changing the policy too much.
     """,
 )
 
@@ -598,8 +609,10 @@ PPO1_SOURCE = source_file(
     smaller = torch.min(torch.tensor([1.0, 5.0]), torch.tensor([2.0, 3.0]))    # tensor([1., 3.])
 
 
-    # TODO: Return the probability ratio of each action, its chance under the
-    #   new policy over its chance under the old, from their log probabilities.
+    # TODO: Return the probability ratio of each action, which is its
+    #   probability under the new policy divided by its probability under the
+    #   old policy. The inputs are log probabilities, so compute the ratio from
+    #   them.
     def probability_ratio(
         new_log_probs: Tensor,
         old_log_probs: Tensor,
@@ -607,9 +620,13 @@ PPO1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return PPO's loss, minus the mean over the actions of the smaller of
-    #   ratio times advantage and the ratio clipped to 1 - epsilon and
-    #   1 + epsilon times advantage.
+    # TODO: Return PPO's loss, as a tensor with one number. For each action,
+    #   compute two terms, ratio * advantage and clipped_ratio * advantage.
+    #   clipped_ratio is the ratio clamped to the range from 1 - epsilon to
+    #   1 + epsilon. Take the smaller term for each action, then return minus
+    #   the mean over the actions.
+    #   Example: ppo_loss(torch.tensor([-0.5, -2.0]), torch.tensor([-0.7, -1.9]),
+    #   torch.tensor([1.0, -1.0]), 0.2) returns tensor(-0.1476).
     def ppo_loss(
         new_log_probs: Tensor,
         old_log_probs: Tensor,
@@ -619,10 +636,13 @@ PPO1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the slope of each sample's clipped objective, the smaller of
-    #   ratio times advantage and the clipped ratio times advantage, with
-    #   respect to its ratio. Take it through a fresh copy of ratios that
-    #   records gradients.
+    # TODO: Return the derivative of each sample's clipped objective with
+    #   respect to its ratio. One sample's objective is the smaller of
+    #   ratio * advantage and clipped_ratio * advantage. Make a fresh copy of
+    #   ratios that records gradients, compute the objectives from it, sum them
+    #   and backpropagate. Return the copy's gradient.
+    #   Example: objective_slopes(torch.tensor([0.5, 1.0, 1.5]), 1.0, 0.2)
+    #   returns tensor([1., 1., 0.]).
     def objective_slopes(
         ratios: Tensor,
         advantage: float,
@@ -678,14 +698,17 @@ def check_ppo_loss_gradient(found: object) -> None:
     loss = found(new_log_probs, log_probs_for_check(823), small_tensor(824, 6), 0.2)
 
     if not isinstance(loss, Tensor) or loss.grad_fn is None:
-        raise Mismatch("ppo_loss gives a loss that records nothing, so no gradient reaches the new log probabilities. Keep it a tensor.")
+        raise Mismatch(
+            "ppo_loss returns a loss that autograd did not record, so no gradient can reach the new log probabilities. "
+            "Return a tensor computed from the inputs, without .item().",
+        )
 
 
 def check_ppo1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="probability_ratio",
-        description="divides the new chance by the old one",
+        description="divides the new probability by the old one",
         inputs=(
             (torch.tensor([-0.5, -2.0, -1.0]), torch.tensor([-0.7, -1.9, -1.0])),
             (log_probs_for_check(825), log_probs_for_check(826)),
@@ -712,7 +735,7 @@ def check_ppo1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="objective_slopes",
-        description="gives each sample's slope against its ratio",
+        description="returns each sample's derivative with respect to its ratio",
         inputs=(
             (torch.tensor([0.5, 0.9, 1.0, 1.1, 1.5]), 1.0, 0.2),
             (torch.tensor([0.5, 0.9, 1.0, 1.1, 1.5]), -2.0, 0.2),
@@ -731,12 +754,12 @@ PPO1 = Exercise(
     source=PPO1_SOURCE,
     solution=PPO1_SOLUTION,
     hints={
-        "probability_ratio": "The ratio of two chances is the exp of the difference of their logs.",
-        "ppo_loss": "ratio from probability_ratio, and ratio.clamp(1 - epsilon, 1 + epsilon). torch.min of the two "
-        "times the advantages, then .mean() with a minus in front.",
-        "objective_slopes": "Make a leaf from ratios.clone() and requires_grad_. Build torch.min of leaf * advantage "
-        "and the "
-        "clamped leaf * advantage, .sum().backward(), and return leaf.grad.",
+        "probability_ratio": "The ratio of two probabilities is the exp of the difference of their logs.",
+        "ppo_loss": "Get the ratio from probability_ratio and the clipped ratio from ratio.clamp(1 - epsilon, "
+        "1 + epsilon). Multiply each by the advantages and take torch.min of the two products. Then take .mean() and "
+        "put a minus in front.",
+        "objective_slopes": "Make a leaf from ratios.clone() and requires_grad_. Compute torch.min of leaf * advantage "
+        "and the clamped leaf times advantage. Call .sum().backward() on it, and return leaf.grad.",
     },
     introduces=(),
     check=check_ppo1,
@@ -749,58 +772,70 @@ PPO1 = Exercise(
 
 PPO2_LESSON = prose(
     """
-    In the bandit an episode is one action, so its reward plainly belongs to
-    it. ppo3's cart pole runs for hundreds of steps and pays 1 for each step
-    the pole stays up. Which push deserves the credit?
+    In the bandit an episode is one action, so the reward belongs to that one
+    action. ppo3's cart pole runs for hundreds of steps and gives a reward of
+    1 for each step the pole stays up. So it is not clear which pushes
+    deserve the credit for keeping the pole up.
 
-    The **return** of a step adds its reward and every later one in the
-    episode, each shrunk by a discount gamma per step.
+    The **return** of a step is its reward plus every later reward in the
+    episode. Each later reward is multiplied by a discount factor gamma once
+    per step of delay, so rewards far in the future count less.
 
     ```text
     G_t = r_t + gamma * r_(t+1) + gamma^2 * r_(t+2) + ...
     ```
 
-    As a baseline, a value network V learns to guess a state's return from
-    the state alone. The TD error, short for temporal difference, compares
-    one real step against that guess.
+    For a baseline, a second network V, called the value network, learns to
+    predict a state's return from the state alone. The TD error, short for
+    temporal difference error, compares one real step with that prediction.
+    It is the reward actually received plus the discounted prediction for
+    the next state, minus the prediction for this state.
 
     ```text
     delta_t = r_t + gamma * V(s_(t+1)) - V(s_t)
     ```
 
-    GAE, from Schulman and colleagues in 2015, mixes the two. Its advantage
-    adds up the TD errors ahead, each shrunk by gamma times lambda per step.
-    One pass from the last step back to the first computes it.
+    GAE, generalized advantage estimation, from Schulman and colleagues in
+    2015, mixes the two. Its advantage for a step is a sum of the TD errors
+    from that step onward. Each later TD error is multiplied by
+    `gamma * lambda` once per step of delay. One pass from the last step
+    back to the first computes it with this recurrence.
 
     ```text
     A_t = delta_t + gamma * lambda * A_(t+1)
     ```
 
-    At lambda 1 it is the return minus the guess, unbiased but noisy. At
-    lambda 0 it is one TD error, quiet but only as right as V. PPO's paper
-    uses gamma 0.99 and lambda 0.95.
+    At lambda 1 the advantage equals the return minus V's prediction. That
+    estimate is right on average, which is called unbiased, but it is noisy.
+    At lambda 0 the advantage is a single TD error. That has little noise,
+    but it is only as accurate as V. PPO's paper uses gamma 0.99 and lambda
+    0.95.
 
-    When an episode ends at step t, nothing after it belongs to it. The next
-    state's value counts as 0, and the sums stop there. A done flag marks
-    those steps. ppo3's carts also end at a cap of 500 steps. Gymnasium calls
-    that cut a truncation, apart from a fall, but here both count as an end.
+    When an episode ends at step t, the steps after t belong to a new
+    episode. So the next state's value counts as 0, and the sums stop at
+    step t. A done flag marks the steps where an episode ended. ppo3's carts
+    also stop when they reach 500 steps. Gymnasium calls that a truncation
+    and treats it differently from a fall. Here both count as the end of an
+    episode.
 
-    Here is that trade measured. ppo3's loop trained a policy and V for 20
-    updates. Then 32 states the policy reached were each played out 256
-    times for 300 steps. For each lambda, GAE estimates a start state's
-    return as its advantage plus V. That is set against the average return
-    of 256 separate playouts from the state. Over 3 seeds, in steps of reward:
+    The table measures this tradeoff. ppo3's loop trained a policy and V for
+    20 updates. Then each of 32 states the policy reached was played out 256
+    times, for 300 steps each. For each lambda, GAE estimates the return of
+    a start state as its advantage plus V. The estimate is compared with the
+    average return of 256 separate playouts from the same state. Each cell
+    is a range over 3 seeds, measured in steps of reward.
 
     | Lambda | 0 | 0.5 | 0.8 | 0.95 | 1 |
     |---|---|---|---|---|---|
-    | Average miss | 6.4 to 14.0 | 6.1 to 13.5 | 5.0 to 12.2 | 2.5 to 8.2 | 0.6 |
-    | Spread of one estimate | 0.05 to 0.16 | 0.08 to 0.31 | 0.53 to 1.24 | 3.1 to 4.4 | 8.9 to 10.0 |
+    | Error of the average estimate | 6.4 to 14.0 | 6.1 to 13.5 | 5.0 to 12.2 | 2.5 to 8.2 | 0.6 |
+    | Standard deviation of one estimate | 0.05 to 0.16 | 0.08 to 0.31 | 0.53 to 1.24 | 3.1 to 4.4 | 8.9 to 10.0 |
 
-    The miss is V's error, which lambda 0 takes whole and lambda 1 drops.
-    The spread is the luck of one playout, which lambda 0 never sees and
-    lambda 1 takes whole. The 0.6 left at lambda 1 is the noise of averaging
-    256 playouts. ppo3 uses lambda 0.8, the value RL Baselines3 Zoo tuned
-    for cart pole.
+    The error of the average comes from V's mistakes. Lambda 0 inherits all
+    of V's error, and lambda 1 removes it. The standard deviation comes from
+    the randomness of a single playout. Lambda 0 is not affected by it, and
+    lambda 1 inherits all of it. The 0.6 left at lambda 1 is the noise from
+    averaging only 256 playouts. ppo3 uses lambda 0.8, the value that RL
+    Baselines3 Zoo tuned for cart pole.
     """,
 )
 
@@ -817,12 +852,17 @@ PPO2_SOURCE = source_file(
 
 
     # Every function takes tensors of shape (steps, carts), or (steps,) for one
-    # cart, in the order the steps were played. dones holds True at a step
-    # whose episode ended there.
+    # cart, with the steps in the order they were played. dones is True at
+    # each step where an episode ended.
 
-    # TODO: Return the return of every step, its reward plus gamma times the
-    #   next step's return, where an episode's last step has no next step.
-    #   Work from the last step back to the first.
+    # TODO: Return the return of every step, as a tensor with the shape of
+    #   rewards. A step's return is its reward plus gamma times the next
+    #   step's return. At a step where dones is True the episode ended, so the
+    #   next step's return counts as 0. Work from the last step back to the
+    #   first, starting from a next return of 0.
+    #   Example: discounted_returns(torch.tensor([1.0, 1.0, 1.0]),
+    #   torch.tensor([False, True, False]), 0.5) returns
+    #   tensor([1.5000, 1.0000, 1.0000]).
     def discounted_returns(
         rewards: Tensor,
         dones: Tensor,
@@ -831,9 +871,9 @@ PPO2_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the TD error of every step, its reward plus gamma times the
-    #   next state's value, minus its own value. Count the next value as 0 at
-    #   a step whose episode ended.
+    # TODO: Return the TD error of every step. It is the step's reward plus
+    #   gamma times the next state's value, minus the step's own value. At a
+    #   step where dones is True, count the next state's value as 0.
     def td_errors(
         rewards: Tensor,
         values: Tensor,
@@ -844,9 +884,10 @@ PPO2_SOURCE = source_file(
         ...
 
 
-    # TODO: Return GAE's advantage of every step, its TD error plus gamma times
-    #   lam times the next step's advantage, where an episode's last step has
-    #   no next step. Work from the last step back to the first.
+    # TODO: Return the GAE advantage of every step. A step's advantage is its
+    #   TD error plus gamma * lam times the next step's advantage. At a step
+    #   where dones is True, the next step's advantage counts as 0. Work from
+    #   the last step back to the first, as in discounted_returns.
     def gae(
         rewards: Tensor,
         values: Tensor,
@@ -920,7 +961,7 @@ def check_ppo2(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="discounted_returns",
-        description="adds the discounted rewards ahead within each episode",
+        description="sums the discounted later rewards within each episode",
         inputs=(
             (first[0], first[3], 0.9),
             (second[0], second[3], 0.5),
@@ -932,7 +973,7 @@ def check_ppo2(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="td_errors",
-        description="compares one step with the value's guess",
+        description="compares one real step with the value network's prediction",
         inputs=(
             (*first, 0.9),
             (*second, 0.5),
@@ -943,7 +984,7 @@ def check_ppo2(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="gae",
-        description="adds the TD errors ahead within each episode",
+        description="sums the discounted later TD errors within each episode",
         inputs=(
             (*first, 0.9, 0.8),
             (*second, 0.5, 0.95),
@@ -963,10 +1004,11 @@ PPO2 = Exercise(
     solution=PPO2_SOLUTION,
     hints={
         "discounted_returns": "Start running at torch.zeros_like(rewards[0]). For t in reversed(range(len(rewards))), "
-        "running becomes rewards[t] plus gamma times running times 1 - dones[t].float(). Store it in returns[t].",
-        "td_errors": "rewards + gamma * next_values * (1 - dones.float()), minus values.",
-        "gae": "Take td_errors first. Then walk back as discounted_returns does, adding gamma * lam times the running "
-        "advantage, cut to 0 where dones[t] is True.",
+        "set running to rewards[t] plus gamma times running times (1 - dones[t].float()). Store it in returns[t].",
+        "td_errors": "Multiply next_values by (1 - dones.float()) to make them 0 where an episode ended. Then add "
+        "gamma times that to the rewards, and subtract values.",
+        "gae": "Compute td_errors first. Then loop backwards as discounted_returns does. Each step's advantage is its TD "
+        "error plus gamma * lam times the running advantage, which counts as 0 where dones[t] is True.",
     },
     introduces=(),
     check=check_ppo2,
@@ -980,50 +1022,59 @@ PPO2 = Exercise(
 PPO3_LESSON = prose(
     """
     Cart pole is the classic balancing task, from Barto, Sutton and Anderson
-    in 1983. A cart rolls on a track with a pole hinged on top, and each step
-    the policy pushes it left or right. An episode ends when the pole tips
-    past 12 degrees or the cart rolls 2.4 from the center. Each step pays 1,
-    up to 500.
+    in 1983. A cart rolls on a track with a pole hinged on top. At each step
+    the policy pushes the cart left or right. An episode ends when the pole
+    tilts more than 12 degrees from upright, or the cart moves more than 2.4
+    units from the center. Each step gives a reward of 1, for at most 500
+    steps.
 
-    The file holds it in plain PyTorch, with the physics of gym's
-    CartPole-v1. The one change is that the cap of 500 steps counts as a
-    fall, as ppo2 said. Eight carts run at once as the rows of one tensor,
-    and a cart that falls starts over.
+    The file implements cart pole in plain PyTorch, with the same physics as
+    gym's CartPole-v1. The one difference is that reaching 500 steps counts
+    as the end of an episode, like a fall, as ppo2 explained. Eight carts
+    run at once, one per row of a tensor, and a cart whose episode ends
+    starts over.
 
     Stable Baselines3 is a widely used PyTorch library of reinforcement
-    learning methods. RL Baselines3 Zoo keeps its settings tuned for each
-    task. These are the Zoo's for CartPole-v1, on the library's defaults. One
-    update of PPO has three parts.
+    learning methods. RL Baselines3 Zoo is a collection of settings tuned
+    for each task with that library. This file uses the Zoo's settings for
+    CartPole-v1, with the library's defaults for everything else. One update
+    of PPO has three parts.
 
-    - Collect: run the carts for 32 steps under no_grad, keeping states, actions, log probabilities, values, rewards and done flags.
-    - Advantages: GAE with gamma 0.98 and lambda 0.8. Advantage plus value is the return V learns to guess.
-    - Update: 20 epochs, each one step of PPO's loss plus half V's squared error on all 256 samples, with gradients clipped to norm 0.5.
+    - Collect: run the carts for 32 steps inside `torch.no_grad()`, and save the states, actions, log probabilities, values, rewards and done flags.
+    - Advantages: compute GAE with gamma 0.98 and lambda 0.8. Each step's advantage plus its value is the return that V learns to predict.
+    - Update: run 20 epochs, each one optimizer step on all 256 samples from 32 steps of 8 carts, with gradients clipped to norm 0.5.
 
-    Over the run the rate falls in a line from 1e-3 to 0, and the clip from
-    0.2 to 0. So the last updates change the policy less and less. PPO's
-    loss plus half V's error follows the paper's combined objective, less
+    Over the run, the learning rate falls linearly from 1e-3 to 0, and
+    epsilon falls linearly from 0.2 to 0. So the last updates change the
+    policy less and less. The loss is PPO's loss plus half of V's mean
+    squared error. That follows the combined objective in the paper, without
     its entropy bonus. Each minibatch's advantages are scaled to mean 0 and
-    spread 1, and the file gives the networks, started as Stable Baselines3
-    starts them.
+    standard deviation 1.
+    The file gives you the networks, initialized the way Stable Baselines3
+    initializes them.
 
-    The score is how many steps the greedy policy, always taking its likelier
-    action, keeps 16 fresh poles up. Of 40 untrained policies, 17 fell
-    within 12 steps, and one held all 500 by luck.
+    The score is the average number of steps that the greedy policy keeps 16
+    fresh poles up. The greedy policy always takes the action with the
+    higher probability. Of 40 untrained policies, 17 scored 12 steps or
+    fewer, and one scored the full 500 by luck.
 
-    On 5 seeds, every policy first keeps all 16 poles up for 500 steps
-    within 117 updates, 30,000 steps of play. After all 390 updates, 100,000
-    steps of play, every one keeps 100 fresh poles up for all 500.
+    On all 5 seeds, the policy first keeps all 16 poles up for 500 steps
+    within 117 updates, which is about 30,000 steps of play. After all 390
+    updates, about 100,000 steps of play, every seed's policy keeps 100
+    fresh poles up for all 500 steps.
 
-    Reuse pays, and the clip keeps it safe. Here are the same 390 updates
-    with other numbers of epochs, scored on 100 fresh poles.
+    Reusing each batch for many epochs helps, and the clip keeps that reuse
+    safe. The table runs the same 390 updates with other numbers of epochs,
+    scored on 100 fresh poles.
 
     | Epochs | 1 | 4 | 20 | 20, no clip |
     |---|---|---|---|---|
     | Steps balanced, 5 seeds | 116 to 145 | 108 to 500 | 500 on all 5 | 9 to 500 |
 
-    One epoch wastes most of each batch. Four get to 499.8 or more on 3
-    seeds and stall below 175 on 2. Twenty reach 500 on all 5. Without the
-    clip, 20 epochs broke one seed, whose policy ended falling within 9 steps.
+    With one epoch, most of the information in each batch goes unused. Four
+    epochs reach 499.8 or more on 3 seeds, but stay below 175 on the other
+    2. Twenty epochs reach 500 on all 5 seeds. Without the clip, 20 epochs
+    ruined one seed, whose final policy let the poles fall within 9 steps.
     """,
 )
 
@@ -1038,8 +1089,8 @@ PPO3_SOURCE = source_file(
     from torch import Tensor
 
     shuffled = torch.randperm(6, generator=torch.Generator().manual_seed(0))    # the numbers 0 to 5 in a random order
-    flat = torch.zeros(32, 8, 4).flatten(0, 1)                                   # shape (256, 4), steps and carts in one
-    share_left = 1 - 3 / 10                                                      # 0.7 of 10 updates still to run at update 3
+    flat = torch.zeros(32, 8, 4).flatten(0, 1)                                   # shape (256, 4), steps and carts merged into one dimension
+    share_left = 1 - 3 / 10                                                      # 0.7, the fraction of 10 updates still to run at update 3
 
 
     # The cart poles, the networks, and the pieces of ppo1 and ppo2.
@@ -1052,17 +1103,21 @@ PPO3_SOURCE = source_file(
 ''' + indented(GAE_PART) + '''
 
 
-    # TODO: Finish collect. At each step, take the log softmax of the policy's
-    #   scores for the states, draw one action per cart from its chances with
-    #   torch.multinomial(..., 1, generator=generator), and keep the log
-    #   probability of each cart's drawn action.
+    # TODO: Finish collect by filling in its three ... placeholders. At each
+    #   step, set log_chances to the log softmax of the policy's scores for
+    #   the states, over the 2 actions. Draw one action per cart from its
+    #   probabilities with torch.multinomial(..., 1, generator=generator), as
+    #   a tensor of shape (carts,). Then save the log probability of each
+    #   cart's drawn action.
 ''' + indented(COLLECT_STUB) + '''
 
 
-    # TODO: Return the loss of one minibatch. Scale advantages to mean 0 and
-    #   spread 1, with 1e-8 added to the spread. Take each action's new log
-    #   probability from the policy, then ppo_loss plus 0.5 times the mean
-    #   squared error of the value network's guesses against returns.
+    # TODO: Return the loss of one minibatch. First scale advantages to mean 0
+    #   and standard deviation 1, by subtracting their mean and dividing by
+    #   their standard deviation plus 1e-8. Take each action's new log
+    #   probability from the policy's log softmax for states. Return ppo_loss
+    #   plus 0.5 times the mean squared error between the value network's
+    #   predictions for states and returns.
     def minibatch_loss(
         policy: nn.Module,
         value: nn.Module,
@@ -1076,13 +1131,16 @@ PPO3_SOURCE = source_file(
         ...
 
 
-    # TODO: Flatten the rollout's states, actions and log probabilities, and
-    #   advantages and returns, with .flatten(0, 1), steps first, so steps and
-    #   carts become one. For each of epochs epochs, shuffle with
-    #   torch.randperm and generator, and take one optimizer step on
-    #   minibatch_loss for each minibatch of that order. Before each step,
-    #   clip both networks' gradients to a total norm of 0.5, as clipping1 did.
-    #   Return the last loss as a plain number.
+    # TODO: Train both networks on one rollout and return the last loss as a
+    #   Python float. First merge the steps and carts dimensions of the
+    #   rollout's states, actions and log probabilities, and of advantages and
+    #   returns, so each sample is one row. The states become shape
+    #   (steps * carts, 4), and the rest become shape (steps * carts,). Then
+    #   run `epochs` epochs. In each epoch, shuffle the sample indices with
+    #   torch.randperm and generator, and split that order into minibatches
+    #   of size minibatch. Take one optimizer step on minibatch_loss for each
+    #   minibatch. Before each step, clip the gradients of both networks
+    #   together to a total norm of 0.5, as clipping1 did.
     def ppo_update(
         policy: nn.Module,
         value: nn.Module,
@@ -1098,19 +1156,22 @@ PPO3_SOURCE = source_file(
         ...
 
 
-    # TODO: Finish train_ppo. For each update, take left, the share of the
-    #   updates still to run, and set the optimizer's rate to 1e-3 times left
-    #   in optimizer.param_groups[0]["lr"]. Collect 32 steps, take gae with
-    #   gamma 0.98 and lam 0.8, and add the values to get the returns. Call
-    #   ppo_update with 20 epochs, minibatches of 256 and epsilon 0.2 times
-    #   left. Return the policy.
+    # TODO: Finish train_ppo. Loop over the updates. At each update, compute
+    #   left, the fraction of updates still to run, which is 1 at the first
+    #   update. Set the learning rate to 1e-3 * left in
+    #   optimizer.param_groups[0]["lr"]. Collect 32 steps, compute gae with
+    #   gamma 0.98 and lam 0.8, and add the rollout's values to the advantages
+    #   to get the returns. Call ppo_update with 20 epochs, minibatches of 256
+    #   and epsilon 0.2 * left. After the loop, return the policy.
 ''' + indented(TRAIN_STUB) + '''
 
 
-    # TODO: Return how many steps policy keeps count fresh carts up on
-    #   average, made with generator, up to LONGEST. Push each cart toward its
-    #   likelier action, count each cart's steps until its first done, and
-    #   record nothing for autograd.
+    # TODO: Return the average number of steps that policy keeps `count` fresh
+    #   carts up, at most LONGEST, as a Python float. Make the carts with
+    #   CartPole(count, generator). At each step, push each cart with its more
+    #   likely action, the argmax of the policy's scores. Count each cart's
+    #   steps up to and including its first done, and stop counting that cart
+    #   after it. Run inside torch.no_grad(), so autograd records nothing.
     def balance_time(
         policy: nn.Module,
         count: int,
@@ -1174,7 +1235,7 @@ def check_collect(found: object) -> None:
         rollout, expected = rollouts
 
         if not isinstance(rollout, dict):
-            raise Mismatch(f"{call} should give a dict of tensors, as its last lines build.")
+            raise Mismatch(f"{call} should return a dict of tensors, which its last lines build.")
 
         for name, wanted in expected.items():
             expect_tensor(
@@ -1228,9 +1289,9 @@ def check_minibatch_loss(found: object) -> None:
 
         if guesses_unsqueezed:
             raise Mismatch(
-                f"{call} is {actual.item():.4f}, which takes the value error between every guess and every return. "
-                "value(states) has shape (8, 1), so subtracting returns of shape (8,) makes an (8, 8) grid. Squeeze the "
-                "guesses to shape (8,) first.",
+                f"{call} is {actual.item():.4f}, which computes the value error between every prediction and every "
+                "return. value(states) has shape (8, 1), so subtracting returns of shape (8,) broadcasts to an (8, 8) "
+                "grid. Squeeze the predictions to shape (8,) first.",
             )
 
         expect_loss_tensor(
@@ -1245,12 +1306,12 @@ def check_minibatch_gradient(found: object) -> None:
     loss = found(policy, value, states, actions, old_log_probs, advantages, returns, 0.2)
 
     if not isinstance(loss, Tensor) or loss.grad_fn is None:
-        raise Mismatch("minibatch_loss gives a loss that records nothing, so no gradient reaches the networks. Keep it a tensor.")
+        raise Mismatch("minibatch_loss returns a loss that autograd did not record, so no gradient can reach the networks. Return a tensor, without .item().")
 
     loss.backward()
 
     if policy[0].weight.grad is None or value[0].weight.grad is None:
-        raise Mismatch("minibatch_loss's loss reaches only one network. It should add the policy's ppo_loss and the value network's error.")
+        raise Mismatch("minibatch_loss's loss sends gradients to only one network. It should add the policy's ppo_loss and the value network's error.")
 
 
 class swapped:
@@ -1321,7 +1382,7 @@ def check_train_ppo(found: object) -> None:
         policy = found(2, 838)
 
     if not isinstance(policy, nn.Module):
-        raise Mismatch(f"train_ppo(2, 838) gives {type(policy).__name__}, but it should give the trained policy.")
+        raise Mismatch(f"train_ppo(2, 838) returns {type(policy).__name__}, but it should return the trained policy.")
 
     expect_tensor(
         call="the policy's first weights after train_ppo(2, 838)",
@@ -1336,7 +1397,7 @@ def check_ppo_learns(found: object) -> None:
     steps = REFERENCE["balance_time"](found(20, 839), 16, torch.Generator().manual_seed(7))
 
     if steps < 50:
-        raise Mismatch(f"After 20 updates of train_ppo, the greedy policy keeps 16 poles up for {steps:.1f} steps on average, but it should pass 50.")
+        raise Mismatch(f"After 20 updates of train_ppo, the greedy policy keeps 16 poles up for {steps:.1f} steps on average, but it should be above 50.")
 
 
 def check_balance_time(found: object) -> None:
@@ -1361,13 +1422,13 @@ def check_balance_time(found: object) -> None:
         )
 
         if any(grad_seen):
-            raise Mismatch("balance_time recorded for autograd. Run the carts inside torch.no_grad().")
+            raise Mismatch("balance_time ran the policy while autograd was recording. Run the carts inside torch.no_grad().")
 
 
 def check_ppo3(checker: Checker) -> None:
     checker.test(
         function="collect",
-        description="draws each cart's action and keeps its log probability",
+        description="draws each cart's action and saves its log probability",
         run=check_collect,
     )
     checker.test(
@@ -1377,7 +1438,7 @@ def check_ppo3(checker: Checker) -> None:
     )
     checker.test(
         function="minibatch_loss",
-        description="reaches both networks",
+        description="sends gradients to both networks",
         run=check_minibatch_gradient,
     )
     checker.test(
@@ -1387,12 +1448,12 @@ def check_ppo3(checker: Checker) -> None:
     )
     checker.test(
         function="train_ppo",
-        description="collects, takes GAE, then updates",
+        description="collects, computes GAE, then updates",
         run=check_train_ppo,
     )
     checker.test(
         function="balance_time",
-        description="counts the steps until each cart's first fall",
+        description="counts each cart's steps until its episode first ends",
         run=check_balance_time,
     )
     checker.test(
@@ -1410,21 +1471,21 @@ PPO3 = Exercise(
     source=PPO3_SOURCE,
     solution=PPO3_SOLUTION,
     hints={
-        "collect": "Take the log softmax of the policy's scores over dim 1. torch.multinomial wants chances, so draw "
-        "from the exp of the log chances, one per row, and squeeze away the extra dimension. To keep each cart's own "
-        "log probability, index the rows with torch.arange and the columns with the actions.",
-        "minibatch_loss": "Scale the advantages first, minus their mean, over their spread plus 1e-8. Index the "
-        "policy's log softmax as collect did, rows with torch.arange and columns with the actions. The value network "
-        "gives shape (rows, 1), so squeeze that last dimension before comparing with the returns.",
-        "ppo_update": "Flatten the states over their first two dimensions, and the rest into one dimension. Each epoch, "
-        "draw a fresh order with torch.randperm and the generator, then walk it in slices of minibatch. For each slice, "
-        "zero the gradients, backpropagate minibatch_loss, clip both networks' gradients together with "
-        "nn.utils.clip_grad_norm_, then step.",
-        "train_ppo": "Each update, left is the share of updates not yet run, 1 at the first. Set the rate in the "
-        "optimizer's first param group, collect 32 steps, and pass the rollout's rewards, values, next values and dones "
-        "to gae. The returns are the advantages plus the rollout's values.",
-        "balance_time": "Make CartPole(count, generator), a standing mask of ones as bools and a survived count of "
-        "zeros. Each step, add standing to survived, then set standing to False where dones is True.",
+        "collect": "Take the log softmax of the policy's scores over dim 1. torch.multinomial needs probabilities, so "
+        "draw from the exp of the log probabilities, one sample per row, and squeeze away the extra dimension. To get "
+        "each cart's own log probability, index the rows with torch.arange and the columns with the actions.",
+        "minibatch_loss": "Scale the advantages first. Subtract their mean and divide by their standard deviation plus "
+        "1e-8. Index the policy's log softmax as collect did, rows with torch.arange and columns with the actions. The "
+        "value network returns shape (rows, 1), so squeeze that last dimension before comparing with the returns.",
+        "ppo_update": "Flatten the states over their first two dimensions, and flatten the rest completely. Each epoch, "
+        "draw a fresh order with torch.randperm and the generator, then go through it in slices of length minibatch. "
+        "For each slice, zero the gradients and backpropagate minibatch_loss. Then clip both networks' gradients "
+        "together with nn.utils.clip_grad_norm_, and step.",
+        "train_ppo": "At each update, left is the fraction of updates not yet run, which is 1 at the first. Set the "
+        "learning rate in the optimizer's first param group and collect 32 steps. Pass the rollout's rewards, values, "
+        "next values and dones to gae. The returns are the advantages plus the rollout's values.",
+        "balance_time": "Make CartPole(count, generator), a standing mask of ones as bools, and a survived count of "
+        "zeros. At each step, add standing to survived, then set standing to False where dones is True.",
     },
     introduces=(),
     check=check_ppo3,

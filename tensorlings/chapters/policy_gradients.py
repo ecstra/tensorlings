@@ -27,11 +27,13 @@ POLICY_GRADIENTS = Chapter(
         """
         # Policy gradients
 
-        Reinforcement learning trains from scores in place of right answers.
-        This chapter names its parts on a row of slot machines, then derives
-        REINFORCE, the classic way to follow the gradient of an expected score.
-        A baseline cuts its noise, and a speller trained on a score made with
-        `==` shows why it needs no gradient from the score at all.
+        Reinforcement learning trains a model from scores instead of right
+        answers. This chapter introduces its standard terms on a row of slot
+        machines. Then it derives REINFORCE, the classic method for following
+        the gradient of the expected score. A baseline makes REINFORCE's
+        gradient estimate less noisy. Finally, a model learns to spell a hidden
+        word from a score computed with `==`, which shows that REINFORCE needs
+        no gradient from the score at all.
 
         ## Further reading
 
@@ -358,46 +360,55 @@ def measure_policy_gradients() -> dict[str, object]:
 
 RL1_LESSON = prose(
     """
-    Every model so far learned from right answers, a label for each output.
-    Reinforcement learning has none. A program acts, and the world answers
-    with a score. Four words name the parts.
+    Every model so far learned from right answers, with a label for each
+    output. Reinforcement learning has no labels. A program takes an action,
+    and the world responds with a score that says how good the action was.
+    Four standard terms name the parts.
 
-    - **Policy**: the rule that picks what to do, here a probability distribution over the choices.
+    - **Policy**: the rule that decides what to do. Here it is a probability distribution over the possible choices.
     - **Action**: one choice the policy makes.
-    - **Reward**: the number the world hands back for an action, higher for better.
-    - **Episode**: one run from start to end. Here it is a single action and its reward. In 80_ppo it lasts hundreds of steps.
+    - **Reward**: the number the world gives back for an action. Higher is better.
+    - **Episode**: one run from start to finish. Here an episode is a single action and its reward. In 80_ppo an episode lasts hundreds of steps.
 
     The world here is a bandit, a row of 5 slot machines called arms. Each
-    arm pays its own average plus noise from a standard normal. The policy
-    never sees the averages, only the rewards of the arms it played.
+    time an arm is played, its reward is that arm's mean plus random noise
+    with mean 0 and standard deviation 1. The policy never sees the means. It
+    only sees the rewards of the arms it played.
 
     ```python
     ARM_MEANS = torch.tensor([0.2, -0.5, 1.0, 0.4, -0.1])
     ```
 
-    The policy holds one preference per arm, and its chances are their
-    softmax. Its goal is the highest expected reward, the average reward per
-    episode over very many episodes. With the chances and the averages known,
-    that is each chance times its arm's average, summed.
+    The policy holds one number per arm, called its preference. The
+    probabilities of playing the arms, called `chances` in the code, are the
+    softmax of the preferences. The goal is the highest expected reward,
+    which is the average reward per episode over very many episodes. When
+    the probabilities and the means are known, the expected reward is a sum.
 
-    Playing estimates it without knowing the averages. Here are three
-    policies, each with its exact expected reward and the average over 1,000
-    played episodes.
+    ```text
+    expected reward = sum over arms of probability(arm) * mean(arm)
+    ```
 
-    | Preferences | Exact | Average over 1,000 episodes | Best arm played |
+    Without knowing the means, you can still estimate the expected reward by
+    playing many episodes and averaging their rewards. Here are three
+    policies. Each row shows the exact expected reward and the average
+    reward over 1,000 played episodes.
+
+    | Preferences | Exact expected reward | Average over 1,000 episodes | Plays of the best arm |
     |---|---|---|---|
     | all 0 | 0.200 | 0.154 | 19.8% |
     | [0, 0, 2, 0, 0] | 0.649 | 0.672 | 67.8% |
     | [0, 0, 6, 0, 0] | 0.990 | 1.002 | 98.6% |
 
-    Each average misses by a few hundredths, either way, from the noise of
-    its own 1,000 draws. The best policy puts all its chance on arm 2, for
-    an expected reward of 1.0.
+    Each average is off by a few hundredths, sometimes above and sometimes
+    below, because of the random noise in its 1,000 rewards. The best
+    possible policy puts all its probability on arm 2, which gives an
+    expected reward of 1.0.
 
-    The last column is `best_arm_share`, the share of played actions that
-    went to arm 2, the best arm. It tracks arm 2's chance, 0.2, 0.65 and
-    0.99. The next exercises learn the preferences from rewards alone, and
-    push this share toward 1.
+    The last column is `best_arm_share`, the fraction of played actions that
+    chose arm 2, the best arm. It stays close to arm 2's probability in each
+    policy, which is 0.2, 0.65 and 0.99. The next exercises learn the
+    preferences from the rewards alone, which pushes this fraction toward 1.
     """,
 )
 
@@ -413,14 +424,15 @@ RL1_SOURCE = source_file(
     chances = torch.softmax(torch.tensor([0.0, 0.0, 2.0, 0.0, 0.0]), dim=0)
     # tensor([0.0878, 0.0878, 0.6488, 0.0878, 0.0878])
     picks = torch.multinomial(chances, 6, replacement=True, generator=torch.Generator().manual_seed(0))
-    # tensor([4, 2, 2, 4, 2, 2]), six actions, mostly arm 2
+    # tensor([4, 2, 2, 4, 2, 2]), six actions drawn this way, mostly arm 2
 
 
-    # TODO: Play episodes episodes of the bandit with arm_means. Draw every
-    #   action at once from the softmax of preferences, with torch.multinomial,
-    #   replacement=True and generator. Then draw the noise of every reward with
-    #   torch.randn(episodes, generator=generator). Each reward is its arm's
-    #   average plus its noise. Return the actions and the rewards.
+    # TODO: Play the bandit for `episodes` episodes. First draw all the actions
+    #   at once with torch.multinomial, from the softmax of preferences, with
+    #   replacement=True and generator. Then draw the noise for all the rewards
+    #   with torch.randn(episodes, generator=generator). Each reward is the
+    #   mean of its arm, from arm_means, plus its noise. Return the actions and
+    #   the rewards, two tensors of shape (episodes,).
     def play(
         preferences: Tensor,
         arm_means: Tensor,
@@ -430,8 +442,11 @@ RL1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the policy's expected reward as a tensor, each arm's chance
-    #   times its average, summed.
+    # TODO: Return the policy's expected reward, as a tensor with one number.
+    #   Multiply each arm's probability, from the softmax of preferences, by
+    #   that arm's mean, and add up the products.
+    #   Example: expected_reward(torch.zeros(5), ARM_MEANS) returns
+    #   tensor(0.2000).
     def expected_reward(
         preferences: Tensor,
         arm_means: Tensor,
@@ -439,8 +454,8 @@ RL1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the average reward of episodes episodes from play, as a
-    #   plain number.
+    # TODO: Play `episodes` episodes with play, and return the mean of their
+    #   rewards as a Python float.
     def average_reward(
         preferences: Tensor,
         arm_means: Tensor,
@@ -450,8 +465,10 @@ RL1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the share of actions that played the arm with the highest
-    #   average, as a plain number.
+    # TODO: Return the fraction of actions that chose the best arm, the arm
+    #   with the highest mean, as a Python float.
+    #   Example: best_arm_share(torch.tensor([2, 0, 2, 4]), ARM_MEANS) returns
+    #   0.5.
     def best_arm_share(
         actions: Tensor,
         arm_means: Tensor,
@@ -488,7 +505,7 @@ def check_rl1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="play",
-        description="draws the actions, then each reward's noise",
+        description="draws the actions first, then the noise of each reward",
         inputs=(
             (torch.tensor([0.0, 0.0, 2.0, 0.0, 0.0]), ARM_MEANS, 8, seeded(793)),
             (torch.tensor([1.0, -1.0, 0.5]), torch.tensor([3.0, -2.0, 0.0]), 5, seeded(794)),
@@ -499,7 +516,7 @@ def check_rl1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="expected_reward",
-        description="weighs each arm's average by its chance",
+        description="multiplies each arm's mean by its probability and sums",
         inputs=(
             (torch.tensor([0.0, 0.0, 2.0, 0.0, 0.0]), ARM_MEANS),
             (torch.tensor([1.0, -1.0, 0.5]), torch.tensor([3.0, -2.0, 0.0])),
@@ -521,7 +538,7 @@ def check_rl1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="best_arm_share",
-        description="gives the share of actions on the best arm",
+        description="returns the fraction of actions on the best arm",
         inputs=(
             (torch.tensor([2, 0, 2, 4, 2, 1, 2, 3]), ARM_MEANS),
             (torch.tensor([0, 1, 1, 0, 2]), torch.tensor([-1.0, 0.5, 0.2])),
@@ -541,12 +558,13 @@ RL1 = Exercise(
     source=RL1_SOURCE,
     solution=RL1_SOLUTION,
     hints={
-        "play": "torch.softmax(preferences, dim=0) gives the chances. torch.multinomial draws the actions, "
-        "arm_means[actions] gives each one's average, then add torch.randn(episodes, generator=generator).",
-        "expected_reward": "Multiply torch.softmax(preferences, dim=0) by arm_means and .sum() the result.",
-        "average_reward": "Take the rewards that play gives, their .mean(), then .item().",
-        "best_arm_share": "arm_means.argmax() is the best arm. Compare the actions with it, turn that into floats, "
-        "take the mean and .item().",
+        "play": "torch.softmax(preferences, dim=0) gives the probabilities, and torch.multinomial draws the actions "
+        "from them. arm_means[actions] gives the mean of each action's arm. Then add "
+        "torch.randn(episodes, generator=generator).",
+        "expected_reward": "Multiply torch.softmax(preferences, dim=0) by arm_means and call .sum() on the result.",
+        "average_reward": "Take the rewards that play returns, then call .mean() and .item() on them.",
+        "best_arm_share": "arm_means.argmax() is the best arm. Compare the actions with it using ==, turn the result "
+        "into floats, then take the mean and call .item().",
     },
     introduces=("policy", "episode"),
     check=check_rl1,
@@ -559,49 +577,58 @@ RL1 = Exercise(
 
 REINFORCE1_LESSON = prose(
     """
-    The policy should move its chance toward the arms that pay more. Gradient
-    descent needs the gradient of the expected reward with respect to the
-    preferences. Played episodes have none to give. An action is a whole
-    number drawn at random, and a reward comes from the world.
+    The policy should shift its probability toward the arms that pay more.
+    Gradient descent needs the gradient of the expected reward with respect
+    to the preferences. But played episodes cannot give that gradient
+    directly. An action is an integer drawn at random, so it has no
+    gradient. A reward comes from the world, outside autograd, so it has
+    none either.
 
-    Williams's REINFORCE, from 1992, finds the gradient anyway. Write the
-    expected reward J as a sum over the actions a, with p the policy's chance
-    and r an arm's average.
+    REINFORCE, published by Williams in 1992, gets the gradient anyway.
+    Write the expected reward as J, a sum over the actions a. Here p(a) is
+    the policy's probability of action a, and r(a) is the mean reward of
+    that arm.
 
     ```text
     J = sum over a of p(a) * r(a)
     gradient of J = sum over a of p(a) * r(a) * gradient of log p(a)
     ```
 
-    The second line uses `gradient of p = p * gradient of log p`, the chain
-    rule through the log. It is again an average over actions the policy
-    picks. So played episodes estimate it, each one adding its reward times
-    the gradient of its action's log probability.
+    The second line uses `gradient of p = p * gradient of log p`, which is
+    the chain rule applied to `log p`. The second line has the same form as
+    the first, a sum of p(a) times something. So it is an average over the
+    actions the policy picks, and played episodes can estimate it. Each
+    episode contributes its reward times the gradient of the log probability
+    of its action.
 
-    In code that becomes a loss. Autograd takes the gradient of the log
-    probabilities, and the rewards are plain weights.
+    In code, this estimate becomes a loss. Autograd computes the gradient of
+    the log probabilities, and the rewards are treated as constant weights.
 
     ```text
     loss = minus the mean over episodes of log p(action) * reward
     ```
 
-    The minus sign turns climbing the expected reward into the descent an
-    optimizer does. A high reward pushes its action's log probability up
-    hard, and a negative one pushes it down.
+    An optimizer minimizes a loss, but we want to maximize the expected
+    reward. The minus sign turns one into the other. An action with a high
+    reward gets its log probability pushed up strongly. An action with a
+    negative reward gets its log probability pushed down.
 
-    `torch.log_softmax(preferences, dim=0)` gives every arm's log
-    probability at once, the safe way likelihood2 built by hand.
+    `torch.log_softmax(preferences, dim=0)` gives the log probability of
+    every arm at once. It computes them in the numerically safe way that
+    likelihood2 built by hand.
 
-    Here is SGD at a learning rate of 0.1 with 32 episodes a step, from equal
-    preferences, on 5 seeds.
+    The table shows training with SGD at a learning rate of 0.1 and 32
+    episodes per step, starting from equal preferences. Each cell gives the
+    range over 5 seeds.
 
     | Steps | 50 | 200 | 500 |
     |---|---|---|---|
     | Expected reward | 0.47 to 0.53 | 0.92 to 0.93 | 0.979 to 0.980 |
-    | Chance of arm 2 | 0.42 to 0.48 | 0.91 to 0.92 | 0.976 to 0.977 |
+    | Probability of arm 2 | 0.42 to 0.48 | 0.91 to 0.92 | 0.976 to 0.977 |
 
-    Every seed finds arm 2 from rewards alone. The climb slows near the top,
-    where the other arms are rarely played and their rewards rarely seen.
+    Every seed finds arm 2 from the rewards alone. The improvement slows
+    down near the top. By then the other arms are rarely played, so their
+    rewards are rarely seen.
     """,
 )
 
@@ -623,8 +650,11 @@ REINFORCE1_SOURCE = source_file(
 ''' + indented(PLAY_PART) + '''
 
 
-    # TODO: Return the log probability of each action under the softmax of
-    #   preferences, one per action.
+    # TODO: Return the log probability of each action in actions, where the
+    #   probabilities are the softmax of preferences. The result has one entry
+    #   per action.
+    #   Example: log_probabilities(torch.tensor([0.0, 1.0, 2.0]),
+    #   torch.tensor([2, 0])) returns tensor([-0.4076, -2.4076]).
     def log_probabilities(
         preferences: Tensor,
         actions: Tensor,
@@ -632,8 +662,11 @@ REINFORCE1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return REINFORCE's loss, minus the mean of each log probability
-    #   times its reward.
+    # TODO: Return the REINFORCE loss, as a tensor with one number. Multiply
+    #   each log probability by its reward, take the mean of the products, and
+    #   negate it.
+    #   Example: reinforce_loss(torch.tensor([-0.5, -1.0]),
+    #   torch.tensor([2.0, 1.0])) returns tensor(1.).
     def reinforce_loss(
         log_probs: Tensor,
         rewards: Tensor,
@@ -641,10 +674,12 @@ REINFORCE1_SOURCE = source_file(
         ...
 
 
-    # TODO: Train preferences, starting at zeros that record gradients, with
-    #   torch.optim.SGD at lr. Each of steps steps plays episodes episodes with
-    #   play and generator, then takes one step on reinforce_loss. Zero the
-    #   gradients before each backward. Return the trained preferences detached.
+    # TODO: Train the preferences and return them. Start them as zeros, one
+    #   per arm, that record gradients, and make a torch.optim.SGD optimizer
+    #   for them with learning rate lr. Run `steps` training steps. In each
+    #   one, play `episodes` episodes with play and generator, compute
+    #   reinforce_loss, and take one optimizer step. Zero the gradients before
+    #   each backward call. Return the trained preferences detached.
     def train_bandit(
         arm_means: Tensor,
         steps: int,
@@ -705,7 +740,10 @@ def check_loss_has_gradient(found: object) -> None:
     loss = found(log_probs, torch.tensor([1.0, -2.0, 0.5]))
 
     if not isinstance(loss, Tensor) or loss.grad_fn is None:
-        raise Mismatch("reinforce_loss gives a loss that records nothing, so no gradient reaches the preferences. Keep it a tensor.")
+        raise Mismatch(
+            "reinforce_loss returns a loss that autograd did not record, so no gradient can reach the preferences. "
+            "Return a tensor computed from log_probs, without .item().",
+        )
 
 
 def check_train_bandit(found: object) -> None:
@@ -727,14 +765,14 @@ def check_bandit_learns(found: object) -> None:
     chance = torch.softmax(preferences, dim=0)[2].item()
 
     if chance < 0.6:
-        raise Mismatch(f"After 300 steps, train_bandit gives arm 2 a chance of {chance:.2f}, but it should pass 0.6.")
+        raise Mismatch(f"After 300 steps, train_bandit gives arm 2 a probability of {chance:.2f}, but it should be above 0.6.")
 
 
 def check_reinforce1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="log_probabilities",
-        description="gives each action's log probability",
+        description="returns each action's log probability",
         inputs=(
             (torch.tensor([0.0, 1.0, 2.0]), torch.tensor([2, 0, 0, 1])),
             (torch.tensor([3.0, -1.0, 0.5, 0.0, 2.0]), torch.tensor([4, 4, 1])),
@@ -760,7 +798,7 @@ def check_reinforce1(checker: Checker) -> None:
     )
     checker.test(
         function="train_bandit",
-        description="plays, then steps SGD on reinforce_loss",
+        description="plays episodes, then takes an SGD step on reinforce_loss",
         run=check_train_bandit,
     )
     checker.test(
@@ -781,10 +819,9 @@ REINFORCE1 = Exercise(
         "log_probabilities": "torch.log_softmax(preferences, dim=0) gives every arm's log probability. Index it "
         "with the actions.",
         "reinforce_loss": "Multiply log_probs by rewards, take the mean, and put a minus in front.",
-        "train_bandit": "Start the preferences as torch.zeros, one per arm, with requires_grad=True, and SGD over "
-        "[preferences]. "
-        "In the loop, play, then reinforce_loss of log_probabilities(preferences, actions) and the rewards, then "
-        "zero_grad, backward and step.",
+        "train_bandit": "Start the preferences as torch.zeros, one per arm, with requires_grad=True, and make SGD "
+        "over [preferences]. In the loop, call play, then compute reinforce_loss of "
+        "log_probabilities(preferences, actions) and the rewards. Then call zero_grad, backward and step.",
     },
     introduces=(),
     check=check_reinforce1,
@@ -799,52 +836,61 @@ REINFORCE1 = Exercise(
 
 REINFORCE2_LESSON = prose(
     """
-    REINFORCE's estimate is right on average, but noisy. Shift every arm's
-    average up by 10, so every reward is about 10. The best arm is the same.
-    Now every played action gets pushed up, the good ones only a little more
-    than the bad. The push swings with the luck of each batch.
+    REINFORCE's gradient estimate is correct on average, but it is noisy. To
+    see why, add 10 to every arm's mean, so every reward is about 10. The
+    best arm is still arm 2. But now every reward is positive, so every
+    played action gets its probability pushed up. The good actions are
+    pushed only a little more than the bad ones. So the direction of each
+    update depends heavily on which actions happened to be drawn in that
+    batch.
 
-    A **baseline** fixes that. Subtract a number b from every reward before
-    it weighs the log probabilities. The estimate still averages to the same
-    gradient. The extra part, b times the gradient of log p, averages to b
-    times the gradient of the summed chances. Those always sum to 1, so that
-    gradient is 0.
+    A **baseline** fixes this. Subtract a number b from every reward before
+    multiplying it by the log probabilities. On average, the estimate still
+    equals the same gradient. Subtracting b adds the term
+    `-b * gradient of log p(a)` to each episode. Averaged over actions, that
+    term is `-b` times the gradient of the sum of all the probabilities. The
+    probabilities always sum to 1, so that gradient is 0.
 
-    The reward minus the baseline is the **advantage**, how much better an
-    action did than usual. A common baseline is the average reward of the
-    batch. That one also counts the reward it is subtracted from, which
-    shrinks the estimate by a factor of 31 in 32 at 32 episodes. GRPO, in
-    82_dpo, uses a version of it taken per question.
+    The reward minus the baseline is called the **advantage**. It says how
+    much better an action did than usual. A common baseline is the average
+    reward of the batch. That average includes the reward it is subtracted
+    from. Because of this, the estimate comes out smaller by a factor of
+    31/32 with 32 episodes. GRPO, in 82_dpo, uses a version of this baseline
+    computed separately for each question.
 
-    Here is the spread of the estimate over 1,000 batches of 32 episodes, at
-    equal preferences, averaged over the 5 arms.
+    The table shows how noisy the estimate is. Each number is the standard
+    deviation of the estimate over 1,000 batches of 32 episodes, at equal
+    preferences, averaged over the 5 arms.
 
     | Bandit | Without a baseline | With the batch average |
     |---|---|---|
     | `ARM_MEANS` | 0.078 | 0.076 |
     | `ARM_MEANS + 10` | 0.72 | 0.076 |
 
-    On the shifted bandit the baseline cuts the noise tenfold. On `ARM_MEANS`
-    the rewards already average near 0, so it changes little. Averaged over
-    the 1,000 batches, every column gives about the same gradient.
+    On the shifted bandit, the baseline cuts the noise by a factor of about
+    10. On `ARM_MEANS` the rewards already average near 0, so the baseline
+    changes little. The mean of the 1,000 estimates is about the same in
+    every cell of the table.
 
-    Less noise lets the rate go higher. Here is reinforce1's training on the
-    shifted bandit for 100 steps at a rate of 1.0, 10 times reinforce1's, on
-    10 seeds. Its expected reward is taken on `ARM_MEANS`, leaving out the
-    shift of 10.
+    Less noise allows a higher learning rate. The next table runs
+    reinforce1's training on the shifted bandit for 100 steps, on 10 seeds.
+    The learning rate is 1.0, which is 10 times reinforce1's. The expected
+    reward is measured on `ARM_MEANS`, without the shift of 10.
 
-    | Weights | Lowest | Highest | Average | Seeds that favor arm 2 |
+    | Log probabilities weighted by | Lowest | Highest | Average | Seeds that favor arm 2 |
     |---|---|---|---|---|
     | Rewards | -0.50 | 1.00 | 0.70 | 7 of 10 |
     | Advantages | 0.99 | 0.99 | 0.99 | 10 of 10 |
 
-    Without the baseline, 3 seeds end on a worse arm, one at -0.50. With it,
-    every seed finds arm 2. On `ARM_MEANS` itself both reach 0.99 at this
-    rate, so the shift is what breaks the plain version. The baseline lets
-    the rate go 10 times higher safely.
+    Without the baseline, 3 seeds end up favoring a worse arm, and one of
+    them has an expected reward of -0.50. With the baseline, every seed finds
+    arm 2. On the unshifted `ARM_MEANS`, both versions reach 0.99 at this
+    rate. So the shift is what breaks the version without a baseline. The
+    baseline makes a learning rate 10 times higher safe to use.
 
-    `.clone().requires_grad_()` makes a fresh copy that records gradients,
-    so each batch gets its own gradient in `.grad`.
+    `.clone().requires_grad_()` makes a fresh copy of a tensor that records
+    gradients. Each batch gets its own copy, so each batch's gradient ends up
+    in a separate `.grad`.
     """,
 )
 
@@ -873,17 +919,19 @@ REINFORCE2_SOURCE = source_file(
 ''' + indented(REINFORCE_LOSS_PART) + '''
 
 
-    # TODO: Return the advantages of rewards, each reward minus the average of
-    #   all of them.
+    # TODO: Return the advantages, which are each reward minus the mean of all
+    #   the rewards.
     def advantages(rewards: Tensor) -> Tensor:
         ...
 
 
-    # TODO: Return trials estimates of the expected reward's gradient, of shape
-    #   (trials, arms). For each trial, make a fresh copy of preferences that
-    #   records gradients, play episodes episodes with it, and weigh the log
-    #   probabilities by the advantages when baseline is True, by the rewards
-    #   when False. The estimate is minus the gradient of reinforce_loss.
+    # TODO: Return `trials` separate estimates of the gradient of the expected
+    #   reward, stacked into a tensor of shape (trials, arms). For each trial,
+    #   make a fresh copy of preferences that records gradients, and play
+    #   `episodes` episodes with it. Weight the log probabilities by the
+    #   advantages when baseline is True, or by the rewards when it is False,
+    #   and backpropagate reinforce_loss. The estimate is the negative of the
+    #   copy's gradient, because the loss has a minus sign.
     def gradient_samples(
         preferences: Tensor,
         arm_means: Tensor,
@@ -895,14 +943,17 @@ REINFORCE2_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the noise of samples as a plain number, the spread over the
-    #   trials of each arm's estimate, averaged over the arms.
+    # TODO: Return how noisy samples is, as a Python float. Take the standard
+    #   deviation over the trials of each arm's estimate, then average those
+    #   over the arms.
+    #   Example: gradient_noise(torch.tensor([[0.5, -0.5], [1.5, 0.5]]))
+    #   returns about 0.7071.
     def gradient_noise(samples: Tensor) -> float:
         ...
 
 
-    # TODO: Finish reinforce1's training, so the weights are the advantages
-    #   when baseline is True and the rewards when it is False.
+    # TODO: Finish reinforce1's training loop. Set weights to the advantages
+    #   when baseline is True, and to the rewards when it is False.
 ''' + indented(TRAIN_BASELINE_STUB) + '''
     ''',
 )
@@ -970,7 +1021,7 @@ def check_reinforce2(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="advantages",
-        description="subtracts the average reward",
+        description="subtracts the mean reward",
         inputs=(
             (torch.tensor([10.5, 9.0, 11.5, 10.0]),),
             (torch.tensor([-1.0, 2.0]),),
@@ -980,13 +1031,13 @@ def check_reinforce2(checker: Checker) -> None:
     )
     checker.test(
         function="gradient_samples",
-        description="gives one gradient estimate per trial",
+        description="returns one gradient estimate per trial",
         run=check_samples_shape_and_values,
     )
     check_on_inputs(
         checker=checker,
         function="gradient_noise",
-        description="averages each arm's spread over the trials",
+        description="averages each arm's standard deviation over the trials",
         inputs=(
             (torch.tensor([[1.0, 0.0, -2.0], [3.0, 0.0, 2.0], [2.0, 1.0, 0.0]]),),
             (torch.tensor([[0.5, -0.5], [1.5, 0.5]]),),
@@ -996,7 +1047,7 @@ def check_reinforce2(checker: Checker) -> None:
     )
     checker.test(
         function="train_bandit",
-        description="weighs by the advantages when baseline is True",
+        description="weights by the advantages when baseline is True",
         run=check_train_with_baseline,
     )
 
@@ -1011,11 +1062,12 @@ REINFORCE2 = Exercise(
     hints={
         "advantages": "Subtract rewards.mean() from rewards.",
         "gradient_samples": "In a loop, make a fresh leaf with preferences.clone() and requires_grad_, then play with "
-        "the leaf. Call "
-        ".backward() on reinforce_loss of log_probabilities(leaf, actions) and the weights, keep -leaf.grad, and "
-        "torch.stack the list.",
-        "gradient_noise": "samples.std(dim=0) gives each arm's spread over the trials. Take its .mean() and .item().",
-        "train_bandit": "advantages(rewards) if baseline else rewards.",
+        "the leaf. Call .backward() on reinforce_loss of log_probabilities(leaf, actions) and the weights. Keep "
+        "-leaf.grad in a list, and torch.stack the list at the end.",
+        "gradient_noise": "samples.std(dim=0) gives each arm's standard deviation over the trials. Take its .mean(), "
+        "then .item().",
+        "train_bandit": "Use a conditional expression that gives advantages(rewards) when baseline is True and the "
+        "rewards otherwise.",
     },
     introduces=(),
     check=check_reinforce2,
@@ -1030,52 +1082,61 @@ REINFORCE2 = Exercise(
 
 REINFORCE3_LESSON = prose(
     """
-    Check the estimate against the truth. On the bandit, `expected_reward` is
-    a sum of chances times averages, so autograd gives its exact gradient.
-    REINFORCE's estimate from one batch gets close with enough episodes. Here
-    is the largest gap over the 5 arms, at equal preferences, on 5 seeds.
+    You can check the estimate against the true gradient. On the bandit,
+    `expected_reward` is a sum of probabilities times means, so autograd can
+    compute its exact gradient. REINFORCE's estimate from one batch gets
+    close to it when the batch has enough episodes. The table shows the
+    largest difference between the estimate and the exact gradient over the
+    5 arms. It uses equal preferences and gives the range over 5 seeds.
 
     | Episodes in the batch | 10 | 1,000 | 100,000 |
     |---|---|---|---|
-    | Largest gap | 0.095 to 0.19 | 0.016 to 0.047 | 0.0007 to 0.0025 |
+    | Largest difference | 0.095 to 0.19 | 0.016 to 0.047 | 0.0007 to 0.0025 |
 
-    The exact gradient there is `[0, -0.14, 0.16, 0.04, -0.06]`. Each arm's
-    entry is its chance, 0.2, times how far its average sits from the expected
-    reward of 0.2.
+    At equal preferences the exact gradient is `[0, -0.14, 0.16, 0.04, -0.06]`.
+    The entry for each arm is its probability, 0.2, times the arm's mean
+    minus the expected reward of 0.2.
 
-    The estimate never asked the reward for a gradient. The reward only
-    weighs log probabilities, so any score works, even one made with `==`.
+    The estimate never needed the gradient of the reward. The reward only
+    multiplies the log probabilities, so any score works as a reward, even
+    one computed with `==`.
 
-    A speller shows it. The policy writes a word of 5 letters, each from its
-    own softmax over 26 letters. The reward counts the letters that match a
-    hidden word, `torch`. Counting with `==` gives whole numbers and no
-    gradient, and the policy never sees the hidden word.
+    A speller shows this. The policy writes a word of 5 letters. Each letter
+    is drawn from its own softmax over the 26 letters of the alphabet. The
+    reward is the number of letters that match a hidden word, `torch`, at
+    the same position. Counting matches with `==` gives integers, which have
+    no gradient. The policy never sees the hidden word.
 
     ```python
     (torch.tensor([[19, 14, 17, 2, 7]]) == torch.tensor([19, 0, 17, 2, 0])).sum(dim=1)    # tensor([3])
     ```
 
-    A word's log probability is the sum of its letters' log probabilities.
-    Indexing with `torch.arange(5)` and the words together picks each
-    position's row and each word's letter there. The arange lines up with the
-    positions, the last dimension of the words, as the `picked` line in the
-    file shows.
+    The letters are drawn independently, so the log probability of a word is
+    the sum of the log probabilities of its letters. To pick them out, index
+    the log probabilities with `torch.arange(5)` and the words together. For
+    each word and position, this picks the row for that position and the
+    column for the word's letter there. The arange lines up with the
+    positions, which are the last dimension of the words. The `picked` line
+    in the file shows this on a small example.
 
-    Here is Adam at a learning rate of 0.1, 64 words a step, with the batch
-    average as the baseline, on 5 seeds.
+    The table shows training with Adam at a learning rate of 0.1 and 64
+    words per step, with the batch average as the baseline. Each cell gives
+    the range over 5 seeds.
 
     | Steps | 10 | 20 | 40 | 80 |
     |---|---|---|---|---|
     | Average reward of drawn words | 0.54 to 0.58 | 1.49 to 1.57 | 4.49 to 4.54 | 4.93 to 4.94 |
 
-    Random letters score 5 in 26, about 0.19. After 10 steps the likeliest
-    word is already `torch` on every seed, though drawn words still miss most
-    letters. The steps after that make the policy sure of it.
+    Random letters score 5/26 on average, about 0.19. After 10 steps, the
+    most likely word is already `torch` on every seed, even though the drawn
+    words still miss most letters. The later steps make the policy more and
+    more certain of `torch`.
 
-    This is how a model trains on scores like a passed test, a solved puzzle
-    or a person's thumbs up. The rest of Section 11 does it to a language
-    model. With the hidden word known, plain cross entropy on its letters
-    would train faster. REINFORCE is for when the score is all there is.
+    This is how a model can train on scores like a passed test, a solved
+    puzzle or a person's thumbs up. The rest of Section 11 does this with a
+    language model. If the hidden word were known, ordinary cross entropy on
+    its letters would train faster. REINFORCE is for when the score is the
+    only signal available.
     """,
 )
 
@@ -1113,7 +1174,11 @@ REINFORCE3_SOURCE = source_file(
 
 
     # TODO: Return the exact gradient of expected_reward with respect to
-    #   preferences, through a fresh copy that records gradients.
+    #   preferences. Make a fresh copy of preferences that records gradients,
+    #   backpropagate expected_reward through it, and return the copy's
+    #   gradient.
+    #   Example: exact_gradient(torch.zeros(5), ARM_MEANS) returns
+    #   tensor([ 0.0000, -0.1400,  0.1600,  0.0400, -0.0600]).
     def exact_gradient(
         preferences: Tensor,
         arm_means: Tensor,
@@ -1121,9 +1186,10 @@ REINFORCE3_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the largest gap, as a plain number, between one estimate of
-    #   the gradient from episodes episodes, gradient_samples with one trial and
-    #   no baseline, and exact_gradient.
+    # TODO: Return how far one REINFORCE estimate is from the exact gradient,
+    #   as a Python float. Get the estimate from gradient_samples with one
+    #   trial of `episodes` episodes and no baseline. Subtract exact_gradient,
+    #   and return the largest absolute difference over the arms.
     def estimate_gap(
         preferences: Tensor,
         arm_means: Tensor,
@@ -1133,14 +1199,17 @@ REINFORCE3_SOURCE = source_file(
         ...
 
 
-    # The speller's world. spell draws batch words from logits of shape (5, 26),
-    # one row per position, and matches scores each word against the target.
+    # The speller's world. logits has shape (5, 26), one row of letter scores
+    # per position. spell draws batch words from the softmax of each row.
+    # matches counts the letters of each word that equal the target's letter
+    # at the same position.
 ''' + indented(SPELLER_PART) + '''
 
 
-    # TODO: words has shape (batch, 5). Return one log probability per word,
-    #   of shape (batch,), the sum over the positions of each letter's log
-    #   softmax in its row of logits.
+    # TODO: words has shape (batch, 5), and logits has shape (5, 26). Return
+    #   the log probability of each word, a tensor of shape (batch,). It is the
+    #   sum over the 5 positions of the log softmax of that position's row of
+    #   logits, taken at the word's letter.
     def word_log_probs(
         logits: Tensor,
         words: Tensor,
@@ -1148,11 +1217,13 @@ REINFORCE3_SOURCE = source_file(
         ...
 
 
-    # TODO: Train logits, zeros of shape (len(target), LETTERS) that record
-    #   gradients, with torch.optim.Adam at lr. Each of steps steps spells batch
-    #   words with generator, scores them with matches, and steps on
-    #   reinforce_loss of their log probabilities weighed by the advantages.
-    #   Return the trained logits detached.
+    # TODO: Train the logits and return them. Start them as zeros of shape
+    #   (len(target), LETTERS) that record gradients, and use torch.optim.Adam
+    #   with learning rate lr. Run `steps` training steps. In each one, spell
+    #   `batch` words with generator and score them with matches to get the
+    #   rewards. Then take one step on reinforce_loss of the words' log
+    #   probabilities, weighted by the advantages. Return the trained logits
+    #   detached.
     def train_speller(
         target: Tensor,
         steps: int,
@@ -1224,7 +1295,7 @@ def check_speller_learns(found: object) -> None:
 
     if right < 5:
         raise Mismatch(
-            f"After 100 steps, the likeliest word of train_speller gets {right} of the 5 letters of grade right, "
+            f"After 100 steps, the most likely word from train_speller gets {right} of the 5 letters of 'grade' right, "
             "but it should get all 5.",
         )
 
@@ -1233,7 +1304,7 @@ def check_reinforce3(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="exact_gradient",
-        description="takes the gradient of the expected reward",
+        description="returns the exact gradient of the expected reward",
         inputs=(
             (torch.zeros(5), ARM_MEANS),
             (torch.tensor([1.0, -1.0, 0.5]), torch.tensor([3.0, -2.0, 0.0])),
@@ -1255,7 +1326,7 @@ def check_reinforce3(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="word_log_probs",
-        description="sums each word's letter log probabilities",
+        description="sums the log probabilities of each word's letters",
         inputs=(
             (Described(torch.randn(5, 26, generator=torch.Generator().manual_seed(809)), "logits of shape (5, 26)"), torch.tensor([[19, 14, 17, 2, 7], [0, 0, 0, 0, 0], [25, 1, 17, 3, 9]])),
             (Described(torch.randn(3, 4, generator=torch.Generator().manual_seed(810)), "logits of shape (3, 4)"), torch.tensor([[3, 0, 1], [2, 2, 2]])),
@@ -1265,7 +1336,7 @@ def check_reinforce3(checker: Checker) -> None:
     )
     checker.test(
         function="train_speller",
-        description="steps Adam on REINFORCE with the advantages",
+        description="takes Adam steps on the REINFORCE loss with advantages",
         run=check_train_speller,
     )
     checker.test(
@@ -1278,20 +1349,20 @@ def check_reinforce3(checker: Checker) -> None:
 REINFORCE3 = Exercise(
     name="reinforce3",
     chapter=POLICY_GRADIENTS,
-    title="Why, a score with no gradient",
+    title="Training on a score with no gradient",
     lesson=REINFORCE3_LESSON,
     source=REINFORCE3_SOURCE,
     solution=REINFORCE3_SOLUTION,
     hints={
-        "exact_gradient": "leaf = preferences.clone().requires_grad_(). Call .backward() on expected_reward(leaf, "
-        "arm_means) and return leaf.grad.",
+        "exact_gradient": "Make leaf = preferences.clone().requires_grad_(), as gradient_samples does. Call .backward() "
+        "on expected_reward(leaf, arm_means) and return leaf.grad.",
         "estimate_gap": "gradient_samples(preferences, arm_means, episodes, 1, False, generator)[0] is the one "
-        "estimate. Subtract exact_gradient, then .abs().max().item().",
-        "word_log_probs": "torch.log_softmax(logits, dim=1), indexed with torch.arange(len(logits)) and words, then "
-        ".sum(dim=1).",
-        "train_speller": "Start the logits as torch.zeros, one row of LETTERS per letter of the target, with "
-        "requires_grad=True. In the loop, spell, then "
-        "matches, then reinforce_loss of word_log_probs and advantages(rewards), then zero_grad, backward and step.",
+        "estimate. Subtract exact_gradient from it, then call .abs().max().item().",
+        "word_log_probs": "Take torch.log_softmax(logits, dim=1) and index it with torch.arange(len(logits)) and words "
+        "together. Then sum over the positions with .sum(dim=1).",
+        "train_speller": "Start the logits as torch.zeros with one row of LETTERS entries per letter of the target, and "
+        "requires_grad=True. In the loop, call spell, then matches. Then compute reinforce_loss of word_log_probs and "
+        "advantages(rewards), and call zero_grad, backward and step.",
     },
     introduces=(),
     check=check_reinforce3,

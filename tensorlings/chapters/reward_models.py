@@ -32,12 +32,12 @@ REWARD_MODELS = Chapter(
         # Reward models
 
         People find it easier to pick the better of two answers than to write
-        the best one. A reward model learns from such picks, a score for any
-        answer, with the Bradley Terry loss. Reinforcement learning from human
-        feedback, RLHF, then trains the chat model to score high, with a
-        penalty for drifting from where it started.
-        This chapter trains a reward model on your GPT, then shows on a toy
-        what the penalty is for.
+        the best answer themselves. A reward model learns from such picks to
+        give any answer a score. It trains with the Bradley Terry loss.
+        Reinforcement learning from human feedback, RLHF, then trains the chat
+        model to get high scores. A penalty stops the chat model from drifting
+        too far from where it started. This chapter trains a reward model on
+        your GPT, then uses a toy example to show why the penalty is needed.
 
         ## Further reading
 
@@ -53,7 +53,7 @@ PAIRS_PART = '''
 LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 
 
-# The word in capitals with one slip, a wrong letter, a letter left out, or a letter written twice.
+# Returns the word in capitals with one mistake, which is a wrong letter, a letter left out, or a letter written twice.
 def near_miss(
     word: str,
     generator: torch.Generator,
@@ -73,7 +73,7 @@ def near_miss(
     return right[:spot] + right[spot] + right[spot:]
 
 
-# Questions with a chosen answer, the word in capitals, and a rejected one, a near miss.
+# Returns count questions, each with a chosen answer, the word in capitals, and a rejected answer, a near miss.
 def preference_pairs(
     words: list[str],
     count: int,
@@ -84,7 +84,7 @@ def preference_pairs(
     return [(words[position], words[position].upper(), near_miss(words[position], generator)) for position in picked]
 
 
-# The chats of questions and answers, padded at the end with END, and the place of each chat's own END.
+# Returns the ids of the chats, padded at the end with END, and the index of each chat's own END token.
 def scored_batch(
     chats: list[tuple[str, str]],
     positions: dict[str, int],
@@ -284,62 +284,68 @@ def measure_reward_models() -> dict[str, float]:
 REWARD1_LESSON = prose(
     """
     People find it easier to pick the better of two answers than to write
-    the best one. InstructGPT is GPT-3 trained to follow instructions, by
-    Ouyang and colleagues at OpenAI. Its labelers ranked 4 to 9 answers to
-    each prompt, and every two of them made one comparison. A reward model
-    learns a score for any answer from such picks.
+    the best answer themselves. InstructGPT is GPT-3 trained to follow
+    instructions, by Ouyang and colleagues at OpenAI. Its labelers ranked 4
+    to 9 answers to each prompt. Every pair of those answers then gave one
+    comparison. A reward model learns from such comparisons to give any
+    answer a score.
 
-    The Bradley Terry model says how scores turn into picks. The chance that
-    answer a beats answer b is the sigmoid of the gap between their scores.
+    The Bradley Terry model says how scores turn into choices. The
+    probability that answer a is preferred over answer b is the sigmoid of
+    the difference between their scores.
 
     ```text
     P(a beats b) = sigmoid(r(a) - r(b))
     ```
 
-    Only the gap counts, so adding a number to every score changes nothing.
-    The loss is minus the log of that chance for the answer that won, as in
-    InstructGPT. `F.logsigmoid` takes it in one step, as gan1 did, so a
-    sigmoid that rounds to 0 never turns the log into minus infinity.
+    Only the difference matters, so adding the same number to every score
+    changes nothing. The loss is minus the log of that probability for the
+    answer that was preferred, as in InstructGPT. `F.logsigmoid` computes
+    the log of the sigmoid in one step, as in gan1. That way a sigmoid that
+    rounds to 0 never turns the log into minus infinity.
 
     ```python
     F.logsigmoid(torch.tensor([2.0, -200.0]))    # tensor([-1.2693e-01, -2.0000e+02]), the -200 kept exact
     ```
 
     The reward model is the GPT itself with a new head. InstructGPT started
-    from its SFT model with the last layer removed, and added a layer that
-    gives one number. Here a Linear reads the GPT's output at the chat's END.
-    That place has seen the whole question and the whole answer.
+    from its SFT model, removed the last layer, and added a layer that
+    outputs one number. Here a Linear layer reads the GPT's output at the
+    position of the chat's END token. That position has seen the whole
+    question and the whole answer.
 
-    Chats in a batch differ in length, so `last` holds the place of each
-    one's END. Indexing with two tensors picks one place per row.
+    Chats in a batch have different lengths, so `last` holds the index of
+    each chat's END. Indexing with two tensors picks one position per row.
 
     ```python
     h = torch.arange(12.0).view(2, 3, 2)
-    h[torch.arange(2), torch.tensor([2, 0])]    # tensor([[4., 5.], [6., 7.]]), place 2 of row 0, place 0 of row 1
+    h[torch.arange(2), torch.tensor([2, 0])]    # tensor([[4., 5.], [6., 7.]]), position 2 of row 0, position 0 of row 1
     ```
 
-    The pairs are a right answer and a near miss, with one letter wrong,
-    left out or doubled. Here is the share of 500 held out pairs ranked
-    right, by steps of 32 pairs, averaged over 3 seeds.
+    Each pair holds a right answer and a near miss, which has one letter
+    wrong, left out or doubled. The table shows the percentage of 500 held
+    out pairs ranked correctly, after each number of steps of 32 pairs. It
+    averages 3 seeds.
 
-    | Slip | 0 steps | 50 steps | 200 steps | 1,000 steps |
+    | Mistake | 0 steps | 50 steps | 200 steps | 1,000 steps |
     |---|---|---|---|---|
     | A letter left out | 44% | 100% | 100% | 99.8% |
     | A letter doubled | 60% | 100% | 100% | 100% |
     | A wrong letter | 50% | 79% | 78% | 90% |
     | All | 51% | 93% | 93% | 97% |
 
-    Two slips change the length, and by 50 steps the model ranks every one of
-    them right. It learned the easy cue first, a length that matches the
-    question. A wrong letter keeps the length, so the model has to read the
-    letters, and that takes longer. Between 50 and 200 steps it stays near
-    78%, then climbs to 90% by 1,000. reward2 shows what a policy does with
-    whatever gap a reward model has left.
+    Two kinds of mistake change the length of the answer. By 50 steps the
+    model ranks every one of those pairs correctly. It learned the easy cue
+    first, whether the answer's length matches the question's. A wrong
+    letter keeps the length the same, so the model has to read the letters,
+    and that takes longer. Between 50 and 200 steps it stays near 78%, then
+    rises to 90% by 1,000 steps. reward2 shows what a policy does with
+    whatever mistakes a reward model still makes.
 
-    An untrained GPT learns the length cue as fast, 92% overall by 50
-    steps. Reading letters is where pretraining pays. On wrong letters the
-    untrained GPT gets 74%, 73% and 85% at 50, 200 and 1,000 steps, and
-    gpt3's GPT gets 79%, 78% and 90%.
+    An untrained GPT learns the length cue as quickly, reaching 92% overall
+    by 50 steps. Pretraining helps with reading the letters. On wrong
+    letters the untrained GPT gets 74%, 73% and 85% at 50, 200 and 1,000
+    steps, while gpt3's GPT gets 79%, 78% and 90%.
     """,
 )
 
@@ -374,9 +380,11 @@ REWARD1_SOURCE = source_file(
 ''' + indented_part(PAIRS_PART) + '''
 
 
-    # TODO: Finish forward. Run ids through the GPT's wte and wpe, its blocks
-    #   and ln_f, as GPT.forward does, but not lm_head. Then score the output
-    #   at the place last gives for each row, one number per row.
+    # TODO: Finish forward. ids has shape (rows, steps), and last holds the
+    #   index of each row's END. Run ids through the GPT's wte and wpe, its
+    #   blocks and ln_f, as GPT.forward does, but skip lm_head. For each row,
+    #   take the output at position last[row] and pass it through self.score.
+    #   Return one score per row, a tensor of shape (rows,).
 ''' + indented_part(REWARD_INIT) + '''
 
         def forward(
@@ -387,8 +395,12 @@ REWARD1_SOURCE = source_file(
             ...
 
 
-    # TODO: Return the Bradley Terry loss as a tensor, minus the mean log
-    #   chance that each chosen answer beats its rejected one.
+    # TODO: Return the Bradley Terry loss, as a tensor with one number. For each
+    #   pair, take the log probability that the chosen answer is preferred
+    #   over the rejected one, computed from the difference of their scores.
+    #   Return minus the mean of those log probabilities.
+    #   Example: bradley_terry_loss(torch.tensor([1.0]), torch.tensor([1.0]))
+    #   returns tensor(0.6931).
     def bradley_terry_loss(
         chosen: Tensor,
         rejected: Tensor,
@@ -396,8 +408,10 @@ REWARD1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the share of pairs whose chosen score is above the rejected
-    #   one, as a plain number. A tie counts as wrong.
+    # TODO: Return the fraction of pairs whose chosen score is higher than the
+    #   rejected score, as a Python float. A tie counts as wrong.
+    #   Example: pair_accuracy(torch.tensor([2.0, 1.0]), torch.tensor([1.0, 1.0]))
+    #   returns 0.5.
     def pair_accuracy(
         chosen: Tensor,
         rejected: Tensor,
@@ -405,9 +419,11 @@ REWARD1_SOURCE = source_file(
         ...
 
 
-    # TODO: Take one training step on the Bradley Terry loss of model's scores
-    #   for chosen and rejected, each a pair of ids and last. Zero the old
-    #   gradients, backpropagate, step, and return the loss as a plain number.
+    # TODO: Take one training step. chosen and rejected are each a pair
+    #   (ids, last), ready to pass to model. Compute the Bradley Terry loss of
+    #   model's scores for chosen and rejected. Zero the old gradients,
+    #   backpropagate, call the optimizer's step, and return the loss as a
+    #   Python float.
     def reward_step(
         model: nn.Module,
         optimizer: torch.optim.Optimizer,
@@ -494,15 +510,15 @@ def check_reward_forward(found: type) -> None:
 
         if not scores.requires_grad:
             raise Mismatch(
-                f"{call} holds no gradient, so training would never reach the GPT. Leave out torch.no_grad, "
-                "set_grad_enabled and .detach() in forward.",
+                f"{call} returns scores that autograd did not record, so training would never reach the GPT. Remove "
+                "torch.no_grad, set_grad_enabled and .detach() from forward.",
             )
 
         scores.sum().backward()
 
         if model.gpt.wte.weight.grad is None:
             raise Mismatch(
-                f"{call} sends no gradient back to the GPT's wte, so training would leave the GPT as it was. Keep "
+                f"{call} sends no gradient back to the GPT's wte, so training would leave the GPT unchanged. Keep "
                 "autograd on through the whole forward.",
             )
 
@@ -558,7 +574,7 @@ def check_trained_reward_model(found: object) -> None:
     accuracy = held_out_accuracy(model, held_out_pairs(200))
 
     if accuracy < 0.8:
-        raise Mismatch(f"After 50 steps of reward_step on your gpt3 model, it ranks {accuracy:.0%} of 200 held out pairs right, but it should reach 80%.")
+        raise Mismatch(f"After 50 steps of reward_step on your gpt3 model, it ranks {accuracy:.0%} of 200 held out pairs correctly, but it should reach 80%.")
 
 
 def check_reward1(checker: Checker) -> None:
@@ -571,7 +587,7 @@ def check_reward1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="bradley_terry_loss",
-        description="is minus the mean log sigmoid of the gaps",
+        description="is minus the mean log sigmoid of the score differences",
         inputs=(
             (torch.tensor([1.0, 0.5, -2.0]), torch.tensor([0.0, 1.5, -2.0])),
             (torch.tensor([3.0, -150.0]), torch.tensor([-1.0, 60.0])),
@@ -582,7 +598,7 @@ def check_reward1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="pair_accuracy",
-        description="gives the share of chosen scores above rejected ones",
+        description="returns the fraction of chosen scores above rejected ones",
         inputs=(
             (torch.tensor([1.0, 0.5, -2.0, 4.0]), torch.tensor([0.0, 1.5, -2.0, 3.0])),
             (torch.tensor([2.0, 2.0, 1.0]), torch.tensor([1.0, 3.0, 0.0])),
@@ -592,12 +608,12 @@ def check_reward1(checker: Checker) -> None:
     )
     checker.test(
         function="reward_step",
-        description="zeroes, backpropagates and steps on the Bradley Terry loss",
+        description="zeroes the gradients, backpropagates the Bradley Terry loss and steps",
         run=check_reward_step,
     )
     checker.test(
         function="reward_step",
-        description="trains your gpt3 model to rank 80% of held out pairs right",
+        description="trains your gpt3 model to rank 80% of held out pairs correctly",
         run=check_trained_reward_model,
     )
 
@@ -610,14 +626,15 @@ REWARD1 = Exercise(
     source=REWARD1_SOURCE,
     solution=REWARD1_SOLUTION,
     hints={
-        "RewardModel.forward": "Add self.gpt.wte(ids) and self.gpt.wpe of torch.arange(ids.shape[1]), run each block of "
-        "self.gpt.h, then self.gpt.ln_f. Pick each row's place with torch.arange(len(ids)) and last, then self.score "
-        "and .squeeze(-1).",
-        "bradley_terry_loss": "The gaps are chosen - rejected. F.logsigmoid of them, the mean, then minus.",
-        "pair_accuracy": "chosen > rejected gives True or False per pair. Turn it into floats, take the mean, and "
-        ".item().",
-        "reward_step": "model(*chosen) and model(*rejected) give the scores. bradley_terry_loss of them, then "
-        "zero_grad, backward, step, and loss.item().",
+        "RewardModel.forward": "Add self.gpt.wte(ids) and self.gpt.wpe of torch.arange(ids.shape[1]). Run each block of "
+        "self.gpt.h, then self.gpt.ln_f. Pick each row's position with torch.arange(len(ids)) and last, then apply "
+        "self.score and .squeeze(-1).",
+        "bradley_terry_loss": "The differences are chosen - rejected. Take F.logsigmoid of them, then the mean, then put "
+        "a minus in front.",
+        "pair_accuracy": "chosen > rejected gives True or False for each pair. Turn that into floats, take the mean, and "
+        "call .item().",
+        "reward_step": "model(*chosen) and model(*rejected) give the scores. Compute bradley_terry_loss of them, then "
+        "call zero_grad, backward and step, and return loss.item().",
     },
     introduces=(),
     check=check_reward1,
@@ -646,7 +663,8 @@ def true_reward() -> Tensor:
     return -(((LENGTHS - 12) / 3) ** 2)
 
 
-# 2,000 pairs from the reference, each won by an answer with the Bradley Terry chance its true reward gives.
+# 2,000 pairs of answers drawn from the reference. The first answer of a pair wins with the Bradley Terry probability
+# from the true rewards. Returns the chosen and the rejected answers.
 def judged_pairs(generator: torch.Generator) -> tuple[Tensor, Tensor]:
     reference, truth = reference_policy(), true_reward()
     first = torch.multinomial(reference, 2000, replacement=True, generator=generator)
@@ -656,7 +674,7 @@ def judged_pairs(generator: torch.Generator) -> tuple[Tensor, Tensor]:
     return torch.where(first_won, first, second), torch.where(first_won, second, first)
 
 
-# A reward model that is a slope times the length, fit to the pairs with the Bradley Terry loss.
+# A reward model whose reward is a learned slope times the length, fit to the pairs with the Bradley Terry loss.
 def learned_reward(generator: torch.Generator) -> Tensor:
     chosen, rejected = judged_pairs(generator)
     slope = torch.zeros(1, requires_grad=True)
@@ -766,39 +784,45 @@ def reference_chance_at_40() -> float:
 
 REWARD2_LESSON = prose(
     """
-    A reward model learns from pairs, so it is only right near the answers
-    those pairs held. Train a policy to score as high as it can, and it finds
-    where the reward model is wrong. That is reward hacking.
+    A reward model learns from pairs, so it is only accurate for answers
+    similar to the ones in those pairs. If you train a policy to get the
+    highest score it can, it finds the answers where the reward model is
+    wrong. This is called reward hacking.
 
     Reinforcement learning from human feedback, RLHF, holds the policy back
     with a penalty. It maximizes the expected reward minus beta times the KL
-    divergence from the reference, the model before RLHF. InstructGPT adds it
-    to keep the policy from over optimizing the reward model.
+    divergence from the reference. The reference is the model before RLHF,
+    and the KL divergence measures how far the policy has moved away from
+    it. InstructGPT adds this penalty to keep the policy from over
+    optimizing the reward model.
 
     ```text
     E[r] - beta * KL(policy || reference)
     ```
 
     The best policy has a closed form, from section 4 of the DPO paper. Each
-    answer keeps its reference chance, scaled by the exponential of its
-    reward over beta, then all are scaled to add up to 1.
+    answer's probability under the reference is multiplied by
+    `exp(r(y) / beta)`. Then all the probabilities are divided by their sum
+    Z, so they add up to 1.
 
     ```text
     policy(y) = reference(y) * exp(r(y) / beta) / Z
     ```
 
-    Z sums the scaled chances of every answer, which is easy over the 40
-    answers here.
+    Computing Z means summing over every possible answer. That is easy for
+    the 40 answers here.
 
-    In logs that is a softmax of the log of the reference plus the rewards
-    over beta. A large beta stays near the reference, and a small one piles
-    everything on the top reward.
+    Taking logs, the best policy is the softmax of
+    `log reference(y) + r(y) / beta`. A large beta keeps the policy near the
+    reference. A small beta puts almost all the probability on the answer
+    with the highest reward.
 
-    The toy has 40 answers whose only feature is their length. The reference
-    writes about 8 characters, and the true reward is best at 12. A reward
-    model that sees only the length is fit, with reward1's loss, to 2,000
-    pairs from the reference. Near the reference longer was better, so it
-    learned that longer is always better.
+    The toy has 40 possible answers, and the only thing that differs between
+    them is their length, from 1 to 40 characters. The reference writes
+    about 8 characters, and the true reward is highest at 12. A reward model
+    that sees only the length is fit to 2,000 pairs from the reference, with
+    reward1's loss. Near 8 characters, longer answers were better. So the
+    reward model learned that longer is always better.
 
     | beta | KL | Learned reward | True reward | Mean length |
     |---|---|---|---|---|
@@ -809,23 +833,25 @@ REWARD2_LESSON = prose(
     | 1 | 10.6 | 17.77 | -60.63 | 32.5 |
     | 0.5 | 14.9 | 21.57 | -84.08 | 39.5 |
 
-    Down to a beta of 2, a smaller penalty buys a better true reward. At 1
-    the policy jumps to answers of 30 characters and more, which the
-    reference almost never wrote. The learned reward triples while the true
-    one collapses.
+    As beta goes down to 2, the smaller penalty gives a better true reward.
+    At a beta of 1, the policy jumps to answers of 30 characters or more,
+    which the reference almost never wrote. The learned reward triples while
+    the true reward collapses.
 
-    That jump comes from a floor in the reference, which adds 1e-6 to every
-    length's weight before the chances are scaled. A language model too
-    gives every answer some chance. At 40 characters the floor leaves a
-    chance of about 1 in 7.5 million. A beta of 1 multiplies every length's
-    chance by e to the power of its learned reward, e^22 at 40 against e^4.4
-    at 8. That is enough for the longest answers to win. Without the floor
-    the chance there is
-    about e^-59, and a beta of 1 settles near 13 characters, with a true
-    reward of -1.09.
+    The jump comes from a floor in the reference. Before its weights are
+    normalized into probabilities, the reference adds 1e-6 to every length's
+    weight. A language model also gives every answer some small probability.
+    At 40 characters, the floor leaves a probability of about 1 in 7.5
+    million. A beta of 1 multiplies each length's probability by
+    `exp(learned reward)`. That is e^22 at 40 characters against e^4.4 at 8,
+    which is enough for the longest answers to win. Without the floor, the
+    probability at 40 characters is about e^-59. Then the best policy at a
+    beta of 1 has a mean length near 13 characters, with a true reward of
+    -1.09.
 
-    A KL divergence sums over every answer, and a choice the policy never
-    makes adds nothing, so those terms are left out.
+    A KL divergence is a sum over every answer of
+    `policy * log(policy / reference)`. An answer the policy never gives has
+    probability 0 and adds nothing to the sum, so those terms are left out.
     """,
 )
 
@@ -841,13 +867,15 @@ REWARD2_SOURCE = source_file(
     used = torch.tensor([0.5, 0.0, 0.5]) > 0                    # tensor([ True, False,  True])
 
 
-    # The toy's answers, its reference, its true reward and its learned one.
+    # The toy's answer lengths, reference policy, true reward and learned reward.
 ''' + indented_part(TOY_PART) + '''
 
 
-    # TODO: Return the policy that maximizes the expected rewards minus beta
-    #   times the KL divergence from reference. It is the softmax of the log of
-    #   reference plus rewards over beta.
+    # TODO: Return the policy that maximizes the expected reward minus beta
+    #   times the KL divergence from reference. It is the softmax of
+    #   log(reference) + rewards / beta.
+    #   Example: best_policy(torch.tensor([0.5, 0.5]), torch.tensor([0.0, 1.0]),
+    #   1.0) returns tensor([0.2689, 0.7311]).
     def best_policy(
         reference: Tensor,
         rewards: Tensor,
@@ -856,9 +884,12 @@ REWARD2_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the KL divergence of policy from reference, as a plain
-    #   number. Sum policy times the log of policy over reference, leaving out
-    #   every answer policy gives no chance.
+    # TODO: Return the KL divergence of policy from reference, as a Python
+    #   float. It is the sum over the answers of
+    #   policy * log(policy / reference). Leave out every answer where policy
+    #   is 0.
+    #   Example: kl_divergence(torch.tensor([0.0, 1.0]), torch.tensor([0.5, 0.5]))
+    #   returns about 0.6931, which is log(2).
     def kl_divergence(
         policy: Tensor,
         reference: Tensor,
@@ -866,8 +897,8 @@ REWARD2_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the reward policy expects, each answer's chance times its
-    #   reward, summed, as a plain number.
+    # TODO: Return the expected reward of policy, as a Python float. Multiply
+    #   each answer's probability by its reward, and add up the products.
     def expected_reward(
         policy: Tensor,
         rewards: Tensor,
@@ -923,7 +954,7 @@ def check_reward2(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="expected_reward",
-        description="weights each reward by its chance",
+        description="weights each reward by its probability",
         inputs=(
             (torch.tensor([0.5, 0.3, 0.2]), torch.tensor([1.0, -2.0, 4.0])),
             (torch.tensor([0.1, 0.0, 0.9]), torch.tensor([3.0, 100.0, -1.0])),
@@ -941,10 +972,10 @@ REWARD2 = Exercise(
     source=REWARD2_SOURCE,
     solution=REWARD2_SOLUTION,
     hints={
-        "best_policy": "reference.log() plus rewards divided by beta, then torch.softmax over dim=0.",
-        "kl_divergence": "Keep the answers where policy > 0 with a mask. Sum policy times the log of policy over "
-        "reference on those, then .item().",
-        "expected_reward": "Multiply policy by rewards, sum, and .item().",
+        "best_policy": "Add reference.log() and rewards divided by beta, then take torch.softmax over dim=0.",
+        "kl_divergence": "Make a mask of the answers where policy > 0. On those answers, sum policy times the log of "
+        "policy divided by reference, then call .item().",
+        "expected_reward": "Multiply policy by rewards, sum the result, and call .item().",
     },
     introduces=(),
     check=check_reward2,
