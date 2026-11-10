@@ -19,11 +19,13 @@ EMBEDDINGS = Chapter(
         """
         # Embeddings
 
-        Characters, words and product codes come in as ids, whole numbers that
-        name things. An embedding gives each id a learned row of numbers. This
-        chapter shows it is a Linear layer on a one hot input, builds it, shows
-        why ids can't go in as plain numbers, and puts it at the front of a
-        model with a Linear head at the back.
+        Inputs like characters, words and product codes reach a model as ids.
+        An id is a whole number that names one item. An embedding gives each id
+        its own row of learned numbers. This chapter shows that an embedding
+        does the same job as a Linear layer applied to one hot inputs, and you
+        build one yourself. Then you see why ids cannot go into a model as
+        plain numbers. Last, you put an embedding at the front of a model, with
+        a Linear layer called the head at the back.
 
         ## Further reading
 
@@ -52,12 +54,14 @@ def id_tensor(
 
 EMBEDDING1_LESSON = prose(
     """
-    Many inputs are picks from a fixed set, like characters, words or product
-    codes. Each gets an id, a whole number from 0 up. The set of every
-    possible id is the vocabulary.
+    Many inputs are choices from a fixed set, like characters, words or
+    product codes. Each item in the set gets an id, a whole number starting
+    from 0. The set of all possible ids is called the vocabulary.
 
-    The one hot rows of likelihood4 can carry an id into a model. A one hot
-    row times a matrix picks out one row of the matrix, the row at the id.
+    One way to give an id to a model is the one hot row from likelihood4. That
+    is a row of zeros with a single 1 at the position of the id. Multiplying a
+    one hot row by a matrix gives one row of the matrix, the row whose index
+    is the id.
 
     ```python
     table = torch.tensor([[0.1, 0.2],
@@ -68,26 +72,32 @@ EMBEDDING1_LESSON = prose(
     table[ids]                            # the same rows, picked directly
     ```
 
-    So a Linear layer with no bias, on one hot inputs, is a table lookup, and
-    building the one hot rows is wasted work. An **embedding** is the lookup
-    done directly. Its table has shape `(vocabulary size, embedding size)`,
-    and its numbers are parameters, learned like any weight. A flat tensor of
-    numbers is also called a **vector**, so each id's row is its embedding
-    vector.
+    So a Linear layer with no bias, applied to one hot inputs, does the same
+    thing as looking up a row in a table. Building the one hot rows is wasted
+    work. An **embedding** skips them and looks up the rows directly. Its
+    table has shape `(vocabulary size, embedding size)`. The numbers in the
+    table are parameters, and training learns them like any other weight. A
+    one dimensional tensor of numbers is also called a **vector**, so each
+    id's row is called its embedding vector.
 
-    Indexing with a tensor of ids of any shape gives one row per id, in the
-    same arrangement. Ids of shape `(examples, positions)` give a result of
-    shape `(examples, positions, embedding size)`.
+    You can index the table with a tensor of ids of any shape. The result has
+    one row per id, arranged in the same shape as the ids. For example, each
+    example can be a sequence of ids, one id per position. Ids of shape
+    `(examples, positions)` then give a result of shape
+    `(examples, positions, embedding size)`.
 
-    `.reshape` puts the same numbers, read in order, into a new shape. A `-1`
-    stands for whatever size makes the count of numbers work out.
+    `.reshape` puts the same numbers, read in order, into a new shape. A size
+    of `-1` tells PyTorch to work out that size from the total number of
+    entries.
 
     ```python
     torch.tensor([1, 2, 3, 4, 5, 6]).reshape(2, -1)    # tensor([[1, 2, 3], [4, 5, 6]])
     ```
 
-    So `.reshape(len(vectors), -1)` lays each example's rows end to end, one
-    long row per example, which a Linear layer can take.
+    Take `vectors` of shape `(examples, positions, embedding size)`.
+    `.reshape(len(vectors), -1)` joins each example's rows end to end. The
+    result has one long row per example, with `positions * embedding size`
+    numbers in it, and a Linear layer can take that as input.
     """,
 )
 
@@ -108,8 +118,11 @@ EMBEDDING1_SOURCE = source_file(
     rows = table[ids]                                 # tensor([[0.5, 0.5], [0.1, 0.2], [0.5, 0.5]])
 
 
-    # TODO: Return the same rows the slow way, a one hot row per id times the
-    #   table. It should give what table[ids] gives.
+    # TODO: Return the same rows the slow way. Make a one hot row for each id,
+    #   with one entry per row of table, and multiply those rows by the table.
+    #   ids has shape (n,) and table has shape (vocabulary, size). The result
+    #   should equal table[ids]. Example: one_hot_lookup(table, ids) returns the
+    #   same tensor as rows above.
     def one_hot_lookup(
         table: Tensor,
         ids: Tensor,
@@ -117,8 +130,9 @@ EMBEDDING1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the rows of table for ids of shape (examples, positions), so
-    #   the result has shape (examples, positions, size).
+    # TODO: Return the row of table for every id in ids. ids has shape
+    #   (examples, positions) and table has shape (vocabulary, size), so the
+    #   result has shape (examples, positions, size).
     def embed_sequences(
         table: Tensor,
         ids: Tensor,
@@ -126,8 +140,12 @@ EMBEDDING1_SOURCE = source_file(
         ...
 
 
-    # TODO: Finish the last line, so each example's rows are laid end to end, one
-    #   row of positions * size numbers per example.
+    # TODO: Finish the last line, so it joins each example's rows end to end.
+    #   vectors has shape (examples, positions, size), and the result should
+    #   have shape (examples, positions * size).
+    #   Example: flat_context(table, torch.tensor([[2, 0], [1, 1]])) returns
+    #   tensor([[ 0.5000,  0.5000,  0.1000,  0.2000],
+    #           [ 1.0000, -1.0000,  1.0000, -1.0000]]).
     def flat_context(
         table: Tensor,
         ids: Tensor,
@@ -161,7 +179,7 @@ EMBEDDING1_SOLUTION = source_file(
         return F.one_hot(ids, table.shape[0]).float() @ table
 
 
-    # Indexing with ids of any shape gives one row per id, in the same arrangement.
+    # Indexing with ids of any shape gives one row per id, in the shape of ids.
     def embed_sequences(
         table: Tensor,
         ids: Tensor,
@@ -229,7 +247,8 @@ EMBEDDING1 = Exercise(
         "one_hot_lookup": "F.one_hot(ids, number of rows of table) gives the one hot rows. Turn them into floats and "
         "multiply by the table with @.",
         "embed_sequences": "Index the table with ids, as the line that sets rows does. It works for ids of any shape.",
-        "flat_context": "Reshape vectors to len(vectors) rows, with -1 for the rest.",
+        "flat_context": "Reshape vectors to len(vectors) rows, and pass -1 as the second size so PyTorch works it "
+        "out.",
     },
     introduces=("embedding", "vector"),
     check=check_embedding1,
@@ -242,18 +261,20 @@ EMBEDDING1 = Exercise(
 
 EMBEDDING2_LESSON = prose(
     """
-    PyTorch's `nn.Embedding(count, size)` holds a table of shape
-    `(count, size)` as its `weight`, drawn from the bell curve with spread 1.
-    Calling it with ids looks up their rows. Building one is a module with one
-    parameter and a `forward` that indexes it.
+    PyTorch's `nn.Embedding(count, size)` stores a table of shape
+    `(count, size)` as its `weight`. The table starts as random numbers drawn
+    from the bell curve with mean 0 and standard deviation 1. Calling the
+    module with ids returns their rows. To build your own, write a module with
+    one parameter, the table, and a `forward` that indexes it.
 
     `torch.randn(3, 2)` draws a tensor of shape `(3, 2)` from the bell curve
-    with mean 0 and spread 1.
+    with mean 0 and standard deviation 1.
 
-    The backward of a lookup is worth knowing. A row that no id picked took no
-    part in the output, so its gradient is 0, and a step leaves it alone. A row
-    picked twice gets the gradient of both uses added up, as chain2 said. So a
-    rare id learns slowly, since few examples ever send it a gradient.
+    The backward pass of a lookup is worth knowing. A row that no id picked
+    was not used in the output, so its gradient is 0. A gradient step then
+    leaves that row unchanged. A row picked twice gets the gradients of both
+    uses added together, as chain2 explained. This means a rare id learns
+    slowly, because few examples ever give its row a gradient.
 
     ```python
     table = nn.Embedding(4, 2)
@@ -261,10 +282,11 @@ EMBEDDING2_LESSON = prose(
     table.weight.grad    # rows 0 and 2 all zero, row 1 all 2, row 3 all 1
     ```
 
-    `(grad != 0).any(dim=1)` says which rows have any number that isn't 0, one
-    `True` or `False` per row. `.nonzero()` on a flat tensor of `True` and
-    `False` gives the positions of the `True` ones, as a column, and
-    `.flatten()` makes that column flat.
+    `(grad != 0).any(dim=1)` gives one `True` or `False` per row. It is `True`
+    for a row that holds at least one number other than 0. `.nonzero()` on a
+    one dimensional tensor of `True` and `False` gives the positions of the
+    `True` entries, as a column of shape `(n, 1)`. `.flatten()` turns that
+    column into a one dimensional tensor of shape `(n,)`.
     """,
 )
 
@@ -277,9 +299,11 @@ EMBEDDING2_SOURCE = source_file(
     from torch import Tensor
 
 
-    # TODO: Finish the line that sets self.weight and the forward method, so
-    #   MyEmbedding works like nn.Embedding. The table starts drawn from the bell
-    #   curve, one row of size numbers per id.
+    # TODO: Finish the line that sets self.weight, and the forward method, so
+    #   MyEmbedding works like nn.Embedding. self.weight is a parameter of shape
+    #   (count, size), one row of size numbers per id. It starts as random
+    #   numbers from the bell curve with mean 0 and standard deviation 1.
+    #   forward returns the row of self.weight for every id in ids.
     class MyEmbedding(nn.Module):
         def __init__(
             self,
@@ -293,8 +317,11 @@ EMBEDDING2_SOURCE = source_file(
             ...
 
 
-    # TODO: Return the ids that were looked up, the positions of the rows of grad
-    #   that hold any number other than 0, as a flat tensor.
+    # TODO: grad is the gradient of an embedding table after a backward pass.
+    #   Return the ids that were looked up, which are the indices of the rows
+    #   of grad holding at least one number other than 0. Return them as a one
+    #   dimensional tensor. Example: for grad with rows [0, 0], [2, 2], [0, 0]
+    #   and [1, 1], used_rows returns tensor([1, 3]).
     def used_rows(grad: Tensor) -> Tensor:
         ...
     ''',
@@ -335,7 +362,7 @@ def check_my_embedding(found: type) -> None:
         weight = expect_parameter(module, call, "weight", (count, size))
 
         if weight.detach().std() < 0.3:
-            raise Mismatch(f"The weight of {call} should start drawn from the bell curve with torch.randn, but its numbers are near 0.")
+            raise Mismatch(f"The weight of {call} should start as random numbers from torch.randn, but its numbers are near 0.")
 
         ids = id_tensor(231 + count, 3, count, 2)
         expect_tensor(
@@ -350,7 +377,7 @@ def check_my_embedding(found: type) -> None:
     spread = weight.detach().std().item()
 
     if abs(spread - 1) > 0.1:
-        raise Mismatch(f"The weight of {call} has spread {spread:.3g}, but nn.Embedding's table starts with spread 1, as torch.randn draws it.")
+        raise Mismatch(f"The weight of {call} has standard deviation {spread:.3g}, but nn.Embedding's table starts with standard deviation 1, like torch.randn.")
 
 
 def check_embedding2(checker: Checker) -> None:
@@ -384,8 +411,8 @@ EMBEDDING2 = Exercise(
     hints={
         "MyEmbedding": "The weight is an nn.Parameter of torch.randn(count, size). forward indexes self.weight with "
         "ids.",
-        "used_rows": "Ask which rows have any entry other than 0. Then turn the True ones into a flat tensor of "
-        "positions, as the lesson's last paragraph shows.",
+        "used_rows": "Find which rows have any entry other than 0. Then turn the True entries into a one "
+        "dimensional tensor of their positions, as the lesson's last paragraph shows.",
     },
     introduces=(),
     check=check_embedding2,
@@ -398,32 +425,35 @@ EMBEDDING2 = Exercise(
 
 EMBEDDING3_LESSON = prose(
     """
-    Why not feed an id in as a plain number? Because a Linear layer then
-    treats it as an amount. To it, id 9 is nine times id 1, and id 5 sits
-    halfway between 1 and 9. Ids that name things carry no such order, and the
-    model wastes itself fitting one that isn't there.
+    Why not give a model an id as a plain number? Because a Linear layer would
+    then treat the id as an amount. To the layer, id 9 is nine times id 1, and
+    id 5 is halfway between id 1 and id 9. Ids that name things have no such
+    order. The model would spend its parameters trying to fit an order that
+    does not exist.
 
-    Here 10 categories, ids 0 to 9, each have a target with no order to it.
+    In this exercise there are 10 categories with ids 0 to 9. Each one has a
+    target number, and the targets do not follow the order of the ids.
 
     ```python
     targets = torch.tensor([3.0, -1.0, 2.0, 0.5, -2.0, 1.0, 4.0, -0.5, 2.5, 0.0])
     ```
 
-    A Linear layer on the raw id can only draw a straight line through the
-    ten. After 2000 steps its mean squared error is 3.27, as bad as always
-    answering the mean.
+    A Linear layer given the raw id can only fit a straight line through the
+    ten targets. After 2000 steps its mean squared error is 3.27. That is as
+    bad as always predicting the mean of the targets.
 
-    An MLP on the raw id can bend, but it needs a bend between each pair of
-    neighbouring ids. With a hidden layer of 64, 193 parameters, it was still
-    at 2.39 after 2000 steps, from 1.90 to 2.63 over 10 seeds.
+    An MLP given the raw id can fit a curve, but it needs a separate bend
+    between each pair of neighbouring ids. An MLP with a hidden layer of 64
+    neurons has 193 parameters. After 2000 steps its error was still 2.39 on
+    average, and between 1.90 and 2.63 over 10 seeds.
 
-    An embedding of size 4 followed by a Linear layer, 45 parameters, gives
-    every id its own learned row. So each can land on its own target, and
-    after 500 steps the error is about 0 on all 10 seeds.
+    An embedding of size 4 followed by a Linear layer has only 45 parameters.
+    It gives every id its own learned row, so the model can map each id to its
+    own target. After 500 steps the error is about 0 on all 10 seeds.
 
-    The rule is general. A discrete input, one picked from a set, enters a
-    model through an embedding. Numbers that measure an amount, like a price
-    or a length, enter as they are.
+    This is a general rule. A discrete input, one chosen from a fixed set,
+    goes into a model through an embedding. Numbers that measure an amount,
+    like a price or a length, go in unchanged.
     """,
 )
 
@@ -436,7 +466,7 @@ EMBEDDING3_SOURCE = source_file(
     from torch import Tensor
 
 
-    # The training loop of mlp3, giving the final loss.
+    # The training loop of mlp3. It returns the final loss.
     def train(
         model: nn.Module,
         inputs: Tensor,
@@ -456,8 +486,9 @@ EMBEDDING3_SOURCE = source_file(
         return loss.item()
 
 
-    # TODO: Finish the line that sets inputs, the ids as a column of floats of
-    #   shape (count, 1), so this trains one Linear layer on the raw ids.
+    # TODO: Finish the line that sets inputs, so this trains one Linear layer on
+    #   the raw ids. ids has shape (count,). inputs holds the same ids as
+    #   floats, in a column of shape (count, 1).
     def fit_raw_ids(
         ids: Tensor,
         targets: Tensor,
@@ -470,9 +501,9 @@ EMBEDDING3_SOURCE = source_file(
         return train(model, inputs, targets, steps, 0.01)
 
 
-    # TODO: Finish the line that sets model. It is an nn.Embedding with a row of
-    #   size 4 for each of the count ids, then an nn.Linear from 4 to 1, chained
-    #   by nn.Sequential.
+    # TODO: Finish the line that sets model to an nn.Sequential of two modules.
+    #   The first is an nn.Embedding with a row of 4 numbers for each of the
+    #   count ids. The second is an nn.Linear from 4 inputs to 1 output.
     def fit_embedded_ids(
         ids: Tensor,
         targets: Tensor,
@@ -627,7 +658,7 @@ EMBEDDING3 = Exercise(
     hints={
         "fit_raw_ids": "Turn the ids into floats with .float(), then give them a column shape with .unsqueeze(1).",
         "fit_embedded_ids": "nn.Sequential takes the modules in order, the embedding first, then the Linear layer "
-        "that turns each row of 4 into one number.",
+        "that turns each row of 4 numbers into one number.",
     },
     introduces=(),
     check=check_embedding3,
@@ -641,10 +672,11 @@ EMBEDDING3 = Exercise(
 
 EMBEDDING4_LESSON = prose(
     """
-    A model that takes ids in and picks a class out has a usual shape. An
-    embedding at the front turns each id into a row of numbers. A Linear layer
-    at the back, the head, turns that row into one score per class, the
-    logits. The loss is cross entropy from the logits, as likelihood2 showed.
+    A model that takes ids as input and predicts a class usually has the same
+    layout. An embedding at the front turns each id into a row of numbers. A
+    Linear layer at the back, called the head, turns that row into one score
+    per class. Those scores are the logits. The loss is the cross entropy
+    computed from the logits, as likelihood2 showed.
 
     ```python
     class IdClassifier(nn.Module):
@@ -654,17 +686,17 @@ EMBEDDING4_LESSON = prose(
             self.head = nn.Linear(size, classes)
     ```
 
-    Anything can sit between the two, and later models put most of their
-    layers there. Language models are this shape, with ids for pieces of text
-    going in and scores for the next piece coming out.
+    Any layers can go between the embedding and the head, and later models
+    put most of their layers there. Language models have this layout. Ids for
+    pieces of text go in, and scores for the next piece of text come out.
 
-    Training it is the loop of mlp3 with cross entropy in place of the squared
-    error. `F.cross_entropy(logits, labels)` takes logits of shape
+    You train this model with the loop of mlp3, using cross entropy instead of
+    the squared error. `F.cross_entropy(logits, labels)` takes logits of shape
     `(examples, classes)` and labels of shape `(examples,)`.
 
-    Here 12 ids each belong to one of 3 classes, with no pattern a raw number
-    could follow. An embedding of size 4 and a Linear head learn every id's
-    class within 300 steps.
+    In this exercise each of 12 ids belongs to one of 3 classes. The classes
+    follow no pattern in the id numbers. An embedding of size 4 and a Linear
+    head learn the class of every id within 300 steps.
     """,
 )
 
@@ -678,8 +710,10 @@ EMBEDDING4_SOURCE = source_file(
     from torch import Tensor
 
 
-    # TODO: Finish forward, so it looks each id up in the embedding, then passes
-    #   the rows through the head, giving one row of class scores per id.
+    # TODO: Finish forward, so it looks up each id in the embedding, then passes
+    #   those rows through the head. It returns one row of class scores, the
+    #   logits, per id. ids has shape (examples,), so the result has shape
+    #   (examples, classes).
     class IdClassifier(nn.Module):
         def __init__(
             self,
@@ -695,9 +729,9 @@ EMBEDDING4_SOURCE = source_file(
             ...
 
 
-    # TODO: Finish the line that sets loss, the cross entropy of the model's
-    #   scores for ids against labels, so this trains the model and returns the
-    #   final loss.
+    # TODO: Finish the line that sets loss, so this trains the model and returns
+    #   the final loss. loss is the cross entropy between the model's scores
+    #   for ids and the correct classes in labels.
     def train_classifier(
         model: nn.Module,
         ids: Tensor,
@@ -838,7 +872,7 @@ EMBEDDING4 = Exercise(
     source=EMBEDDING4_SOURCE,
     solution=EMBEDDING4_SOLUTION,
     hints={
-        "IdClassifier": "Call self.embedding on ids, then self.head on what it gives.",
+        "IdClassifier": "Call self.embedding on ids, then call self.head on the result.",
         "train_classifier": "The model's scores are model(ids). Pass them and labels to F.cross_entropy.",
     },
     introduces=(),

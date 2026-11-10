@@ -32,10 +32,11 @@ DROPOUT = Chapter(
         """
         # Dropout
 
-        Dropout zeroes numbers inside a model at random while it trains, so no
-        neuron can lean on any other. This chapter builds it, measures what it
-        does for a model that overfits, and sets out where it goes and when to
-        leave it out.
+        Dropout sets random numbers inside a model to 0 while the model trains.
+        Because any neuron's output might be missing, no neuron can rely on
+        another one. In this chapter you build dropout and measure how it helps
+        a model that overfits. Then you see where dropout goes in a model and
+        when to leave it out.
 
         ## Further reading
 
@@ -103,34 +104,39 @@ def summary_text(summary: list[tuple[str, object]]) -> str:
 
 DROPOUT1_LESSON = prose(
     """
-    The generalization chapter fought overfitting with weight decay and early
-    stopping. **Dropout** is another way, from Hinton and colleagues in 2012.
-    While the model trains, each number coming out of a layer is set to 0 with
-    probability `p`, picked again at random every step.
+    The generalization chapter reduced overfitting with weight decay and early
+    stopping. **Dropout** is another way, introduced by Hinton and colleagues
+    in 2012. While the model trains, each number coming out of a layer is set
+    to 0 with probability `p`. Which numbers are set to 0 is chosen again at
+    random at every step.
 
-    No neuron can then count on any other being there, so each has to be
-    useful on its own. The paper's way to see it is that every step trains a
-    different thinned model, and the full model acts like their average.
+    Since any neuron's output might be missing, no neuron can rely on another
+    one being there. So each neuron has to be useful on its own. The paper
+    offers another way to see it. Each step trains a different thinned model,
+    one with some neurons removed. The full model then acts like the average
+    of all these thinned models.
 
-    Zeroing a fraction `p` of the numbers makes their average `1 - p` times
-    smaller. So the numbers that survive are divided by `1 - p`, which keeps
-    the average where it was.
+    Setting a fraction `p` of the numbers to 0 multiplies their average by
+    `1 - p`. To make up for that, the numbers that are kept are divided by
+    `1 - p`. That keeps the average the same as before.
 
-    `torch.rand(shape, generator=generator)` draws evenly between 0 and 1, so
-    each number is below `p` with probability `p`. A tensor of `True` and
-    `False` multiplies like 1 and 0.
+    `torch.rand(shape, generator=generator)` draws numbers uniformly between
+    0 and 1, so each number is below `p` with probability `p`. When you
+    multiply by a tensor of `True` and `False`, `True` acts as 1 and `False`
+    acts as 0.
 
     ```python
     x = torch.ones(8)
-    keep = torch.rand(8, generator=generator) >= 0.5    # True where a number survives
+    keep = torch.rand(8, generator=generator) >= 0.5    # True where a number is kept
     x * keep / (1 - 0.5)    # like tensor([2., 0., 2., 2., 0., 0., 2., 0.]), mean about 1
     ```
 
-    When the model is used for real, nothing is dropped. A module knows which
-    it is doing from `self.training`. `model.train()` sets it to `True` in the
-    module and every module inside it, and `model.eval()` sets it to `False`.
-    A new module starts in training mode. PyTorch's `nn.Dropout(p)` works this
-    way.
+    When the model makes predictions after training, nothing is dropped. A
+    module checks `self.training` to know whether it is training.
+    `model.train()` sets `training` to `True` in the model and in every module
+    inside it. `model.eval()` sets it to `False`, which is called eval mode. A
+    new module starts in training mode. PyTorch's `nn.Dropout(p)` follows
+    these rules.
     """,
 )
 
@@ -143,13 +149,14 @@ DROPOUT1_SOURCE = source_file(
     from torch import Tensor
 
     generator = torch.Generator().manual_seed(0)
-    draws = torch.rand(8, generator=generator)       # 8 numbers drawn evenly between 0 and 1
+    draws = torch.rand(8, generator=generator)       # 8 numbers drawn uniformly between 0 and 1
     below = draws < 0.5                              # True for about half of them
 
 
-    # TODO: Return a tensor of True and False of the given shape, True where a
-    #   number survives dropout. Draw numbers of that shape with torch.rand from
-    #   generator, and keep each one that is at or above p.
+    # TODO: Return a tensor of True and False with the given shape, which is
+    #   True where dropout keeps a number. Draw random numbers of that shape
+    #   with torch.rand from generator. A number is kept when its draw is at or
+    #   above p, so it is dropped with probability p.
     def keep_mask(
         shape: tuple[int, ...],
         p: float,
@@ -158,8 +165,10 @@ DROPOUT1_SOURCE = source_file(
         ...
 
 
-    # TODO: Finish the last line, so this zeroes the numbers keep_mask drops and
-    #   scales the survivors to keep the average where it was.
+    # TODO: Finish the last line, so this sets to 0 the numbers of x that
+    #   keep_mask drops. Divide the kept numbers by 1 - p, so the average stays
+    #   the same. Example: for x = torch.ones(8) and p = 0.5, every number in
+    #   the result is 0 or 2.
     def dropout(
         x: Tensor,
         p: float,
@@ -175,9 +184,9 @@ DROPOUT1_SOURCE = source_file(
     training = layer.training                        # False, so this layer drops nothing
 
 
-    # TODO: Finish forward, so in training mode it drops each number with
-    #   probability self.p, drawn with torch.rand, and scales the rest, and in
-    #   eval mode it returns x unchanged.
+    # TODO: Finish forward. In training mode, it drops each number of x with
+    #   probability self.p, using torch.rand with no generator, and divides the
+    #   kept numbers by 1 - self.p. In eval mode, it returns x unchanged.
     class MyDropout(nn.Module):
         def __init__(self, p: float) -> None:
             super().__init__()
@@ -273,17 +282,17 @@ def check_my_dropout(found: type) -> None:
         survivors = first != 0
 
         if not torch.allclose(first[survivors], x[survivors] / (1 - p)):
-            raise Mismatch(f"{call} should divide the numbers that survive by 1 - p, {1 - p:g}, so their average stays where it was.")
+            raise Mismatch(f"{call} should divide the numbers it keeps by 1 - p, {1 - p:g}, so their average stays the same.")
 
         if torch.equal(module(x.clone()) == 0, first == 0):
-            raise Mismatch(f"{call} drops the same numbers on every call. Draw a new pick each time with torch.rand.")
+            raise Mismatch(f"{call} drops the same numbers on every call. Draw new random numbers each time with torch.rand.")
 
 
 def check_dropout1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="keep_mask",
-        description="is True where a number survives, drawn with torch.rand",
+        description="is True where a number is kept, drawn with torch.rand",
         inputs=(
             ((2, 5), 0.5, seeded(261)),
             ((3, 4), 0.25, seeded(262)),
@@ -294,7 +303,7 @@ def check_dropout1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="dropout",
-        description="zeroes the dropped numbers and scales the survivors",
+        description="zeroes the dropped numbers and scales the kept ones",
         inputs=(
             (small_tensor(263, 2, 5), 0.5, seeded(264)),
             (small_tensor(265, 3, 4), 0.25, seeded(266)),
@@ -318,8 +327,8 @@ DROPOUT1 = Exercise(
     source=DROPOUT1_SOURCE,
     solution=DROPOUT1_SOLUTION,
     hints={
-        "keep_mask": "Draw torch.rand(shape, generator=generator) and compare it with p, so a number at or above p "
-        "survives.",
+        "keep_mask": "Draw torch.rand(shape, generator=generator) and compare it with p, so a draw at or above p "
+        "means the number is kept.",
         "dropout": "Multiply x by keep, then divide by 1 - p.",
         "MyDropout.forward": "If not self.training, return x. Otherwise build keep with torch.rand(x.shape) and "
         "self.p, as keep_mask does, and scale as dropout does.",
@@ -335,11 +344,12 @@ DROPOUT1 = Exercise(
 
 DROPOUT2_LESSON = prose(
     """
-    Here an MLP with two hidden layers of 512 learned from only 1000 MNIST
-    images. It trained for 300 epochs on minibatches of 100, at a learning rate
-    of 0.1, with dropout after each hidden ReLU. The last row also drops 20% of
-    the input pixels, as Hinton and colleagues did. Each number is the average
-    of 3 seeds, and the training loss was measured with dropout off.
+    In this experiment, an MLP with two hidden layers of 512 neurons learned
+    from only 1000 MNIST images. It trained for 300 epochs on minibatches of
+    100, at a learning rate of 0.1. Dropout came after each hidden layer's
+    ReLU. The last row also drops 20% of the input pixels, as Hinton and
+    colleagues did. Each number is the average over 3 seeds. The training
+    loss was measured with dropout turned off.
 
     | Dropout | Training loss | Validation loss | Validation accuracy |
     |---|---|---|---|
@@ -348,32 +358,35 @@ DROPOUT2_LESSON = prose(
     | hidden 0.5 | 0.0005 | 0.498 | 89.7% |
     | inputs 0.2, hidden 0.5 | 0.0005 | 0.373 | 91.4% |
 
-    By the end all four fit the training images perfectly, so dropout didn't
-    stop that. It changed where the validation loss went. Without dropout it
-    rose from 0.41 at epoch 30 to 0.62. With dropout on the inputs too, it
-    fell to 0.35 by epoch 90 and ended at 0.37. The accuracy rose about 3.4
-    points on every seed.
+    By the end, all four models fit the training images perfectly, so dropout
+    did not prevent that. What changed was the validation loss. Without
+    dropout it rose from 0.41 at epoch 30 to 0.62 at the end. With dropout on
+    the inputs and the hidden layers, it fell to 0.35 by epoch 90 and ended at
+    0.37. The validation accuracy rose by about 3.4 percentage points on every
+    seed.
 
-    Hinton and colleagues' 2012 paper saw the same steps on all of MNIST. Its
-    plain network made 160 errors on the test set. 50% dropout in the hidden
-    layers, with a limit on the size of each neuron's incoming weights,
-    brought that to about 130. Dropping 20% of the pixels too brought it to
-    about 110.
+    The 2012 paper by Hinton and colleagues saw the same improvements on all
+    of MNIST. Its network without dropout made 160 errors on the test set.
+    Adding 50% dropout in the hidden layers, with a limit on the size of each
+    neuron's incoming weights, brought that down to about 130. Also dropping
+    20% of the pixels brought it down to about 110.
 
-    Dropout has a cost. Each step trains a thinned model, so training takes
-    longer to get as far. Srivastava and others' 2014 paper counted two to
-    three times as long. At epoch 10 here, the model without dropout had a
-    training loss of 0.62, and the one with hidden 0.5 had 0.72. Both were
-    measured with dropout off. Their validation accuracy was 80.5% against
-    77.4%.
+    Dropout has a cost. Each step trains only a thinned model, so training
+    needs more steps to reach the same loss. The 2014 paper by Srivastava and
+    others found that it took two to three times as long. Here, at epoch 10,
+    the model without dropout had a training loss of 0.62. The model with
+    hidden dropout 0.5 had 0.72. Both were measured with dropout off. Their
+    validation accuracies were 80.5% and 77.4%.
 
-    A model with plenty of data for its size doesn't overfit, and there dropout
-    only slows it down. Karpathy's nanoGPT turns it off for training from
-    scratch, and suggests 0.1 or more for further training on a small set.
+    A model with plenty of data for its size does not overfit, and then
+    dropout only slows training down. Karpathy's nanoGPT turns dropout off
+    when training from scratch. It suggests 0.1 or more when you continue
+    training an existing model on a small dataset.
 
-    The trap is the mode. Measuring needs `model.eval()`, and the model stays
-    that way until `model.train()`. Forget it, and every epoch after the first
-    trains with dropout off, and nothing warns you.
+    A common bug is forgetting the mode. Measuring the model needs
+    `model.eval()`, and the model stays in eval mode until you call
+    `model.train()`. If you forget that call, every epoch after the first
+    trains with dropout off, and no error warns you.
     """,
 )
 
@@ -391,9 +404,10 @@ DROPOUT2_SOURCE = source_file(
     dropping = model.training                        # False until model.train()
 
 
-    # TODO: Return the model's cross entropy and accuracy on x and y, measured in
-    #   eval mode without recording anything for autograd, as two plain numbers.
-    #   The accuracy is the share of right answers, between 0 and 1.
+    # TODO: Return the model's cross entropy and accuracy on x and y, as two
+    #   plain Python numbers. Measure in eval mode, and do not let autograd
+    #   record anything. The accuracy is the fraction of examples the model
+    #   classifies correctly, a number between 0 and 1.
     def evaluate(
         model: nn.Module,
         x: Tensor,
@@ -402,8 +416,9 @@ DROPOUT2_SOURCE = source_file(
         ...
 
 
-    # TODO: This trains with dropout in the first epoch only, since evaluate
-    #   leaves the model in eval mode. Fix it, so every epoch trains with dropout.
+    # TODO: This trains with dropout only in the first epoch, because evaluate
+    #   leaves the model in eval mode. Fix it, so every epoch trains with
+    #   dropout on.
     def train_epochs(
         model: nn.Module,
         x: Tensor,
@@ -436,8 +451,9 @@ DROPOUT2_SOURCE = source_file(
     position = [0.9, 0.5, 0.7].index(0.5)            # 1, counted from 0
 
 
-    # TODO: Return the epoch, counted from 1, with the lowest validation loss,
-    #   the one early stopping would keep.
+    # TODO: Return the epoch with the lowest validation loss, which is the one
+    #   early stopping would keep. validation_losses[0] is epoch 1, so count the
+    #   epochs from 1. Example: best_epoch([0.9, 0.5, 0.7]) returns 2.
     def best_epoch(validation_losses: list[float]) -> int:
         ...
     ''',
@@ -655,8 +671,9 @@ DROPOUT2 = Exercise(
     source=DROPOUT2_SOURCE,
     solution=DROPOUT2_SOLUTION,
     hints={
-        "evaluate": "Call model.eval() first, then work inside a with torch.no_grad() block. Take the logits once. "
-        "F.cross_entropy of them is the loss, and the share of rows whose .argmax(dim=1) equals y is the accuracy.",
+        "evaluate": "Call model.eval() first, then work inside a with torch.no_grad() block. Compute the logits "
+        "once. F.cross_entropy of the logits and y is the loss. The accuracy is the fraction of rows whose "
+        ".argmax(dim=1) equals y.",
         "train_epochs": "Add model.train() as the first line inside the loop over epochs.",
         "best_epoch": "Find the position of the smallest loss with .index(min(...)), then add 1.",
     },
@@ -672,25 +689,28 @@ DROPOUT2 = Exercise(
 
 DROPOUT3_LESSON = prose(
     """
-    The 2014 dropout paper by Srivastava and others did not scale while
-    training. It dropped numbers, and at test time multiplied the weights after
-    them by the keep probability `1 - p` to make up for it. PyTorch scales
-    during training instead, which is called inverted dropout. Each gives the
-    next layer the same average in training and at test time. Inverted
-    dropout leaves the model at test time with nothing to change.
+    The 2014 dropout paper by Srivastava and others did not divide by `1 - p`
+    during training. It only dropped numbers. Then at test time it multiplied
+    the weights after each dropout by the keep probability `1 - p`, to make up
+    for the dropping. PyTorch divides by `1 - p` during training instead,
+    which is called inverted dropout. Both ways give the next layer the same
+    average in training and at test time. With inverted dropout, nothing in
+    the model has to change at test time.
 
-    Each draw of dropout gives different numbers, but their average over many
-    draws is the input itself. That is what dividing by `1 - p` buys.
+    Each run of dropout on the same input gives different numbers. But the
+    average of many runs is the input itself. Dividing by `1 - p` is what
+    makes that true.
 
-    The paper's own `p` is the chance of keeping a number, PyTorch's `1 - p`.
-    So the paper's 0.5 for hidden layers and 0.8 for inputs are PyTorch's 0.5
-    and 0.2. This course always means PyTorch's `p`.
+    In the paper, `p` is the probability of keeping a number, which is `1 - p`
+    in PyTorch. So the paper's 0.5 for hidden layers and 0.8 for inputs are
+    0.5 and 0.2 in PyTorch. This course always uses PyTorch's `p`, the
+    probability of dropping a number.
 
-    Where dropout goes in an MLP, from the paper.
+    The paper puts dropout in these places in an MLP.
 
-    - after each hidden layer's activation: a neuron's output is what gets dropped, usually with p 0.5.
-    - on the inputs: with a smaller p, 0.2 in the paper's image models.
-    - never after the last layer: its output is the answer.
+    - after each hidden layer's activation: so each neuron's output is what gets dropped, usually with `p` of 0.5.
+    - on the inputs: with a smaller `p`, 0.2 in the paper's image models.
+    - never after the last layer: its output is the model's prediction.
 
     Models in later chapters put dropout in more places, and those chapters
     say where.
@@ -733,11 +753,12 @@ DROPOUT3_SOURCE = source_file(
         return x * keep_mask(x.shape, p, generator) / (1 - p)
 
 
-    keep_probability = 1 - 0.5                       # the paper's scale at test time for p 0.5
+    keep_probability = 1 - 0.5                       # the paper multiplies by this at test time
 
 
-    # TODO: Return the paper's dropout. In training, zero the numbers keep_mask
-    #   drops, with no scaling. At test time, scale x by the keep probability.
+    # TODO: Return x after the paper's version of dropout. When training is
+    #   True, set to 0 the numbers that keep_mask drops, and do not divide by
+    #   1 - p. When training is False, multiply x by the keep probability, 1 - p.
     def paper_dropout(
         x: Tensor,
         p: float,
@@ -747,12 +768,13 @@ DROPOUT3_SOURCE = source_file(
         ...
 
 
-    # torch.stack piles tensors of the same shape along a new first dimension.
+    # torch.stack joins tensors of the same shape along a new first dimension.
     piled = torch.stack([torch.ones(3), torch.zeros(3)])    # shape (2, 3)
 
 
-    # TODO: Run dropout on x as many times as draws, each run from generator,
-    #   and return the average of the runs.
+    # TODO: Run dropout on x draws times, each time with generator, and return
+    #   the average of the runs. The result has the same shape as x. Example:
+    #   for x full of 3, p = 0.2 and 1000 draws, every number is close to 3.
     def average_of_draws(
         x: Tensor,
         p: float,
@@ -762,9 +784,13 @@ DROPOUT3_SOURCE = source_file(
         ...
 
 
-    # TODO: Finish the line in the loop, so this returns an MLP with dropout of
-    #   p_input on the inputs, then each hidden layer as Linear, ReLU and dropout
-    #   of p_hidden, then a last Linear. sizes holds every layer's size in order.
+    # TODO: Finish the line in the loop, so this returns an MLP with dropout on
+    #   its inputs and after each hidden layer. It starts with dropout of
+    #   p_input. Each hidden layer is a Linear layer, a ReLU and dropout of
+    #   p_hidden. A last Linear layer gives the outputs. sizes lists the number
+    #   of inputs, each hidden width, then the number of outputs. Example:
+    #   dropout_mlp([784, 512, 10], 0.2, 0.5) holds the layers of the lesson's
+    #   example.
     def dropout_mlp(
         sizes: list[int],
         p_input: float,

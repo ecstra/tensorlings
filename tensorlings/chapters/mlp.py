@@ -18,10 +18,12 @@ MLP = Chapter(
         """
         # Multilayer perceptrons
 
-        Linear layers with activations between them make the multilayer
-        perceptron, the MLP, the plainest model that can learn curved shapes and
-        a part of nearly every bigger model. This chapter stacks one, builds it
-        as a module, trains it, and shows how its size decides what it fits.
+        A multilayer perceptron, or MLP, is a stack of linear layers with an
+        activation between each pair of layers. It is the simplest model that
+        can learn curves and not only straight lines, and nearly every bigger
+        model has MLPs inside it. In this chapter you build an MLP with
+        `nn.Sequential`, then build it again as your own module. Then you train
+        it and see how its size affects what it can fit.
 
         ## Further reading
 
@@ -90,12 +92,15 @@ def layer_shapes(model: nn.Module) -> list[tuple[str, tuple[int, ...]]]:
 
 MLP1_LESSON = prose(
     """
-    Linear layers with an activation between each pair make a multilayer
-    perceptron, an MLP. It is the plainest model that can learn curved shapes,
-    and a part of nearly every bigger model.
+    A multilayer perceptron, or MLP, is a stack of linear layers with an
+    activation between each pair of layers. It is the simplest model that can
+    learn curves and not only straight lines. Nearly every bigger model has
+    MLPs inside it.
 
-    `nn.Sequential` chains modules, so calling it passes the input through
-    each in turn. `nn.ReLU()` is ReLU as a module.
+    `nn.Sequential` takes modules and runs them in order. When you call it, it
+    passes the input to the first module, passes that output to the second
+    module, and so on. `nn.ReLU()` is the ReLU activation wrapped as a module,
+    so it can go in the chain.
 
     ```python
     model = nn.Sequential(
@@ -107,17 +112,20 @@ MLP1_LESSON = prose(
     model[0]                          # Linear(in_features=2, out_features=8, bias=True)
     ```
 
-    The first layer's input size is the number of features, and the last
-    layer's output size is the number of outputs. The sizes in between are
-    yours to choose. The number of neurons in a hidden layer is its width, and
-    the number of hidden layers is the depth.
+    The first layer's input size must equal the number of input features. The
+    last layer's output size must equal the number of outputs you want. Each
+    Linear and ReLU pair before the last Linear is a hidden layer, and you
+    choose its size. The number of neurons in a hidden layer is its width. The
+    number of hidden layers is the depth of the MLP.
 
-    `nn.Sequential(*layers)` builds one from a list, which helps when the depth
-    is a number you pass in. The `*` spreads the list out into separate
+    `nn.Sequential(*layers)` builds the chain from a Python list named
+    `layers`. This helps when the depth is a number passed in, because you can
+    build the list in a loop. The `*` unpacks the list into separate
     arguments.
 
-    A hidden layer of width `h` after `n` inputs holds `n * h + h`
-    parameters, and every layer after it counts the same way.
+    A Linear layer from `n` inputs to `h` outputs holds `n * h + h`
+    parameters. That is `n * h` weights and `h` biases. Every Linear layer in
+    the MLP counts the same way, with its own input and output sizes.
     """,
 )
 
@@ -128,7 +136,8 @@ MLP1_SOURCE = source_file(
     import torch
     import torch.nn as nn
 
-    # Linear, ReLU, Linear, chained by nn.Sequential.
+    # A Linear layer, a ReLU and a second Linear layer, run in order by
+    # nn.Sequential. It takes 2 inputs, has 8 hidden neurons, and gives 1 output.
     model = nn.Sequential(
         nn.Linear(2, 8),
         nn.ReLU(),
@@ -136,8 +145,10 @@ MLP1_SOURCE = source_file(
     )
 
 
-    # TODO: Return an MLP with one hidden layer, Linear, ReLU, Linear, for the
-    #   given numbers of inputs, hidden neurons and outputs.
+    # TODO: Return an MLP with one hidden layer, as an nn.Sequential of a Linear
+    #   layer, a ReLU and a second Linear layer. It takes `inputs` features, has
+    #   `hidden` neurons in its hidden layer, and gives `outputs` outputs.
+    #   Example: make_mlp(2, 8, 1) holds the same layers as model above.
     def make_mlp(
         inputs: int,
         hidden: int,
@@ -146,9 +157,11 @@ MLP1_SOURCE = source_file(
         ...
 
 
-    # TODO: Finish the line in the loop. This returns an MLP with `depth` hidden
-    #   layers, each `hidden` wide and each a Linear then a ReLU. A last Linear
-    #   then gives the outputs.
+    # TODO: Finish the line in the loop, so this returns an MLP with `depth`
+    #   hidden layers. Each hidden layer is a Linear layer with `hidden` outputs,
+    #   followed by a ReLU. After them, a last Linear layer gives `outputs`
+    #   outputs. Example: make_deep_mlp(2, 8, 1, 3) holds Linear, ReLU, Linear,
+    #   ReLU, Linear, ReLU, Linear.
     def make_deep_mlp(
         inputs: int,
         hidden: int,
@@ -167,8 +180,10 @@ MLP1_SOURCE = source_file(
         return nn.Sequential(*layers)
 
 
-    # TODO: Return how many parameters make_mlp(inputs, hidden, outputs) holds,
-    #   worked out without building it.
+    # TODO: Return the number of parameters in make_mlp(inputs, hidden, outputs),
+    #   which is the weights and biases of both Linear layers. Compute it from
+    #   the three sizes, without building the model.
+    #   Example: mlp_parameters(2, 8, 1) returns 33.
     def mlp_parameters(
         inputs: int,
         hidden: int,
@@ -323,11 +338,12 @@ MLP1 = Exercise(
     source=MLP1_SOURCE,
     solution=MLP1_SOLUTION,
     hints={
-        "make_mlp": "Follow the line that sets model, with inputs, hidden and outputs in place of 2, 8 and 1.",
-        "make_deep_mlp": "Each hidden layer adds two modules to the list, a Linear from size to hidden, then a "
-        "ReLU. .extend takes a list of them.",
+        "make_mlp": "Copy the pattern of the line that sets model, using inputs, hidden and outputs instead of 2, 8 "
+        "and 1.",
+        "make_deep_mlp": "Each hidden layer adds two modules to the list, a Linear layer from size to hidden and then "
+        "a ReLU. layers.extend takes a list and appends each of its items.",
         "mlp_parameters": "The hidden layer holds inputs * hidden weights and hidden biases. The output layer counts "
-        "the same way from hidden to outputs.",
+        "the same way, with hidden in place of inputs and outputs in place of hidden.",
     },
     introduces=(),
     check=check_mlp1,
@@ -340,15 +356,19 @@ MLP1 = Exercise(
 
 MLP2_LESSON = prose(
     """
-    `nn.Sequential` fits a model that is one chain. Most models need more
-    control, so they are written as a module with a `forward` of their own.
-    Here is the MLP that way. It takes a list of sizes, the inputs, each
-    hidden width, then the outputs, like `[2, 8, 8, 1]`.
+    `nn.Sequential` works for a model whose layers run one after another in a
+    single chain. Most models need more control than that. So they are written
+    as a subclass of `nn.Module` with their own `forward` method. This exercise
+    writes the MLP that way. It takes a list of sizes, like `[2, 8, 8, 1]`.
+    The first number is the number of inputs and the last is the number of
+    outputs. The numbers in between are the widths of the hidden layers.
 
-    The layers live in a list, and a plain Python list is a trap. A module only
-    finds parameters stored in attributes it knows about, so the Linear layers
-    of a plain list are invisible to `model.parameters()`. A training loop over
-    `model.parameters()` then trains nothing, and nothing warns you.
+    The MLP keeps its layers in a list, and a plain Python list causes a
+    silent bug. A module finds the parameters of the modules stored directly in
+    its attributes, or in containers it knows about. It does not look inside a
+    plain list. So the Linear layers in a plain list are missing from
+    `model.parameters()`. A training loop over `model.parameters()` then
+    trains nothing, and no error warns you.
 
     ```python
     class Broken(nn.Module):
@@ -359,14 +379,15 @@ MLP2_LESSON = prose(
     len(list(Broken().parameters()))    # 0
     ```
 
-    `nn.ModuleList` is a list a module does know about. It works like a list.
-    You can loop over it and index it, and its modules' parameters belong to
-    the model.
+    `nn.ModuleList` is a list that a module does know about. You can loop over
+    it and index it like a list. The parameters of every module inside it are
+    included in `model.parameters()`.
 
-    In `forward`, the activation goes between the layers and not after the
-    last one, since the last layer gives the answer, as activations2 said.
-    `enumerate` gives each layer's position as you loop, which tells the last
-    one apart.
+    In `forward`, an activation goes after every layer except the last one.
+    The last layer produces the model's output, so it gets no ReLU.
+    activations2 showed that ReLU at the output can break a model. `enumerate`
+    gives each layer's position as you loop, so you can tell when you have
+    reached the last layer.
     """,
 )
 
@@ -379,9 +400,10 @@ MLP2_SOURCE = source_file(
     from torch import Tensor
 
 
-    # TODO: Two things to finish. The layers are stored in a plain list, so the
-    #   model has no parameters. Fix that line. Then finish the loop in forward,
-    #   so every layer but the last is followed by ReLU.
+    # TODO: Fix two things. First, self.layers is a plain list, so the model has
+    #   no parameters. Change that line so the model finds the layers. Second,
+    #   finish the loop in forward, so ReLU is applied after every layer except
+    #   the last. Example: MLP([2, 8, 1]) has 33 parameters.
     class MLP(nn.Module):
         def __init__(self, sizes: list[int]) -> None:
             super().__init__()
@@ -407,7 +429,8 @@ MLP2_SOLUTION = source_file(
     from torch import Tensor
 
 
-    # nn.ModuleList registers each layer, so their parameters belong to the model.
+    # nn.ModuleList registers each layer, so model.parameters() includes their
+    # parameters.
     class MLP(nn.Module):
         def __init__(self, sizes: list[int]) -> None:
             super().__init__()
@@ -480,10 +503,11 @@ MLP2 = Exercise(
 
 MLP3_LESSON = prose(
     """
-    Training an MLP is the loop of Section 2, with the model's parameters in
-    place of a hand made `w` and `b`. The model gives the predictions, the
-    loss compares them with the targets, `.backward()` fills every
-    parameter's gradient, and a step moves them all.
+    You train an MLP with the same loop as in Section 2. The difference is
+    that the parameters belong to the model, instead of being a `w` and `b`
+    you made by hand. In each step the model makes predictions, and the loss
+    compares them with the targets. Then `.backward()` computes the gradient
+    of every parameter, and a gradient step updates all the parameters.
 
     ```python
     for _ in range(steps):
@@ -492,15 +516,17 @@ MLP3_LESSON = prose(
         gradient_step(model, learning_rate)
     ```
 
-    `gradient_step` is the one from modules1, which steps every parameter of
-    the model against its gradient and clears it. `.squeeze(1)` turns the
-    model's output of shape `(examples, 1)` into `(examples,)`, to line up with
-    the targets, as linreg2 warned.
+    `gradient_step` is the function from modules1. It subtracts the learning
+    rate times the gradient from every parameter of the model, then clears
+    the gradient. `.squeeze(1)` turns the model's output from shape
+    `(examples, 1)` into shape `(examples,)`, which is the shape of the
+    targets. linreg2 showed what goes wrong when those shapes differ.
 
-    Here an MLP with one hidden layer of 32 neurons learns `sin(x)` between -3
-    and 3 from 64 points. In 1000 steps with a learning rate of 0.1 the mean
-    squared error falls to about 0.0004. One Linear layer on the same points
-    can only fit a straight line, and stays above 0.1.
+    In this exercise an MLP with one hidden layer of 32 neurons learns
+    `sin(x)` for `x` between -3 and 3, from 64 points. After 1000 steps with a
+    learning rate of 0.1, the mean squared error falls to about 0.0004. A
+    single Linear layer trained on the same points can only fit a straight
+    line, so its error stays above 0.1.
 
     The same loop trains any model built from modules, however many layers it
     has. Only the model, the loss and the data change from task to task.
@@ -516,7 +542,7 @@ MLP3_SOURCE = source_file(
     from torch import Tensor
 
 
-    # The step from modules1.
+    # The gradient step from modules1.
     def gradient_step(
         model: nn.Module,
         learning_rate: float,
@@ -527,9 +553,10 @@ MLP3_SOURCE = source_file(
                 parameter.grad = None
 
 
-    # TODO: Finish the line that sets loss, the mean squared error of the model's
-    #   predictions on x against y, so this trains the model and returns the final
-    #   loss.
+    # TODO: Finish the line that sets loss, so this trains the model and returns
+    #   the final loss. loss is the mean squared error between the model's
+    #   predictions on x and the targets y. x has shape (examples, features), y
+    #   has shape (examples,), and the model's output has shape (examples, 1).
     def train(
         model: nn.Module,
         x: Tensor,
@@ -545,8 +572,9 @@ MLP3_SOURCE = source_file(
         return loss.item()
 
 
-    # TODO: Return the mean squared error of model on x against y, without
-    #   recording anything for autograd.
+    # TODO: Return the mean squared error of the model's predictions on x against
+    #   y, as a plain Python number. Autograd must not record anything while
+    #   this runs.
     def evaluate(
         model: nn.Module,
         x: Tensor,
@@ -681,7 +709,8 @@ MLP3 = Exercise(
     solution=MLP3_SOLUTION,
     hints={
         "train": "Call the model on x, .squeeze(1) the result, and take the mean squared error against y.",
-        "evaluate": "The same mean squared error, inside a with torch.no_grad() block, returned as a plain number.",
+        "evaluate": "Compute the same mean squared error inside a with torch.no_grad() block, and return it as a "
+        "plain number with .item().",
     },
     introduces=(),
     check=check_mlp3,
@@ -695,15 +724,18 @@ MLP3 = Exercise(
 
 MLP4_LESSON = prose(
     """
-    How wide should a hidden layer be? Here MLPs of six widths learned 20
-    noisy points of `sin(x)`, 10,000 steps each with a learning rate of 0.005.
-    Each was measured on a test set of 1000 new points. Each number is the
-    average of 10 seeds, each with its own points and start. The noise alone
-    gives an error of 0.09, so no model can beat that on new points.
+    How wide should a hidden layer be? To find out, MLPs with six different
+    widths were each trained on 20 noisy points of `sin(x)`. Each trained for
+    10,000 steps with a learning rate of 0.005. Then each was measured on a
+    test set of 1000 new points. Each number in the table is an average over
+    10 seeds, and each seed has its own points and its own starting weights.
+    Even a model that predicted `sin(x)` exactly would have a mean squared
+    error of 0.09 on new points, because of the noise. So no model can do
+    better than 0.09.
 
-    The last column stops early, as in Section 2. Every 100 steps the model
-    was measured on 200 validation points, and the step where it did best was
-    kept.
+    The last column uses early stopping, from Section 2. Every 100 steps the
+    model was measured on 200 validation points. The column shows the test
+    error at the check where the validation error was lowest.
 
     | Width | Training error | Test error at the end | Test error, stopped early |
     |---|---|---|---|
@@ -714,28 +746,34 @@ MLP4_LESSON = prose(
     | 128 | 0.050 | 0.154 | 0.147 |
     | 512 | 0.041 | 0.163 | 0.138 |
 
-    Width 1 is too narrow to bend, and underfits both. Trained to the end,
-    width 512 overfits a little, worse than width 32 on 9 of 10 seeds. Stopped
-    early, more width kept helping, and 512 beat 32 on 8 of 10 seeds.
+    Width 1 is too narrow to bend into a curve, so it underfits. Both its
+    training error and its test error are high. Trained to the end, width 512
+    overfits a little. Its test error was worse than width 32's on 9 of 10
+    seeds. With early stopping, more width kept helping, and width 512 beat
+    width 32 on 8 of 10 seeds.
 
-    Neyshabur and colleagues found in 2014 that test error kept falling as they
-    added hidden units, even after the training error reached 0. They argued
-    that training itself holds a big network back. So in practice a model is
-    made a bit too big, then held back with early stopping and weight decay.
-    Its size is a hyperparameter, chosen on the validation set.
+    In 2014, Neyshabur and colleagues found that test error kept falling as
+    they added hidden units, even after the training error reached 0. They
+    argued that the training method itself stops a big network from fitting
+    the noise as much as its size would allow. So in practice people make a
+    model a little bigger than it needs to be. Then they limit its overfitting
+    with early stopping and weight decay. The size of the model is a
+    hyperparameter, chosen by comparing errors on the validation set.
 
-    Depth gives more bends for the same number of parameters. Here 200 points
-    of `sin(3x)`, with no noise, were fitted for 20,000 steps at a rate of
-    0.01, over 10 seeds.
+    A deeper MLP can make more bends in its curve with the same number of
+    parameters. In the next table, two MLPs fitted 200 points of `sin(3x)`
+    with no noise. Each trained for 20,000 steps at a learning rate of 0.01,
+    and each error is an average over 10 seeds.
 
     | Hidden layers | Parameters | Training error |
     |---|---|---|
     | one of 48 | 145 | 0.042 |
     | two of 11 | 166 | 0.025 |
 
-    Two hidden layers ended lower on 9 of 10 seeds. Deeper plain stacks soon
-    stop training at all. init3, normalization and residuals are what let more
-    depth keep paying.
+    The MLP with two hidden layers ended with a lower error on 9 of 10 seeds.
+    A plain stack with many more layers soon stops training at all. Careful
+    initialization (init3), normalization and residual connections are what
+    make extra depth keep helping.
     """,
 )
 
@@ -768,10 +806,11 @@ MLP4_SOURCE = source_file(
         return loss.item()
 
 
-    # TODO: Finish the line that sets model, an MLP with one hidden layer of the
-    #   given width, built after torch.manual_seed(0) so every run starts the same.
-    #   train_x has shape (points, 1). It returns the training and validation
-    #   errors after training.
+    # TODO: Finish the line that sets model to an MLP with 1 input, one hidden
+    #   layer of `width` neurons, and 1 output. The line comes after
+    #   torch.manual_seed(0), so every run starts from the same weights. train_x
+    #   and validation_x have shape (points, 1). The function returns the
+    #   training error and the validation error after training.
     def errors_for_width(
         width: int,
         train_x: Tensor,
@@ -790,7 +829,8 @@ MLP4_SOURCE = source_file(
         return train_error, validation_error
 
 
-    # TODO: Return the width from widths with the lowest validation error.
+    # TODO: Return the width in widths whose MLP has the lowest validation error,
+    #   as measured by errors_for_width.
     def best_width(
         widths: list[int],
         train_x: Tensor,
@@ -928,7 +968,8 @@ MLP4 = Exercise(
     source=MLP4_SOURCE,
     solution=MLP4_SOLUTION,
     hints={
-        "errors_for_width": "nn.Sequential of a Linear from 1 input to width, a ReLU, and a Linear from width to 1.",
+        "errors_for_width": "Build an nn.Sequential of a Linear layer from 1 input to width outputs, a ReLU, and a "
+        "Linear layer from width inputs to 1 output.",
         "best_width": "Call errors_for_width for each width and keep the one whose second number, the validation "
         "error, is lowest.",
     },
