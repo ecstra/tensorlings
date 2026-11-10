@@ -63,8 +63,8 @@ def run_with_time_limit(
 PLAIN_ERRORS: tuple[tuple[str, str], ...] = (
     (
         r"probability tensor contains either",
-        "torch.multinomial needs probabilities, numbers from 0 up that it can draw by. A model's scores can be "
-        "negative, so pass them through torch.softmax first.",
+        "torch.multinomial needs probabilities, which are never negative. A model's raw scores can be negative, so "
+        "pass them through torch.softmax first.",
     ),
     (
         r"list indices must be integers or slices, not tuple",
@@ -77,8 +77,9 @@ PLAIN_ERRORS: tuple[tuple[str, str], ...] = (
     ),
     (
         r"object is not subscriptable",
-        "Square brackets pick parts of something that holds values, like a tensor or a list. Here they come right "
-        "after something that holds nothing to pick, such as a function like torch.tensor.",
+        "Square brackets index into something that holds values, like a tensor or a list. Here they come right "
+        "after something that cannot be indexed, such as a function like torch.tensor. A function is called with "
+        "round brackets.",
     ),
     (
         r"expected sequence of length (\d+) at dim \d+ \(got (\d+)\)",
@@ -86,7 +87,8 @@ PLAIN_ERRORS: tuple[tuple[str, str], ...] = (
     ),
     (
         r"The size of tensor a \((\d+)\) must match the size of tensor b \((\d+)\)",
-        "These two shapes cannot be broadcast together. Compared from the right, a size {0} meets a size {1}. "
+        "These two shapes cannot be broadcast together. Lined up from the right, a size of {0} sits against a size "
+        "of {1}. "
         "Two sizes only fit when they are equal or one of them is 1. If each row should get its own number, "
         "give the numbers shape (rows, 1).",
     ),
@@ -102,12 +104,13 @@ PLAIN_ERRORS: tuple[tuple[str, str], ...] = (
     (
         r"mat1 and mat2 shapes cannot be multiplied \((\d+)x(\d+) and (\d+)x(\d+)\)",
         "For @, the size at the end of the first shape must equal the size at the start of the second. Here the "
-        "shapes are ({0}, {1}) and ({2}, {3}), so {1} meets {2}. A flat tensor counts as one row when it is on the "
-        "left of @.",
+        "shapes are ({0}, {1}) and ({2}, {3}), and {1} is not equal to {2}. A flat tensor on the left of @ counts "
+        "as one row.",
     ),
     (
         r"size mismatch, got input \((\d+)\), mat \((\d+)x(\d+)\), vec \((\d+)\)",
-        "For @, every row of the first tensor needs one weight per entry. Rows have {2} entries and there are {3} weights.",
+        "For a matrix @ a flat tensor, the flat tensor needs one entry per column of the matrix. The matrix has {2} "
+        "columns, but the flat tensor has {3} entries.",
     ),
     (
         r"Dimension out of range",
@@ -116,11 +119,12 @@ PLAIN_ERRORS: tuple[tuple[str, str], ...] = (
     (
         r"index (-?\d+) is out of bounds for dimension (\d+) with size (\d+)",
         # PyTorch numbers the dimension within the index, not the tensor, so the message leaves it out.
-        "Position {0} does not exist, since the dimension it picks from only has {2} entries. Counting starts at 0.",
+        "Index {0} is out of range, because that dimension only has {2} entries. Indices start at 0, so the last "
+        "valid index is one less than the size.",
     ),
     (
         r"too many indices for tensor of dimension (\d+)",
-        "The code picks along more dimensions than the tensor has. It has {0}.",
+        "The code indexes more dimensions than the tensor has. It has {0}.",
     ),
     (
         r"tuple index out of range",
