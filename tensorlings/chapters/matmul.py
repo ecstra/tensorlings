@@ -17,9 +17,10 @@ MATMUL = Chapter(
         """
         # Matrix multiplication
 
-        A weighted sum multiplies each input by how much it counts and adds the
-        results. Matrix multiplication does many weighted sums in one call, and
-        most of the work in deep learning is matrix multiplication.
+        A weighted sum multiplies each input by its own weight, a number that
+        says how much that input counts, and adds up the results. Matrix
+        multiplication computes many weighted sums in one call. Most of the
+        computation in deep learning is matrix multiplication.
 
         ## Further reading
 
@@ -33,10 +34,11 @@ MATMUL1_LESSON = prose(
     """
     Try the first TODO before you read on, with what you already know.
 
-    A **weighted sum** multiplies each value by its own **weight** and adds the
-    results. With tensors that is an elementwise multiply and a sum, as you may
-    have written. The **dot product**, written `@` between two flat tensors,
-    does both in one step.
+    A **weighted sum** multiplies each value by its own **weight** and adds up
+    the results. With tensors, that is an elementwise multiplication followed
+    by a sum, which you may have written for the first TODO. The **dot
+    product** of two flat tensors computes the same thing in one step. PyTorch
+    writes it as `@` between the two tensors.
 
     ```python
     v = torch.tensor([2.0, 3.0])
@@ -45,13 +47,17 @@ MATMUL1_LESSON = prose(
     v @ w            # tensor(320.)
     ```
 
-    A tensor with two dimensions is a **matrix**. With a matrix on the left and
-    a flat tensor on the right, `@` gives one dot product per row.
+    A tensor with two dimensions is a **matrix**. Put a matrix on the left of
+    `@` and a flat tensor on the right. Then `@` takes the dot product of each
+    row of the matrix with the flat tensor, which gives one number per row.
 
-    With a matrix on each side, `@` takes the dot product of every row on the
-    left with every column on the right. This is **matrix multiplication**.
-    `(rows, k) @ (k, columns)` gives `(rows, columns)`, and the two middle
-    sizes, both `k`, must match.
+    With a matrix on each side, `@` takes the dot product of every row of the
+    left matrix with every column of the right matrix. This is called
+    **matrix multiplication**. Entry `[i, j]` of the result is row `i` of the
+    left matrix dotted with column `j` of the right one. So
+    `(rows, k) @ (k, columns)` gives shape `(rows, columns)`. The two middle
+    sizes must both be `k`, because a dot product needs two lists of the same
+    length.
 
     ```python
     a = torch.tensor([[1.0, 2.0],
@@ -62,17 +68,18 @@ MATMUL1_LESSON = prose(
     a @ torch.tensor([1.0, 1.0])    # tensor([3., 7.])
     ```
 
-    `.T` swaps the two dimensions of a matrix, so its rows become columns and
-    `b.T` has shape `(3, 2)`. It is for matrices only, and PyTorch warns when
-    it meets a flat tensor.
+    `.T` swaps the two dimensions of a matrix, so its rows become its columns.
+    `b` has shape `(2, 3)`, so `b.T` has shape `(3, 2)`. Use `.T` only on
+    matrices, because PyTorch warns when you use it on a flat tensor.
 
-    Most of the work inside a model is matrix multiplication. A model's inputs
-    often form a matrix with one example per row. One `@` with a matrix of
-    weights then gives every example many weighted sums at once.
+    Most of the computation inside a model is matrix multiplication. A model's
+    inputs often form a matrix with one example per row. One `@` with a matrix
+    of weights then computes many weighted sums for every example at once.
 
-    One `@` is also far faster than a loop. On a 1000 by 1000 matrix, a
-    Python loop of one dot product per row took about 2 milliseconds in three
-    runs. One `@` took about 0.015 milliseconds, over 140 times less.
+    One `@` is also much faster than a loop. On a 1000 by 1000 matrix, a
+    Python loop that takes one dot product per row took about 2 milliseconds
+    in three runs. One `@` took about 0.015 milliseconds, which is over 140
+    times faster.
     """,
 )
 
@@ -85,8 +92,10 @@ MATMUL1_SOURCE = source_file(
 
 
     # TODO: Try this before reading the lesson, with what you already know.
-    #   Multiply each entry of v by the matching entry of w, then add up the
-    #   results. For v = [2., 3.] and w = [10., 100.] that is tensor(320.).
+    #   v and w are flat tensors of the same length. Multiply each entry of v
+    #   by the matching entry of w, then add up the results.
+    #   Example: for v = tensor([2., 3.]) and w = tensor([10., 100.]),
+    #   weighted_sum returns tensor(320.).
     def weighted_sum(
         v: Tensor,
         w: Tensor,
@@ -104,7 +113,10 @@ MATMUL1_SOURCE = source_file(
 
 
     # TODO: Return the dot product of every row of matrix with w, one number per
-    #   row.
+    #   row. matrix has shape (rows, k) and w has shape (k,), so the result has
+    #   shape (rows,).
+    #   Example: for matrix = tensor([[1., 2.], [3., 4.]]) and the w above,
+    #   row_dots returns tensor([210., 430.]).
     def row_dots(
         matrix: Tensor,
         w: Tensor,
@@ -117,8 +129,8 @@ MATMUL1_SOURCE = source_file(
     b = torch.tensor([[1.0, 0.0, 2.0],
                       [0.0, 10.0, 1.0]])
 
-    # A matrix @ a matrix pairs every row on the left with every column on the
-    # right, so (2, 2) @ (2, 3) gives (2, 3).
+    # A matrix @ a matrix takes the dot product of every row on the left with
+    # every column on the right, so (2, 2) @ (2, 3) gives (2, 3).
     product = a @ b                               # tensor([[1., 20., 4.], [3., 40., 10.]])
 
     # .T swaps rows and columns, so b.T has shape (3, 2).
@@ -126,11 +138,13 @@ MATMUL1_SOURCE = source_file(
 
 
     # TODO: This crashes when the checker calls it. It should return the dot
-    #   product of every row of a with every row of b, with entry [i, j] being
-    #   row i of a dotted with row j of b. For a = [[1., 2.], [3., 4.]] and
-    #   b = [[1., 0.], [0., 1.], [1., 1.]] that is
-    #   tensor([[1., 2., 3.], [3., 4., 7.]]). Read the error in the Result tab,
-    #   then fix it.
+    #   product of every row of a with every row of b. Entry [i, j] of the
+    #   result is row i of a dotted with row j of b. a has shape (n, k) and b
+    #   has shape (m, k), so the result has shape (n, m). Read the error in the
+    #   Result tab, then fix it.
+    #   Example: for a = [[1., 2.], [3., 4.]] and
+    #   b = [[1., 0.], [0., 1.], [1., 1.]], row_pairs should return
+    #   tensor([[1., 2., 3.], [3., 4., 7.]]).
     def row_pairs(
         a: Tensor,
         b: Tensor,
@@ -139,9 +153,11 @@ MATMUL1_SOURCE = source_file(
 
 
     # TODO: Finish the first line, so scores holds the dot product of every row
-    #   of a with every row of b, the way row_pairs gives it. The second line
-    #   then picks, for each row of a, the position of the row of b it scores
-    #   highest with.
+    #   of a with every row of b, the same tensor row_pairs returns. The second
+    #   line then finds, for each row of a, the position of the row of b that
+    #   gives the largest dot product with it.
+    #   Example: for the a and b in the row_pairs example, best_match returns
+    #   tensor([2, 2]).
     def best_match(
         a: Tensor,
         b: Tensor,
@@ -191,7 +207,7 @@ MATMUL1_SOLUTION = source_file(
     b_turned = b.T
 
 
-    # b.T turns the rows of b into columns, so (n, size) @ (size, m) gives (n, m).
+    # b.T turns the rows of b into columns, so (n, k) @ (k, m) gives (n, m).
     def row_pairs(
         a: Tensor,
         b: Tensor,
@@ -249,7 +265,7 @@ def check_matmul1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="best_match",
-        description="picks the row of b each row of a scores highest with",
+        description="picks, for each row of a, the row of b with the largest dot product",
         inputs=(
             (torch.tensor([[1.0, 0.0, 2.0], [0.0, 1.0, 1.0]]), torch.tensor([[1.0, 1.0, 1.0], [2.0, 0.0, 1.0], [0.0, 3.0, 0.0], [1.0, 2.0, 3.0]])),
             (torch.tensor([[1.0, 2.0, 0.0], [0.0, 1.0, 3.0], [2.0, 0.0, 1.0]]), torch.tensor([[1.0, 0.0, 0.0], [0.0, 2.0, 0.0], [1.0, 1.0, 1.0]])),
@@ -266,12 +282,13 @@ MATMUL1 = Exercise(
     source=MATMUL1_SOURCE,
     solution=MATMUL1_SOLUTION,
     hints={
-        "weighted_sum": "Multiply v and w entry by entry, then add up the result, as math1 and reductions1 showed.",
+        "weighted_sum": "Multiply v and w entry by entry, then add up the products, as math1 and reductions1 "
+        "showed.",
         "row_dots": "Put matrix on the left of @ and w on the right.",
-        "row_pairs": "The error says the middle sizes don't match. Turn the rows of b into columns with .T, as the "
-        "line that sets b_turned does.",
-        "best_match": "scores is every row of a dotted with every row of b, the same thing row_pairs returns once "
-        "it is fixed.",
+        "row_pairs": "The error says the shapes cannot be multiplied, because the two middle sizes differ. Turn the "
+        "rows of b into columns with .T, as the line that sets b_turned does.",
+        "best_match": "scores is the dot product of every row of a with every row of b. That is the same tensor "
+        "row_pairs returns once you fix it.",
     },
     introduces=("weight", "weighted sum", "dot product", "matrix", "matrix multiplication"),
     check=check_matmul1,
@@ -279,16 +296,16 @@ MATMUL1 = Exercise(
 
 QUIZ1_LESSON = prose(
     """
-    This quiz has no examples and no new tools. Each function combines moves
-    from the earlier exercises. If a step is unclear, the exercise in the
-    table shows it.
+    This quiz has no examples and no new tools. Each function combines
+    operations from the earlier exercises. If a step is unclear, the exercise
+    listed in the table shows how to do it.
 
-    | Function | Moves | Shown in |
+    | Function | Steps | Shown in |
     |---|---|---|
-    | `biggest_row` | add up each row, find the position of the largest | reductions1 |
+    | `biggest_row` | sum each row, then find the position of the largest total | reductions1 |
     | `clean_fractions` | replace negatives with 0, divide each row by its total | math1, reductions1 |
-    | `center_columns` | take each column's mean, take it away from every row | reductions1, broadcasting1 |
-    | `weighted_first_columns` | keep the first two columns, take one weighted sum per row | indexing1, matmul1 |
+    | `center_columns` | compute each column's mean, subtract it from every row | reductions1, broadcasting1 |
+    | `weighted_first_columns` | keep the first two columns, compute one weighted sum per row | indexing1, matmul1 |
     """,
 )
 
@@ -296,37 +313,39 @@ QUIZ1_SOURCE = source_file(
     '''
     # quiz1.py
     #
-    # No examples and no new tools. Each function combines moves from the
-    # earlier exercises.
+    # This quiz has no examples and no new tools. Each function combines
+    # operations from the earlier exercises.
 
     import torch
     from torch import Tensor
 
 
-    # TODO: Return the position of the row of grid with the largest total. For
-    #   [[1., 2., 3.], [4., 5., 6.]] that is tensor(1).
+    # TODO: Return the position of the row of grid whose entries add up to the
+    #   largest total.
+    #   Example: for the grid [[1., 2., 3.], [4., 5., 6.]], biggest_row returns
+    #   tensor(1).
     def biggest_row(grid: Tensor) -> Tensor:
         ...
 
 
     # TODO: Fill in both lines. The first replaces the negative entries of grid
-    #   with 0.0. The second divides each row of cleaned by its own total, so
-    #   every row adds up to 1.
+    #   with 0.0. The second divides each row of cleaned by that row's total,
+    #   so every row adds up to 1.
     def clean_fractions(grid: Tensor) -> Tensor:
         cleaned = ...
 
         return ...
 
 
-    # TODO: Take each column's mean away from that column, so every column ends
-    #   up with a mean of 0.
+    # TODO: Subtract each column's mean from every entry in that column, so
+    #   every column of the result has a mean of 0.
     def center_columns(grid: Tensor) -> Tensor:
         ...
 
 
-    # TODO: Fill in both lines. The first keeps the first two columns of grid,
-    #   and the second gives each row of them its weighted sum with weights,
-    #   one number per row. weights holds 2 numbers.
+    # TODO: Fill in both lines. The first keeps only the first two columns of
+    #   grid. The second computes the weighted sum of each row of first_two
+    #   with weights, one number per row. weights holds 2 numbers.
     def weighted_first_columns(
         grid: Tensor,
         weights: Tensor,
@@ -390,7 +409,7 @@ def check_quiz1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="clean_fractions",
-        description="zeroes the negatives and makes every row add up to 1",
+        description="replaces the negatives with 0 and makes every row add up to 1",
         inputs=(
             (torch.tensor([[1.0, -2.0, 3.0], [4.0, 5.0, -6.0]]),),
             (torch.tensor([[2.0, -1.0, 2.0], [-3.0, 1.0, 1.0], [0.0, 4.0, 4.0]]),),
@@ -400,7 +419,7 @@ def check_quiz1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="center_columns",
-        description="takes each column's mean away from it",
+        description="subtracts each column's mean from that column",
         inputs=(
             (torch.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]),),
             (torch.tensor([[2.0, 0.0, 1.0], [1.0, 5.0, 1.0], [0.0, 3.0, 9.0]]),),
@@ -432,10 +451,10 @@ QUIZ1 = Exercise(
         "biggest_row": "Add up each row, as row_totals does in reductions1, then find the position of the largest "
         "total with argmax.",
         "clean_fractions": "Replace the negatives with torch.where, as zero_negatives does in math1. Then divide "
-        "cleaned by its row totals, kept with size 1 so they line up with the rows, as rows_to_fractions does in "
-        "reductions1.",
-        "center_columns": "Take the mean of each column, as column_means does in reductions1. Its shape lines up "
-        "with every row, so take it away from grid.",
+        "cleaned by its row totals, as rows_to_fractions does in reductions1. Keep the summed dimension with size "
+        "1, so the totals line up with the rows.",
+        "center_columns": "Compute the mean of each column, as column_means does in reductions1. The means have "
+        "shape (columns,), which lines up with every row, so subtract them from grid.",
         "weighted_first_columns": "Slice the first two columns, as in indexing1. Then put first_two on the left of @ "
         "and weights on the right, as row_dots does in matmul1.",
     },

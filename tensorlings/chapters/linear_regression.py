@@ -16,10 +16,11 @@ LINEAR_REGRESSION = Chapter(
         """
         # Linear regression
 
-        Section 2 is about how a model learns. It starts with the simplest model,
-        a weighted sum of the features plus a bias, and the loss that says how
-        wrong it is. For this one model the best parameters can be worked out
-        exactly, which gives the next chapters an answer to check against.
+        Section 2 is about how a model learns. This chapter starts with the
+        simplest model, a weighted sum of the features plus a bias. It also
+        introduces the loss, a number that measures how wrong the model is. For
+        this model, the best parameters can be computed exactly. That gives the
+        next chapters an answer to check their training against.
 
         ## Further reading
 
@@ -39,12 +40,13 @@ LINREG1_LESSON = prose(
     Section 2 is about how a model learns. It starts with the simplest model
     there is.
 
-    The data is a tensor with one row per example. A row's numbers are that
-    example's **features**, and each example has a target, the number the
-    model should give for it. What the model gives is its **prediction**.
+    The data is a tensor with one row per example. The numbers in a row are
+    that example's **features**. Each example also has a target, the number
+    the model should output for it. The number the model actually outputs is
+    its **prediction**.
 
-    A linear model multiplies each feature by its own weight, adds them up,
-    and adds one more number, the **bias**.
+    A linear model multiplies each feature by its own weight, adds up the
+    results, and then adds one more number, the **bias**.
 
     ```python
     x = torch.tensor([[1.0, 2.0],
@@ -55,19 +57,20 @@ LINREG1_LESSON = prose(
     x @ w + b                         # tensor([ 4.5000,  7.5000, 10.5000])
     ```
 
-    `x @ w` gives every row's weighted sum at once, as in matmul1, and the bias
-    is added to each. The examples are the rows, so `x` goes on the left.
+    `x @ w` computes the weighted sum of every row at once, as in matmul1.
+    Then `+ b` adds the bias to each of those sums. The examples are the rows
+    of `x`, so `x` goes on the left of `@`.
 
-    The weights and the bias are the model's **parameters**, the numbers
-    training adjusts. The bias lets a prediction be something other than 0
-    when every feature is 0. Predicting a number this way is linear
-    **regression**. A regression model is one whose output is a number, and
-    models that pick among options come in a later chapter.
+    The weights and the bias are the model's **parameters**, the numbers that
+    training changes. The bias lets a prediction be something other than 0
+    when every feature is 0. Predicting a number this way is called linear
+    **regression**. A regression model is any model whose output is a number.
+    Models that choose among a set of options come in a later chapter.
 
-    A model can predict several numbers per example. Then the weights form a
-    matrix of shape `(features, outputs)`, one column per output, and the bias
-    holds one number per output. A model's size is its parameter count, every
-    weight plus every bias.
+    A model can also predict several numbers per example. Then the weights
+    form a matrix of shape `(features, outputs)`, with one column per output.
+    The bias then holds one number per output. A model's size is its number of
+    parameters, which counts every weight and every bias.
     """,
 )
 
@@ -84,12 +87,15 @@ LINREG1_SOURCE = source_file(
     w = torch.tensor([0.5, 1.0])             # one weight per feature
     b = 2.0                                  # the bias
 
-    # One prediction per example, its weighted sum plus the bias.
-    predictions = x @ w + b                  # tensor([ 4.5,  7.5, 10.5])
+    # One prediction per example, which is the example's weighted sum plus the bias.
+    predictions = x @ w + b                  # tensor([ 4.5000,  7.5000, 10.5000])
 
 
     # TODO: Return the prediction for every example in x, for any weights w and
-    #   bias b.
+    #   bias b. x has shape (examples, features), w has shape (features,), and
+    #   the result has shape (examples,).
+    #   Example: predict(x, w, b) with the x, w and b above returns
+    #   tensor([ 4.5000,  7.5000, 10.5000]).
     def predict(
         x: Tensor,
         w: Tensor,
@@ -98,9 +104,9 @@ LINREG1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the predictions of a model with several outputs, one row per
-    #   example and one column per output. W has shape (features, outputs), and
-    #   biases holds one number per output.
+    # TODO: Return the predictions of a model with several outputs, as a tensor
+    #   of shape (examples, outputs). x has shape (examples, features), W has
+    #   shape (features, outputs), and biases has shape (outputs,).
     def predict_outputs(
         x: Tensor,
         W: Tensor,
@@ -111,7 +117,7 @@ LINREG1_SOURCE = source_file(
 
     # TODO: Return how many parameters a linear model has with this many
     #   features and outputs, counting every weight and every bias. The model
-    #   above has 2 weights and 1 bias, so count_parameters(2, 1) gives 3.
+    #   above has 2 weights and 1 bias, so count_parameters(2, 1) returns 3.
     def count_parameters(
         features: int,
         outputs: int,
@@ -120,7 +126,7 @@ LINREG1_SOURCE = source_file(
 
 
     # TODO: This crashes when the checker calls it. Read the error, then fix it
-    #   so it gives one prediction per example.
+    #   so it returns one prediction per example.
     def predict_rows(
         x: Tensor,
         w: Tensor,
@@ -154,8 +160,8 @@ LINREG1_SOLUTION = source_file(
         return x @ w + b
 
 
-    # (examples, features) @ (features, outputs) gives (examples, outputs), and the
-    # biases line up with the columns.
+    # (examples, features) @ (features, outputs) gives (examples, outputs). Then
+    # broadcasting adds each bias to its own column.
     def predict_outputs(
         x: Tensor,
         W: Tensor,
@@ -229,13 +235,13 @@ LINREG1 = Exercise(
     source=LINREG1_SOURCE,
     solution=LINREG1_SOLUTION,
     hints={
-        "predict": "Follow the line that sets predictions, with this function's x, w and b.",
-        "predict_outputs": "The same move with a matrix of weights. x @ W gives one column per output, and biases "
-        "lines up with those columns.",
+        "predict": "Copy the pattern of the line that sets predictions, using this function's x, w and b.",
+        "predict_outputs": "Do the same as in predict, with a matrix of weights. x @ W has one column per output, "
+        "and broadcasting adds each bias to its own column.",
         "count_parameters": "There is one weight for each pair of a feature and an output, and one bias for each "
         "output.",
-        "predict_rows": "The error says the sizes don't fit. Each row of x is an example, so x has to be on the "
-        "left of @.",
+        "predict_rows": "The error says the two shapes cannot be multiplied. Each row of x is an example, so x has "
+        "to be on the left of @.",
     },
     introduces=("feature", "prediction", "parameter", "bias", "regression"),
     check=check_linreg1,
@@ -249,11 +255,12 @@ LINREG1 = Exercise(
 LINREG2_LESSON = prose(
     """
     Training needs one number that says how wrong the model is. That number is
-    the **loss**. Lower is better, and training searches for parameters that
-    give a low loss.
+    the **loss**. A lower loss is better, and training searches for parameters
+    that give a low loss.
 
-    For regression the usual loss is the **mean squared error**, the mean of
-    each prediction's error squared.
+    For regression, the usual loss is the **mean squared error**. Take each
+    prediction's error, `prediction - target`, square it, and then take the
+    mean of those squares.
 
     ```python
     predictions = torch.tensor([4.5, 7.5, 10.5])
@@ -263,20 +270,29 @@ LINREG2_LESSON = prose(
     errors.abs()                      # tensor([0.5000, 0.5000, 1.5000]), the sign dropped
     ```
 
-    Squaring makes every error count as positive, so misses in both directions
-    add up instead of canceling. It also makes a big miss cost far more than a
-    small one. An error of 3 costs 9, and an error of 1 costs 1. The mean
-    absolute error counts each miss by its size alone, so one wild target
-    pulls on it less. PyTorch has both, as `F.mse_loss` and `F.l1_loss`. `F`
-    is the usual name code gives `torch.nn.functional` when it imports it.
+    Squaring makes every error positive, so errors in opposite directions add
+    up instead of canceling out. Squaring also makes a big error cost far more
+    than a small one. An error of 3 adds 9 to the sum, and an error of 1 only
+    adds 1.
+
+    The mean absolute error is the mean of the absolute values of the errors.
+    It counts each error by its size alone. So a single target that is far
+    from its prediction changes it less than it changes the squared error.
+
+    PyTorch has both losses built in, as `F.mse_loss` and `F.l1_loss`. Here
+    `F` is `torch.nn.functional`, which code usually imports with
+    `import torch.nn.functional as F`.
 
     The data stays fixed while a model trains, so the loss depends only on the
-    parameters. New weights give new predictions, and so a new loss.
+    parameters. Changing the weights changes the predictions, which changes
+    the loss.
 
-    Watch the shapes. Predictions of shape `(3, 1)` minus targets of shape
-    `(3,)` broadcast to `(3, 3)`, every prediction against every target. The
-    mean of that runs with no error and means nothing. `.squeeze(1)` drops a
-    dimension of size 1, undoing `.unsqueeze(1)`, so `(3, 1)` becomes `(3,)`.
+    Be careful with shapes. Say the predictions have shape `(3, 1)` and the
+    targets have shape `(3,)`. Subtracting them broadcasts to shape `(3, 3)`,
+    which compares every prediction with every target. Taking the mean of that
+    runs without an error, but the number is meaningless. `.squeeze(1)`
+    removes dimension 1 when its size is 1, which undoes `.unsqueeze(1)`. So
+    it turns shape `(3, 1)` into `(3,)`.
     """,
 )
 
@@ -290,12 +306,15 @@ LINREG2_SOURCE = source_file(
     predictions = torch.tensor([4.5, 7.5, 10.5])
     targets = torch.tensor([5.0, 7.0, 12.0])
 
-    # The mean squared error, each error squared, then the mean.
-    errors = predictions - targets                 # tensor([-0.5, 0.5, -1.5])
+    # The mean squared error. Square each error, then take the mean.
+    errors = predictions - targets                 # tensor([-0.5000,  0.5000, -1.5000])
     mse = (errors ** 2).mean()                     # tensor(0.9167)
 
 
-    # TODO: Return the mean squared error between predictions and targets.
+    # TODO: Return the mean squared error between predictions and targets,
+    #   which have the same shape.
+    #   Example: with the predictions and targets above, it returns
+    #   tensor(0.9167).
     def mean_squared_error(
         predictions: Tensor,
         targets: Tensor,
@@ -303,8 +322,10 @@ LINREG2_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the mean absolute error, the mean of how far each prediction
-    #   is from its target whatever the sign.
+    # TODO: Return the mean absolute error, the mean of the absolute values of
+    #   the errors predictions - targets.
+    #   Example: with the predictions and targets above, it returns
+    #   tensor(0.8333).
     def mean_absolute_error(
         predictions: Tensor,
         targets: Tensor,
@@ -312,9 +333,11 @@ LINREG2_SOURCE = source_file(
         ...
 
 
-    # TODO: w has shape (features, 1) here, so the predictions come out with
-    #   shape (examples, 1). The loss runs without an error but is wrong. Read
-    #   the result, then fix the line that sets predictions.
+    # TODO: Here w has shape (features, 1), so the predictions come out with
+    #   shape (examples, 1). targets has shape (examples,). The function runs
+    #   without an error, but the loss it returns is wrong. Compare it with the
+    #   expected loss in the Result tab, then fix the line that sets
+    #   predictions.
     def column_model_loss(
         x: Tensor,
         w: Tensor,
@@ -355,7 +378,7 @@ LINREG2_SOLUTION = source_file(
         return (predictions - targets).abs().mean()
 
 
-    # Shape (examples, 1) against (examples,) broadcasts to (examples, examples).
+    # Shape (examples, 1) minus shape (examples,) broadcasts to (examples, examples).
     def column_model_loss(
         x: Tensor,
         w: Tensor,
@@ -372,7 +395,7 @@ LINREG2_SOLUTION = source_file(
 def check_linreg2(checker: Checker) -> None:
     for function, description, reference in (
         ("mean_squared_error", "gives the mean of the squared errors", lambda p, t: ((p - t) ** 2).mean()),
-        ("mean_absolute_error", "gives the mean of the errors without their signs", lambda p, t: (p - t).abs().mean()),
+        ("mean_absolute_error", "gives the mean of the absolute errors", lambda p, t: (p - t).abs().mean()),
     ):
         check_on_inputs(
             checker=checker,
@@ -389,7 +412,7 @@ def check_linreg2(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="column_model_loss",
-        description="gives the mean squared error of a model with a column of weights",
+        description="gives the mean squared error of a model whose weights have shape (features, 1)",
         inputs=(
             (small_tensor(15, 4, 2), small_tensor(16, 2, 1), 0.5, small_tensor(17, 4)),
             (small_tensor(18, 3, 3), small_tensor(19, 3, 1), -1.0, small_tensor(20, 3)),
@@ -407,12 +430,13 @@ LINREG2 = Exercise(
     source=LINREG2_SOURCE,
     solution=LINREG2_SOLUTION,
     hints={
-        "mean_squared_error": "Follow the two lines that set errors and mse, with the function's own predictions "
-        "and targets.",
-        "mean_absolute_error": "Take the errors as mean_squared_error does, then .abs() in place of squaring, then "
-        "the mean.",
-        "column_model_loss": "The predictions have shape (examples, 1) and the targets (examples,), which broadcast "
-        "to a square. Drop the size 1 dimension of the predictions with .squeeze(1).",
+        "mean_squared_error": "Copy the pattern of the two lines that set errors and mse, using this function's "
+        "predictions and targets.",
+        "mean_absolute_error": "Compute the errors as in mean_squared_error. Then call .abs() on them instead of "
+        "squaring, and take the mean.",
+        "column_model_loss": "The predictions have shape (examples, 1) and the targets have shape (examples,). "
+        "Subtracting them broadcasts to shape (examples, examples). Remove the size 1 dimension of the "
+        "predictions with .squeeze(1).",
     },
     introduces=("loss",),
     check=check_linreg2,
@@ -425,19 +449,21 @@ LINREG2 = Exercise(
 
 LINREG3_LESSON = prose(
     """
-    For a linear model with squared error, the best parameters can be worked
-    out directly, with no searching. The method is **least squares**, and
-    `torch.linalg.lstsq(A, y).solution` gives the weights for the columns of
-    `A` with the lowest squared error against `y`.
+    For a linear model with the squared error loss, the best parameters can be
+    computed directly, without any searching. This method is called **least
+    squares**. `torch.linalg.lstsq(A, y).solution` returns one weight per
+    column of `A`. Those weights give `A @ weights` the lowest possible
+    squared error against `y`.
 
-    It has no bias of its own. The trick is a column of ones. A weight on a
-    feature that is always 1 adds the same number to every prediction, which
-    is what a bias does. So add a column of ones to `x`, and the last weight
-    that comes back is the bias.
+    `lstsq` has no separate bias. The usual trick is to add a column of ones
+    to the data. A weight on a feature that is always 1 adds the same number
+    to every prediction, which is exactly what a bias does. So if you add a
+    column of ones on the right of `x`, the last weight that `lstsq` returns
+    is the bias.
 
-    `torch.cat` joins tensors along a dimension, and along dimension 1 it sets
-    columns side by side. `torch.ones(4, 1)` makes ones of shape `(4, 1)`, and
-    `x.shape[0]` gives the number of rows of any `x`.
+    `torch.cat` joins tensors along a dimension. Along dimension 1, it puts
+    their columns side by side. `torch.ones(4, 1)` makes a tensor of ones with
+    shape `(4, 1)`. `x.shape[0]` is the number of rows of `x`.
 
     ```python
     x = torch.tensor([[1.0], [2.0], [3.0], [4.0]])
@@ -448,10 +474,11 @@ LINREG3_LESSON = prose(
 
     The best line here is `1.94 * x + 1.15`.
 
-    Only a few simple models have a formula like this. The models of later
-    sections have none, so the next chapter finds parameters by walking
-    downhill on the loss. On a linear model, least squares gives the
-    answer that walk should reach, so it can check the walk.
+    Only a few simple models have an exact formula like this. The models in
+    later sections have none. So the next chapter finds parameters by changing
+    them step by step in the direction that lowers the loss, like walking
+    downhill. On a linear model, least squares gives the answer that this walk
+    should reach. So least squares can check whether the walk works.
     """,
 )
 
@@ -465,23 +492,29 @@ LINREG3_SOURCE = source_file(
     x = torch.tensor([[1.0], [2.0], [3.0], [4.0]])
     y = torch.tensor([3.1, 4.9, 7.2, 8.8])
 
-    # torch.cat along dimension 1 sets columns side by side, so this adds a
+    # torch.cat along dimension 1 puts columns side by side, so this adds a
     # column of ones on the right of x.
     with_ones = torch.cat([x, torch.ones(4, 1)], dim=1)    # shape (4, 2)
 
-    # The weights with the lowest squared error. The last one, on the column of
-    # ones, is the bias.
+    # The weights with the lowest squared error. The last weight, the one on the
+    # column of ones, is the bias.
     best = torch.linalg.lstsq(with_ones, y).solution        # tensor([1.9400, 1.1500])
 
 
-    # TODO: Return x with a column of ones added on the right, for any number of
-    #   rows and columns.
+    # TODO: Return x with a column of ones added on the right. x can have any
+    #   number of rows and columns. For x of shape (rows, columns), the result
+    #   has shape (rows, columns + 1).
+    #   Example: add_ones_column(x) with the x above returns the same tensor as
+    #   with_ones.
     def add_ones_column(x: Tensor) -> Tensor:
         ...
 
 
-    # TODO: Finish the middle line, so this returns the weights and the bias with
-    #   the lowest mean squared error on x and y, found by least squares.
+    # TODO: Finish the middle line, so this returns the weights and the bias
+    #   that give the lowest mean squared error on x and y, found by least
+    #   squares. x has shape (examples, features) and y has shape (examples,).
+    #   Example: best_fit(x, y) with the x and y above returns
+    #   (tensor([1.9400]), tensor(1.1500)).
     def best_fit(
         x: Tensor,
         y: Tensor,
@@ -493,8 +526,10 @@ LINREG3_SOURCE = source_file(
 
 
     # TODO: Finish the last two lines, so this returns the mean squared error of
-    #   the best fit on x and y. Predict and measure the loss as linreg1 and
-    #   linreg2 do.
+    #   the best fit on x and y. Make the predictions the way linreg1 does, and
+    #   compute the loss the way linreg2 does.
+    #   Example: lowest_loss(x, y) with the x and y above returns about
+    #   tensor(0.0205).
     def lowest_loss(
         x: Tensor,
         y: Tensor,
@@ -605,8 +640,9 @@ LINREG3 = Exercise(
     source=LINREG3_SOURCE,
     solution=LINREG3_SOLUTION,
     hints={
-        "add_ones_column": "Follow the line that sets with_ones, with x.shape[0] rows of ones in place of 4.",
-        "best_fit": "Pass with_ones and y to torch.linalg.lstsq, and take .solution from what it gives.",
+        "add_ones_column": "Copy the pattern of the line that sets with_ones, using x.shape[0] rows of ones "
+        "instead of 4.",
+        "best_fit": "Pass with_ones and y to torch.linalg.lstsq, and take .solution from the result.",
         "lowest_loss": "Get w and b from best_fit. Predict with x @ w + b, then take the mean squared error "
         "against y.",
     },
