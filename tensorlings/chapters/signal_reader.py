@@ -54,10 +54,10 @@ SIGNAL_READER = Chapter(
         # Project: your GPT reads signals
 
         Section 13's project. Your GPT from gpt3 learns to answer questions
-        about signals two ways. One writes each signal out as letters it can
-        read. The other runs it through a frozen encoder and a projector, as
-        101_reading_a_new_modality built, with LLaVA's two stages of training.
-        Then both are scored on the same questions.
+        about signals in two ways. The first writes each signal out as letters
+        the GPT can read. The second runs each signal through a frozen encoder
+        and a projector, as built in 101_reading_a_new_modality, with LLaVA's
+        two stages of training. Then both are scored on the same questions.
 
         ## Further reading
 
@@ -71,7 +71,7 @@ QUESTION_PART = '''
 QUESTIONS = ["does it rise?", "how many waves?", "where is the spike?"]
 
 
-# The right answer to question number asked, from a signal's three facts.
+# The right answer to question number `asked`, from a signal's three facts.
 def answer_for(
     asked: int,
     rise: int,
@@ -87,7 +87,7 @@ def answer_for(
     return THIRDS[third]
 
 
-# count new signals, a question drawn for each, and its right answer.
+# Makes count new signals, draws a question for each, and returns the right answers.
 def question_batch(
     count: int,
     generator: torch.Generator,
@@ -133,8 +133,8 @@ def text_step(
 
 # Greedy writing for prompts of one length, as post1's answer wrote, a batch at a time.
 TEXT_WRITE_PART = '''
-# What gpt writes after each prompt, the likeliest character each step, until a newline or 8 characters. Every
-# prompt must be as long as the others.
+# Returns what gpt writes after each prompt. It picks the most likely character at each step, and stops at a
+# newline or after 8 characters. All prompts must have the same length.
 def write_text(
     gpt: nn.Module,
     prompts: list[str],
@@ -312,7 +312,7 @@ COMMON_GIVEN = '''
 ''' + indented(GPT_SETTINGS) + '''
 
 
-    # The model from gpt2, your model from gpt3, and LoRA from lora1 and lora3.
+    # The model from gpt2, the code that loads your model from gpt3, and LoRA from lora1 and lora3.
 ''' + indented(MODEL_PART) + '''
 
 
@@ -325,7 +325,7 @@ COMMON_GIVEN = '''
 ''' + indented(EVERYWHERE_SOLUTION) + '''
 
 
-    # 101_reading_a_new_modality's signals, the questions about them, and sft1's answer only rows.
+    # The signals from 101_reading_a_new_modality, the questions about them, and sft1's rows that score only the answer.
 ''' + indented(SIGNAL_PART) + '''
 
 
@@ -390,7 +390,7 @@ def reference_model(
         raise Mismatch(str(missing)) from None
     except RuntimeError:
         raise Mismatch(
-            f"The saved model in checkpoints/{name}.pt doesn't fit the model as it is now. Train it again from the "
+            f"The saved model in checkpoints/{name}.pt doesn't match the current model code. Train it again from the "
             f"project folder.\n\n    .venv/bin/python run.py train {name}",
         ) from None
 
@@ -444,8 +444,8 @@ def check_shares_name(
         for question, share, bar in zip(READER_REFERENCE["QUESTIONS"], expected, bars):
             if share < bar:
                 raise Mismatch(
-                    f"Your model from {checkpoint} answers {share:.0%} of the held out {question!r} questions right, "
-                    f"but it should reach {bar:.0%}. Check {checkpoint} and train it again.",
+                    f"Your model from {checkpoint} answers {share:.0%} of the held out {question!r} questions correctly, "
+                    f"but it should reach {bar:.0%}. Check your code in {checkpoint} and train it again.",
                 )
 
     return check
@@ -485,9 +485,10 @@ READER1_MAIN = '''
 READER1_LESSON = prose(
     """
     This is Section 13's project. Your GPT from gpt3 learns to answer
-    questions about the signals of 101_reading_a_new_modality, two ways.
-    reader1 writes each signal out as characters. reader2 reads it through
-    bridge1's projector, and reader3 scores both.
+    questions about the signals from 101_reading_a_new_modality, in two
+    different ways. In reader1, each signal is written out as characters. In
+    reader2, the GPT reads each signal through bridge1's projector. reader3
+    scores both.
 
     Each question asks about one of a signal's three facts.
 
@@ -497,9 +498,10 @@ READER1_LESSON = prose(
     | `how many waves?` | one to four |
     | `where is the spike?` | early, middle or late |
 
-    Your GPT's characters hold no digit but 3. So `as_letters` scales each
-    signal from its own lowest step to its highest, and cuts that range into
-    26 levels, a to z. Its 64 steps become 64 letters.
+    The only digit among your GPT's characters is 3, so the signal can't be
+    written as numbers. Instead, `as_letters` scales each signal so its
+    lowest step is 0 and its highest is 1. Then it cuts that range into 26
+    levels, written a to z. So the 64 steps of a signal become 64 letters.
 
     ```text
     oopppqssututtsqpnmllkjjkzlmmnooooomlljihgfdeffghijjjijihhfeebaaa
@@ -507,16 +509,17 @@ READER1_LESSON = prose(
     A: three
     ```
 
-    The spike is the `z` among the `k`s. Writing a series out as text is how
-    Gruver and colleagues fed time series to large language models, as
-    digits.
+    The spike is the `z` among the `k`s. Gruver and colleagues fed time
+    series to large language models in a similar way, by writing each series
+    out as text, using digits.
 
-    `text_step` trains as post1's `sft_step` did, on the answer's loss alone.
-    main puts rank 8 LoRA on every Linear, as lora3 did, and trains 1,500
-    steps of 32 questions.
+    `text_step` takes one training step the way post1's `sft_step` did, with
+    the loss on the answer only. `main` adds rank 8 LoRA to every Linear
+    layer, as lora3 did. Then it trains for 1,500 steps of 32 questions each.
 
-    Once every check passes, train from the project folder. It took 43 to 97
-    seconds on an Apple M5's GPU, and 1.1 to 3.8 minutes on 4 CPU threads.
+    Once every check passes, run the training from the project folder. It
+    took 43 to 97 seconds on an Apple M5's GPU, and 1.1 to 3.8 minutes on 4
+    CPU threads.
 
     ```text
     .venv/bin/python run.py train reader1
@@ -526,7 +529,7 @@ READER1_LESSON = prose(
 
 READER1_GIVEN = COMMON_GIVEN + '''
 
-    # What a GPT writes after each prompt, as post1's answer wrote, a batch at a time.
+    # Writes a GPT's answer after each prompt, like post1's answer function but a batch at a time.
 ''' + indented(TEXT_WRITE_PART) + '''
 '''
 
@@ -540,15 +543,20 @@ READER1_SOURCE = source_file(
     letter = "abcdefghijklmnopqrstuvwxyz"[13]    # 'n'
 ''' + READER1_GIVEN + '''
 
-    # TODO: Write signal as 64 letters. Scale it so its lowest step is 0 and its
-    #   highest is 1, times 26, as whole numbers clamped to 0 to 25. Each level
-    #   picks a letter, 0 for a and 25 for z.
+    # TODO: Write signal, a tensor of 64 numbers, as a string of 64 letters.
+    #   Scale it so its lowest value becomes 0 and its highest becomes 1.
+    #   Multiply by 26, convert to whole numbers, and clamp them to 0 to 25.
+    #   Each whole number is a level. Level 0 is a and level 25 is z.
+    #   Example: as_letters(torch.tensor([0.0, 0.5, 1.0])) returns "anz".
     def as_letters(signal: Tensor) -> str:
         ...
 
 
-    # TODO: Return the letters of signal, a newline, then "Q: " and the
-    #   question QUESTIONS[asked], a newline, then "A: ".
+    # TODO: Return the prompt for signal and question number asked, as one
+    #   string. It is the letters of signal, a newline, "Q: ", the question
+    #   QUESTIONS[asked], another newline, and "A: ".
+    #   Example: for a signal whose letters are "anz" and asked = 1, return
+    #   "anz\\nQ: how many waves?\\nA: ".
     def text_prompt(
         signal: Tensor,
         asked: int,
@@ -556,10 +564,12 @@ READER1_SOURCE = source_file(
         ...
 
 
-    # TODO: Take one training step on x and y, moved to device, as post1's
-    #   sft_step did. The loss is the cross entropy of gpt's scores against y,
-    #   which skips -100. Zero the old gradients, backpropagate, step, and
-    #   return the loss as a plain number.
+    # TODO: Take one training step on x and y, the way post1's sft_step did.
+    #   Move x and y to device first. The loss is the cross entropy of gpt's
+    #   scores on x against y. Cross entropy skips targets of -100 by
+    #   default, so only the answer counts. Zero the old gradients,
+    #   backpropagate, step the optimizer, and return the loss as a Python
+    #   float.
     def text_step(
         gpt: nn.Module,
         optimizer: torch.optim.Optimizer,
@@ -672,24 +682,24 @@ def check_text_step(found: object) -> None:
         function="text_step",
         run=lambda: found(recorder, torch.optim.SGD(recorder.parameters(), lr=0.1), x, y, torch.device("meta")),
         recorders=[recorder],
-        advice="Move x and y to device before the model and the loss.",
+        advice="Move x and y to device before passing them to the model and the loss.",
     )
 
 
 def check_reader1(checker: Checker) -> None:
     checker.test(
         function="as_letters",
-        description="writes each step as a letter by its level",
+        description="writes each step as the letter of its level",
         run=check_as_letters,
     )
     checker.test(
         function="text_prompt",
-        description="writes the letters, then the question, then A",
+        description='writes the letters, then "Q: " and the question, then "A: "',
         run=check_text_prompt,
     )
     checker.test(
         function="text_step",
-        description="trains on the answer's loss, on device",
+        description="takes one step on the answer's loss, with x and y on device",
         run=check_text_step,
     )
 
@@ -702,11 +712,13 @@ READER1 = Exercise(
     source=READER1_SOURCE,
     solution=READER1_SOLUTION,
     hints={
-        "as_letters": "Subtract signal.min(), divide by signal.max() minus signal.min(), times 26, then .long() "
-        "and .clamp(0, 25). Join the letter at each level, from its .tolist().",
-        "text_prompt": "as_letters(signal) + a newline + \"Q: \" + QUESTIONS[asked] + a newline + \"A: \".",
-        "text_step": "Run gpt on x moved to device for the scores. F.cross_entropy of scores.flatten(0, 1) and "
-        "y.to(device).flatten(). Then zero_grad, backward, step, and loss.item().",
+        "as_letters": "Subtract signal.min(), divide by signal.max() minus signal.min(), and multiply by 26. Then "
+        "apply .long() and .clamp(0, 25). Join the letter for each level, looping over the levels' .tolist().",
+        "text_prompt": "Concatenate as_letters(signal), a newline, \"Q: \", QUESTIONS[asked], another newline and "
+        "\"A: \" with +.",
+        "text_step": "Run gpt on x moved to device to get the scores. The loss is F.cross_entropy of "
+        "scores.flatten(0, 1) and y.to(device).flatten(). Then call zero_grad, backward and step, and return "
+        "loss.item().",
     },
     introduces=(),
     check=check_reader1,
@@ -740,28 +752,31 @@ READER2_MAIN = '''
 
 READER2_LESSON = prose(
     """
-    reader2 gives your GPT the same signals through 101_reading_a_new_modality's
-    bridge. The frozen encoder makes 8 tokens of each signal, and the
-    projector maps them into the GPT's embeddings. LoRA lets the GPT learn to
-    read them. What follows the tokens is the question alone.
+    reader2 gives your GPT the same signals through the bridge from
+    101_reading_a_new_modality. The frozen encoder turns each signal into 8
+    tokens, and the projector maps them to vectors the size of the GPT's
+    embeddings. LoRA lets the GPT learn to read them. After the 8 signal
+    tokens, the text holds only the question and the answer.
 
     ```text
     Q: how many waves?
     A: three
     ```
 
-    `train_reader` runs LLaVA's two stages as bridge2 built them. Stage one
-    trains the projector alone on captions, 300 steps. Stage two adds LoRA and
-    trains on questions, 1,200 steps. That is the same 1,500 steps reader1's
-    text GPT took.
+    `train_reader` runs LLaVA's two stages, with the functions from bridge2.
+    Stage one trains only the projector, on captions, for 300 steps. Stage
+    two adds LoRA and trains on questions for 1,200 steps. That makes 1,500
+    steps in total, the same as reader1's text GPT.
 
-    main saves the encoder with the rest, since the projector learned to read
-    that encoder's tokens and no other.
+    `main` saves the encoder together with the projector and the GPT. The
+    projector learned to read the tokens of this exact encoder, so it would
+    not work with any other.
 
-    Once every check passes, train from the project folder. It took 27 to 69
-    seconds on an Apple M5's GPU, and 46 to 90 on 4 CPU threads. Its rows are
-    far shorter than reader1's, 8 tokens and a question in place of 64
-    letters.
+    Once every check passes, run the training from the project folder. It
+    took 27 to 69 seconds on an Apple M5's GPU, and 46 to 90 seconds on 4 CPU
+    threads. It is faster than reader1 because its rows are much shorter.
+    Each row holds 8 tokens and a question, instead of 64 letters and a
+    question.
 
     ```text
     .venv/bin/python run.py train reader2
@@ -771,7 +786,7 @@ READER2_LESSON = prose(
 
 READER2_GIVEN = COMMON_GIVEN + '''
 
-    # The frozen encoder, and bridge1's and bridge2's code.
+    # The frozen encoder, and the code from bridge1 and bridge2.
 ''' + BRIDGE_GIVEN
 
 READER2_SOURCE = source_file(
@@ -783,13 +798,16 @@ READER2_SOURCE = source_file(
     asked_twice = ["Q: " + question for question in ["a?", "b?"]]    # ['Q: a?', 'Q: b?']
 ''' + READER2_GIVEN + '''
 
-    # TODO: Return the prompt that follows the signal's tokens, "Q: ", then the
-    #   question QUESTIONS[asked], a newline, then "A: ".
+    # TODO: Return the text prompt that follows the signal's tokens. It is
+    #   "Q: ", the question QUESTIONS[asked], a newline, and "A: ".
+    #   Example: signal_prompt(1) returns "Q: how many waves?\\nA: ".
     def signal_prompt(asked: int) -> str:
         ...
 
 
-    # TODO: Return answer_rows of each question's signal_prompt and its answer.
+    # TODO: Build x and y for a batch of questions. Make the signal_prompt of
+    #   each question number in asked, then return answer_rows of those
+    #   prompts, answers and positions.
     def question_rows(
         asked: list[int],
         answers: list[str],
@@ -798,11 +816,13 @@ READER2_SOURCE = source_file(
         ...
 
 
-    # TODO: Train with LLaVA's two stages. Make stage one's optimizer, then
-    #   take stage_one_steps steps of bridge_step on caption_batch's 32 signals
-    #   and captions each. Then make stage two's optimizer, and take
-    #   stage_two_steps steps on question_batch's 32 signals and questions, as
-    #   question_rows. Draw every batch from generator.
+    # TODO: Train with LLaVA's two stages. First get stage one's optimizer
+    #   from stage_one. Then take stage_one_steps steps. Each step gets 32
+    #   signals with their captions as x and y from caption_batch, and runs
+    #   bridge_step on them. Next get stage two's optimizer from stage_two.
+    #   Then take stage_two_steps steps. Each step gets 32 signals and their
+    #   questions from question_batch, turns the questions into x and y with
+    #   question_rows, and runs bridge_step. Draw every batch from generator.
     def train_reader(
         gpt: nn.Module,
         encoder: nn.Module,
@@ -977,7 +997,8 @@ def check_train_reader(found: object) -> None:
     if steps != expected:
         raise Mismatch(
             f"{call} took the steps {steps}, each as (optimizer, data, device), but they should be {expected}. Stage one "
-            "trains on captions, stage two on questions, each with its own optimizer, and every step on device.",
+            "trains on captions and stage two on questions. Each stage uses its own optimizer, and every step runs on "
+            "device.",
         )
 
     sizes = {detail for name, detail in calls if name in ("caption_batch", "question_batch")}
@@ -987,15 +1008,15 @@ def check_train_reader(found: object) -> None:
 
     if strays:
         raise Mismatch(
-            f"{call} called {' and '.join(sorted(set(strays)))} with another generator than the one it was handed. Draw "
-            "every batch from generator, so each step gets new signals.",
+            f"{call} called {' and '.join(sorted(set(strays)))} with a different generator from the one passed in. "
+            "Draw every batch from generator, so each step gets new signals.",
         )
 
 
 def check_reader2(checker: Checker) -> None:
     checker.test(
         function="signal_prompt",
-        description="writes Q, the question, then A",
+        description='writes "Q: ", the question, then "A: "',
         run=check_signal_prompt,
     )
     checker.test(
@@ -1018,11 +1039,12 @@ READER2 = Exercise(
     source=READER2_SOURCE,
     solution=READER2_SOLUTION,
     hints={
-        "signal_prompt": "\"Q: \" + QUESTIONS[asked] + a newline + \"A: \".",
-        "question_rows": "answer_rows of [signal_prompt(question) for question in asked], answers and positions.",
-        "train_reader": "stage_one of gpt and projector gives the first optimizer, then a loop of caption_batch(32, "
-        "positions, generator) and bridge_step. stage_two gives the second optimizer, then a loop of "
-        "question_batch(32, generator), question_rows, and bridge_step.",
+        "signal_prompt": "Concatenate \"Q: \", QUESTIONS[asked], a newline and \"A: \" with +.",
+        "question_rows": "Call answer_rows with the list [signal_prompt(question) for question in asked], then "
+        "answers and positions.",
+        "train_reader": "stage_one(gpt, projector) returns the first optimizer. Then loop, calling caption_batch(32, "
+        "positions, generator) and bridge_step each step. stage_two returns the second optimizer. Then loop again, "
+        "calling question_batch(32, generator), question_rows and bridge_step each step.",
     },
     introduces=(),
     check=check_reader2,
@@ -1037,15 +1059,16 @@ READER2 = Exercise(
 
 READER3_LESSON = prose(
     """
-    reader3 scores your two models on the same 300 held out signals, a third
-    of them for each question.
+    reader3 scores your two models on the same 300 held out signals. A third
+    of the signals get each question.
 
-    `text_written` and `signal_written` collect what each model writes, one
-    question at a time, since a batch of prompts must share one length.
-    `shares_by_question` gives the share right for each question.
+    `text_written` and `signal_written` collect what each model writes. They
+    go one question at a time, because all the prompts in a batch must have
+    the same length. `shares_by_question` returns the fraction of correct
+    answers for each question.
 
-    Here are both models as reader1's and reader2's mains train them, over 3
-    seeds.
+    Here are the scores of both models, trained by the `main` functions of
+    reader1 and reader2, over 3 seeds.
 
     | Question | Text GPT | Signal reader |
     |---|---|---|
@@ -1053,45 +1076,47 @@ READER3_LESSON = prose(
     | `how many waves?` | 70% to 86% | 100% |
     | `where is the spike?` | 87% to 99% | 88% to 99% |
 
-    Both read the trend, and both find the spike, which stands out in either
-    form. Its `z` towers over the letters around it, and one of the encoder's
-    tokens holds it whole.
+    Both models read the trend. Both also find the spike, which is easy to
+    see in either form. In the letters, the spike's `z` is far above the
+    letters around it. For the encoder, the spike falls inside one window of
+    8 steps, so one of its tokens contains all of it.
 
-    The wave count is where the bridge wins. Here is the text GPT's share of
-    wave counts right as it trains on, over the same 3 seeds.
+    The bridge wins on the wave count. The next table shows how the text
+    GPT's share of correct wave counts grows as it trains for longer, over
+    the same 3 seeds.
 
     | Steps | 500 | 1,000 | 1,500 | 3,000 |
     |---|---|---|---|---|
     | Wave counts right | 50% to 59% | 58% to 70% | 70% to 86% | 86% to 96% |
 
-    At reader1's 1,500 steps, 68 of its 71 wrong counts were off by one,
-    among two, three and four waves. It got every signal of one wave right.
-    So it is still learning to count the cycles in 64 letters, and twice the
-    steps leave it short. The signal reader got every wave count right in
-    the same 1,500 steps, on every seed.
+    After reader1's 1,500 steps, 68 of its 71 wrong counts were off by one,
+    mixing up two, three and four waves. It got every signal with one wave
+    right. So the text GPT is still learning to count the cycles in 64
+    letters, and even twice as many steps do not finish the job. The signal
+    reader got every wave count right in the same 1,500 steps, on every seed.
 
-    It also reads each signal in 8 positions, where the text needs 64. That
-    is LLaVA's recipe, and now yours, for any kind of input you want your
-    GPT to read.
+    The signal reader also uses only 8 positions per signal, while the text
+    needs 64. This is LLaVA's recipe, and now yours, for any kind of input
+    you want your GPT to read.
     """,
 )
 
 READER3_GIVEN = COMMON_GIVEN + '''
 
-    # reader1's letters and what a GPT writes after a prompt.
+    # as_letters and text_prompt from reader1, and the function that writes a GPT's answer after a prompt.
 ''' + indented(LETTERS_SOLUTION) + '''
 
 
 ''' + indented(TEXT_WRITE_PART) + '''
 
 
-    # The frozen encoder, bridge1's and bridge2's code, and reader2's prompt and rows.
+    # The frozen encoder, the code from bridge1 and bridge2, and signal_prompt and question_rows from reader2.
 ''' + BRIDGE_GIVEN + '''
 
 ''' + indented(QUESTION_ROWS_SOLUTION) + '''
 
 
-    # The held out signals, and both trained models read back.
+    # The held out signals, and the code that loads both trained models.
 ''' + indented(HELD_OUT_PART) + '''
 
 
@@ -1117,10 +1142,12 @@ READER3_SOURCE = source_file(
     rows = [row for row, which in enumerate([2, 0, 2]) if which == 2]    # [0, 2]
 ''' + READER3_GIVEN + '''
 
-    # TODO: Return what gpt writes for each signal's question, in the signals'
-    #   order. write_text needs prompts of one length, so take one question at
-    #   a time. Find the rows asked it, write their text_prompts, and put each
-    #   answer back at its row.
+    # TODO: Return a list of what gpt writes for each signal's question, in
+    #   the order of the signals. asked[row] is the question number for
+    #   signals[row]. write_text needs prompts of the same length, so handle
+    #   one question at a time. For each question, find the rows asked it,
+    #   make their text_prompts, call write_text on them, and store each
+    #   answer at its row.
     def text_written(
         gpt: nn.Module,
         signals: Tensor,
@@ -1131,9 +1158,10 @@ READER3_SOURCE = source_file(
         ...
 
 
-    # TODO: The same for reader, a ModuleDict of "gpt", "encoder" and
-    #   "projector". For each question, write_after reads the rows' signals,
-    #   then that question's signal_prompt.
+    # TODO: Do the same as text_written for reader, a ModuleDict holding
+    #   "gpt", "encoder" and "projector". For each question, call write_after
+    #   with those three parts, the signals of the rows asked it, and that
+    #   question's signal_prompt.
     def signal_written(
         reader: nn.Module,
         signals: Tensor,
@@ -1144,8 +1172,11 @@ READER3_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the share written right for each question, in the order of
-    #   QUESTIONS, as plain numbers.
+    # TODO: Return the fraction of correct answers for each question, as a
+    #   list of Python floats in the order of QUESTIONS. The answer in a row
+    #   is correct when written[row] equals answers[row].
+    #   Example: shares_by_question([0, 1, 2, 0], ["yes", "two", "late", "no"],
+    #   ["yes", "one", "late", "yes"]) returns [0.5, 0.0, 1.0].
     def shares_by_question(
         asked: list[int],
         written: list[str],
@@ -1177,7 +1208,7 @@ def check_text_written(found: object) -> None:
         characters: list[str],
     ) -> list[str]:
         if len({len(prompt) for prompt in prompts}) > 1:
-            raise Mismatch("text_written handed write_text prompts of different lengths. Take one question at a time.")
+            raise Mismatch("text_written passed write_text prompts of different lengths. Handle one question at a time.")
 
         prompts_seen.append(prompts)
 
@@ -1214,7 +1245,7 @@ def check_signal_written(found: object) -> None:
         characters: list[str],
     ) -> list[str]:
         if gpt is not reader["gpt"] or encoder is not reader["encoder"] or projector is not reader["projector"]:
-            raise Mismatch("signal_written handed write_after the wrong parts. Use reader[\"gpt\"], reader[\"encoder\"] and reader[\"projector\"].")
+            raise Mismatch("signal_written passed the wrong parts to write_after. Use reader[\"gpt\"], reader[\"encoder\"] and reader[\"projector\"].")
 
         return [f"{prompt[3:6]}{signal[0].item():.2f}" for signal in signals]
 
@@ -1248,11 +1279,11 @@ def expect_shares(
     )
 
     if not isinstance(actual, (list, tuple)) or len(actual) != len(expected):
-        raise Mismatch(f"{call} is {value_text(actual)}, but it should be a list of {len(expected)} shares, one per question.")
+        raise Mismatch(f"{call} is {value_text(actual)}, but it should be a list of {len(expected)} fractions, one per question.")
 
     for place, (share, wanted) in enumerate(zip(actual, expected)):
         expect_close(
-            call=f"share {place} of {call}",
+            call=f"fraction {place} of {call}",
             actual=share,
             expected=wanted,
         )
@@ -1272,7 +1303,7 @@ def check_reader3(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="shares_by_question",
-        description="gives the share right for each question",
+        description="returns the fraction of correct answers for each question",
         inputs=(
             ([0, 1, 2, 0], ["yes", "two", "late", "no"], ["yes", "one", "late", "yes"]),
             ([2, 2, 1, 0, 1, 0], ["early", "middle", "four", "no", "four", "no"], ["early", "early", "four", "no", "one", "yes"]),
@@ -1306,13 +1337,13 @@ READER3 = Exercise(
     source=READER3_SOURCE,
     solution=READER3_SOLUTION,
     hints={
-        "text_written": "Start with written = [\"\"] * len(signals). For each question, rows = the places where asked "
-        "holds it. write_text of their text_prompts gives answers in the rows' order, so zip rows with them and fill "
-        "written.",
-        "signal_written": "As text_written, but call write_after(reader[\"gpt\"], reader[\"encoder\"], "
+        "text_written": "Start with written = [\"\"] * len(signals). For each question, let rows be the indices "
+        "where asked holds that question. write_text of their text_prompts returns the answers in the order of rows, "
+        "so zip rows with the answers and fill in written.",
+        "signal_written": "Work as in text_written, but call write_after(reader[\"gpt\"], reader[\"encoder\"], "
         "reader[\"projector\"], signals[rows], signal_prompt(question), positions, characters).",
-        "shares_by_question": "For each question, collect said == answer over the rows asked it, then divide the sum "
-        "by the count.",
+        "shares_by_question": "For each question, collect said == answer over the rows asked that question. Then "
+        "divide the sum by the count.",
         "text_shares": "Train reader1 and reader2 from the project folder first.",
         "signal_shares": "Train reader1 and reader2 from the project folder first.",
     },

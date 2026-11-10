@@ -37,12 +37,14 @@ FUSION = Chapter(
         """
         # Fusion
 
-        A model that reads two kinds of input has to decide where they meet.
-        Early fusion puts both in one sequence, so attention mixes them from
-        the first layer. Late fusion sums each up on its own and joins the
-        summaries. This chapter measures when each wins, joins a new input to
-        a trained model through gated cross attention that starts closed, as
-        Flamingo does, and trains a model to keep working when an input is
+        A model that reads two kinds of input has to combine them somewhere.
+        Early fusion puts both inputs into one sequence of tokens, so attention
+        mixes them from the first layer. Late fusion summarizes each input
+        separately and then joins the two summaries. This chapter measures
+        when each approach works better. Then it adds a new kind of input to an
+        already trained model through gated cross attention, the way Flamingo
+        does. The gates start at 0, so the new layers change nothing at first.
+        Last, it trains a model to keep working when one of its inputs is
         missing.
 
         ## Further reading
@@ -112,7 +114,8 @@ LENGTH = 32
 WIDTH = 16
 
 MIX_BLOCK_PART = '''
-# block1's block with the causal mask taken off, so every position sees every other.
+# The transformer block from block1 without its causal mask, so every position
+# can attend to every other position.
 class MixBlock(nn.Module):
     def __init__(
         self,
@@ -231,20 +234,24 @@ def sum_data(
 
 FUSE1_LESSON = prose(
     """
-    A model with two kinds of input must decide where they meet. Here one
-    input is a series of 32 numbers and the other a question, one token.
+    A model with two kinds of input must combine them at some point. In this
+    exercise one input is a series of 32 numbers. The other input is a
+    question, which is a single token.
 
     - **late fusion**: each input is summarized on its own, and the two summaries are joined at the end.
-    - **early fusion**: both become tokens in one sequence, so attention mixes them from the first layer.
+    - **early fusion**: both inputs become tokens in one sequence, so attention mixes them from the first layer.
 
-    Late fusion summarizes the series before it knows the question. Early
-    fusion lets the question pick what to read. In the one sequence, tokens2's type
-    embedding marks each token's kind.
+    Late fusion summarizes the series before it sees the question. Early
+    fusion lets the question choose, through attention, which numbers of the
+    series to read. In the single sequence, a type embedding like the one in
+    tokens2 marks whether each token comes from the series or the question.
 
-    Two tasks, each model trained 1,500 steps on three seeds.
+    There are two tasks. Each model trained for 1,500 steps, with three
+    different random seeds. The table shows the mean squared error on new
+    inputs, as a range over the three seeds.
 
-    - lookup: the question names a position, and the answer is the series' number there.
-    - sum: the answer is 3 times the series' mean, plus an offset the question names.
+    - lookup: the question names a position, and the answer is the number of the series at that position.
+    - sum: the answer is 3 times the mean of the series, plus an offset that depends on the question.
 
     | Model | Weights | Lookup | Sum |
     |---|---|---|---|
@@ -253,24 +260,31 @@ FUSE1_LESSON = prose(
     | early fusion, 16 wide | 4,417 | 0.0003 to 0.011 | 0.0002 |
     | guessing the mean | 0 | 0.33 | 0.44 |
 
-    At 64 wide the summary has room for all 32 numbers, and late fusion still
-    does no better than the guess. The head isn't the trouble. Given a summary
-    that keeps every number, the series times a fixed random matrix, the same
-    head learns the lookup to 0.0065 to 0.0095.
+    At a width of 64, the summary vector has room for all 32 numbers. Yet late
+    fusion still does no better than guessing the mean. The head, the part
+    that turns the joined summaries into an answer, is not the problem. To
+    test the head alone, it was given a summary that keeps every number, the
+    series multiplied by a fixed random matrix. With that summary, the same
+    head learns the lookup to an error of 0.0065 to 0.0095.
 
-    The trouble is the summary. It is made before the question, so it must
-    keep all 32 numbers apart, and an average of each position's features
-    blurs them. One linear map reads the numbers back from it with an error of
-    0.11 to 0.14, against 0.33 for guessing. Early fusion needs no such
-    summary, since the question's query matches the asked position's key. In
-    the sum, each input brings its own piece of the answer, and the summaries
-    hold everything needed.
+    The problem is the summary. It is computed before the model sees the
+    question, so it must keep all 32 numbers separate. But late fusion builds
+    it by averaging the features of all the positions, and the average blurs
+    the numbers together. A linear map fitted to read the 32 numbers back
+    from the summary gets an error of 0.11 to 0.14, against 0.33 for guessing.
 
-    So fuse early when one input decides what to read in the other. Fuse late
-    when each brings its own evidence, as CLIP's two encoders do. Late fusion
-    runs each encoder once per input, and its summaries can be stored. To
-    answer 32 questions about one series, early fusion takes 8.8 million FLOPs
-    and late fusion 0.17 million, 52 times fewer.
+    Early fusion needs no such summary. In attention, the question token's
+    query matches the key of the position it asks about, so it reads that
+    number directly. In the sum task, late fusion does fine, because each
+    input supplies its own part of the answer. So the two summaries already
+    hold everything the head needs.
+
+    So use early fusion when one input decides what to read in the other. Use
+    late fusion when each input contributes its own information, as with
+    CLIP's separate image and text encoders. Late fusion is also cheaper. It
+    runs each encoder once per input, and its summaries can be stored and
+    reused. To answer 32 questions about one series, early fusion takes 8.8
+    million FLOPs and late fusion takes 0.17 million, which is 52 times fewer.
     """,
 )
 
@@ -285,15 +299,18 @@ FUSE1_SOURCE = source_file(
 
     series = torch.tensor([[0.5, -1.0, 2.0]])
     series.unsqueeze(-1).shape    # torch.Size([1, 3, 1]), one number per position, ready for a Linear(1, size)
-    joined = torch.cat([torch.zeros(2, 3, 4), torch.ones(2, 1, 4)], dim=1)    # shape (2, 4, 4), a token added at the end
+    joined = torch.cat([torch.zeros(2, 3, 4), torch.ones(2, 1, 4)], dim=1)    # shape (2, 4, 4), one token added after the three
 
 
 ''' + indented(MIX_BLOCK_PART) + '''
 
 
-    # TODO: series has shape (batch, steps). Return one token per number, of
-    #   shape (batch, steps, size). Each token is `value` run on the number,
-    #   plus the row of `positions` for its place.
+    # TODO: series has shape (batch, steps). Return one token vector per
+    #   number, a tensor of shape (batch, steps, size). The token for the
+    #   number at position i is value applied to that number, plus row i of
+    #   positions.weight.
+    #   Example: for series of shape (2, 3), value = nn.Linear(1, 4) and
+    #   positions = nn.Embedding(8, 4), the result has shape (2, 3, 4).
     def series_tokens(
         series: Tensor,
         value: nn.Linear,
@@ -302,10 +319,12 @@ FUSE1_SOURCE = source_file(
         ...
 
 
-    # TODO: Finish forward. Make series_tokens, run each through series_mlp,
-    #   and average over the positions for the series' summary. Join it with
-    #   the question's embedding along the last dimension, run head, and
-    #   return one answer per row, of shape (batch,).
+    # TODO: Finish forward. Turn series into tokens with series_tokens, run
+    #   the tokens through series_mlp, and average them over the positions.
+    #   That average is the summary of the series, shape (batch, size).
+    #   Concatenate it with the question's embedding along the last
+    #   dimension, run head on the result, and return one answer per row,
+    #   shape (batch,).
 ''' + indented(LATE_INIT) + '''
 
         def forward(
@@ -316,10 +335,12 @@ FUSE1_SOURCE = source_file(
             ...
 
 
-    # TODO: Finish forward. Add kinds row 0 to every series token, and make the
-    #   question one more token, its embedding plus kinds row 1. Put it after
-    #   the series tokens, run block over all of them, and read the answer
-    #   from the question's place with ln_f then head, of shape (batch,).
+    # TODO: Finish forward. Make the series tokens with series_tokens and add
+    #   row 0 of kinds.weight to each one. Turn the question into one more
+    #   token, its embedding plus row 1 of kinds.weight. Put the question
+    #   token after the series tokens and run block over the whole sequence.
+    #   Take the output at the question token's position, run ln_f and then
+    #   head on it, and return one answer per row, shape (batch,).
 ''' + indented(EARLY_INIT) + '''
 
         def forward(
@@ -397,7 +418,7 @@ def check_fuse1(checker: Checker) -> None:
         check_on_inputs(
             checker=checker,
             function="series_tokens",
-            description="gives each number a token, its value plus its place",
+            description="makes one token per number, value of the number plus its position's row",
             inputs=((small_tensor(seed, batch, steps) / 3, Described(value, f"nn.Linear(1, {size})"), Described(positions, f"nn.Embedding({steps + 2}, {size})")),),
             reference=FUSE1_REFERENCE["series_tokens"],
         )
@@ -405,13 +426,13 @@ def check_fuse1(checker: Checker) -> None:
     checker.test_method(
         class_name="LateFusion",
         method="forward",
-        description="sums up the series alone, then joins the summary with the question",
+        description="summarizes the series alone, then joins the summary with the question's embedding",
         run=lambda found: check_fusion_forward(found, "LateFusion"),
     )
     checker.test_method(
         class_name="EarlyFusion",
         method="forward",
-        description="puts the question in the series' sequence and reads the answer at its place",
+        description="puts the question token after the series tokens and reads the answer at its position",
         run=lambda found: check_fusion_forward(found, "EarlyFusion"),
     )
 
@@ -424,12 +445,14 @@ FUSE1 = Exercise(
     source=FUSE1_SOURCE,
     solution=FUSE1_SOLUTION,
     hints={
-        "series_tokens": "Give series a last dimension of 1 with .unsqueeze(-1) and run value on it. Add the first "
-        "series.shape[1] rows of positions.weight, which broadcast over the batch.",
-        "LateFusion.forward": "series_tokens with self.value and self.positions, then self.series_mlp, then .mean(dim=1). "
-        "torch.cat that with self.question(question) on dim=-1, run self.head and .squeeze(-1).",
-        "EarlyFusion.forward": "self.kinds.weight[0] and self.kinds.weight[1] are the two type rows. The question token needs "
-        "a positions dimension, .unsqueeze(1), before torch.cat on dim=1. The answer sits at index -1 of dim 1.",
+        "series_tokens": "Add a last dimension of size 1 with .unsqueeze(-1) and apply value to that. Then add the "
+        "first series.shape[1] rows of positions.weight, which broadcast over the batch.",
+        "LateFusion.forward": "Call series_tokens with self.value and self.positions, apply self.series_mlp, then take "
+        ".mean(dim=1). Join that with self.question(question) using torch.cat on dim=-1. Then apply self.head and "
+        ".squeeze(-1).",
+        "EarlyFusion.forward": "self.kinds.weight[0] and self.kinds.weight[1] are the two type embeddings. The question "
+        "token needs a position dimension, added with .unsqueeze(1), before torch.cat on dim=1. The question token is "
+        "last, so its output is at index -1 of dim 1.",
     },
     introduces=("late fusion", "early fusion"),
     check=check_fuse1,
@@ -491,7 +514,8 @@ class TinyLM(nn.Module):
         return self.head(self.ln_f(x))
 
 
-# cross1's cross attention with heads. The queries come from the text, the keys and values from the memory.
+# The cross attention from cross1, split into heads. The queries come from the text, and the keys and values
+# come from the memory.
 class MemoryAttention(nn.Module):
     def __init__(
         self,
@@ -519,7 +543,7 @@ class MemoryAttention(nn.Module):
         return self.out(mixed.transpose(1, 2).reshape(batch, steps, size))
 
 
-# A token per number of the series, as fuse1's series_tokens made them.
+# One token per number of the series, made the same way as series_tokens in fuse1.
 class SeriesEncoder(nn.Module):
     def __init__(
         self,
@@ -626,39 +650,56 @@ def slope_series(
 
 FUSE2_LESSON = prose(
     """
-    A trained language model is costly to train again. Flamingo joined images
-    to a frozen one by adding new layers between its blocks, each reading the
-    image through cross attention, as cross1 did.
+    Training a language model again from the start is expensive. Flamingo
+    added images to a trained language model while keeping that model's
+    weights fixed, which is called freezing the model. It inserted new layers
+    between the model's blocks. Each new layer reads the image through cross
+    attention, as in cross1.
 
-    New random layers would change what the trained model says from the
-    first step. So each new layer's output is multiplied by `tanh(gate)`
-    before it joins the stream, with the gate a learned number starting at 0.
+    New layers start with random weights, so they would change the trained
+    model's output from the very first step. To prevent that, each new
+    layer's output is multiplied by `tanh(gate)` before it is added to the
+    residual stream. The gate is a learned number that starts at 0.
 
     ```text
     x = x + tanh(attn_gate) * cross(norm(x), memory)
     x = x + tanh(ff_gate) * ff(norm(x))
     ```
 
-    At step 0, `tanh(0) = 0`, so the model is exactly the frozen one. It is
-    residual3's zero start. Each gate is one learned number per layer, a
-    scale the same for every input, so no input sets it as gating1's gates
-    did. It still gets a gradient at 0, since tanh's slope there is 1, and it
-    opens as the new layers prove useful. Without the gates, Flamingo trained
-    unstably and scored 66.5 against 70.7.
+    At step 0, `tanh(0) = 0`, so the new layers add nothing and the model
+    gives exactly the frozen model's output. This is the same zero start as
+    in residual3. Each gate is one learned number per layer, which scales
+    that layer's output by the same amount for every input. So unlike the
+    gates in gating1, these gates do not depend on the input.
 
-    Here a tiny LM learned text that climbs by a step of 1 to 7 each token.
-    After two tokens it knows the step. Its first prediction can only guess,
-    a loss near ln 7, 1.95. A series whose slope is the step carries what it
-    lacks. The LM stays frozen, and only the new layers train, three seeds.
+    The gate still gets a gradient at 0, because the derivative of tanh at 0
+    is 1. So training moves the gate away from 0 once the new layers start to
+    help. Without the gates, Flamingo trained unstably and scored 66.5
+    instead of 70.7.
 
-    | New layers | Text loss at step 0 | First token, step 200 | First token, step 1,000 | Text loss, step 1,000 |
+    In this exercise a tiny language model (LM) was trained on token
+    sequences that follow one rule. Each token is the previous one plus a
+    fixed step between 1 and 7,
+    wrapping around after 15. After seeing two tokens, the LM knows the step.
+    Its first prediction comes after only one token, so it can only guess
+    among 7 steps. That gives a loss near `ln 7`, about 1.95.
+
+    The new input is a series whose slope equals the step, so it supplies
+    the missing information. The LM stays frozen and only the new layers
+    train, with three seeds. "First token" is the loss on the first
+    prediction, and "later tokens" is the loss on all the others.
+
+    | New layers | Later tokens, step 0 | First token, step 200 | First token, step 1,000 | Later tokens, step 1,000 |
     |---|---|---|---|---|
-    | gated, starting closed | 0.0004 to 0.0005 | 0.83 to 0.95 | 0.018 to 0.042 | 0.0011 to 0.0012 |
-    | open, no gates | 1.26 to 1.87 | 1.61 to 1.76 | 0.054 to 0.134 | 0.0014 to 0.0018 |
+    | gated, starting at 0 | 0.0004 to 0.0005 | 0.83 to 0.95 | 0.018 to 0.042 | 0.0011 to 0.0012 |
+    | no gates | 1.26 to 1.87 | 1.61 to 1.76 | 0.054 to 0.134 | 0.0014 to 0.0018 |
 
-    The frozen LM alone scores 2.00 to 2.02 on the first token and 0.0004 to
-    0.0005 on the rest. The open layers broke it at step 0. The gated ones
-    learned to read the series faster and further, and kept a lower text loss.
+    The frozen LM alone has a loss of 2.00 to 2.02 on the first token and
+    0.0004 to 0.0005 on the later tokens. At step 0 the layers without gates
+    raised the later token loss to 1.26 to 1.87, so they broke what the LM
+    already knew. The gated layers learned to use the series faster and
+    reached a lower first token loss. They also kept the later token loss
+    lower.
     """,
 )
 
@@ -674,15 +715,16 @@ FUSE2_SOURCE = source_file(
     from torch import Tensor
 
     gate = nn.Parameter(torch.zeros(1))
-    closed = torch.tanh(gate) * torch.tensor([3.0, -2.0])    # tensor([0., -0.]), the branch adds nothing yet
+    closed = torch.tanh(gate) * torch.tensor([3.0, -2.0])    # tensor([0., -0.]), so the gated branch adds nothing yet
 
 ''' + indented(LM_PART) + '''
 
 
-    # TODO: Finish __init__ and forward. Make attn_gate and ff_gate, each a
-    #   learned number of shape (1,) that starts at 0. Then add the cross
-    #   attention on norm_1(x) and the memory to x, times tanh(attn_gate).
-    #   Add ff on norm_2 of the result, times tanh(ff_gate), and return it.
+    # TODO: Finish __init__ and forward. In __init__, replace the ... line
+    #   with attn_gate and ff_gate, each a parameter of shape (1,) that starts
+    #   at 0. In forward, apply the two gated steps from the lesson. First add
+    #   tanh(attn_gate) times cross(norm_1(x), memory) to x. Then add
+    #   tanh(ff_gate) times ff(norm_2(x)) to the new x, and return the result.
 ''' + indented(GATED_START) + '''
             ...
 
@@ -694,10 +736,11 @@ FUSE2_SOURCE = source_file(
             ...
 
 
-    # TODO: Finish forward. Encode the series into the memory. Embed ids with
-    #   lm's wte and the first rows of its wpe. Before each of lm's blocks, run
-    #   its own GatedCrossAttention with the memory, then the block. Return the
-    #   scores from lm's ln_f and head.
+    # TODO: Finish forward. Run encoder on series to get the memory. Embed ids
+    #   the way TinyLM.forward does, with lm.wte and the first rows of
+    #   lm.wpe. Then for each block in lm.h, first run the matching layer of
+    #   xattn on x and the memory, then run the block. Return the scores from
+    #   lm.ln_f followed by lm.head, shape (batch, steps, vocabulary).
 ''' + indented(FLAMINGO_INIT) + '''
 
         def forward(
@@ -708,8 +751,9 @@ FUSE2_SOURCE = source_file(
             ...
 
 
-    # TODO: Stop every parameter of module from training, so no gradient is
-    #   kept for it and no optimizer can change it.
+    # TODO: Freeze module. Make every one of its parameters stop requiring a
+    #   gradient, so autograd computes none for it and no optimizer can
+    #   change it. Return nothing.
     def freeze_(module: nn.Module) -> None:
         ...
     ''',
@@ -763,7 +807,7 @@ def check_gates(found: type) -> None:
             raise Mismatch(f"GatedCrossAttention(8, 6).{name} has shape {tuple(gate.shape)}, but it should hold one number, shape (1,).")
 
         if gate.item() != 0:
-            raise Mismatch(f"GatedCrossAttention(8, 6).{name} starts at {gate.item():.4g}, but it should start at 0, so the layer starts closed.")
+            raise Mismatch(f"GatedCrossAttention(8, 6).{name} starts at {gate.item():.4g}, but it should start at 0, so the layer adds nothing at first.")
 
     x = small_tensor(1102, 2, 3, 8) / 3
     memory = small_tensor(1103, 2, 4, 6) / 3
@@ -832,7 +876,7 @@ def check_flamingo_forward(found: type) -> None:
             actual = model(ids, series)
 
         expect_tensor(
-            call=f"Flamingo(lm, 8) on {batch} texts of {steps} tokens and their series, every gate opened",
+            call=f"Flamingo(lm, 8) on {batch} texts of {steps} tokens and their series, with every gate set away from 0",
             actual=actual,
             expected=expected,
         )
@@ -851,7 +895,7 @@ def check_starts_as_lm(found: type) -> None:
         actual = model(ids, series)
 
     expect_tensor(
-        call="a new Flamingo(lm, 8), every gate still at 0, against lm(ids) alone",
+        call="a new Flamingo(lm, 8) with every gate still at 0, compared with lm(ids) alone",
         actual=actual,
         expected=expected,
     )
@@ -864,7 +908,7 @@ def check_freeze(found: object) -> None:
         trainable = [name for name, parameter in lm.named_parameters() if parameter.requires_grad]
 
         if trainable:
-            raise Mismatch(f"After freeze_(lm), these of lm's parameters still train: {', '.join(trainable)}.")
+            raise Mismatch(f"After freeze_(lm), some parameters of lm still require a gradient. They are {', '.join(trainable)}.")
 
 
 def check_fuse2(checker: Checker) -> None:
@@ -877,7 +921,7 @@ def check_fuse2(checker: Checker) -> None:
     checker.test_method(
         class_name="GatedCrossAttention",
         method="forward",
-        description="adds cross attention and ff, each times tanh of its gate",
+        description="adds the cross attention and ff outputs, each multiplied by tanh of its gate",
         run=check_gated_forward,
     )
     checker.test_method(
@@ -889,7 +933,7 @@ def check_fuse2(checker: Checker) -> None:
     checker.test_method(
         class_name="Flamingo",
         method="forward",
-        description="starts as exactly the frozen LM",
+        description="gives exactly the frozen LM's output while every gate is 0",
         run=check_starts_as_lm,
     )
     checker.test(
@@ -907,12 +951,13 @@ FUSE2 = Exercise(
     source=FUSE2_SOURCE,
     solution=FUSE2_SOLUTION,
     hints={
-        "GatedCrossAttention.__init__": "Each gate is nn.Parameter of torch.zeros(1), set as self.attn_gate and self.ff_gate in "
-        "place of the ... line.",
-        "GatedCrossAttention.forward": "Two residual lines. The first adds torch.tanh(self.attn_gate) times self.cross of "
-        "self.norm_1(x) and memory. The second does the same with self.ff_gate, self.ff and self.norm_2.",
-        "Flamingo.forward": "self.encoder(series) is the memory. zip(self.xattn, self.lm.h) pairs each new layer with the "
-        "block it goes before. Run the new layer on x and memory, then the block on that.",
+        "GatedCrossAttention.__init__": "Each gate is an nn.Parameter wrapping torch.zeros(1). Assign them to "
+        "self.attn_gate and self.ff_gate in place of the ... line.",
+        "GatedCrossAttention.forward": "Write two residual lines. The first adds torch.tanh(self.attn_gate) times "
+        "self.cross applied to self.norm_1(x) and memory. The second does the same with self.ff_gate, self.ff and "
+        "self.norm_2.",
+        "Flamingo.forward": "The memory is self.encoder(series). zip(self.xattn, self.lm.h) pairs each new layer with "
+        "the block it runs before. In the loop, run the new layer on x and memory, then run the block on its output.",
         "freeze_": "Loop over module.parameters() and call .requires_grad_(False) on each.",
     },
     introduces=(),
@@ -1025,22 +1070,29 @@ def paired_data(
 
 FUSE3_LESSON = prose(
     """
-    In use, an input goes missing. A sensor fails, a form has no table, a
-    question comes with no series. A model that always saw both inputs has
-    never learned what to do then.
+    In real use, an input is sometimes missing. A sensor fails, a form comes
+    without its table, or a question arrives without its series. A model that
+    always saw both inputs during training has never learned what to do in
+    that case.
 
-    Give each kind of input a learned stand in, a vector the model gets in
-    its place when it is missing. MAE's learned mask token in masked2 takes a
-    hidden patch's place the same way. Then train with inputs dropped at random,
-    as dropout1 dropped units. Neverova and colleagues dropped whole inputs
-    at random this way in ModDrop, setting each dropped one to 0. The model
-    learns to answer from what it has.
+    The fix has two parts. First, give each kind of input a learned stand
+    in. This is a learned vector that the model receives in place of the
+    input's encoding when that input is missing. MAE's learned mask token in
+    masked2 replaces a hidden patch in the same way.
 
-    Here the answer is one part from a series of 16 and one from a table row
-    of 4. With one input missing, the best any model can do is answer the
-    part it has and the average of the other. Each model trained 3,000 steps
-    on three seeds. A rate of 0.15 drops the series in 15% of rows and the
-    table in another 15%, never both.
+    Second, train with inputs removed at random, the way dropout1 removed
+    units at random. Neverova and colleagues did this with whole inputs in
+    ModDrop, setting each dropped input to 0. The model learns to answer from
+    whatever inputs it has.
+
+    In this exercise the answer is the sum of two parts. One part comes from
+    a series of 16 numbers, and the other from a table row of 4 numbers. When
+    one input is missing, the best any model can do is compute the part it
+    can see. Then it adds the average value of the missing part.
+
+    Each model trained for 3,000 steps with three seeds. A drop rate of 0.15
+    removes the series in 15% of rows and the table in a different 15%, so no
+    row loses both. The table shows the mean squared error.
 
     | Training | Both present | Series missing | Table missing |
     |---|---|---|---|
@@ -1048,10 +1100,11 @@ FUSE3_LESSON = prose(
     | inputs dropped at 0.15 | 0.002 to 0.003 | 0.38 to 0.39 | 0.45 to 0.46 |
     | the best any model can do | 0 | 0.38 to 0.39 | 0.45 to 0.46 |
 
-    Guessing the mean answer scores 0.83 to 0.85. The model that always saw
-    both had never trained its stand ins. A missing input sent it far past
-    the best, at times worse than the guess. The dropped model landed on the
-    best, and with both inputs it still reads them nearly perfectly.
+    Guessing the mean answer gives an error of 0.83 to 0.85. The model that
+    always saw both inputs never trained its stand ins. So with an input
+    missing, its error was far above the best possible, and sometimes worse
+    than guessing. The model trained with dropped inputs matched the best
+    possible error. With both inputs present, its error is still close to 0.
     """,
 )
 
@@ -1065,14 +1118,18 @@ FUSE3_SOURCE = source_file(
     from torch import Tensor
 
     roll = torch.tensor([0.05, 0.2, 0.5])
-    (roll < 0.1) | (roll >= 0.3)    # tensor([ True, False,  True]), true below 0.1 or from 0.3 up
-    torch.where(torch.tensor([[True], [False]]), torch.ones(2, 3), torch.zeros(3))    # row 0 ones, row 1 the stand in
+    (roll < 0.1) | (roll >= 0.3)    # tensor([ True, False,  True]), True where roll is below 0.1 or at least 0.3
+    torch.where(torch.tensor([[True], [False]]), torch.ones(2, 3), torch.zeros(3))    # row 0 is ones, row 1 is the zeros vector
 
 
-    # TODO: Return has_series and has_table, two tensors of count True and
-    #   False. Draw one number per row with torch.rand and the generator. A
-    #   row drops its series below rate, and its table from rate up to
-    #   2 * rate, so it never drops both.
+    # TODO: Return has_series and has_table, two boolean tensors of shape
+    #   (count,). Draw one random number per row with torch.rand and the
+    #   generator. A row loses its series when its number is below rate. It
+    #   loses its table when its number is at least rate but below 2 * rate.
+    #   So no row loses both, and every other row keeps both inputs.
+    #   Example: with torch.Generator().manual_seed(0), count 4 and rate
+    #   0.25, the numbers are [0.50, 0.77, 0.09, 0.13]. So has_series is
+    #   [True, True, False, False] and has_table is [False, True, True, True].
     def dropped_masks(
         count: int,
         rate: float,
@@ -1081,9 +1138,11 @@ FUSE3_SOURCE = source_file(
         ...
 
 
-    # TODO: Finish forward. Encode the series and the table. Where has_series
-    #   is False, use missing_series in the series' place, and the same for
-    #   the table. Join the two along dim 1, run head, return shape (batch,).
+    # TODO: Finish forward. Encode series with series_encoder and table with
+    #   table_encoder. In rows where has_series is False, use missing_series
+    #   instead of the encoded series. Do the same for the table with
+    #   has_table and missing_table. Concatenate the two results along dim 1,
+    #   run head, and return one answer per row, shape (batch,).
 ''' + indented(PAIRED_INIT) + '''
 
         def forward(
@@ -1096,10 +1155,11 @@ FUSE3_SOURCE = source_file(
             ...
 
 
-    # TODO: Train model for steps steps with Adam at 1e-3, and return the last
-    #   loss as a plain number. Each step, draw 128 rows of data with
-    #   torch.randint and the generator, then dropped_masks for 128 rows at
-    #   rate. The loss is the mean squared error against y.
+    # TODO: Train model for `steps` steps with Adam at a learning rate of
+    #   1e-3, and return the last loss as a Python float. Each step, pick 128
+    #   random row indices with torch.randint and the generator. Then call
+    #   dropped_masks for 128 rows at rate, with the same generator. The loss
+    #   is the mean squared error between the model's answers and y.
     def train_paired(
         model: nn.Module,
         data: tuple[Tensor, Tensor, Tensor],
@@ -1111,9 +1171,10 @@ FUSE3_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the model's mean squared error on all of data, with the
-    #   inputs present as has_series and has_table say, as a plain number.
-    #   Record nothing for autograd.
+    # TODO: Return the model's mean squared error on all of data as a Python
+    #   float. Pass has_series and has_table to the model, so each input is
+    #   present only in the rows where its mask is True. Run the model inside
+    #   torch.no_grad(), so autograd records nothing.
     def error_with(
         model: nn.Module,
         data: tuple[Tensor, Tensor, Tensor],
@@ -1173,7 +1234,7 @@ def expect_mask_pair(
         )
 
         if found.dtype != torch.bool:
-            raise Mismatch(f"{name} from {call} holds {found.dtype} numbers, but it should hold True and False. Return the comparisons themselves.")
+            raise Mismatch(f"{name} from {call} holds {found.dtype} numbers, but it should hold booleans, True and False. Return the comparison results without converting them.")
 
 
 def check_paired_forward(found: type) -> None:
@@ -1251,14 +1312,14 @@ def check_error_with(found: object) -> None:
         )
 
         if any(seen):
-            raise Mismatch("error_with ran the model while recording for autograd. Score inside torch.no_grad().")
+            raise Mismatch("error_with ran the model while autograd was recording. Run the model inside torch.no_grad().")
 
 
 def check_fuse3(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="dropped_masks",
-        description="drops the series below the rate and the table from the rate to twice it",
+        description="drops the series where the number is below rate, and the table from rate up to 2 * rate",
         inputs=(
             (8, 0.25, seeded(1207)),
             (10, 0.4, seeded(1208)),
@@ -1279,7 +1340,7 @@ def check_fuse3(checker: Checker) -> None:
     )
     checker.test(
         function="error_with",
-        description="scores the model with the inputs it is given",
+        description="computes the mean squared error with only the given inputs present",
         run=check_error_with,
     )
 
@@ -1292,13 +1353,16 @@ FUSE3 = Exercise(
     source=FUSE3_SOURCE,
     solution=FUSE3_SOLUTION,
     hints={
-        "dropped_masks": "One torch.rand(count, generator=generator). has_series is where it is at least rate. has_table "
-        "is where it is below rate, or at least 2 * rate, joined with |.",
-        "PairedModel.forward": "torch.where takes the mask with .unsqueeze(1), the encoded rows, and the stand in, which "
-        "broadcasts to every row. torch.cat the two results on dim=1, then self.head and .squeeze(1).",
-        "train_paired": "Like gpt3's train_step in a loop, drawing torch.randint(0, len(y), (128,), generator=generator) "
-        "before dropped_masks(128, rate, generator). Zero the gradients, backpropagate, step.",
-        "error_with": "Inside torch.no_grad(), F.mse_loss of the model's answers and y, then .item().",
+        "dropped_masks": "Draw the numbers with one call, torch.rand(count, generator=generator). has_series is True "
+        "where a number is at least rate. has_table is True where a number is below rate or at least 2 * rate, so "
+        "combine those two comparisons with |.",
+        "PairedModel.forward": "Give torch.where the mask with .unsqueeze(1), then the encoded rows, then the stand in "
+        "vector, which broadcasts to every row. Join the two results with torch.cat on dim=1, then apply self.head "
+        "and .squeeze(1).",
+        "train_paired": "Each step works like gpt3's train_step. First draw the row indices with torch.randint(0, "
+        "len(y), (128,), generator=generator), then call dropped_masks(128, rate, generator). Then zero the "
+        "gradients, backpropagate and step the optimizer.",
+        "error_with": "Inside torch.no_grad(), compute F.mse_loss of the model's answers and y, then call .item().",
     },
     introduces=(),
     check=check_fuse3,

@@ -40,11 +40,12 @@ OUTPUTS = Chapter(
         """
         # Outputs
 
-        A model's last layer decides what it can say. One class, several tags,
-        a number, a choice between two right answers, a valid JSON object, a
-        robot's next move and a signal each need their own head, or their own
-        way of writing tokens. This chapter builds them and measures what the
-        wrong head gets wrong.
+        A model's last layer decides what kind of answer it can give. Each
+        kind of answer needs its own head, or its own way of writing tokens.
+        The kinds here are one class, several tags, a number, a choice between
+        two right answers, a valid JSON object, a robot's next move, and a
+        signal. This chapter builds a head for each one and measures the
+        mistakes a mismatched head makes.
 
         ## Further reading
 
@@ -166,34 +167,38 @@ def tag_data(
 
 OUT1_LESSON = prose(
     """
-    activations2 matched the output to the answer's form. A model often has
-    several answers to give at once. One trunk reads the input, and a small
-    head per answer reads the trunk.
+    activations2 matched a model's output layer to the form of the answer.
+    Often a model has to give several answers at once. Then one shared
+    network, called the trunk, reads the input. A small head for each answer
+    reads the trunk's output.
 
     | Answer | Head gives | Loss |
     |---|---|---|
-    | one class of several | a score per class | `F.cross_entropy`, softmax inside |
+    | one class of several | a score per class | `F.cross_entropy`, which applies a softmax inside |
     | any number of tags | a score per tag | `F.binary_cross_entropy_with_logits`, a sigmoid per tag |
     | several numbers | one number each | `F.mse_loss` |
 
-    A softmax's chances add up to 1, so it bets on one answer. A sigmoid per
-    tag says yes or no to each tag on its own, so a document can be news and
-    sport at once. Reading a tag means its sigmoid passes 0.5.
+    The probabilities from a softmax add up to 1, so the softmax favors one
+    answer over the others. A separate sigmoid per tag gives each tag its own
+    probability, independent of the others. So a document can be tagged both
+    news and sport. A tag counts as present when its sigmoid is above 0.5.
 
-    Here each input of 8 numbers carried 5 tags, each on when its own
-    weighted sum passed 0.4. 67% to 69% of inputs carried two or more, and
-    4.5% to 5.5% none. Two heads trained 1,500 steps on three seeds, scored
-    on the share of inputs whose whole set of tags came out right.
+    Here each input is 8 numbers, and there are 5 possible tags. Each tag is
+    present when its own weighted sum of the input is above 0.4. Of the
+    inputs, 67% to 69% had two or more tags, and 4.5% to 5.5% had none. Two
+    heads trained for 1,500 steps on three seeds. Each was scored on the
+    share of inputs whose whole set of tags came out right.
 
     | Head | Whole set right |
     |---|---|
     | softmax, its top class taken as the one tag | 25% to 27% |
     | a sigmoid per tag | 95% to 96% |
 
-    The softmax head names exactly one tag, so it fails every input with
-    none or with more. It got right every input with exactly one tag, the
-    most it could. The losses of several heads add up into one, and one
-    backward pass trains the trunk for all of them.
+    The softmax head names exactly one tag, so it fails on every input with
+    no tags or with more than one. It got every input with exactly one tag
+    right, which is the best it could do. When a model has several heads,
+    their losses are added into one loss. Then one backward pass trains the
+    trunk for all the heads at once.
     """,
 )
 
@@ -210,19 +215,22 @@ OUT1_SOURCE = source_file(
     F.binary_cross_entropy_with_logits(torch.tensor([3.0]), torch.tensor([1.0]))    # tensor(0.0486)
 
 
-    # TODO: Finish forward. Run x through trunk, then each of the three heads
-    #   on the trunk's output. Return the class scores, the tag scores and
-    #   the values, in that order.
+    # TODO: Finish forward. Run x through trunk once, then run each of the
+    #   three heads on the trunk's output. Return the class scores, the tag
+    #   scores and the values, as a tuple in that order.
 ''' + indented(HEADS_INIT) + '''
 
         def forward(self, x: Tensor) -> tuple[Tensor, Tensor, Tensor]:
             ...
 
 
-    # TODO: Return one loss for all three heads, as a tensor. outputs is what
-    #   Heads gives. Add the cross entropy of the class scores against
-    #   classes, the binary cross entropy of the tag scores against tags,
-    #   from the raw scores, and the mean squared error against values.
+    # TODO: Return one loss for all three heads, as a tensor. outputs is the
+    #   tuple Heads returns, (class scores, tag scores, values). Add three
+    #   losses. The first is the cross entropy of the class scores against
+    #   classes. The second is the binary cross entropy of the raw tag scores
+    #   against tags, computed with F.binary_cross_entropy_with_logits. The
+    #   third is the mean squared error of the predicted values against
+    #   values.
     def heads_loss(
         outputs: tuple[Tensor, Tensor, Tensor],
         classes: Tensor,
@@ -232,8 +240,13 @@ OUT1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the answers outputs gives: each row's class, its tags as
-    #   True where the tag's sigmoid passes 0.5, and the values as they are.
+    # TODO: Turn outputs into answers, and return three tensors. The first is
+    #   each row's class, the index of its highest class score. The second is
+    #   the tags, True where the tag's sigmoid is above 0.5. The third is the
+    #   values, unchanged.
+    #   Example: for class scores [[0.1, 2.0, -1.0]] and tag scores
+    #   [[2.0, -1.0]], the class is tensor([1]) and the tags are
+    #   tensor([[ True, False]]).
     def read_heads(outputs: tuple[Tensor, Tensor, Tensor]) -> tuple[Tensor, Tensor, Tensor]:
         ...
     ''',
@@ -346,28 +359,28 @@ def expect_read(
     )
 
     if actual[0].dtype != torch.long:
-        raise Mismatch(f"The classes from {call} hold {actual[0].dtype} numbers, but they should be whole numbers, positions from argmax.")
+        raise Mismatch(f"The classes from {call} hold {actual[0].dtype} numbers, but they should be whole numbers, the indices from argmax.")
 
     if actual[1].dtype != torch.bool:
-        raise Mismatch(f"The tags from {call} hold {actual[1].dtype} numbers, but they should be True and False. Return the comparison itself.")
+        raise Mismatch(f"The tags from {call} hold {actual[1].dtype} numbers, but they should be booleans, True and False. Return the comparison result without converting it.")
 
 
 def check_out1(checker: Checker) -> None:
     checker.test_method(
         class_name="Heads",
         method="forward",
-        description="runs the trunk once and each head on it",
+        description="runs the trunk once and each head on its output",
         run=check_heads_forward,
     )
     checker.test(
         function="heads_loss",
-        description="adds the cross entropy, the binary cross entropy and the squared error",
+        description="adds the cross entropy, the binary cross entropy and the mean squared error",
         run=check_heads_loss,
     )
     check_on_inputs(
         checker=checker,
         function="read_heads",
-        description="reads one class, the tags past 0.5 and the values",
+        description="reads one class, the tags whose sigmoid is above 0.5, and the values",
         inputs=(
             (Described(head_outputs(1305, 3), "the three heads' outputs for 3 rows"),),
             (Described(head_outputs(1306, 5), "the three heads' outputs for 5 rows"),),
@@ -385,12 +398,12 @@ OUT1 = Exercise(
     source=OUT1_SOURCE,
     solution=OUT1_SOLUTION,
     hints={
-        "Heads.forward": "Keep self.trunk(x) in a name, then return a tuple of self.class_head, self.tag_head and "
-        "self.value_head each run on it.",
-        "heads_loss": "Unpack outputs into three names. F.cross_entropy, F.binary_cross_entropy_with_logits and F.mse_loss, "
-        "each with its own target, added together.",
-        "read_heads": "argmax over the last dimension for the class. torch.sigmoid of the tag scores compared with 0.5 for "
-        "the tags. The values come back unchanged.",
+        "Heads.forward": "Store self.trunk(x) in a variable. Then return a tuple of self.class_head, self.tag_head and "
+        "self.value_head, each applied to that variable.",
+        "heads_loss": "Unpack outputs into three variables. Then add F.cross_entropy, "
+        "F.binary_cross_entropy_with_logits and F.mse_loss, each with its own target.",
+        "read_heads": "Take argmax over the last dimension for the class. For the tags, compare torch.sigmoid of the "
+        "tag scores with 0.5. Return the values unchanged.",
     },
     introduces=(),
     check=check_out1,
@@ -459,36 +472,45 @@ OUT2_LESSON = prose(
     point with its elbow up or down. A road forks, and either branch is fine.
 
     Bishop showed in 1994 that a head trained on the squared error learns the
-    average answer for each input. With two right answers, the average can be
-    neither of them, a hand halfway between up and down.
+    average of the right answers for each input. With two right answers, the
+    average can be neither of them. For the arm, it would put the elbow
+    halfway between up and down.
 
-    His **mixture density network** gives a whole distribution instead. For
-    each input, the head gives K normals, each with a weight, a mean and a
-    spread. The weights go through a softmax, and the spreads are kept as
-    logs so they stay positive.
+    His **mixture density network** outputs a whole probability distribution
+    instead. For each input, the head outputs K normal distributions, called
+    components. Each component has a weight, a mean and a standard deviation.
+    The code calls the standard deviation the spread.
 
-    The mixture's density at y is the weighted sum of its normals'
-    densities. The loss is likelihood3's negative log of that density.
-    Adding chances in log space is likelihood2's logsumexp.
+    The weights go through a softmax. The head outputs the log of each
+    spread, `log_spreads`, and the spread is `exp` of that. This keeps every
+    spread positive.
+
+    The density of the mixture at y is the weighted sum of its components'
+    densities. The loss is the negative log of that density, as in
+    likelihood3. To add probabilities that are stored as logs, use
+    logsumexp, as in likelihood2.
 
     ```text
     loss = -logsumexp(log_softmax(weights) + log N(y; mean, spread))
     ```
 
-    To answer, pick one normal by its weight, then draw from it.
+    To produce an answer, pick one component at random, with probabilities
+    given by the softmax of the weights. Then draw a sample from that
+    component's normal distribution.
 
     Here y lies on one of two branches, `0.3 + x` or `-(0.3 + x)`, for x from
-    0 to 1. Each head trained 2,000 steps on three seeds. An answer counts as
-    right within 0.15 of a branch.
+    0 to 1. Each head trained for 2,000 steps on three seeds. An answer counts
+    as right if it is within 0.15 of a branch.
 
     | Head | Answers right | Answers above 0 |
     |---|---|---|
     | one number, squared error | 0% | 0% or 100% |
     | a mixture of 2 normals, sampled | 99.4% to 99.9% | 47% to 53% |
 
-    The plain head settles near 0, between the branches, and is never right.
-    Each of its runs put every answer on the same side of 0. The mixture
-    puts one normal on each branch and picks them evenly.
+    The plain head's answers end up near 0, between the branches, so they are
+    never right. In each run, all of its answers were on the same side of 0.
+    The mixture puts one component on each branch and picks each one about
+    half the time.
     """,
 )
 
@@ -507,9 +529,11 @@ OUT2_SOURCE = source_file(
     torch.tensor([[5.0, 6.0]]).gather(-1, torch.tensor([[1]]))    # tensor([[6.]])
 
 
-    # TODO: Return the weights, the means and the log spreads, the head's out
-    #   cut into three parts of components numbers each along the last
-    #   dimension.
+    # TODO: Split the head's output out into three parts along the last
+    #   dimension, each of size components. Return them in order as the
+    #   weights, the means and the log spreads.
+    #   Example: for out = torch.arange(6.0) and components = 2, return
+    #   (tensor([0., 1.]), tensor([2., 3.]), tensor([4., 5.])).
     def split_mixture(
         out: Tensor,
         components: int,
@@ -517,11 +541,15 @@ OUT2_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the average negative log likelihood of y under each row's
-    #   mixture, as a tensor. The log density of a normal at y is minus half
-    #   the square of (the gap divided by the spread), minus the log spread,
-    #   minus half of log 2 pi. Add each normal's log softmax weight and
-    #   logsumexp them.
+    # TODO: Return the negative log likelihood of y under each row's mixture,
+    #   averaged over the rows, as a tensor. weights, means and log_spreads
+    #   have shape (batch, K), and y has shape (batch,). For one component,
+    #   with spread = exp(log_spread), the log density of its normal at y is
+    #   -0.5 * ((y - mean) / spread) ** 2 - log_spread - 0.5 * log(2 * pi).
+    #   Add the log softmax of the weights to these log densities, take
+    #   logsumexp over the K components, negate, and average over the rows.
+    #   Example: for one row of two components with weights 0, means 0 and
+    #   log spreads 0, and y = 0, the result is tensor(0.9189).
     def mixture_nll(
         weights: Tensor,
         means: Tensor,
@@ -531,9 +559,11 @@ OUT2_SOURCE = source_file(
         ...
 
 
-    # TODO: Return one draw per row. First pick a normal per row by its
-    #   softmax weight with torch.multinomial and the generator. Then return
-    #   its mean plus its spread times one torch.randn draw from the generator.
+    # TODO: Return one sample per row, a tensor of shape (batch,). First pick
+    #   one component per row with torch.multinomial and the generator, using
+    #   the softmax of the weights as the probabilities. Then return that
+    #   component's mean plus its spread, exp(log_spread), times a standard
+    #   normal draw from torch.randn with the generator.
     def sample_mixture(
         weights: Tensor,
         means: Tensor,
@@ -622,7 +652,7 @@ def check_out2(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="split_mixture",
-        description="cuts the head's output into weights, means and log spreads",
+        description="splits the head's output into weights, means and log spreads",
         inputs=(
             (small_tensor(1401, 2, 6), 2),
             (small_tensor(1402, 3, 9), 3),
@@ -633,7 +663,7 @@ def check_out2(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="mixture_nll",
-        description="gives the average negative log likelihood under each row's mixture",
+        description="returns the negative log likelihood under each row's mixture, averaged over the rows",
         inputs=(
             mixture_inputs(1403, 4, 2),
             mixture_inputs(1404, 3, 3),
@@ -644,7 +674,7 @@ def check_out2(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="sample_mixture",
-        description="picks a normal by its weight, then draws from it",
+        description="picks a component by its weight, then draws a sample from it",
         inputs=(
             (*mixture_inputs(1405, 6, 2)[:3], seeded(1405)),
             (*mixture_inputs(1406, 4, 3)[:3], seeded(1406)),
@@ -662,11 +692,12 @@ OUT2 = Exercise(
     solution=OUT2_SOLUTION,
     hints={
         "split_mixture": "out.split(components, dim=-1) gives the three parts as a tuple, in order.",
-        "mixture_nll": "Give y a last dimension with .unsqueeze(-1) so it lines up with every normal. log_spreads.exp() "
-        "is the spread. F.log_softmax of the weights, added to the log densities, then torch.logsumexp over dim=-1, "
-        "minus, and the mean.",
+        "mixture_nll": "Give y a last dimension with .unsqueeze(-1), so it lines up with every component. "
+        "log_spreads.exp() is the spread. Add F.log_softmax of the weights to the log densities, then take "
+        "torch.logsumexp over dim=-1. Negate that and take the mean.",
         "sample_mixture": "torch.multinomial(torch.softmax(weights, dim=-1), 1, generator=generator) picks a column per row. "
-        ".gather(-1, picked) reads that column of the means and the spreads. Then one torch.randn of that shape.",
+        "Then .gather(-1, picked) reads that column of the means and of the spreads. Last, draw one torch.randn of "
+        "that shape with the generator.",
     },
     introduces=("mixture density network",),
     check=check_out2,
@@ -681,7 +712,7 @@ SHAPE_PART = '''
 CHARACTERS = list('{}":, ' + string.ascii_lowercase + string.digits) + ["\\n"]
 END = "\\n"
 
-# The shape every answer must take: {"name": "<1 to 6 letters>", "age": <1 to 2 digits>} and a newline.
+# Every answer must have the form {"name": "<1 to 6 letters>", "age": <1 to 2 digits>} followed by a newline.
 PARTS = (
     ("literal", '{"name": "'),
     ("letters", 1, 6),
@@ -692,7 +723,7 @@ PARTS = (
 
 
 def allowed(state: tuple[int, int]) -> str:
-    """The characters that may come next, where state is the part we are in and how far into it."""
+    """The characters allowed next. state is the index of the current part and how many of its characters are written."""
     part, used = state
     kind = PARTS[part][0]
 
@@ -787,40 +818,43 @@ END: str = OUT3_REFERENCE["END"]
 
 OUT3_LESSON = prose(
     """
-    A program that reads a model's answer needs it in a fixed form, like
-    JSON. A model writing one character at a time can slip, and one wrong
-    character breaks the whole answer.
+    A program that reads a model's answer needs the answer in a fixed format,
+    such as JSON. A model that writes one character at a time can make a
+    mistake, and one wrong character makes the whole answer unreadable.
 
-    The form says which characters may come next. After `{"name": "` comes a
-    letter. After the age's digits come more digits or `}`. Before each
-    choice, set every other character's score to minus infinity, as gpt4's
-    `top_k_filter` did. The softmax gives those exactly 0.
+    At each point, the format says which characters are allowed next. After
+    `{"name": "` only a letter is allowed. After the age's digits, only
+    another digit or `}` is allowed. Before picking each character, set the
+    score of every character that is not allowed to minus infinity, as
+    gpt4's `top_k_filter` did. The softmax then gives those characters a
+    probability of exactly 0.
 
     ```python
     torch.tensor([2.0, 1.0, 3.0]).masked_fill(torch.tensor([False, True, True]), float("-inf"))
     # tensor([2., -inf, -inf])
     ```
 
-    This is **constrained decoding**. The given `allowed` and `step` follow
-    one fixed shape. Willard and Louf's Outlines library builds the same
-    allowed sets from a regular expression or a grammar. It runs them as a
-    finite state machine, with a stack added for a grammar, at little cost
-    per token. RT-2 restricts its output
-    the same way, to its action tokens.
+    This is called **constrained decoding**. In this exercise, the given
+    functions `allowed` and `step` track one fixed format. Willard and Louf's
+    Outlines library builds the same sets of allowed characters from a
+    regular expression or a grammar. It tracks them with a finite state
+    machine, adding a stack for a grammar, so each token costs little extra.
+    RT-2 restricts its output in the same way, to its action tokens.
 
-    Here a small GRU learned the shape from examples like
-    `{"name": "ada", "age": 36}`, for 100, 300 or 1,000 steps on three seeds.
-    Each wrote 300 answers, free and masked.
+    Here a small GRU learned the format from examples like
+    `{"name": "ada", "age": 36}`. It trained for 100, 300 or 1,000 steps, on
+    three seeds. Each trained model wrote 300 answers without the mask and
+    300 with it. The table shows the share of valid answers.
 
-    | Training | Valid, free | Valid, masked |
+    | Training | Valid without mask | Valid with mask |
     |---|---|---|
     | 100 steps | 15% to 45% | 100% |
     | 300 steps | 91% to 94% | 100% |
     | 1,000 steps | 98% to 99.7% | 100% |
 
-    The mask fixes the form at any stage of training, so the reading program
-    never fails. What the model puts in the form, the name and the age,
-    still comes from the model.
+    The mask guarantees the format at any stage of training, so the program
+    reading the answers never fails. The content inside the format, the name
+    and the age, still comes from the model.
     """,
 )
 
@@ -841,8 +875,12 @@ OUT3_SOURCE = source_file(
 ''' + indented(SHAPE_PART) + '''
 
 
-    # TODO: Return scores, one per character of CHARACTERS, with every
-    #   character not in allowed_characters set to minus infinity.
+    # TODO: scores holds one score per character of CHARACTERS. Return new
+    #   scores where every character not in allowed_characters has its score
+    #   set to minus infinity. The scores of allowed characters stay as they
+    #   are.
+    #   Example: mask_scores(torch.zeros(len(CHARACTERS)), "{") returns 0 at
+    #   index 0, the index of "{", and minus infinity everywhere else.
     def mask_scores(
         scores: Tensor,
         allowed_characters: str,
@@ -850,11 +888,13 @@ OUT3_SOURCE = source_file(
         ...
 
 
-    # TODO: Return one answer written a character at a time, starting from the
-    #   empty text and state (0, 0). Each step, mask next_scores(text) to what
-    #   allowed(state) gives, pick one character with torch.multinomial of the
-    #   softmax and the generator, and add it. Stop after END. Otherwise move
-    #   the state on with step. Give up after limit characters.
+    # TODO: Write one answer a character at a time and return it as a string.
+    #   Start with an empty text and the state (0, 0). At each step, mask the
+    #   scores next_scores(text) so only the characters in allowed(state)
+    #   remain. Pick one character with torch.multinomial on the softmax of
+    #   the masked scores and the generator, and append it to the text. If
+    #   the character is END, return the text. Otherwise update the state
+    #   with step. After limit characters, return the text as it is.
     def constrained_text(
         next_scores: Callable[[str], Tensor],
         generator: torch.Generator,
@@ -863,7 +903,8 @@ OUT3_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the share of texts that is_valid accepts, as a plain number.
+    # TODO: Return the fraction of texts that is_valid accepts, as a Python
+    #   float. Example: for one valid text and one invalid text, return 0.5.
     def valid_share(texts: list[str]) -> float:
         ...
     ''',
@@ -926,10 +967,10 @@ def check_constrained_text(found: object) -> None:
                 raise Mismatch(f"{call} is {value_text(actual)}, but it should be the text, a string.")
 
             if not OUT3_REFERENCE["is_valid"](actual):
-                raise Mismatch(f"{call} wrote {actual!r}, which breaks the shape. Mask before every pick, with the state moved on after each character.")
+                raise Mismatch(f"{call} wrote {actual!r}, which does not match the format. Mask the scores before every pick, and update the state with step after each character.")
 
             if actual != expected:
-                raise Mismatch(f"{call} wrote {actual!r}, but it should write {expected!r}. Draw once per character, with the mask applied first.")
+                raise Mismatch(f"{call} wrote {actual!r}, but it should write {expected!r}. Draw exactly once per character, after applying the mask.")
 
 
 def check_out3(checker: Checker) -> None:
@@ -950,7 +991,7 @@ def check_out3(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="valid_share",
-        description="gives the share of valid answers",
+        description="returns the fraction of valid answers",
         inputs=(
             (['{"name": "ab", "age": 7}\n', '{"name": "ab, "age": 7}\n', '{"name": "c", "age": 12}\n'],),
             (['{"name": "x", "age": 5}\n', '{"name": "x", "age": 5}', '{"age": 5, "name": "x"}\n', '{"name": "x", "age": 5.0}\n'],),
@@ -968,10 +1009,12 @@ OUT3 = Exercise(
     source=OUT3_SOURCE,
     solution=OUT3_SOLUTION,
     hints={
-        "mask_scores": "Make a mask of False, shaped like scores, with torch.zeros_like and dtype=torch.bool. Set True at "
-        "CHARACTERS.index of each allowed character, then masked_fill where the mask is False.",
-        "constrained_text": "A for loop over range(limit). mask_scores of next_scores(text) and allowed(state), then "
-        "torch.multinomial of the softmax with 1 draw and the generator. CHARACTERS of that position is the character.",
+        "mask_scores": "Make a boolean mask of False values shaped like scores, with torch.zeros_like and "
+        "dtype=torch.bool. Set it to True at CHARACTERS.index of each allowed character. Then use masked_fill where "
+        "the mask is False.",
+        "constrained_text": "Use a for loop over range(limit). Inside, call mask_scores on next_scores(text) and "
+        "allowed(state). Then call torch.multinomial on the softmax with 1 draw and the generator. The character is "
+        "CHARACTERS at the index it returns.",
         "valid_share": "Count the texts is_valid accepts with sum, then divide by len(texts).",
     },
     introduces=("constrained decoding",),
@@ -1050,38 +1093,45 @@ def sine_signals(
 
 OUT4_LESSON = prose(
     """
-    A language model writes tokens. To make it act, RT-2 wrote a robot's
-    moves as tokens too. Each move is 8 numbers, a stop flag and 7 for how
-    the arm moves and grips. The 7 continuous ones are cut into 256 even
-    bins, and each bin is a token. PaLI-X already had a token for each whole
-    number to 1,000. PaLM-E had none, so its 256 rarest tokens were taken.
+    A language model writes tokens. To make a language model control a
+    robot, RT-2 wrote the robot's actions as tokens too. Each action is 8
+    numbers. One is a flag that says whether to stop, and 7 say how the arm
+    moves and grips. The range of each of those 7 continuous numbers is cut
+    into 256 equal bins, and each bin is a token. PaLI-X already had a token
+    for each whole number up to 1,000. PaLM-E had no such tokens, so RT-2
+    used its 256 least used tokens for the bins.
 
     ```text
-    bin = floor((value - low) / (high - low) * bins), kept from 0 to bins - 1
+    bin = floor((value - low) / (high - low) * bins), clamped to 0 to bins - 1
     value back = low + (bin + 0.5) * (high - low) / bins
     ```
 
-    Reading a bin back gives its middle, at most half a bin from the true
-    value. With 256 bins over -1 to 1 that is 0.0039.
+    Converting a bin back to a value gives the middle of the bin. That is at
+    most half a bin width from the true value. With 256 bins from -1 to 1,
+    half a bin width is 0.0039.
 
-    Tokens also keep out2's two right answers. Here a cart steers 0.6 left or
-    right around an obstacle, either one fine. A head of one number and a
-    head of 256 bin tokens trained 1,500 steps on three seeds. A steer counts
-    within 0.08 of a fine one.
+    Tokens also handle out2's problem of two right answers. Here a cart
+    steers 0.6 left or right around an obstacle, and either way is fine. Two
+    heads trained for 1,500 steps on three seeds. One outputs a single
+    number, and the other outputs scores for 256 bin tokens. A steer counts
+    as fine if it is within 0.08 of a fine steer.
 
     | Head | Steers fine |
     |---|---|
     | one number, squared error | 0% |
-    | 256 bin tokens, the likeliest | 100% |
+    | 256 bin tokens, most likely bin taken | 100% |
 
-    The number head steers straight at the obstacle. The tokens' softmax
-    holds both sides, and the likeliest bin is always one of them.
+    The number head outputs the average and steers straight at the obstacle.
+    The softmax over the bin tokens puts high probability on both sides, and
+    the most likely bin is always on one of them.
 
-    Any signal can be written the same way through vq1's codebook. Cut it
-    into pieces, write each piece as its nearest code's id, and read the ids
-    back as the codes. Here codebooks were fitted to sums of sines by
-    k-means, each code moved to the mean of its pieces. The error left is
-    the share of the signal's sum of squares that the codes miss.
+    Any signal can also be written as tokens, through a codebook like the
+    one in vq1. Cut the signal into pieces, and write each piece as the id of
+    its nearest code. To read the signal back, replace each id with its code.
+    Here the codebooks were fitted to sums of sines by k-means. K-means
+    repeatedly moves each code to the mean of the pieces nearest to it. The
+    error left is the fraction of the signal's sum of squares that the codes
+    miss.
 
     | Codes | Error left |
     |---|---|
@@ -1089,19 +1139,21 @@ OUT4_LESSON = prose(
     | 32 | 3.1% to 3.3% |
     | 128 | 1.0% |
 
-    Then a model writes a signal as it writes text. Here a wave runs 32
-    steps, then rises or falls, either one right. out3's GRU learned such
-    series as ids, 8 steps to a piece and 128 codes, and wrote each future
-    by sampling 4 ids. A head of 32 numbers learned the future by squared
-    error. Each trained 6,000 steps on three seeds.
+    Then a model can write a signal the same way it writes text. Here a wave
+    runs for 32 steps, then either rises or falls, and both are right. out3's
+    GRU learned such series as ids, with 8 steps per piece and 128 codes. It
+    wrote each future, the next 32 steps, by sampling 4 ids. For comparison,
+    a head of 32 numbers learned the future with the squared error. Each
+    trained for 6,000 steps on three seeds.
 
-    | Head | Futures nearer a right one than the two's average |
+    | Head | Futures closer to a right future than to the average of the two |
     |---|---|
     | 32 numbers, squared error | 0% |
     | 4 codebook ids, sampled | 99.7% to 99.8% |
 
-    The number head writes nearer the average, the wave with neither rise
-    nor fall. The sampled ids pick a side, rising in 50% to 54% of series.
+    The number head writes a future close to the average of the two, a wave
+    that neither rises nor falls. The sampled ids pick one side, rising in
+    50% to 54% of series.
     """,
 )
 
@@ -1116,8 +1168,12 @@ OUT4_SOURCE = source_file(
     torch.tensor([[1.0, 2.0], [3.0, 4.0]])[torch.tensor([1, 1, 0])].flatten()    # tensor([3., 4., 3., 4., 1., 2.])
 
 
-    # TODO: Return each value's bin, a whole number from 0 to bins - 1, for
-    #   bins even bins from low to high. A value at high goes in the last bin.
+    # TODO: The range from low to high is cut into `bins` equal bins. Return
+    #   the bin index of each value, a whole number from 0 to bins - 1, with
+    #   the formula from the lesson. A value equal to high goes in the last
+    #   bin.
+    #   Example: to_bins(torch.tensor([-1.0, 0.0, 1.0]), -1.0, 1.0, 4)
+    #   returns tensor([0, 2, 3]).
     def to_bins(
         values: Tensor,
         low: float,
@@ -1127,7 +1183,10 @@ OUT4_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the middle of each bin of ids, as floats, for the same bins.
+    # TODO: Return the middle value of each bin index in ids, as floats, for
+    #   the same bins as to_bins.
+    #   Example: from_bins(torch.tensor([0, 3]), -1.0, 1.0, 4) returns
+    #   tensor([-0.7500,  0.7500]).
     def from_bins(
         ids: Tensor,
         low: float,
@@ -1137,13 +1196,18 @@ OUT4_SOURCE = source_file(
         ...
 
 
-    # vq1's distances and nearest codes.
+    # The distance and nearest code functions from vq1.
 ''' + indented(NEAREST_PART) + '''
 
 
-    # TODO: signal_ids returns the id of the nearest code for each piece of
-    #   signal, cut into pieces as long as a code. write_signal returns the
-    #   signal the ids spell, their codes one after another, flat.
+    # TODO: Finish both functions. codebook has shape (codes, piece). In
+    #   signal_ids, cut the 1D signal into pieces of length piece, and return
+    #   the id of the nearest code for each piece. In write_signal, replace
+    #   each id with its code, and return the codes joined end to end as one
+    #   flat 1D tensor.
+    #   Example: with codebook [[0., 0.], [1., 1.]], signal_ids of
+    #   tensor([0.9, 1.1, 0.1, -0.1]) returns tensor([1, 0]), and
+    #   write_signal of tensor([1, 0]) returns tensor([1., 1., 0., 0.]).
     def signal_ids(
         signal: Tensor,
         codebook: Tensor,
@@ -1200,7 +1264,7 @@ def check_out4(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="to_bins",
-        description="gives each value its bin, the edges kept inside",
+        description="returns each value's bin, with values at the edges kept inside 0 to bins - 1",
         inputs=(
             (torch.tensor([-1.0, -0.6, 0.0, 0.3, 1.0]), -1.0, 1.0, 4),
             (torch.tensor([[0.0, 2.0], [9.4, 10.0]]), 0.0, 10.0, 8),
@@ -1211,7 +1275,7 @@ def check_out4(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="from_bins",
-        description="gives each bin's middle",
+        description="returns the middle of each bin",
         inputs=(
             (torch.tensor([0, 1, 3]), -1.0, 1.0, 4),
             (torch.tensor([[0, 7], [3, 4]]), 0.0, 10.0, 8),
@@ -1234,7 +1298,7 @@ def check_out4(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="write_signal",
-        description="reads the ids back as their codes, flat",
+        description="replaces the ids with their codes, as one flat tensor",
         inputs=(
             (torch.tensor([2, 0, 2]), codebook_a),
             (torch.tensor([5, 1, 1, 4]), codebook_b),
@@ -1251,11 +1315,12 @@ OUT4 = Exercise(
     source=OUT4_SOURCE,
     solution=OUT4_SOLUTION,
     hints={
-        "to_bins": "Scale the values to run from 0 to bins, then .floor() and .long() for whole numbers. .clamp(0, bins - 1) "
-        "keeps a value at high in the last bin.",
-        "from_bins": "Turn ids into floats, add 0.5 for the middle, then scale back by the bin width (high - low) / bins "
+        "to_bins": "Scale the values so they run from 0 to bins, then use .floor() and .long() to get whole numbers. "
+        "Then .clamp(0, bins - 1) keeps a value at high in the last bin.",
+        "from_bins": "Turn ids into floats, add 0.5 for the middle, then multiply by the bin width (high - low) / bins "
         "and add low.",
-        "signal_ids": "signal.view(-1, codebook.shape[1]) cuts it into pieces as long as a code. nearest_codes does the rest.",
+        "signal_ids": "signal.view(-1, codebook.shape[1]) cuts the signal into pieces as long as a code. Then pass the "
+        "pieces and the codebook to nearest_codes.",
         "write_signal": "Index codebook with the ids, then .flatten().",
     },
     introduces=(),
@@ -1656,18 +1721,19 @@ def measure_codebooks(
 
 QUIZ16_LESSON = prose(
     """
-    This quiz has no examples and no new tools. Each function combines moves
-    from Section 13. If a step is unclear, the exercise in the table shows it.
+    This quiz has no examples and no new tools. Each function combines steps
+    you learned in Section 13. If a step is unclear, go back to the exercise
+    the table names for it.
 
-    | Function | Moves | Shown in |
+    | Function | Steps | Shown in |
     |---|---|---|
-    | `row_tokens` | each number times its column's weight plus its bias, then each category looked up in its column's table | table1 |
-    | `normalized_patches` | each series against its own mean and spread, padded at the end, then cut into patches | series1, series2 |
-    | `residual_ids` | each codebook's nearest entry to what the levels before it left over | sound2 |
-    | `clip_loss` | CLIP's loss both ways, and the share of rows whose own partner scores highest | clip1, clip2 |
-    | `gated_cross` | cross attention through a tanh gate that starts closed, skipped where the memory is missing | fuse2, fuse3 |
-    | `prefix_inputs` | the projected features in front of the text's embeddings, then positions over the whole row | bridge1 |
-    | `action_values` | scores masked to the action ids, the likeliest taken, then read back as its bin's middle | out3, out4 |
+    | `row_tokens` | each number times its column's weight plus its column's bias, then each category looked up in its column's table | table1 |
+    | `normalized_patches` | each series normalized by its own mean and standard deviation, padded at the end, then cut into patches | series1, series2 |
+    | `residual_ids` | at each level, the codebook entry nearest to what the earlier levels left over | sound2 |
+    | `clip_loss` | CLIP's loss in both directions, and the fraction of rows whose own partner scores highest | clip1, clip2 |
+    | `gated_cross` | cross attention scaled by the tanh of a gate that starts at 0, skipped in rows where the memory is missing | fuse2, fuse3 |
+    | `prefix_inputs` | the projected features in front of the text's embeddings, then position embeddings over the whole joined row | bridge1 |
+    | `action_values` | scores masked to the action ids, the highest scoring id taken, then turned into the middle of its bin | out3, out4 |
     """,
 )
 
@@ -1675,7 +1741,7 @@ QUIZ16_SOURCE = source_file(
     '''
     # quiz16.py
     #
-    # No examples and no new tools. Each function combines moves from Section 13.
+    # No examples and no new tools. Each function combines steps from Section 13.
 
     import torch
     import torch.nn as nn
@@ -1683,11 +1749,14 @@ QUIZ16_SOURCE = source_file(
     from torch import Tensor
 
 
-    # TODO: Return each row's tokens, of shape (rows, columns of numbers plus
-    #   columns of categories, size). A number's token is the number times its
-    #   column's row of weight, plus its column's row of bias. A category's
-    #   token is its id's row in its column's own table in tables. The number
-    #   tokens come first.
+    # TODO: Return the tokens of each table row, a tensor of shape
+    #   (rows, number columns + category columns, size). numbers has shape
+    #   (rows, number columns), and weight and bias have shape
+    #   (number columns, size). The token of a number in column j is the
+    #   number times row j of weight, plus row j of bias. categories has
+    #   shape (rows, category columns), and tables[j] is the embedding table
+    #   of category column j. The token of a category in column j is the row
+    #   of tables[j] at that category's id. Put the number tokens first.
     def row_tokens(
         numbers: Tensor,
         weight: Tensor,
@@ -1698,10 +1767,11 @@ QUIZ16_SOURCE = source_file(
         ...
 
 
-    # TODO: Normalize each row of series, less its own mean, over its `.std()`
-    #   plus 1e-5. Pad the row's end with `stride` copies of its last value, then
-    #   cut it into patches of `length` steps, a new one every `stride` steps.
-    #   Return the patches, of shape (rows, patches, length).
+    # TODO: Normalize each row of series by its own statistics, computing
+    #   (row - row mean) / (row.std() + 1e-5). Pad the end of each normalized
+    #   row with `stride` copies of its last value. Then cut it into patches
+    #   of `length` steps, starting a new patch every `stride` steps. Return
+    #   the patches, of shape (rows, patches, length).
     def normalized_patches(
         series: Tensor,
         length: int,
@@ -1710,10 +1780,11 @@ QUIZ16_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the ids residual quantization gives each row of z, of shape
-    #   (rows, levels). codebooks has shape (levels, entries, size). Each level
-    #   picks its codebook's entry nearest to what is left of z, by squared
-    #   distance, and takes that entry off what is left.
+    # TODO: Return the ids that residual quantization gives each row of z, a
+    #   tensor of shape (rows, levels). codebooks has shape (levels, entries,
+    #   size). Start with the residual equal to z. At each level, pick the
+    #   entry of that level's codebook nearest to the residual, by squared
+    #   distance, and subtract the chosen entry from the residual.
     def residual_ids(
         z: Tensor,
         codebooks: Tensor,
@@ -1721,12 +1792,14 @@ QUIZ16_SOURCE = source_file(
         ...
 
 
-    # TODO: Return CLIP's loss for a batch of pairs, where row i of a goes with
-    #   row i of b, and the share of rows of a whose best scoring row of b is
-    #   their own partner, as a plain number. Score every row of a against
-    #   every row of b by cosine similarity over temperature. The loss averages
-    #   the cross entropy that picks each row's partner from a to b and from b
-    #   to a.
+    # TODO: Row i of a and row i of b form a pair. Return two things. The
+    #   first is CLIP's loss, a tensor. The second is the fraction of rows of
+    #   a whose highest scoring row of b is their own partner, as a Python
+    #   float. The score of row i of a against row j of b is their cosine
+    #   similarity divided by temperature. The loss is the average of two
+    #   cross entropies. One picks the partner of each row of a among the
+    #   rows of b, and the other picks the partner of each row of b among the
+    #   rows of a.
     def clip_loss(
         a: Tensor,
         b: Tensor,
@@ -1736,9 +1809,10 @@ QUIZ16_SOURCE = source_file(
 
 
     # TODO: Return x after gated cross attention, skipping the rows with no
-    #   memory. cross is fuse2's MemoryAttention, called as cross(x, memory).
+    #   memory. x has shape (rows, steps, size) and has_memory has shape
+    #   (rows,). cross is fuse2's MemoryAttention, called as cross(x, memory).
     #   Scale its output by the tanh of gate. Add that to x in the rows where
-    #   has_memory is True, and leave x as it is where it is False.
+    #   has_memory is True, and leave x unchanged where it is False.
     def gated_cross(
         x: Tensor,
         memory: Tensor,
@@ -1749,10 +1823,10 @@ QUIZ16_SOURCE = source_file(
         ...
 
 
-    # TODO: Return what a GPT reads for features from another modality followed
-    #   by text ids. Run features through projector and put the result in
-    #   front of wte's embeddings of ids. Then add wpe's embedding of every
-    #   place in the joined row.
+    # TODO: Return the input vectors a GPT reads for features from another
+    #   modality followed by the text ids. Run features through projector,
+    #   and put the result in front of wte(ids) along the positions. Then add
+    #   the position embedding from wpe for every position of the joined row.
     def prefix_inputs(
         features: Tensor,
         projector: nn.Module,
@@ -1763,11 +1837,12 @@ QUIZ16_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the value a model's scores pick, one per row, as RT-2 reads
-    #   an action. Only ids `first` to `first + bins - 1` stand for actions, so
-    #   set every other id's score to minus infinity. Take each row's likeliest
-    #   id, and return the middle of its bin, with the range from low to high
-    #   cut into `bins` equal bins and id `first` the lowest bin.
+    # TODO: Return the action value the scores pick, one per row, the way
+    #   RT-2 reads an action. Only the ids from `first` to `first + bins - 1`
+    #   stand for actions, so set every other id's score to minus infinity.
+    #   Take each row's highest scoring id. The range from low to high is cut
+    #   into `bins` equal bins, and id `first` stands for the lowest bin.
+    #   Return the middle value of the chosen id's bin.
     def action_values(
         scores: Tensor,
         low: float,
@@ -1964,7 +2039,7 @@ def expect_loss_and_share(
     )
 
     if not isinstance(actual, tuple) or len(actual) != 2:
-        raise Mismatch(f"{call} is {value_text(actual)}, but it should be a pair, the loss and the share of rows whose partner scores highest.")
+        raise Mismatch(f"{call} is {value_text(actual)}, but it should be a pair, the loss and the fraction of rows whose partner scores highest.")
 
     expect_tensor(
         call=f"the loss from {call}",
@@ -1972,7 +2047,7 @@ def expect_loss_and_share(
         expected=expected[0],
     )
     expect_close(
-        call=f"the share from {call}",
+        call=f"the fraction from {call}",
         actual=actual[1],
         expected=expected[1],
     )
@@ -2007,7 +2082,7 @@ def check_quiz16(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="normalized_patches",
-        description="measures each row against itself, pads its end and cuts it into patches",
+        description="normalizes each row by its own mean and standard deviation, pads its end and cuts it into patches",
         inputs=(
             (small_tensor(1610, 2, 10), 4, 2),
             (small_tensor(1611, 3, 13), 6, 3),
@@ -2017,7 +2092,7 @@ def check_quiz16(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="residual_ids",
-        description="matches each level against what the levels before it left",
+        description="matches each level against the residual the earlier levels left",
         inputs=(
             (random_input(1620, 4, 2), random_input(1621, 3, 5, 2)),
             (random_input(1622, 6, 3), random_input(1623, 2, 4, 3)),
@@ -2028,7 +2103,7 @@ def check_quiz16(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="clip_loss",
-        description="averages the cross entropy both ways, and finds each row's partner",
+        description="averages the cross entropy in both directions, and the fraction of rows matched to their partner",
         inputs=(
             (*partner_pair(1630, 6, 3), 0.07),
             (*partner_pair(1632, 8, 5), 0.5),
@@ -2039,7 +2114,7 @@ def check_quiz16(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="gated_cross",
-        description="adds the gated cross attention to x where the memory is there",
+        description="adds the gated cross attention to x where the memory is present",
         inputs=tuple(
             (
                 random_input(seed, 3, 3, 8),
@@ -2055,7 +2130,7 @@ def check_quiz16(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="prefix_inputs",
-        description="puts the projected features first and gives every place its position",
+        description="puts the projected features first and adds a position embedding at every position",
         inputs=(
             (
                 random_input(1650, 2, 3, 5),
@@ -2077,7 +2152,7 @@ def check_quiz16(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="action_values",
-        description="masks the scores to the action ids, takes the likeliest and reads its bin's middle",
+        description="masks the scores to the action ids, takes the highest and returns the middle of its bin",
         inputs=(
             (action_scores(1660, 5, 12, {0: 0, 1: 10, 2: 3, 3: 11}), -1.0, 1.0, 6, 4),
             (action_scores(1661, 3, 9, {0: 4, 1: 8}), 0.0, 10.0, 4, 0),
@@ -2095,21 +2170,25 @@ QUIZ16 = Exercise(
     solution=QUIZ16_SOLUTION,
     hints={
         "row_tokens": "numbers.unsqueeze(-1) gives each number a last axis of size 1, which broadcasts against weight. "
-        "Column j's category tokens are tables[j] indexed by categories[:, j]. Stack those on dim 1, then join both parts.",
-        "normalized_patches": "mean and std over dim 1 with keepdim=True keep one number per row. Repeat the "
-        "normalized row's last column with .expand, join it on, and .unfold on dim 1 cuts the patches.",
-        "residual_ids": "Keep what is left of z, starting with z. For each codebook, compare it with every entry "
-        "through unsqueeze, take the argmin of the summed squares, and take the chosen entries off.",
-        "clip_loss": "F.normalize with dim=1 makes every row length 1, so a matrix multiply gives the cosines. Row "
-        "i's right class is i, from torch.arange. The other direction scores the transpose. For the share, compare "
-        "each row's argmax with those classes, as floats, and take the mean with .item().",
-        "gated_cross": "cross(x, memory) gives an output shaped like x. torch.where lines up with x once has_memory has "
-        "shape (rows, 1, 1), and torch.zeros_like gives the rows that add nothing.",
+        "Column j's category tokens are tables[j] indexed by categories[:, j]. Stack those on dim 1, then "
+        "concatenate the number tokens and the category tokens on dim 1.",
+        "normalized_patches": "Take mean and std over dim 1 with keepdim=True, which keeps one number per row. "
+        "Repeat the normalized rows' last column with .expand and concatenate it at the end. Then .unfold on dim 1 "
+        "cuts the patches.",
+        "residual_ids": "Keep the residual in a variable, starting with z. For each codebook, compare the residual "
+        "with every entry by broadcasting with unsqueeze. Take the argmin of the summed squared differences, then "
+        "subtract the chosen entries from the residual.",
+        "clip_loss": "F.normalize with dim=1 makes every row length 1, so a matrix multiply gives the cosine "
+        "similarities. The right class for row i is i, from torch.arange. For the other direction, use the "
+        "transpose of the scores. For the fraction, compare each row's argmax with those classes, convert to "
+        "floats, and take the mean with .item().",
+        "gated_cross": "cross(x, memory) returns an output shaped like x. torch.where broadcasts against x once "
+        "has_memory has shape (rows, 1, 1). torch.zeros_like gives the zeros to add in rows with no memory.",
         "prefix_inputs": "torch.cat on dim 1 joins the prefix and the text. The positions run over the joined length, "
         "so look up torch.arange of that length in wpe.",
-        "action_values": "A mask of False over the scores' last dimension, True from first up to first + bins, marks "
-        "the action ids. masked_fill the rest with float(\"-inf\") and take argmax over the last dimension. Take "
-        "first off for the bin, then read its middle, each bin (high - low) / bins wide.",
+        "action_values": "Make a boolean mask over the scores' last dimension, True from first up to first + bins "
+        "and False elsewhere. Use masked_fill to set the rest to float(\"-inf\"), then take argmax over the last "
+        "dimension. Subtract first to get the bin, then compute its middle. Each bin is (high - low) / bins wide.",
     },
     introduces=(),
     check=check_quiz16,

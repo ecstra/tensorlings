@@ -33,11 +33,12 @@ COMBINING = Chapter(
         # Combining
 
         Section 14 is about building modules of your own. Every structure
-        assumes something about the problem, and a module is a choice of
-        which assumptions to make. This chapter joins the pieces the course
-        built: a side input that scales features, a gate against a sum, a
-        new branch on a trained model, mixing across and within positions,
-        and a guide to picking the structure for a problem you haven't seen.
+        assumes something about the problem, so designing a module means
+        choosing which assumptions to make. This chapter combines pieces the
+        course already built. It covers a second input that scales features,
+        a gate compared with a plain sum, a new branch added to a trained
+        model, and mixing across and within positions. It ends with a guide to
+        picking the structure for a problem you haven't seen.
 
         ## Further reading
 
@@ -208,33 +209,41 @@ def conditioned_error(
 COMBINE1_LESSON = prose(
     """
     Section 14 is about building modules of your own. Each structure assumes
-    something about the problem, and a module is a choice of assumptions.
+    something about the problem, so designing a module means choosing which
+    assumptions to make.
 
     Often a second input should change what a model does with the first. A
     question changes what to look for in an image. An instruction changes
-    which number to read.
+    which number to read. This second input is called the condition.
 
-    The plain way is to join the condition onto every position's features.
-    Perez and colleagues point out what that buys. A Linear on the joined
-    input adds a bias per feature, a shift that depends on the condition.
+    The simple way is to concatenate the condition onto every position's
+    features. Perez and colleagues point out what this achieves. A Linear
+    layer on the joined input adds a term to each output feature that
+    depends on the condition. So the condition can only shift each feature,
+    like a bias.
 
-    Their **FiLM** layer scales as well. A generator computes a scale and a
-    shift from the condition, one pair per feature, the same at every position.
+    Their **FiLM** layer can scale the features as well. A small network,
+    called the generator, computes a scale and a shift from the condition.
+    There is one scale and one shift per feature, and they are the same at
+    every position.
 
     ```text
     FiLM(h) = scale(condition) * h + shift(condition)
     ```
 
-    A scale can do what a shift can't. A scale of 0 turns a feature off, and
-    a negative one flips it, however large the feature is. The paper put a
-    ReLU after each FiLM and found 36% of its scales negative. On the CLEVR
-    reasoning benchmark it roughly halved the best error of methods without
-    extra supervision, from relation networks' 4.5% to 2.3%.
+    A scale can do things a shift can't. A scale of 0 turns a feature off,
+    and a negative scale flips its sign, however large the feature is. The
+    paper put a ReLU after each FiLM layer and found that 36% of its scales
+    were negative. On the CLEVR reasoning benchmark, FiLM roughly halved the
+    best error among methods without extra supervision, from 4.5% for
+    relation networks to 2.3%.
 
-    Here the condition is one of 8 instructions. Each input holds 6
-    positions of 4 features. The instruction says which feature to average,
-    and whether to flip its sign. Each model trained for 1,500 steps, on
-    three seeds, then met new inputs, and new inputs 3 times larger.
+    Here the condition is one of 8 instructions, given as a one hot vector.
+    Each input has 6 positions with 4 features each. The instruction says
+    which feature to average over the positions, and whether to flip its
+    sign. Each model trained for 1,500 steps on three seeds. Then it was
+    tested on new inputs, and on new inputs 3 times larger than any it
+    trained on. The table shows the mean squared error.
 
     | Model | Weights | Error | Error, inputs 3 times larger |
     |---|---|---|---|
@@ -242,12 +251,15 @@ COMBINE1_LESSON = prose(
     | joined, two hidden layers of 32 | 1,505 | 0.0002 to 0.0003 | 0.11 to 0.22 |
     | FiLM, one hidden layer of 16 | 385 | 0.00003 to 0.00011 | 0.043 to 0.050 |
 
-    Guessing the average scores 0.053 and 0.47. In range every model fits. On
-    larger inputs FiLM's error is 2 to 5 times lower than either joined model's.
+    Guessing the average answer gives an error of 0.053 on normal inputs and
+    0.47 on the larger ones. On inputs like the training data, every model
+    fits well. On larger inputs, FiLM's error is 2 to 5 times lower than
+    either joined model's.
 
-    Which half does the work? The paper's test holds one half at its average
-    over the training data, so the condition no longer moves it. Here it is on
-    the trained FiLM model, on new inputs, three seeds.
+    Which half of FiLM does the work, the scale or the shift? The paper
+    tested this by fixing one half at its average over the training data, so
+    the condition no longer changes it. Here is that test on the trained FiLM
+    model, on new inputs, over three seeds.
 
     | Held at its average | Error |
     |---|---|
@@ -255,13 +267,15 @@ COMBINE1_LESSON = prose(
     | the shift | 0.013 to 0.047 |
     | the scale | 0.054 to 0.097 |
 
-    Without its scale the model is no better than a guess. The condition works
-    mostly through the scale, as on CLEVR, where the averaged scale dropped
-    accuracy by 65.4% and the averaged shift by 1.0%.
+    With its scale fixed, the model is no better than a guess. So the
+    condition works mostly through the scale. The same was true on CLEVR,
+    where fixing the scale at its average dropped accuracy by 65.4%, and
+    fixing the shift dropped it by 1.0%.
 
-    The paper's appendix makes the scale 1 plus a change, so no feature starts
-    switched off, and found it made no real difference. combine3 comes back to
-    such starts.
+    The paper's appendix also tried computing the scale as 1 plus a learned
+    change, so that no feature starts switched off. It found this made no
+    real difference. combine3 comes back to the question of how a new layer
+    should start.
     """,
 )
 
@@ -274,13 +288,15 @@ COMBINE1_SOURCE = source_file(
     from torch import Tensor
 
     scale = torch.tensor([[2.0, 0.0]])                  # one row per input, one number per channel
-    spread = scale.unsqueeze(1) * torch.ones(1, 3, 2)   # tensor([[[2., 0.], [2., 0.], [2., 0.]]]), at all 3 positions
+    spread = scale.unsqueeze(1) * torch.ones(1, 3, 2)   # tensor([[[2., 0.], [2., 0.], [2., 0.]]]), the same scale at all 3 positions
 
 
-    # TODO: Finish forward. features has shape (batch, positions, channels) and
-    #   condition (batch, condition_size). Compute a scale with to_scale and a
-    #   shift with to_shift, one number per channel. Return scale times
-    #   features plus shift, the same scale and shift at every position.
+    # TODO: Finish forward. features has shape (batch, positions, channels),
+    #   and condition has shape (batch, condition_size). Compute a scale with
+    #   to_scale(condition) and a shift with to_shift(condition), each of
+    #   shape (batch, channels). Return scale * features + shift, with the
+    #   same scale and shift at every position. The result has the shape of
+    #   features.
     class FiLM(nn.Module):
         def __init__(
             self,
@@ -302,9 +318,10 @@ COMBINE1_SOURCE = source_file(
     copies = torch.ones(2, 3).unsqueeze(1).expand(-1, 4, -1)    # shape (2, 4, 3), each row copied to 4 positions
 
 
-    # TODO: Return features, of shape (batch, positions, channels), with the
-    #   condition, of shape (batch, size), joined onto every position's
-    #   channels. The result has shape (batch, positions, channels + size).
+    # TODO: Return features with the condition concatenated onto every
+    #   position's channels. features has shape (batch, positions, channels)
+    #   and condition has shape (batch, size). The result has shape
+    #   (batch, positions, channels + size).
     def concatenated(
         features: Tensor,
         condition: Tensor,
@@ -312,9 +329,10 @@ COMBINE1_SOURCE = source_file(
         ...
 
 
-    # TODO: Finish forward. Embed x, of shape (batch, positions, 4), run film on
-    #   it with the condition, then a ReLU. Average over the positions and run
-    #   head, giving one answer per input, of shape (batch,).
+    # TODO: Finish forward. x has shape (batch, positions, 4). Run embed on x,
+    #   run film on the result with the condition, then apply a ReLU. Average
+    #   over the positions, run head, and return one answer per input, of
+    #   shape (batch,).
     class FilmNet(nn.Module):
         def __init__(self, hidden: int = 16) -> None:
             super().__init__()
@@ -330,7 +348,7 @@ COMBINE1_SOURCE = source_file(
             ...
 
 
-    # The joined model of the lesson's first row, for comparison.
+    # The joined model from the first row of the lesson's table, for comparison.
     class ConcatNet(nn.Module):
         def __init__(self, hidden: int = 16) -> None:
             super().__init__()
@@ -481,7 +499,7 @@ def check_combine1(checker: Checker) -> None:
     checker.test_method(
         class_name="FilmNet",
         method="forward",
-        description="embeds, runs FiLM and a ReLU, averages, then reads one answer",
+        description="embeds, runs FiLM and a ReLU, averages over positions, then returns one answer per input",
         run=check_film_net,
     )
 
@@ -494,8 +512,8 @@ COMBINE1 = Exercise(
     source=COMBINE1_SOURCE,
     solution=COMBINE1_SOLUTION,
     hints={
-        "FiLM.forward": "self.to_scale(condition) has shape (batch, channels). Give it a dimension for the positions "
-        "with .unsqueeze(1) so it multiplies every position, and the same for the shift.",
+        "FiLM.forward": "self.to_scale(condition) has shape (batch, channels). Add a positions dimension with "
+        ".unsqueeze(1), so it broadcasts over every position. Do the same for the shift.",
         "concatenated": "Give the condition a positions dimension with .unsqueeze(1), copy it to features.shape[1] "
         "positions with .expand, then torch.cat along the last dimension.",
         "FilmNet.forward": "Run self.embed on x, pass that and the condition to self.film, take torch.relu, average over "
@@ -603,15 +621,16 @@ def reference_effective_weights(
 COMBINE2_LESSON = prose(
     """
     Adding and multiplying combine two signals in different ways. A sum
-    weighs several pieces of evidence for one answer. A product lets one
+    combines several pieces of evidence into one answer. A product lets one
     signal decide what happens to another.
 
-    Here a control of 2 picks one of two fixed linear maps, A or B, for an
-    input of 4 numbers. Three models, trained for 1,000 steps on three seeds.
+    Here a control input of 2 numbers, a one hot vector, picks one of two
+    fixed linear maps, A or B. The chosen map is applied to an input of 4
+    numbers. Three models trained for 1,000 steps on three seeds.
 
     - added: a Linear of the input plus a Linear of the control, no hidden layer.
-    - added, hidden: the two Linears summed inside a hidden layer of 16, then a ReLU and a head.
-    - gated: gating1's gate from the control, times a Linear of the input, then a head.
+    - added, hidden: the two Linears, each with 16 outputs, summed into a hidden layer, then a ReLU and a head.
+    - gated: a gate computed from the control as in gating1, multiplied by a Linear of the input, then a head.
 
     | Model | Weights | Error | Error, inputs 4 times larger |
     |---|---|---|---|
@@ -619,28 +638,33 @@ COMBINE2_LESSON = prose(
     | added, hidden | 162 | 0.00001 to 0.00002 | 1.56 to 1.91 |
     | gated | 162 | 0.0000 | 0.0000 |
 
-    Guessing the average scores 0.75 and 12.1. The gated model's errors
-    stayed below 0.0000000000002, which is rounding.
+    Guessing the average answer gives an error of 0.75 on normal inputs and
+    12.1 on the larger ones. The gated model's errors stayed below
+    0.0000000000002, which is only rounding error.
 
-    The sum alone has the same weights for every input, so it can't switch
-    maps. With a hidden layer, the control's shift pushes units on or off
-    through the ReLU. A large enough input overrides that shift, as it did
-    FiLM's joined model in combine1.
+    The plain sum uses the same weights on the input for every control, so
+    it can't switch maps. With a hidden layer, the control adds a shift to
+    each hidden unit, which can push the unit on or off through the ReLU.
+    But a large enough input overrides that shift. The same thing happened to
+    the joined model in combine1.
 
-    For a fixed control, the gated model is one linear map of the input. Its
-    weights are the head's weights times each unit's gate times the value's
-    weights. The control writes those **effective weights** anew on every pass.
+    For a fixed control, the gated model is a single linear map of the
+    input. Its weights are the head's weights, times each hidden unit's
+    gate, times the value layer's weights. These are called the **effective
+    weights**, and the control computes new ones on every forward pass.
 
     ```text
     W(control) = W_head @ diag(sigmoid(gate(control))) @ W_value
     ```
 
-    After training, the control for A wrote weights within 0.0000003 of A,
-    and the control for B within 0.0000002 of B, on every seed.
+    After training, the control for A gave effective weights within 0.0000003
+    of A. The control for B gave weights within 0.0000002 of B, on every
+    seed.
 
-    Now flip the task. The answer is A of the input plus another fixed map of
-    a second input of 2 numbers. Both are evidence for the same answer, and
-    neither picks anything. The same three models, trained the same way.
+    Now change the task. The answer is map A applied to the input, plus
+    another fixed map applied to a second input of 2 numbers. Both inputs are
+    evidence for the same answer, and neither one picks anything. The same
+    three models were trained the same way.
 
     | Model | Error | Error, inputs 4 times larger |
     |---|---|---|
@@ -648,14 +672,15 @@ COMBINE2_LESSON = prose(
     | added, hidden | 0.00002 to 0.0001 | 0.60 to 1.12 |
     | gated | 0.0003 to 0.0004 | 1.18 to 1.29 |
 
-    Guessing the average scores 1.18 and 18.5. The plain sum is exact, below
-    0.000000000004, since the answer is a sum. The gate can only scale the
-    first input's units by numbers from 0 to 1. It fakes the sum in range and
-    misses once the inputs grow.
+    Guessing the average answer gives an error of 1.18 and 18.5. The plain
+    sum is exact, with errors below 0.000000000004, because the answer is a
+    sum. The gate can only scale the first input's hidden units by numbers
+    from 0 to 1. It approximates the sum on inputs like the training data,
+    but fails once the inputs grow.
 
-    So multiply when one signal should control another, with a gate, FiLM or
-    attention's weights. Add when signals are evidence for the same answer,
-    as a residual adds a block's change to what came before.
+    So multiply when one signal should control another, as a gate, FiLM or
+    attention's weights do. Add when signals are evidence for the same
+    answer, the way a residual connection adds a block's change to its input.
     """,
 )
 
@@ -669,12 +694,13 @@ COMBINE2_SOURCE = source_file(
 
     gates = torch.sigmoid(torch.tensor([0.0, 10.0]))                # tensor([0.5000, 1.0000])
     rows = torch.tensor([[2.0], [3.0]]) * torch.ones(2, 4)          # each row times its own number
-    batched = torch.ones(5, 2, 3) @ torch.ones(5, 3, 4)             # shape (5, 2, 4), one product per input
+    batched = torch.ones(5, 2, 3) @ torch.ones(5, 3, 4)             # shape (5, 2, 4), one matrix product per input
 
 
-    # TODO: Finish forward. Gate each of value's hidden units by sigmoid of gate
-    #   on the control, then run head. x has shape (batch, 4) and control
-    #   (batch, 2). The result has shape (batch, 2).
+    # TODO: Finish forward. x has shape (batch, 4) and control has shape
+    #   (batch, 2). Compute the gates as the sigmoid of gate(control), one
+    #   per hidden unit. Multiply value(x) by the gates, run head on the
+    #   product, and return the result, of shape (batch, 2).
     class Gated(nn.Module):
         def __init__(self, hidden: int = 16) -> None:
             super().__init__()
@@ -690,8 +716,8 @@ COMBINE2_SOURCE = source_file(
             ...
 
 
-    # TODO: Finish forward. Add from_control of the control to value of x,
-    #   take a ReLU, then run head. The result has shape (batch, 2).
+    # TODO: Finish forward. Add from_control(control) to value(x), apply a
+    #   ReLU, then run head. Return the result, of shape (batch, 2).
     class Added(nn.Module):
         def __init__(self, hidden: int = 16) -> None:
             super().__init__()
@@ -707,10 +733,11 @@ COMBINE2_SOURCE = source_file(
             ...
 
 
-    # TODO: Return the effective weights a Gated model gets from each control,
-    #   of shape (batch, 2, 4): head's weight times each hidden unit's gate
-    #   times value's weight. control has shape (batch, 2). Record nothing for
-    #   autograd.
+    # TODO: Return the effective weights of a Gated model for each control,
+    #   a tensor of shape (batch, 2, 4). control has shape (batch, 2). Use the
+    #   formula from the lesson. Multiply each row of model.value.weight by
+    #   its hidden unit's gate, then matrix multiply model.head.weight by the
+    #   result. Work inside torch.no_grad(), so autograd records nothing.
     def effective_weights(
         model: Gated,
         control: Tensor,
@@ -817,7 +844,7 @@ def check_effective_weights(found: object) -> None:
             hook.remove()
 
         if any(seen):
-            raise Mismatch("effective_weights recorded for autograd. Work inside torch.no_grad().")
+            raise Mismatch("effective_weights ran while autograd was recording. Work inside torch.no_grad().")
 
         expect_tensor(
             call=f"effective_weights of a Gated model for {len(controls)} controls",
@@ -841,7 +868,7 @@ def check_combine2(checker: Checker) -> None:
     )
     checker.test(
         function="effective_weights",
-        description="gives the linear map each control writes",
+        description="returns the effective weights each control produces",
         run=check_effective_weights,
     )
 
@@ -857,8 +884,9 @@ COMBINE2 = Exercise(
         "Gated.forward": "torch.sigmoid(self.gate(control)) gives one gate per hidden unit. Multiply it by "
         "self.value(x), then run self.head.",
         "Added.forward": "Sum self.value(x) and self.from_control(control), take torch.relu, then run self.head.",
-        "effective_weights": "Inside torch.no_grad(), the gates have shape (batch, hidden). .unsqueeze(-1) lets them "
-        "scale the rows of model.value.weight, and model.head.weight @ that gives (batch, 2, 4).",
+        "effective_weights": "Work inside torch.no_grad(). The gates have shape (batch, hidden). Adding a last "
+        "dimension with .unsqueeze(-1) lets them scale the rows of model.value.weight. Then model.head.weight @ that "
+        "product gives shape (batch, 2, 4).",
     },
     introduces=(),
     check=check_combine2,
@@ -963,34 +991,40 @@ def reference_start_gap(
 
 COMBINE3_LESSON = prose(
     """
-    A model that already works sometimes needs a new piece, like a branch
+    Sometimes a model that already works needs a new piece, such as a branch
     that reads a new input. ControlNet adds such a branch to a trained image
-    model, and lora1 added a low rank one.
+    model, and lora1 added a low rank branch.
 
-    The new branch can start random, or start as do nothing. With its last
-    Linear at zero, the model at step 0 gives exactly what it gave before.
-    residual3 used this start for a deep stack with no norm. Here it protects
-    a trained model.
+    The new branch can start with random weights, or it can start by doing
+    nothing. If the weight and bias of its last Linear layer start at zero,
+    the branch outputs zero. So at step 0 the model gives exactly the answers
+    it gave before. residual3 used this start to train a deep stack with no
+    normalization. Here it protects a trained model.
 
-    Zero only the last layer. With every layer at zero, the first layer's
-    gradient is multiplied by the last layer's zeros, and the last weight's by
-    the first's. Only the last bias moves, so the branch never reads its input.
+    Set only the last layer to zero. If every layer started at zero, the
+    first layer's gradient would be multiplied by the last layer's zero
+    weights. The last layer's weight gradient would be multiplied by the
+    first layer's outputs, which would also be zero. Only the last bias would
+    change, so the branch would never read its input.
 
-    ControlNet's authors gave the zero start's reason: no harmful noise
-    reaches the trained model while the new piece starts to learn. So measure
-    the error along the way, checked every 50 steps, not only at the end.
+    ControlNet's authors explained why they used the zero start. It means no
+    harmful noise reaches the trained model while the new piece starts to
+    learn. So it matters what the error does during training, not only at
+    the end. The runs below checked the error every 50 steps.
 
-    Here a residual model of 4 blocks was trained first. Then a branch read
-    4 new numbers and added its output to the stream before the second block.
-    The branch, starting from nothing, trained at 0.01, three seeds each.
+    Here a residual model of 4 blocks was trained first. Then a branch was
+    added that reads 4 new numbers. It adds its output to the residual stream
+    before the second block. The new branch trained with a learning rate of
+    0.01, on three seeds for each setup.
 
     - signal: the new numbers explain part of the answer, with 4,000 examples.
     - no signal: the new numbers explain nothing, with only 64 examples.
 
-    With signal the branch is wide, 512 hidden units, as ControlNet's is a
-    full copy of its model. The trained model trained too, at 0.001. Without
-    signal the branch had 64 units, and the trained model stayed frozen, as
-    ControlNet locks its own.
+    With signal, the branch is wide, with 512 hidden units, to mirror
+    ControlNet, whose branch is a full copy of its model. The trained model also
+    kept training, at a learning rate of 0.001. Without signal, the branch had
+    64 hidden units, and the trained model stayed frozen, the way ControlNet
+    locks its own model. The table shows the error.
 
     | Branch start | Signal, step 0 | Signal, step 1,500 | No signal, step 1,500 |
     |---|---|---|---|
@@ -998,23 +1032,28 @@ COMBINE3_LESSON = prose(
     | PyTorch's default | 0.23 to 0.28 | 0.0035 to 0.0048 | 0.0012 to 0.0017 |
     | Kaiming | 0.33 to 0.37 | 0.0042 to 0.0049 | 0.063 to 0.081 |
 
-    The trained model alone scored 0.252 with signal and 0.0005 without.
+    The trained model alone had an error of 0.252 with signal and 0.0005
+    without.
 
-    The zero start began exactly at the trained model and never rose above it
-    at any check. Every random start began somewhere else, the loud Kaiming
-    one up to 0.37. All of them learned the new input, ending 52 to 76 times
-    below the model alone, and the zero start ended lowest on every seed.
+    The zero start began at exactly the trained model's error, and its error
+    never rose above that at any check. Every random start began with a
+    different error, up to 0.37 for the Kaiming start, whose larger weights
+    add the most noise. All of them learned to use the new input, ending 52
+    to 76 times below the model alone. The zero start ended lowest on every
+    seed.
 
-    Without signal, every branch learned some noise from its 64 examples. The
-    zero start kept that smallest, ending about 1.5 times the model alone, and
-    no check passed 0.0011. PyTorch's default began at 0.017 to 0.030 and
-    ended 2.4 to 3.3 times the model alone, and Kaiming 124 to 160 times. With
-    every layer at zero, the signal run ended at 0.29 to 0.30, worse than the
-    model alone. That branch could never read its input.
+    Without signal, every branch learned some noise from its 64 examples.
+    The zero start learned the least. It ended at about 1.5 times the error
+    of the model alone, and no check went above 0.0011. PyTorch's default
+    start began at 0.017 to 0.030 and ended at 2.4 to 3.3 times the model
+    alone. Kaiming ended at 124 to 160 times. Last, a branch with every layer
+    at zero ended the signal run at 0.29 to 0.30. That is worse than the
+    model alone, because the branch could never read its input.
 
-    So use the zero start when the model already works and you don't know the
-    piece will help. In ControlNet's own test, starting those layers at random
-    pulled its results down to about those of its lite version.
+    So use the zero start when the model already works and you don't know
+    whether the new piece will help. In ControlNet's own test, starting those
+    layers at random lowered its results to about the level of its lite
+    version.
     """,
 )
 
@@ -1031,7 +1070,7 @@ COMBINE3_SOURCE = source_file(
     last.weight.shape    # torch.Size([2, 3]), its .bias has shape (2,)
 
 
-    # A trained model's block, a pre norm residual MLP.
+    # The trained model's block, a residual MLP with a LayerNorm before it.
     class Block(nn.Module):
         def __init__(self) -> None:
             super().__init__()
@@ -1042,7 +1081,7 @@ COMBINE3_SOURCE = source_file(
             return h + self.f(self.norm(h))
 
 
-    # The trained model the branch joins.
+    # The trained model that the branch is added to.
     class Base(nn.Module):
         def __init__(self) -> None:
             super().__init__()
@@ -1060,16 +1099,18 @@ COMBINE3_SOURCE = source_file(
             return self.head(self.norm(h)).squeeze(1)
 
 
-    # TODO: Set the weight and the bias of branch's last layer to zero, in
-    #   place, without recording for autograd. Leave every other layer as it is.
+    # TODO: Set the weight and the bias of the last layer of branch to zero,
+    #   in place, inside torch.no_grad(). Leave every other layer unchanged,
+    #   and return nothing.
     def zero_last_(branch: nn.Sequential) -> None:
         ...
 
 
-    # TODO: Finish forward. Run the base model on x, of shape (batch, 8), as
-    #   Base.forward does, but add branch of side, of shape (batch, 4), to the
-    #   stream just before self.base.blocks[at] runs, so at=1 adds it before
-    #   the second block. Return one answer per input.
+    # TODO: Finish forward. x has shape (batch, 8) and side has shape
+    #   (batch, 4). Run the base model on x the way Base.forward does, with
+    #   one change. Just before self.base.blocks[at] runs, add branch(side) to
+    #   the residual stream h. So at=1 adds it before the second block.
+    #   Return one answer per input, of shape (batch,).
     class WithBranch(nn.Module):
         def __init__(
             self,
@@ -1090,9 +1131,9 @@ COMBINE3_SOURCE = source_file(
             ...
 
 
-    # TODO: Return the largest change, as a plain number, between model's
-    #   answers for x and side and base's answers for x alone. Record nothing
-    #   for autograd.
+    # TODO: Return the largest absolute difference between model(x, side) and
+    #   base(x), over all inputs, as a Python float. It measures how far the
+    #   new branch moves the answers. Run both models inside torch.no_grad().
     def start_gap(
         model: nn.Module,
         base: nn.Module,
@@ -1197,19 +1238,19 @@ def check_zero_last(found: object) -> None:
         result = found(branch)
 
         if result is not None:
-            raise Mismatch(f"zero_last_ gave {value_text(result)}. It should change branch in place and give nothing back.")
+            raise Mismatch(f"zero_last_ returned {value_text(result)}. It should change branch in place and return nothing.")
 
         if branch[-1].weight.abs().max() != 0 or branch[-1].bias.abs().max() != 0:
             raise Mismatch("After zero_last_, the last layer's weight and bias should both be all zeros.")
 
         if not torch.equal(branch[0].weight, before[0].weight) or not torch.equal(branch[0].bias, before[0].bias):
             raise Mismatch(
-                "zero_last_ changed the first layer too. Zero only the last one, or no gradient can ever reach "
-                "either layer.",
+                "zero_last_ changed the first layer too. Zero only the last layer. With both layers at zero, "
+                "neither layer's weights ever get a gradient.",
             )
 
         if not branch[-1].weight.requires_grad or not branch[-1].bias.requires_grad:
-            raise Mismatch("After zero_last_ the last layer no longer trains. Change its values, and keep requires_grad.")
+            raise Mismatch("After zero_last_, the last layer no longer requires a gradient. Change its values in place and leave requires_grad as it is.")
 
 
 def seeded_base() -> nn.Module:
@@ -1273,7 +1314,7 @@ def check_start_gap(found: object) -> None:
             hook.remove()
 
         if any(seen):
-            raise Mismatch("start_gap recorded for autograd. Run the models inside torch.no_grad().")
+            raise Mismatch("start_gap ran the models while autograd was recording. Run them inside torch.no_grad().")
 
         expect_close(
             call=f"start_gap of a model with {name}, on 6 inputs",
@@ -1286,18 +1327,18 @@ def check_start_gap(found: object) -> None:
 def check_combine3(checker: Checker) -> None:
     checker.test(
         function="zero_last_",
-        description="zeroes the last layer alone, in place",
+        description="zeroes only the last layer, in place",
         run=check_zero_last,
     )
     checker.test_method(
         class_name="WithBranch",
         method="forward",
-        description="adds the branch to the stream before block at",
+        description="adds the branch's output to the stream before block number at",
         run=check_with_branch,
     )
     checker.test(
         function="start_gap",
-        description="measures how far the new piece moves the answers",
+        description="returns the largest change the new branch makes to the answers",
         run=check_start_gap,
     )
 
@@ -1305,15 +1346,15 @@ def check_combine3(checker: Checker) -> None:
 COMBINE3 = Exercise(
     name="combine3",
     chapter=COMBINING,
-    title="A new branch that starts as do nothing",
+    title="A new branch that starts by doing nothing",
     lesson=COMBINE3_LESSON,
     source=COMBINE3_SOURCE,
     solution=COMBINE3_SOLUTION,
     hints={
         "zero_last_": "branch[-1] is the last layer. Inside torch.no_grad(), call .zero_() on its weight and on its "
         "bias.",
-        "WithBranch.forward": "Start from self.base.embed(x). Loop with enumerate over self.base.blocks, add "
-        "self.branch(side) when the index equals self.at, then run the block. End with the base's norm and head.",
+        "WithBranch.forward": "Start from self.base.embed(x). Loop with enumerate over self.base.blocks. When the "
+        "index equals self.at, add self.branch(side), then run the block. End with the base's norm and head.",
         "start_gap": "Inside torch.no_grad(), take model(x, side) minus base(x), then .abs().max().item().",
     },
     introduces=(),
@@ -1446,20 +1487,23 @@ COMBINE4_LESSON = prose(
     - across positions: each channel mixes its values from every position, one channel at a time.
     - within a position: the channels mix, one position at a time.
 
-    A transformer block does both, with attention across and its MLP within.
-    Tolstikhin and colleagues' MLP-Mixer does both with MLPs alone. A token
-    mixing MLP acts on each channel's column of positions, shared by every
-    channel. A channel mixing MLP acts on each position's row. The two are
-    interleaved, each with a layer norm and a skip connection. Its largest
-    model, pre-trained on 300 million images, reached 87.94% on ImageNet.
+    A transformer block does both. Its attention mixes across positions, and
+    its MLP mixes within each position. Tolstikhin and colleagues' MLP-Mixer
+    does both with MLPs only. A token mixing MLP acts on each channel's
+    column of values across the positions, with the same weights for every
+    channel. A channel mixing MLP acts on each position's row of channels.
+    The two kinds of block alternate, each with a layer norm and a skip
+    connection. MLP-Mixer's largest model, pre-trained on 300 million images,
+    reached 87.94% accuracy on ImageNet.
 
-    The task has 8 positions of 2 channels. The answer at position p is
-    `|x[p, 0] - x[p + 1, 1]|`, wrapping around at the end. It needs the next
-    position's channel 1 beside this one's channel 0, then a curved mix.
+    The task has 8 positions with 2 channels each. The answer at position p
+    is `|x[p, 0] - x[p + 1, 1]|`, where the last position wraps around to the
+    first. So each answer needs channel 0 of its own position together with
+    channel 1 of the next position, combined by a nonlinear function.
 
     Each model embeds the 2 channels into 16, runs 4 blocks of the kinds
-    below, and reads one answer per position. Each trained for 1,500 steps,
-    three seeds each.
+    below, and outputs one answer per position. Each model trained for 1,500
+    steps on three seeds. The table shows the mean squared error.
 
     | Blocks | Weights | Error |
     |---|---|---|
@@ -1468,15 +1512,18 @@ COMBINE4_LESSON = prose(
     | across, within, across, within | 3,473 | 0.0002 to 0.0005 |
     | within, across, within, across | 3,473 | 0.0003 to 0.0005 |
 
-    Guessing the average scores 0.221. Within only never sees position p + 1,
-    so it can't do much better than a guess. Across only mixes along the
-    positions, one channel at a time. Its embedding and head mix channels only
-    in straight lines, and its layer norms only center and rescale them. So it
-    got part of the way. Alternating gets both, in either order.
+    Guessing the average answer gives an error of 0.221. The within only
+    model never sees position p + 1, so it can't do much better than a guess.
+    The across only model mixes along the positions, but one channel at a
+    time. Its embedding and head mix the channels only linearly, and its
+    layer norms only center and rescale them. So it got only part of the way.
+    Alternating the two kinds of block gets both mixes, in either order.
 
-    The across block needn't be the token MLP. Here it is one head of
-    attention with a learned position per place, or a convolution of width 3
-    that wraps around. Each ran in the across, within order, three seeds.
+    The across block doesn't have to be the token MLP. The next table swaps
+    in two alternatives. One is a single head of attention, with a learned
+    position embedding added at each position. The other is a convolution of
+    width 3 that wraps around at the ends. Each ran in the across, within
+    order, on three seeds.
 
     | Across block | Weights | Error, 8 positions | Error, 16 positions |
     |---|---|---|---|
@@ -1484,20 +1531,22 @@ COMBINE4_LESSON = prose(
     | attention | 6,945 | 0.0005 to 0.0016 | can't run |
     | convolution | 2,497 | 0.0002 to 0.0003 | 0.0002 to 0.0003 |
 
-    The token MLP has a weight for every pair of places, so it takes exactly 8.
-    That suits MLP-Mixer, whose images always cut into the same patches.
-    Attention finds items by content at any distance, as in attention6. Here
-    it needs a learned position to tell the next place apart, and that table
-    holds 8. The convolution assumes a local pattern that means the same
-    anywhere, as this one does, so it runs at any length with the fewest
-    weights. Pick the across block by what links the positions.
+    The token MLP has a weight for every pair of positions, so it only works
+    with exactly 8 positions. That suits MLP-Mixer, whose images are always
+    cut into the same number of patches. Attention finds items by their
+    content at any distance, as in attention6. But here it needs a learned
+    position embedding to tell which position is next, and that table has
+    only 8 rows. The convolution assumes a local pattern that means the same
+    thing anywhere, which is true of this task. So it runs at any length,
+    with the fewest weights. Choose the across block by how the positions are
+    related.
 
-    A position's **reach** is the set of input positions that can change its
-    output. A gradient finds it, since an input with a nonzero gradient
-    changes the output when it moves.
+    The **reach** of an output position is the set of input positions that
+    can change its output. The gradient finds the reach. If an input has a
+    nonzero gradient, changing that input changes the output.
 
-    `torch.autograd.grad(out, x)` gives the gradient of `out` with respect to
-    `x`, without touching any `.grad`.
+    `torch.autograd.grad(out, x)` returns a tuple holding the gradient of
+    `out` with respect to `x`. It does not change any `.grad` attribute.
     """,
 )
 
@@ -1512,12 +1561,14 @@ COMBINE4_SOURCE = source_file(
     table = torch.arange(6.0).reshape(1, 3, 2)    # 1 input, 3 positions, 2 channels
     columns = table.transpose(1, 2)                 # shape (1, 2, 3), one row of positions per channel
     x = torch.tensor([1.0, 2.0], requires_grad=True)
-    slopes = torch.autograd.grad((x[0] * 3).sum(), x)[0]    # tensor([3., 0.]), x[1] can't move the output
+    slopes = torch.autograd.grad((x[0] * 3).sum(), x)[0]    # tensor([3., 0.]), x[1] can't change the output
 
 
     # TODO: Finish forward. x has shape (batch, positions, width). Normalize
-    #   it, run mlp on each channel's column of positions, and add the result
-    #   back to x. The result has x's shape.
+    #   x with norm, then run mlp on each channel's column of values across
+    #   the positions. mlp acts on the last dimension, so transpose before
+    #   and after it. Add the result to x and return the sum, which has x's
+    #   shape.
     class TokenMix(nn.Module):
         def __init__(
             self,
@@ -1533,8 +1584,8 @@ COMBINE4_SOURCE = source_file(
             ...
 
 
-    # TODO: Finish forward. Normalize x, run mlp on each position's channels,
-    #   and add the result back to x.
+    # TODO: Finish forward. Normalize x with norm, run mlp on each position's
+    #   channels, add the result to x, and return the sum.
     class ChannelMix(nn.Module):
         def __init__(
             self,
@@ -1549,8 +1600,8 @@ COMBINE4_SOURCE = source_file(
             ...
 
 
-    # The lesson's models: an embedding, a block per kind in order, and one
-    #   answer per position.
+    # The lesson's models. Each has an embedding, one block per entry of
+    #   kinds in order, and one answer per position.
     class Mixer(nn.Module):
         def __init__(
             self,
@@ -1569,10 +1620,12 @@ COMBINE4_SOURCE = source_file(
             return self.head(self.norm(self.blocks(self.embed(x)))).squeeze(-1)
 
 
-    # TODO: Return the reach of position in model, a tensor of True or False,
-    #   one per input position: whether that position's numbers have a nonzero
-    #   gradient for the sum of model(x)[:, position]. x has shape (batch,
-    #   positions, channels). Leave x itself as it is.
+    # TODO: Return the reach of output position `position` in model, as a
+    #   boolean tensor with one entry per input position. x has shape
+    #   (batch, positions, channels). Take the gradient of the sum of
+    #   model(x)[:, position] with respect to x. Entry i is True when any
+    #   number at input position i, in any row or channel, has a nonzero
+    #   gradient. Leave x itself unchanged.
     def reach(
         model: nn.Module,
         x: Tensor,
@@ -1693,7 +1746,7 @@ def check_reach(found: object) -> None:
             raise Mismatch("reach changed x itself. Work on x.clone().requires_grad_() and leave x as it is.")
 
         if not isinstance(actual, Tensor) or actual.dtype != torch.bool:
-            raise Mismatch(f"reach gave {value_text(actual)}. It should give a tensor of True or False, one per position.")
+            raise Mismatch(f"reach returned {value_text(actual)}. It should return a boolean tensor, one entry per position.")
 
         expect_tensor(
             call=f"reach of position {position} in a Mixer of {', '.join(kinds)} blocks",
@@ -1706,13 +1759,13 @@ def check_combine4(checker: Checker) -> None:
     checker.test_method(
         class_name="TokenMix",
         method="forward",
-        description="mixes each channel across the positions, with a skip",
+        description="mixes each channel across the positions, with a skip connection",
         run=lambda found: check_mix_block(found, ReferenceTokenMix, "TokenMix", (4, 6)),
     )
     checker.test_method(
         class_name="ChannelMix",
         method="forward",
-        description="mixes the channels within each position, with a skip",
+        description="mixes the channels within each position, with a skip connection",
         run=lambda found: check_mix_block(found, ReferenceChannelMix, "ChannelMix", (4, 6)),
     )
     checker.test(
@@ -1731,11 +1784,12 @@ COMBINE4 = Exercise(
     solution=COMBINE4_SOLUTION,
     hints={
         "TokenMix.forward": "Normalize x, then .transpose(1, 2) so each channel's positions sit in the last "
-        "dimension, where a Linear acts. Run self.mlp, turn it back with the same transpose, and add x.",
+        "dimension, where a Linear acts. Run self.mlp, transpose back the same way, and add x.",
         "ChannelMix.forward": "A Linear already acts on the last dimension, the channels, so run self.mlp on "
         "self.norm(x) and add x.",
-        "reach": "Make a copy of x that records gradients with .clone().requires_grad_(). Sum the output at position "
-        "over the batch, take torch.autograd.grad of it, and see which positions have any nonzero entry.",
+        "reach": "Make a copy of x that records gradients with .clone().requires_grad_(). Run the model on the copy "
+        "and sum its output at position over the batch. Take torch.autograd.grad of that sum, then find which "
+        "positions have any nonzero entry.",
     },
     introduces=(),
     check=check_combine4,
@@ -2166,55 +2220,62 @@ def kind_shift_gap(model: nn.Module) -> float:
 COMBINE5_LESSON = prose(
     """
     Each structure the course built assumes something about the problem.
-    Pick it by what the problem gives you.
+    Choose the structure whose assumption matches what you know about the
+    problem.
 
     | Structure | What it assumes | Shown in |
     |---|---|---|
     | Linear or MLP | nothing, a weight for every input | mlp1 |
     | Convolution | a local pattern means the same anywhere | conv4 |
-    | Pooling by sum, mean or max | the order of the items means nothing | sets2 |
+    | Pooling by sum, mean or max | the order of the items doesn't matter | sets2 |
     | Attention | items are found by content, at any distance | attention6 |
-    | RNN, LSTM or state space | one state of fixed size, carried in order | lstm1, ssm1 |
+    | RNN, LSTM or state space | the input is read in order into one state of fixed size | lstm1, ssm1 |
     | Gate or FiLM | one signal controls another | gating1, combine1, combine2 |
     | Residual and norm | the model is deep | residual2, residual3 |
-    | Equivariant layer | a symmetry, like a turn, a move or a mirror | equivariance2 |
+    | Equivariant layer | a symmetry, such as a rotation, a shift or a mirror image | equivariance2 |
     | Router to experts | each input needs a few of many skills | moe1 |
     | Message passing | the answer follows a graph's edges | message1 |
-    | None of these | derive one from the exact algorithm | derive1, paths3 |
+    | None of these | derive a structure from the exact algorithm | derive1, paths3 |
 
-    The right structure matters most where the test differs from training.
-    conv4's MLP missed a moved pattern, and attention6's GRU lost pairs as
-    their number grew. Here are four problems you haven't seen. Build a model
-    for each. The check trains it on small inputs, then tests it on bigger
-    ones it never saw.
+    The right structure matters most when the test inputs differ from the
+    training inputs. In conv4, the MLP missed a pattern that had moved. In
+    attention6, the GRU lost track of pairs as their number grew. Here are
+    four problems you haven't seen. Build a model for each one. The check
+    trains it on small inputs, then tests it on bigger inputs it never saw.
 
-    - bumps: count the bumps in a noisy signal on a level of its own. Training signals are 16 to 48 long, and test signals 96.
-    - baskets: each item has a price and a count, and the answer is the basket's total. Training baskets hold 5 items, and test baskets 12.
-    - lookups: pairs of a key and a value, then a query, and the answer is the query's value. Training uses 4 pairs, and testing 12.
-    - kinds: bumps point up or down, and a query names the kind to count. Test signals of 96 hold up to 18.
+    - bumps: count the bumps in a noisy signal with its own baseline level. Signals have 16 to 48 steps in training, and 96 in testing.
+    - baskets: each item has a price and a count. The answer is the basket's total, with 5 items in training and 12 in testing.
+    - lookups: given key and value pairs and a query equal to one key, return that key's value. Training uses 4 pairs, and testing uses 12.
+    - kinds: each bump points up or down, and a query says which kind to count. Test signals have 96 steps and up to 18 bumps.
 
-    Ask of each problem what stays true as the input grows. Does the answer
+    For each problem, ask what stays true as the input grows. Does the answer
     grow with it? Does the order matter? Does one item need to find another?
-    Each structure also makes a promise, a change its output ignores. Name in
-    `PROMISES` the change each problem's true answer ignores. The check makes
-    that change to the test inputs, and your trained model must barely move.
+    Each structure also makes a promise, a change to the input that it is
+    built to ignore. In `PROMISES`, name the change that each problem's true
+    answer ignores. The check makes that change to the test inputs, and your
+    trained model's answers must barely change.
 
-    A model made of the right pieces needs no hand written answer. The check
-    also trains it on a twin of each problem with another rule. The bumps point
-    down, each item adds its count over its price, and the query is one more
-    than its key. In kinds the query names the kind to leave out. Learned
-    pieces fit both, and a formula written by hand fits one.
+    A model made of the right pieces doesn't need the answer's formula
+    written into it. To test this, the check also trains your model on a twin
+    of each problem that follows a different rule. In the twins, the bumps
+    point down, and each item adds its count divided by its price. The query
+    is one more than its key, and in kinds the query names the kind not to
+    count. A model built from learned pieces fits both versions, while a
+    formula written by hand fits only one.
 
-    In kinds the query has to reach the count, in any form. Here is each form's miss, three seeds.
+    In kinds, the query has to affect the count somehow. The table shows the
+    average number of bumps each way of using the query missed by, over three
+    seeds.
 
-    | Query | none | MLP after the sum | joined on | gate | FiLM |
+    | How the query is used | none | MLP after the sum | joined on | gate | FiLM |
     |---|---|---|---|---|---|
     | Bumps missed | 1.17 to 1.19 | 0.26 to 0.55 | 0.12 to 0.23 | 0.13 to 0.16 | 0.13 to 0.17 |
     | On the twin | 1.15 to 1.18 | 0.29 to 0.50 | 0.15 to 0.28 | 0.11 to 0.30 | 0.15 to 0.17 |
 
-    Joined on, gated or FiLM, the query reaches the detector and only has to
-    switch whole channels on or off. After the sum, the MLP had seen at most 5
-    bumps of a kind. The check takes any form under 0.6.
+    When the query is joined on, used as a gate or used by FiLM, it reaches
+    the detector. Then it only has to switch whole channels on or off. The
+    MLP after the sum did worse, because in training it had seen at most 5
+    bumps of a kind. The check accepts any form that misses by less than 0.6.
     """,
 )
 
@@ -2229,18 +2290,18 @@ COMBINE5_SOURCE = source_file(
     import torch.nn.functional as F
     from torch import Tensor
 
-    signals = torch.zeros(2, 96)                     # bumps: 2 signals of 96, answers of shape (2,)
+    signals = torch.zeros(2, 96)                     # bumps: 2 signals of 96 steps, answers of shape (2,)
     items = torch.zeros(2, 12, 2)                     # baskets: 2 baskets of 12 items, each a price and a count
-    keys = torch.zeros(2, 12, dtype=torch.long)       # lookups: ids from 0 to 15, values the same shape
-    query = torch.zeros(2, dtype=torch.long)          # one query per row, the answer is one of 16 ids
+    keys = torch.zeros(2, 12, dtype=torch.long)       # lookups: ids from 0 to 15, and values has the same shape
+    query = torch.zeros(2, dtype=torch.long)          # one query per row, and the answer is one of 16 ids
     moved = torch.roll(torch.tensor([[1.0, 2.0, 3.0, 4.0, 5.0]]), 4, dims=1)    # tensor([[2., 3., 4., 5., 1.]])
     asked = torch.tensor([[1.0, 0.0], [0.0, 1.0]])    # kinds: one query per signal, [1, 0] asks for the up bumps
 
 
-    # TODO: For each problem, name the change its true answer ignores, "shift"
-    #   or "shuffle". A shift moves a signal along by 4 places, wrapping
-    #   around, as moved shows. A shuffle puts a basket's items, or a lookup's
-    #   pairs, in a new order.
+    # TODO: For each problem, set the change that its true answer ignores,
+    #   either "shift" or "shuffle". A shift moves a signal along by 4 steps,
+    #   wrapping around at the end, as moved shows. A shuffle puts a basket's
+    #   items, or a lookup's pairs, in a new order.
     PROMISES = {
         "bumps": ...,
         "baskets": ...,
@@ -2249,8 +2310,9 @@ COMBINE5_SOURCE = source_file(
 
 
     # TODO: Build a model that counts the bumps in signals of shape (batch,
-    #   length), for any length. forward gives one count per signal, of shape
-    #   (batch,). The check trains it on lengths 16 to 48 and tests it on 96.
+    #   length), for any length. forward returns one count per signal, of
+    #   shape (batch,). The check trains it on lengths 16 to 48 and tests it
+    #   on 96.
     class BumpCounter(nn.Module):
         def __init__(self) -> None:
             super().__init__()
@@ -2260,10 +2322,10 @@ COMBINE5_SOURCE = source_file(
             ...
 
 
-    # TODO: Build a model that gives each basket's total, for items of shape
-    #   (batch, items, 2), each a price and a count, for any number of items.
-    #   forward gives one total per basket, of shape (batch,). The check
-    #   trains it on baskets of 5 and tests it on baskets of 12.
+    # TODO: Build a model that computes each basket's total, for items of
+    #   shape (batch, items, 2), each a price and a count, for any number of
+    #   items. forward returns one total per basket, of shape (batch,). The
+    #   check trains it on baskets of 5 and tests it on baskets of 12.
     class BasketTotal(nn.Module):
         def __init__(self) -> None:
             super().__init__()
@@ -2274,9 +2336,10 @@ COMBINE5_SOURCE = source_file(
 
 
     # TODO: Build a model that answers a lookup. keys and values have shape
-    #   (batch, pairs) and query (batch,), all ids from 0 to 15. forward gives
-    #   16 scores per row, of shape (batch, 16), the highest for the query's
-    #   value. The check trains it on 4 pairs and tests it on 12.
+    #   (batch, pairs) and query has shape (batch,), all holding ids from 0
+    #   to 15. forward returns 16 scores per row, of shape (batch, 16), with
+    #   the highest score at the query's value. The check trains it on 4
+    #   pairs and tests it on 12.
     class KeyLookup(nn.Module):
         def __init__(self) -> None:
             super().__init__()
@@ -2293,8 +2356,8 @@ COMBINE5_SOURCE = source_file(
 
     # TODO: Build a model that counts the bumps of one kind in signals of
     #   shape (batch, length), for any length. Each bump points up or down.
-    #   query has shape (batch, 2), [1, 0] asking for the up bumps and [0, 1]
-    #   for the down ones. forward gives one count per signal, of shape
+    #   query has shape (batch, 2). [1, 0] asks for the up bumps and [0, 1]
+    #   for the down ones. forward returns one count per signal, of shape
     #   (batch,). The check trains it on lengths 16 to 48 and tests it on 96.
     class KindCounter(nn.Module):
         def __init__(self) -> None:
@@ -2450,7 +2513,7 @@ def twin_or_rule(
     score = tested_or_crash(lambda model: measure(model, True), trained, name, "the twin task")
 
     if not passes(score):
-        raise Mismatch(f"{name} learns the task but not its twin, where {twin_task}. Pieces that learn fit both, so {cause}")
+        raise Mismatch(f"{name} learns the task but not its twin, where {twin_task}. Learned pieces fit both versions, so {cause}")
 
 
 def kept_promise(
@@ -2462,8 +2525,8 @@ def kept_promise(
 ) -> None:
     if gap > bar:
         raise Mismatch(
-            f"Trained, {name}'s answers move by {text.format(gap)} when {change}, which leaves the true answer alone. "
-            "Its structure should promise that, so pick layers that can't see the change.",
+            f"After training, {name}'s answers change by {text.format(gap)} when {change}, though that change leaves "
+            "the true answer the same. Its structure should guarantee that, so pick layers that can't see the change.",
         )
 
 
@@ -2477,8 +2540,8 @@ def tested_or_crash(
         return measure(model)
     except RuntimeError as error:
         raise Mismatch(
-            f"{name} crashed on {bigger}, bigger than training had: {error}. A model for this problem has to take "
-            "any size, so its weights can't be tied to one length.",
+            f"{name} crashed on {bigger}, which is bigger than anything in training. The error was {error}. A model "
+            "for this problem has to accept any size, so its weights can't be tied to one length.",
         ) from None
 
 
@@ -2488,13 +2551,13 @@ def check_bump_counter(found: type) -> None:
     untrained_miss = tested_or_crash(bump_miss, untrained, "BumpCounter", "signals of 96")
 
     if untrained_miss <= BUMP_BAR:
-        raise Mismatch(f"Untrained, BumpCounter already misses only {untrained_miss:.2f} bumps. It should learn the count, not compute it by a fixed rule.")
+        raise Mismatch(f"Before training, BumpCounter already misses only {untrained_miss:.2f} bumps. It should learn the count, not compute it by a fixed rule.")
 
     if miss > BUMP_BAR:
         raise Mismatch(
             f"Trained on signals of 16 to 48, BumpCounter misses {miss:.2f} bumps on average on signals of 96. It "
-            f"should miss fewer than {BUMP_BAR}. Ask what the count does as the signal grows, and what a bump looks "
-            "like whatever level its signal sits on.",
+            f"should miss fewer than {BUMP_BAR}. Ask how the count changes as the signal grows, and what a bump looks "
+            "like whatever level its signal sits at.",
         )
 
     kept_promise(bump_shift_gap(trained), BUMP_SHIFT_BAR, "BumpCounter", "the signals move along by 4 places", "{:.2f} bumps")
@@ -2507,12 +2570,12 @@ def check_basket_total(found: type) -> None:
     untrained_miss = tested_or_crash(basket_miss, untrained, "BasketTotal", "baskets of 12")
 
     if untrained_miss <= BASKET_BAR:
-        raise Mismatch("Untrained, BasketTotal already gets the totals right. It should learn them, not compute them by a fixed rule.")
+        raise Mismatch("Before training, BasketTotal already gets the totals right. It should learn them, not compute them by a fixed rule.")
 
     if miss > BASKET_BAR:
         raise Mismatch(
             f"Trained on baskets of 5, BasketTotal misses {miss:.1%} of the average total on baskets of 12. It "
-            f"should miss less than {BASKET_BAR:.0%}. Ask what a total does as the basket grows.",
+            f"should miss less than {BASKET_BAR:.0%}. Ask how a total changes as the basket grows.",
         )
 
     kept_promise(basket_shuffle_gap(trained), BASKET_SHUFFLE_BAR, "BasketTotal", "each basket's items come in a new order", "{:.1%} of a total")
@@ -2525,11 +2588,11 @@ def check_key_lookup(found: type) -> None:
     untrained_share = tested_or_crash(lookup_share, untrained, "KeyLookup", "12 pairs")
 
     if untrained_share >= LOOKUP_BAR:
-        raise Mismatch("Untrained, KeyLookup already answers the lookups. It should learn them, not compute them by a fixed rule.")
+        raise Mismatch("Before training, KeyLookup already answers the lookups. It should learn them, not compute them by a fixed rule.")
 
     if share < LOOKUP_BAR:
         raise Mismatch(
-            f"Trained on 4 pairs, KeyLookup answers {share:.1%} of lookups among 12 pairs right. It should pass "
+            f"Trained on 4 pairs, KeyLookup answers {share:.1%} of lookups among 12 pairs correctly. It should reach "
             f"{LOOKUP_BAR:.0%}. Ask whether the query has to find its key among the pairs.",
         )
 
@@ -2552,7 +2615,7 @@ def check_kind_counter(found: type) -> None:
     untrained_miss = tested_or_crash(kind_miss, untrained, "KindCounter", "signals of 96")
 
     if untrained_miss <= KIND_BAR:
-        raise Mismatch(f"Untrained, KindCounter already misses only {untrained_miss:.2f} bumps. It should learn the count, not compute it by a fixed rule.")
+        raise Mismatch(f"Before training, KindCounter already misses only {untrained_miss:.2f} bumps. It should learn the count, not compute it by a fixed rule.")
 
     if miss > KIND_BAR:
         raise Mismatch(
@@ -2566,7 +2629,7 @@ def check_kind_counter(found: type) -> None:
 
 
 PROMISE_REASONS = {
-    ("bumps", "shuffle"): "Shuffling a signal's places breaks its bumps apart, so the count changes. Which change keeps every bump whole?",
+    ("bumps", "shuffle"): "Shuffling a signal's steps breaks its bumps apart, so the count changes. Which change keeps every bump whole?",
     ("baskets", "shift"): "A basket's items have no order at all, so any new order keeps its total, not only a shift.",
     ("lookups", "shift"): "A lookup's pairs have no order at all, so any new order keeps the answer, not only a shift.",
 }
@@ -2626,14 +2689,16 @@ COMBINE5 = Exercise(
     source=COMBINE5_SOURCE,
     solution=COMBINE5_SOLUTION,
     hints={
-        "PROMISES": "Ask of each problem which change leaves its true answer alone. A shuffled signal's bumps fall "
-        "apart. A basket's total and a lookup's answer don't care what order their parts come in.",
+        "PROMISES": "For each problem, ask which change leaves its true answer the same. Shuffling a signal breaks "
+        "its bumps apart. A basket's total and a lookup's answer don't depend on the order of their parts.",
         "BumpCounter.forward": "A bump means the same anywhere, so slide a small detector along the signal with "
-        "nn.Conv1d, as conv4 did. A count grows with the signal, so add up a score per place rather than averaging.",
-        "BasketTotal.forward": "The order of the items means nothing, as in sets1. Run one small MLP on every item, "
-        "then pool. A total grows with the basket, so the pool is a sum.",
-        "KeyLookup.forward": "The query has to find its key, as in attention6. Score each key against the query with "
-        "two embeddings, softmax the scores, and take the weighted sum of the values' embeddings, then a head.",
+        "nn.Conv1d, as conv4 did. A count grows with the signal, so add up a score per position rather than "
+        "averaging.",
+        "BasketTotal.forward": "The order of the items doesn't matter, as in sets1. Run one small MLP on every item, "
+        "then pool the results. A total grows with the basket, so pool with a sum.",
+        "KeyLookup.forward": "The query has to find its key, as in attention6. Score each key against the query using "
+        "two separate embedding tables, apply softmax to the scores, and take the weighted sum of the values' "
+        "embeddings. Then apply a head.",
         "KindCounter.forward": "Start from BumpCounter. The query decides which bumps count, so it has to change the "
         "detector's channels before the sum. Join it on as extra input channels, gate each channel as combine2 did, "
         "or scale and shift each one with FiLM as combine1 did.",

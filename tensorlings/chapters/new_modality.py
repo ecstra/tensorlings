@@ -37,11 +37,12 @@ NEW_MODALITY = Chapter(
         """
         # Reading a new modality
 
-        Your GPT reads characters. This chapter teaches it to read signals,
-        the way LLaVA taught a language model to read images. A frozen encoder
-        turns each signal into tokens, a small projector maps them into the
-        GPT's embeddings, and two stages of training teach the GPT to use them.
-        Then you look at what those projected tokens carry.
+        Your GPT reads characters. This chapter teaches it to also read
+        signals, the way LLaVA taught a language model to read images. A
+        frozen encoder turns each signal into tokens. A small projector maps
+        those tokens to vectors the size of the GPT's embeddings. Then two
+        stages of training teach the GPT to use them. Last, you look at what
+        information the projected tokens hold.
 
         ## Further reading
 
@@ -75,8 +76,8 @@ WAVE_WORDS = ["one", "two", "three", "four"]
 THIRDS = ["early", "middle", "late"]
 
 
-# count signals of LENGTH steps, each built from three facts. It rises or falls, its wave has 1 to 4 cycles, and a
-# spike sits in its first, middle or last third. The facts come back too, as whole numbers.
+# Makes count signals of LENGTH steps, each built from three facts. The signal rises or falls, its wave has 1 to 4
+# cycles, and a spike sits in its first, middle or last third. The facts are returned too, as whole numbers.
 def make_signals(
     count: int,
     generator: torch.Generator,
@@ -93,7 +94,7 @@ def make_signals(
     return signals + 0.08 * torch.randn(count, LENGTH, generator=generator), rises, waves, thirds
 
 
-# The three facts in words, as stage one's captions say them.
+# The three facts written in words, the way stage one's captions state them.
 def caption(
     rise: int,
     waves: int,
@@ -120,7 +121,7 @@ class SignalEncoder(nn.Module):
         return self.layers(signals.unsqueeze(1)).transpose(1, 2)
 
 
-# Trained as autoencoder1 trained its codes, a decoder rebuilding each signal from its tokens, then frozen.
+# Trained like autoencoder1, with a decoder that rebuilds each signal from its tokens, and then frozen.
 def pretrained_encoder(seed: int = 0) -> nn.Module:
     torch.manual_seed(seed)
     encoder = SignalEncoder()
@@ -182,7 +183,8 @@ def prefix_forward(
 
 # sft1's answer only targets, for plain text, and the batches of captions stage one and two train on.
 ROWS_PART = '''
-# x and y for each prompt, then its answer, then a newline, with y set to -100 before the answer, padded to one batch.
+# Builds x and y for each prompt followed by its answer and a newline. y is -100 before the answer, so only the
+# answer is scored. The rows are padded to one batch.
 def answer_rows(
     prompts: list[str],
     answers: list[str],
@@ -210,7 +212,7 @@ def answer_rows(
 CAPTION_PROMPT = "Describe it: "
 
 
-# count new signals and their captions, as x and y after the prompt.
+# Makes count new signals, and their captions as x and y after the prompt.
 def caption_batch(
     count: int,
     positions: dict[str, int],
@@ -264,8 +266,8 @@ def bridge_step(
 
 # Greedy writing after the prefix, as post1's answer wrote, for the captions the lesson scores.
 WRITE_PART = '''
-# What gpt writes after each signal's tokens and the prompt, the likeliest character each step, until a newline or
-# 40 characters.
+# Returns what gpt writes after each signal's tokens and the prompt. It picks the most likely character at each
+# step, and stops at a newline or after 40 characters.
 def write_after(
     gpt: nn.Module,
     encoder: nn.Module,
@@ -394,35 +396,42 @@ BRIDGE1_LESSON = prose(
     Your GPT reads characters. This chapter teaches it to read a signal of 64
     numbers, as LLaVA taught a language model to read images.
 
-    LLaVA joined two trained models, CLIP's image encoder and the Vicuna
+    LLaVA connected two trained models, CLIP's image encoder and the Vicuna
     language model, with one linear layer between them. That layer maps each
-    image feature into the language model's word embeddings, so the image
-    arrives as extra tokens beside the text's. LLaVA-1.5 swapped the layer
-    for a two layer MLP and scored higher.
+    image feature vector to a vector the size of a word embedding. So the
+    image reaches the language model as extra tokens next to the text tokens.
+    LLaVA-1.5 replaced the linear layer with a two layer MLP and scored
+    higher.
 
-    Here the frozen encoder is a small convolution stack. It was trained in a
-    few seconds the way autoencoder1 trained its codes, then frozen. It turns
-    each window of 8 steps into one token of 32 numbers.
+    Here the encoder is a small stack of convolutions. It was trained for a
+    few seconds as an autoencoder, the way autoencoder1 trained its codes,
+    and then frozen. It turns each window of 8 steps of the signal into one
+    token of 32 numbers, so a signal of 64 steps becomes 8 tokens.
 
     ```python
     SignalEncoder()(torch.zeros(5, 64)).shape    # torch.Size([5, 8, 32])
     ```
 
-    `Projector` maps each token's 32 numbers to the GPT's 128, as
-    LLaVA-1.5's MLP does. `projected_tokens` runs the frozen encoder without
-    recording for autograd, then the projector, which trains.
+    `Projector` maps each token's 32 numbers to 128 numbers, the size of the
+    GPT's embeddings, as LLaVA-1.5's MLP does. `projected_tokens` runs the
+    frozen encoder without autograd recording, since the encoder never
+    trains. Then it runs the projector with recording on, since the
+    projector does train.
 
-    `prefix_forward` lays the projected tokens before the text's embeddings,
-    so the GPT reads 8 vectors it never saw, then characters. Positions count
-    across both, and the scores come back for the text's places alone.
+    `prefix_forward` puts the projected tokens in front of the text's
+    embeddings. So the GPT first reads 8 vectors of a kind it has never seen,
+    then the characters. Vectors placed in front of the text like this are
+    called a prefix. The position numbers run across the prefix and the text
+    together. The function returns the scores only at the text's positions.
 
     | Part | Weights | Trained |
     |---|---|---|
-    | `SignalEncoder` | 13,568 | before, then frozen |
+    | `SignalEncoder` | 13,568 | before this chapter, then frozen |
     | `Projector` | 20,736 | in both stages |
     | Your GPT | 818,048 | frozen in stage one, LoRA in stage two |
 
-    The bridge is 2.5% the size of the GPT. bridge2 trains it.
+    The projector, the bridge between the encoder and the GPT, is 2.5% the
+    size of the GPT. bridge2 trains it.
     """,
 )
 
@@ -442,14 +451,14 @@ BRIDGE1_GIVEN = '''
 ''' + indented(GPT_SETTINGS) + '''
 
 
-    # The model from gpt2, and your model from gpt3 read back.
+    # The model from gpt2, and the code that loads your trained model from gpt3.
 ''' + indented(MODEL_PART) + '''
 
 
 ''' + indented(LOAD_PART) + '''
 
 
-    # The new modality, and the frozen encoder that reads it.
+    # The new kind of input, signals, and the frozen encoder that reads them.
 ''' + indented(SIGNAL_PART) + '''
 
 
@@ -464,10 +473,13 @@ BRIDGE1_SOURCE = source_file(
     joined = torch.cat([torch.zeros(2, 3, 4), torch.ones(2, 5, 4)], dim=1).shape    # torch.Size([2, 8, 4])
 ''' + BRIDGE1_GIVEN + '''
 
-    # TODO: Map each token of width numbers to size numbers, as LLaVA-1.5's
-    #   two layer MLP does. Make self.fc, a Linear from width to size, then
-    #   self.gelu, an nn.GELU(), then self.proj, a Linear from size to size, in
-    #   that order. forward runs a token batch through all three.
+    # TODO: Map each token of width numbers to size numbers with a two layer
+    #   MLP, like LLaVA-1.5's. In __init__, make self.fc, an nn.Linear from
+    #   width to size, then self.gelu, an nn.GELU(), then self.proj, an
+    #   nn.Linear from size to size, in that order. In forward, apply fc,
+    #   then gelu, then proj to tokens and return the result.
+    #   Example: Projector(32, 128) maps tokens of shape (5, 8, 32) to shape
+    #   (5, 8, 128).
     class Projector(nn.Module):
         def __init__(
             self,
@@ -481,9 +493,12 @@ BRIDGE1_SOURCE = source_file(
             ...
 
 
-    # TODO: Return projector of encoder's tokens for signals. Run encoder
-    #   without recording for autograd, since it stays frozen, and projector
-    #   with recording on, since it trains.
+    # TODO: Run encoder on signals to get their tokens, then run projector on
+    #   those tokens and return the result. Run encoder inside
+    #   torch.no_grad(), since it stays frozen. Run projector outside it, so
+    #   autograd records it and it can train.
+    #   Example: for signals of shape (5, 64) and a Projector(32, 128), the
+    #   result has shape (5, 8, 128).
     def projected_tokens(
         encoder: nn.Module,
         projector: nn.Module,
@@ -492,10 +507,13 @@ BRIDGE1_SOURCE = source_file(
         ...
 
 
-    # TODO: Run gpt on prefix, then ids. Join prefix before gpt.wte(ids) along
-    #   the positions, add gpt.wpe of every position, made on ids's device, and
-    #   run each block of gpt.h, then gpt.ln_f and gpt.lm_head. Return the
-    #   scores at the ids' places only, dropping the prefix's.
+    # TODO: Run gpt on the prefix vectors followed by the tokens ids. prefix
+    #   has shape (batch, p, size) and ids has shape (batch, t). Concatenate
+    #   prefix and gpt.wte(ids) along the positions, so x has p + t
+    #   positions. Add gpt.wpe of the position numbers 0 to p + t - 1,
+    #   created on ids.device. Run each block of gpt.h, then gpt.ln_f and
+    #   gpt.lm_head. Return the scores at the t text positions only, dropping
+    #   the first p. The result has shape (batch, t, vocabulary).
     def prefix_forward(
         gpt: nn.Module,
         prefix: Tensor,
@@ -652,8 +670,8 @@ def check_prefix_forward(found: object) -> None:
 
     if places and places[0] != "meta":
         raise Mismatch(
-            "prefix_forward made its positions on the CPU, so on a GPU the GPT crashes there. Make them with "
-            "device=ids.device.",
+            "prefix_forward created its position numbers on the CPU, so the GPT would crash on a GPU. Create them "
+            "with device=ids.device.",
         )
 
 
@@ -677,7 +695,7 @@ def check_bridge1(checker: Checker) -> None:
     )
     checker.test(
         function="prefix_forward",
-        description="reads the prefix then the ids, and scores the ids' places",
+        description="reads the prefix then the ids, and returns the scores at the ids' positions",
         run=check_prefix_forward,
     )
 
@@ -690,14 +708,14 @@ BRIDGE1 = Exercise(
     source=BRIDGE1_SOURCE,
     solution=BRIDGE1_SOLUTION,
     hints={
-        "Projector.__init__": "Three attributes in order. fc is an nn.Linear taking width numbers to size, gelu an "
-        "nn.GELU with no arguments, and proj an nn.Linear from size to size.",
-        "Projector.forward": "self.proj of self.gelu of self.fc of tokens.",
+        "Projector.__init__": "Make three attributes in this order. fc is an nn.Linear from width to size, gelu is an "
+        "nn.GELU with no arguments, and proj is an nn.Linear from size to size.",
+        "Projector.forward": "Apply self.fc to tokens, then self.gelu to that, then self.proj to the result.",
         "projected_tokens": "Run the encoder on the signals inside a torch.no_grad() block and keep its tokens. After "
-        "the block, give those tokens to the projector and return what it gives.",
-        "prefix_forward": "x = torch.cat of prefix and gpt.wte(ids) on dim 1. Add gpt.wpe of torch.arange(x.shape[1], "
-        "device=ids.device). Loop over gpt.h, then gpt.lm_head(gpt.ln_f(x)), and slice off the first prefix.shape[1] "
-        "places with [:, prefix.shape[1] :].",
+        "the block, give those tokens to the projector and return its output.",
+        "prefix_forward": "Set x to torch.cat of prefix and gpt.wte(ids) on dim 1. Add gpt.wpe of "
+        "torch.arange(x.shape[1], device=ids.device). Loop over gpt.h, then apply gpt.ln_f and gpt.lm_head. Drop "
+        "the first prefix.shape[1] positions with [:, prefix.shape[1] :].",
     },
     introduces=(),
     check=check_bridge1,
@@ -712,7 +730,7 @@ BRIDGE1 = Exercise(
 
 BRIDGE2_GIVEN = BRIDGE1_GIVEN + '''
 
-    # bridge1's projector and prefix_forward.
+    # The projector and prefix_forward from bridge1.
 ''' + indented(PROJECTOR_SOLUTION) + '''
 
 
@@ -726,22 +744,25 @@ BRIDGE2_GIVEN = BRIDGE1_GIVEN + '''
 ''' + indented(EVERYWHERE_SOLUTION) + '''
 
 
-    # The batches both stages train on.
+    # The code that builds the batches both stages train on.
 ''' + indented(ROWS_PART) + '''
 '''
 
 BRIDGE2_LESSON = prose(
     """
-    LLaVA trained its bridge in two stages. Stage one froze the encoder and
-    the language model. It trained the projection alone on about 595,000
-    image and caption pairs, at 2e-3 for its one linear layer. LLaVA-1.5
-    halved that to 1e-3 for its two layer MLP, the projector you built.
-    Stage two kept the encoder frozen and trained the projection and the
-    language model, on 158,000 examples of following instructions. Both
-    scored the answer's tokens alone, as sft1's loss did.
+    LLaVA trained its projection layer in two stages. Stage one froze the
+    encoder and the language model, and trained only the projection. It used
+    about 595,000 pairs of an image and its caption. The learning rate was
+    2e-3 for its one linear layer. LLaVA-1.5 halved that learning rate to
+    1e-3 for its two layer MLP, which is the projector you built.
 
-    Here stage one trains on captions, the signal's three facts in words.
-    Stage two trains on questions about them, as the project will.
+    Stage two kept the encoder frozen and trained both the projection and the
+    language model, on 158,000 examples of following instructions. In both
+    stages the loss counted only the answer's tokens, as sft1's loss did.
+
+    Here stage one trains on captions, which state the signal's three facts
+    in words. Stage two trains on questions about those facts, as the project
+    in 103_signal_reader will.
 
     ```text
     Describe it: rises, three waves, spike early
@@ -749,46 +770,55 @@ BRIDGE2_LESSON = prose(
     A: three
     ```
 
-    `stage_one` freezes every weight of the GPT and hands AdamW the projector
-    alone, at LLaVA-1.5's 1e-3. `stage_two` adds rank 8 LoRA on every Linear,
-    as lora3 did, in place of training the whole GPT. Then it hands AdamW the
-    projector and the LoRA weights. `bridge_step` runs the signals through
-    the bridge and the GPT, and trains on the answer's loss.
+    `stage_one` freezes every weight of the GPT and gives AdamW only the
+    projector's weights, at LLaVA-1.5's learning rate of 1e-3. `stage_two`
+    adds rank 8 LoRA to every Linear layer, as lora3 did, instead of training
+    the whole GPT. Then it gives AdamW the projector's weights and the LoRA
+    weights. `bridge_step` runs the signals through the projector and the
+    GPT, and takes one training step on the loss of the answer.
 
-    Captions are plentiful and question examples few, as in LLaVA. Stage one
-    trained 1,200 steps on fresh captions. Stage two trained 300 steps on
-    256 signals with a question each. Each way scored 300 new signals, over
-    3 seeds. Your GPT's loss on held out Shakespeare was 1.53 before.
+    As in LLaVA, captions are plentiful and question examples are few. Stage
+    one trained for 1,200 steps, on new captions every step. Stage two
+    trained for 300 steps on 256 signals with one question each. Each way of
+    training was scored on 300 new signals, over 3 seeds. Before this
+    training, your GPT's loss on held out Shakespeare text was 1.53.
+
+    The table shows the share of questions answered correctly about each
+    fact, and the Shakespeare loss after training.
 
     | Training | Rises | Waves | Spike's third | Shakespeare loss after |
     |---|---|---|---|---|
     | stage two alone | 96% to 100% | 77% to 95% | 49% to 58% | 2.59 to 2.92 |
     | stage one, then stage two | 100% | 89% to 97% | 48% to 58% | 2.39 to 2.56 |
 
-    Stage one buys a GPT that keeps more of what it knew. Its Shakespeare
-    loss after stage two was lower on every seed, as LLaVA said, aligning
-    the features while keeping the knowledge. Stage two buys the answers,
-    and they come out close either way. Prismatic VLMs found the same at
-    scale, and skipped stage one for 20% to 25% less cost.
+    Stage one helps the GPT keep more of what it knew. With stage one first,
+    its Shakespeare loss after stage two was lower on every seed. LLaVA
+    described stage one the same way, as aligning the image features with the
+    language model while keeping its knowledge. The answers come from stage
+    two, and they are about equally good either way. The Prismatic VLMs study
+    found the same at a large scale, and skipped stage one to cut the
+    training cost by 20% to 25%.
 
-    Fuse2's gated cross attention is the other way to join the signal. Both
-    ways below trained 1,200 steps on captions alone, over 3 seeds, and
-    wrote captions for 300 new signals.
+    The gated cross attention of fuse2 is the other way to add the signal to
+    the GPT. Both ways below trained for 1,200 steps on captions only, over 3
+    seeds. Then each wrote captions for 300 new signals.
 
     | Bridge | Weights trained | Whole caption right | Shakespeare loss after |
     |---|---|---|---|
     | projector and LoRA, the prefix | 86,272 | 98% to 100% | 3.7 to 4.1 |
     | gated cross attention, GPT frozen | 694,792 | 85% to 90% | 1.53 |
 
-    The gated layers leave the GPT exactly as it was, and the signal takes
-    none of its positions, where the prefix takes 8. Idefics2's authors
-    measured the same trade at scale. With the image encoder and the
-    language model frozen, cross attention scored 66.7 against the prefix's
-    60.3. With both trained through LoRA, the prefix won, 69.5 against 67.3.
-    So reach for gated cross attention when the language model must stay as
-    it is, or a long input would crowd its positions. Reach for the prefix
-    when LoRA may change the model, for the simpler bridge and the better
-    score.
+    The gated layers leave the GPT exactly as it was, so its Shakespeare loss
+    stays at 1.53. The signal also uses none of the GPT's positions, while
+    the prefix uses 8. The authors of Idefics2 measured the same tradeoff at
+    a large scale. With the image encoder and the language model frozen,
+    cross attention scored 66.7 and the prefix scored 60.3. With both trained
+    through LoRA, the prefix won, 69.5 against 67.3.
+
+    So choose gated cross attention when the language model must stay
+    unchanged, or when a long input would take up too many of its positions.
+    Choose the prefix when LoRA is allowed to change the model, because the
+    prefix is the simpler bridge and scores better.
     """,
 )
 
@@ -800,9 +830,10 @@ BRIDGE2_SOURCE = source_file(
     picked = torch.optim.AdamW(nn.Linear(2, 3).parameters(), lr=2e-3).param_groups[0]["lr"]    # 0.002
 ''' + BRIDGE2_GIVEN + '''
 
-    # TODO: Stage one. Freeze every weight of gpt, then return an AdamW over
-    #   the projector's weights alone, at a rate of 1e-3, as LLaVA-1.5's stage
-    #   one used for its MLP, with a weight_decay of 0.
+    # TODO: Stage one. Freeze every weight of gpt. Then return an AdamW
+    #   optimizer over only the projector's weights, with a learning rate of
+    #   1e-3 and a weight_decay of 0. That is the learning rate LLaVA-1.5's
+    #   stage one used for its MLP.
     def stage_one(
         gpt: nn.Module,
         projector: nn.Module,
@@ -810,11 +841,12 @@ BRIDGE2_SOURCE = source_file(
         ...
 
 
-    # TODO: Stage two. Put rank 8 LoRA with an alpha of 8 on every Linear of
-    #   gpt with add_lora_everywhere, then move gpt to the device its
-    #   gpt.wte.weight sits on, so the new A and B join it there. Return an
-    #   AdamW over the projector's weights and every weight of gpt that now
-    #   trains, at 1e-3, with a weight_decay of 0.
+    # TODO: Stage two. Add rank 8 LoRA with an alpha of 8 to every Linear of
+    #   gpt with add_lora_everywhere. Then move gpt to the device that
+    #   gpt.wte.weight is on, so the new A and B matrices end up on the same
+    #   device as the rest of gpt. Return an AdamW optimizer over the
+    #   projector's weights and every weight of gpt that now requires a
+    #   gradient, with a learning rate of 1e-3 and a weight_decay of 0.
     def stage_two(
         gpt: nn.Module,
         projector: nn.Module,
@@ -822,11 +854,13 @@ BRIDGE2_SOURCE = source_file(
         ...
 
 
-    # TODO: Take one step on signals, x and y, each moved to device. The scores
-    #   are prefix_forward of gpt on projected_tokens of the signals, then x.
-    #   The loss is their cross entropy against y, which skips -100. Zero the
-    #   old gradients, backpropagate, step, and return the loss as a plain
-    #   number.
+    # TODO: Take one training step on signals, x and y. Move each of them to
+    #   device first. Get the prefix with projected_tokens on the signals,
+    #   and the scores with prefix_forward of gpt on that prefix and x. The
+    #   loss is the cross entropy of the scores against y. Cross entropy
+    #   skips targets of -100 by default, so only the answer counts. Zero the
+    #   old gradients, backpropagate, step the optimizer, and return the loss
+    #   as a Python float.
     def bridge_step(
         gpt: nn.Module,
         encoder: nn.Module,
@@ -876,14 +910,14 @@ def expect_optimizer(
     expected = {id(parameter) for parameter in wanted}
 
     if held - expected:
-        raise Mismatch(f"{call}'s AdamW holds {len(held - expected)} weights it shouldn't train. It should hold the trained ones alone.")
+        raise Mismatch(f"{call}'s AdamW holds {len(held - expected)} weights it shouldn't train. It should hold only the weights that train.")
 
     if expected - held:
         raise Mismatch(f"{call}'s AdamW leaves out {len(expected - held)} weights that should train.")
 
     for group in optimizer.param_groups:
         expect_close(
-            call=f"the rate of {call}'s AdamW",
+            call=f"the learning rate of {call}'s AdamW",
             actual=group["lr"],
             expected=lr,
         )
@@ -925,7 +959,7 @@ def check_stage_two(found: object) -> None:
         layers = lora_layers(gpt)
 
         if len(layers) != 4 * len(gpt.h):
-            raise Mismatch(f"{call} put LoRA on {len(layers)} Linears, but it should wrap all 4 of each block's, {4 * len(gpt.h)} in all.")
+            raise Mismatch(f"{call} put LoRA on {len(layers)} Linears, but it should wrap all 4 Linears of each block, {4 * len(gpt.h)} in all.")
 
         for layer in layers:
             if layer.A.shape[0] != 8 or layer.scale != 1.0:
@@ -944,8 +978,8 @@ def check_stage_two(found: object) -> None:
 
     if stray:
         raise Mismatch(
-            f"stage_two left the new LoRA weights on the CPU while the GPT sits elsewhere, such as {stray[0]}. On a "
-            "GPU that crashes. Move gpt to gpt.wte.weight.device after adding LoRA.",
+            f"stage_two left new LoRA weights, such as {stray[0]}, on the CPU while the rest of the GPT is on "
+            "another device. On a GPU that crashes. Move gpt to gpt.wte.weight.device after adding LoRA.",
         )
 
 
@@ -1027,16 +1061,16 @@ def check_bridge_step(found: object) -> None:
 
         if "meta tensor" not in message and "device" in message:
             raise Mismatch(
-                "bridge_step crashed with the models on another device than the CPU, as main runs them on a GPU. Move "
-                f"signals, x and y to device before they meet the models.\n\nThe original message, {message}",
+                "bridge_step crashed with the models on a device other than the CPU, the way main runs them on a GPU. "
+                f"Move signals, x and y to device before passing them to the models.\n\nThe original message, {message}",
             ) from None
 
     from_cpu = [name for name, place in arrived.items() if place != "meta"]
 
     if from_cpu:
         raise Mismatch(
-            f"bridge_step handed the models {' and '.join(from_cpu)} on the CPU, but main runs them on a GPU, where that "
-            "crashes. Move signals, x and y to device before they meet the models.",
+            f"bridge_step passed {' and '.join(from_cpu)} to the models while still on the CPU. main runs the models on "
+            "a GPU, where that crashes. Move signals, x and y to device before passing them to the models.",
         )
 
 
@@ -1053,7 +1087,7 @@ def check_bridge2(checker: Checker) -> None:
     )
     checker.test(
         function="bridge_step",
-        description="trains on the answer's loss after the projected signal, on device",
+        description="takes one step on the answer's loss after the projected signal, with every tensor on device",
         run=check_bridge_step,
     )
 
@@ -1064,7 +1098,7 @@ def check_bridge2(checker: Checker) -> None:
 
 BRIDGE3_GIVEN = BRIDGE2_GIVEN + '''
 
-    # bridge2's stages and step.
+    # The two stages and the training step from bridge2.
 ''' + indented(STAGES_SOLUTION) + '''
 '''
 
@@ -1076,10 +1110,11 @@ BRIDGE3_SOURCE = source_file(
     best, place = torch.tensor([[0.2, 0.9, 0.5]]).max(dim=-1)    # tensor([0.9000]), tensor([1])
 ''' + BRIDGE3_GIVEN + '''
 
-    # TODO: For each vector of vectors, of shape (n, size), find the character
-    #   whose row of gpt.wte.weight points the most the same way, by cosine
-    #   similarity, the dot product of the two rows scaled to length 1. Return
-    #   those characters as a list, and their similarities as a tensor of n.
+    # TODO: vectors has shape (n, size). For each vector, find the character
+    #   whose row of gpt.wte.weight has the highest cosine similarity with
+    #   it. Cosine similarity is the dot product of two vectors after each is
+    #   scaled to length 1. Return those characters as a list of n strings,
+    #   and their cosine similarities as a tensor of shape (n,).
     def nearest_characters(
         gpt: nn.Module,
         vectors: Tensor,
@@ -1088,12 +1123,14 @@ BRIDGE3_SOURCE = source_file(
         ...
 
 
-    # TODO: Fit a linear probe, as masked2 described one, then score it. After
-    #   torch.manual_seed(0), make an nn.Linear from the features' width to
-    #   classes. Train it 300 steps with Adam at 0.01 on the cross entropy of
-    #   the training features against their labels, the whole set each step.
-    #   Return the share of the test features it labels right, as a plain
-    #   number, scored without recording for autograd.
+    # TODO: Train a linear probe, as described in masked2, then measure its
+    #   accuracy. Call torch.manual_seed(0), then make an nn.Linear from the
+    #   number of features, train_features.shape[1], to classes. Train it for
+    #   300 steps with Adam at a learning rate of 0.01. Each step computes
+    #   the cross entropy of the probe's scores on the whole training set
+    #   against train_labels. Return the fraction of test rows whose
+    #   predicted class equals test_labels, as a Python float. Compute that
+    #   inside torch.no_grad().
     def probe_accuracy(
         train_features: Tensor,
         train_labels: Tensor,
@@ -1194,7 +1231,7 @@ def check_probe_accuracy(found: object) -> None:
         call = f"probe_accuracy on {len(data[0])} training rows of width {width}, {classes} classes"
 
         if any(recording):
-            raise Mismatch(f"{call} scored the test features while recording for autograd. Score inside torch.no_grad().")
+            raise Mismatch(f"{call} ran the probe on the test features while autograd was recording. Do that inside torch.no_grad().")
 
         expect_close(
             call=call,
@@ -1206,12 +1243,12 @@ def check_probe_accuracy(found: object) -> None:
 def check_bridge3(checker: Checker) -> None:
     checker.test(
         function="nearest_characters",
-        description="finds each vector's nearest character by cosine",
+        description="finds each vector's nearest character by cosine similarity",
         run=check_nearest_characters,
     )
     checker.test(
         function="probe_accuracy",
-        description="trains a linear probe 300 steps and scores it",
+        description="trains a linear probe for 300 steps and returns its test accuracy",
         run=check_probe_accuracy,
     )
 
@@ -1224,14 +1261,14 @@ BRIDGE2 = Exercise(
     source=BRIDGE2_SOURCE,
     solution=BRIDGE2_SOLUTION,
     hints={
-        "stage_one": "requires_grad_ with False on the whole gpt freezes it in one call. Then return an AdamW over the "
-        "projector's parameters, with lr and weight_decay given by name.",
+        "stage_one": "Calling requires_grad_ with False on the whole gpt freezes it in one call. Then return an AdamW "
+        "over the projector's parameters, with lr and weight_decay passed by name.",
         "stage_two": "Call add_lora_everywhere with rank 8 and alpha 8.0, and chain .to with the device of "
-        "gpt.wte.weight. The LoRA weights are the gpt parameters whose requires_grad is True. Hand AdamW the "
-        "projector's parameters and those, at lr=1e-3.",
+        "gpt.wte.weight. The LoRA weights are the gpt parameters whose requires_grad is True. Give AdamW the "
+        "projector's parameters and those LoRA weights, at lr=1e-3.",
         "bridge_step": "Move signals and x to device first. projected_tokens of the signals is the prefix for "
-        "prefix_forward, with x as the ids. Then the cross entropy of the flattened scores and y.to(device), "
-        "zero_grad, backward, step and loss.item().",
+        "prefix_forward, and x is the ids. Then compute the cross entropy of the flattened scores and the flattened "
+        "y.to(device). Finish with zero_grad, backward, step and loss.item().",
     },
     introduces=(),
     check=check_bridge2,
@@ -1241,35 +1278,43 @@ BRIDGE2 = Exercise(
 
 BRIDGE3_LESSON = prose(
     """
-    After stage one, each signal reaches your GPT as 8 projected tokens. What
-    are they, and what do they carry?
+    After stage one, each signal reaches your GPT as 8 projected tokens. This
+    exercise asks two questions. How do these tokens compare with the GPT's
+    character embeddings? And what information about the signal do they
+    hold?
 
     `nearest_characters` compares each token with every row of the GPT's
-    embedding table by cosine similarity, as word2vec3 compared word rows.
+    embedding table by cosine similarity, as word2vec3 compared the rows of
+    words. `F.normalize` scales each row to length 1, so the dot product of
+    two normalized rows is their cosine similarity.
 
     ```python
     F.normalize(torch.tensor([[3.0, 4.0]]), dim=-1)    # tensor([[0.6000, 0.8000]])
     ```
 
-    Here are the tokens of 1,500 new signals after 300 steps of stage one,
-    over 3 seeds, next to the GPT's own character rows.
+    The table compares the tokens of 1,500 new signals, after 300 steps of
+    stage one over 3 seeds, with the GPT's own character rows.
 
     | Vectors | Cosine with the nearest character | Length |
     |---|---|---|
     | Projected tokens | 0.23 to 0.25 | 6.6 to 9.0 |
     | Character rows | 0.43, to the nearest other character | 1.10 |
 
-    The tokens point further from every character than the characters sit
-    from each other, and run 6 to 8 times longer. They are no characters in
-    disguise. The GPT stays frozen in stage one, so the projector learns to
-    write vectors outside its vocabulary that the GPT still responds to.
+    Each projected token is less similar to its nearest character than the
+    characters are to each other. The tokens are also 6 to 8 times longer
+    than the character rows. So the projected tokens are not disguised
+    characters. The GPT stays frozen in stage one, so the projector learns to
+    produce vectors outside the GPT's vocabulary that the GPT still responds
+    to.
 
-    `probe_accuracy` fits a linear probe, as masked2 described one, and scores
-    it on 500 signals it never saw. Here are probes trained on sets of each
-    size, reading three things. The projected tokens come from a projector
-    that stage one trained on captions naming these very facts. The frozen
-    encoder's own tokens saw no labels at all. The letters are the signal as
-    text, each step one of 26 letters by its level, read as one hot rows.
+    `probe_accuracy` trains a linear probe, as described in masked2, and
+    measures its accuracy on 500 signals it never saw. The table shows probes
+    trained on 100 to 10,000 signals, each reading from one of three inputs.
+    The projected tokens come from a projector that stage one trained on
+    captions stating these very facts. The frozen encoder's own tokens were
+    trained without any labels. The letters are the signal written as text.
+    Each step becomes one of 26 letters according to its level, and the
+    probe reads the letters as one hot rows.
 
     | Read from, fact | 100 signals | 300 | 1,000 | 10,000 |
     |---|---|---|---|---|
@@ -1280,13 +1325,15 @@ BRIDGE3_LESSON = prose(
     | 8 encoder tokens, spike's third | 77% to 81% | 92% to 98% | 99% to 100% | 100% |
     | 64 letters, spike's third | 59% to 67% | 68% to 71% | 75% to 79% | 99% to 99.6% |
 
-    All three read the trend at 99.8% or more from 100 signals on. Given
-    10,000 signals, the letters hold every fact for one linear map too. But a
-    probe on the letters needs thousands of examples to find the spike's
-    third. The encoder lays out the waves and most of the spike with no
-    labels, the way LLaVA leans on CLIP's trained features. Stage one's
-    captions sharpen the spike further, so 300 examples are enough, in an
-    eighth of the positions.
+    A probe on any of the three inputs reads the trend, rising or falling,
+    with 99.8% accuracy or more from 100 signals on. With 10,000 training signals, a linear probe
+    on the letters also finds every fact. But a probe on the letters needs
+    thousands of examples to find the spike's third. The encoder, trained
+    without labels, already arranges the waves and most of the spike
+    information so that a linear probe can read them. In the same way, LLaVA
+    relies on CLIP's trained features. Stage one's captions make the spike
+    even easier to read, so 300 examples are enough. The projected tokens
+    also use 8 positions, an eighth of the 64 the letters need.
     """,
 )
 
@@ -1298,11 +1345,13 @@ BRIDGE3 = Exercise(
     source=BRIDGE3_SOURCE,
     solution=BRIDGE3_SOLUTION,
     hints={
-        "nearest_characters": "F.normalize both vectors and gpt.wte.weight along dim -1, then multiply the first by "
-        "the second's .T. .max(dim=-1) gives the best similarity and its place. Look each place up in characters.",
-        "probe_accuracy": "Seed torch with 0 first, then make the probe, an nn.Linear from the training features' "
-        "second dimension to classes, and Adam at 0.01. 300 steps of cross entropy on the whole training set. Then, inside torch.no_grad(), the mean of "
-        "argmax(dim=1) == test_labels as floats, with .item().",
+        "nearest_characters": "Apply F.normalize to both vectors and gpt.wte.weight along dim -1, then matrix "
+        "multiply the first by the second's .T. Then .max(dim=-1) gives the best similarity and its index. Look up "
+        "each index in characters.",
+        "probe_accuracy": "Seed torch with 0 first. Then make the probe, an nn.Linear from the size of the training "
+        "features' second dimension to classes, and an Adam optimizer at 0.01. Train for 300 steps of cross entropy "
+        "on the whole training set. Then, inside torch.no_grad(), take the mean of argmax(dim=1) == test_labels as "
+        "floats, and call .item().",
     },
     introduces=(),
     check=check_bridge3,
