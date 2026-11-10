@@ -18,11 +18,12 @@ CHAIN_RULE = Chapter(
         """
         # The chain rule
 
-        A model is a long chain of small steps, each fed into the next. The chain
-        rule gives the derivative of the whole chain from each step's own
-        derivative. This chapter uses it on one path, on values that take
-        several paths, and then by hand on a small calculation, the way
-        training does it.
+        A model is a long chain of small steps, where the output of each step is
+        the input of the next. The chain rule gives the derivative of the whole
+        chain from the derivatives of the single steps. This chapter applies it
+        first to one chain of steps, then to values that reach the output along
+        several paths. Last, you work out every derivative of a small
+        calculation by hand, the way training does it.
 
         ## Further reading
 
@@ -46,13 +47,16 @@ def autograd_partials(
 
 CHAIN1_LESSON = prose(
     """
-    Most functions in deep learning are made by feeding one function into
-    another. Take `h(x) = (3 * x + 1) ** 2`. An inner step `u = 3 * x + 1`
-    feeds an outer step `u ** 2`.
+    Most functions in deep learning are built by passing the output of one
+    function into another function. Take `h(x) = (3 * x + 1) ** 2`. It is made
+    of two steps. The inner step computes `u = 3 * x + 1`. The outer step
+    squares `u`, which gives `u ** 2`.
 
-    Nudge `x` a tiny amount. The inner step moves `u` by 3 times the nudge,
-    since its derivative is 3. The outer step moves the output by `2 * u`
-    times the move in `u`. So the output moves `2 * u * 3` times the nudge.
+    Suppose `x` increases by a tiny amount. The inner step has derivative 3,
+    so `u` increases by 3 times that amount. The outer step has derivative
+    `2 * u` with respect to `u`, so the output changes by `2 * u` times the
+    change in `u`. Combining both steps, the output changes by `2 * u * 3`
+    times the change in `x`. So `2 * u * 3` is the derivative of `h`.
 
     ```python
     x = 2.0
@@ -62,17 +66,23 @@ CHAIN1_LESSON = prose(
     outer * inner      # 42.0, the derivative of h at 2
     ```
 
-    This is the **chain rule**. The derivative of steps fed into each other is
-    the product of each step's own derivative, each taken at the value that
-    step sees. A longer chain multiplies more of them.
+    This is the **chain rule**. It applies when steps are chained, so that the
+    output of each step is the input of the next. The derivative of the whole
+    chain is then the product of the derivatives of the steps. Each step's
+    derivative is taken at the input that step receives. In the example, the
+    outer derivative `2 * u` is taken at `u = 7`, the value the inner step
+    produced. A longer chain multiplies more derivatives together.
 
-    A step's own derivative is its **local derivative**. It only needs that
-    step's input. So each step can work out its local derivative on its own,
-    and the chain multiplies them, however many steps there are.
+    The derivative of one step with respect to its own input is called its
+    **local derivative**. Computing it needs only that step's input and
+    nothing else from the chain. So each step can compute its local
+    derivative separately, and the chain rule multiplies them together,
+    however many steps there are.
 
-    The rules of derivatives2 give the local derivatives. Here is
-    `exp(x ** 2)` at 1, where the inner step is `x ** 2` and the outer is
-    `exp`.
+    The rules table in derivatives2 gives the local derivatives. Here is the
+    derivative of `exp(x ** 2)` at `x = 1`. The inner step is `x ** 2`, with
+    local derivative `2 * x`. The outer step is `exp`, with local derivative
+    `exp(u)`.
 
     ```python
     u = 1.0 ** 2
@@ -88,7 +98,9 @@ CHAIN1_SOURCE = source_file(
     import math
 
 
-    # The derivative of (3 * x + 1) ** 2, by the chain rule.
+    # The derivative of (3 * x + 1) ** 2 at x, by the chain rule. outer is the
+    # derivative of the outer step u ** 2 with respect to u. inner is the
+    # derivative of the inner step 3 * x + 1 with respect to x.
     def d_square_of_line(x: float) -> float:
         u = 3 * x + 1
         outer = 2 * u
@@ -98,7 +110,9 @@ CHAIN1_SOURCE = source_file(
 
 
     # TODO: Finish the two middle lines, so this returns the derivative of
-    #   (2 * x - 5) ** 3 at x.
+    #   (2 * x - 5) ** 3 at x. The inner step computes u = 2 * x - 5, and the
+    #   outer step computes u ** 3.
+    #   Example: d_cube_of_line(4.0) returns 54.0.
     def d_cube_of_line(x: float) -> float:
         u = 2 * x - 5
         outer = ...
@@ -108,8 +122,9 @@ CHAIN1_SOURCE = source_file(
 
 
     # TODO: Finish the three lines, so this returns the derivative of
-    #   log(x ** 2 + 1) at x. The inner step is x ** 2 + 1 and the outer step is
-    #   log.
+    #   log(x ** 2 + 1) at x. The inner step computes x ** 2 + 1, and the outer
+    #   step applies log to that result.
+    #   Example: d_log_of_square(2.0) returns 0.8.
     def d_log_of_square(x: float) -> float:
         u = ...
         outer = ...
@@ -119,9 +134,10 @@ CHAIN1_SOURCE = source_file(
 
 
     # TODO: Finish the last line, so this returns the derivative of
-    #   exp(3 * x) ** 2 at x. It has three steps, 3 * x, then exp, then
-    #   squaring, so the chain multiplies three local derivatives. a and b hold
-    #   what the first two steps give.
+    #   exp(3 * x) ** 2 at x. This function has three steps. The first computes
+    #   a = 3 * x, the second computes b = exp(a), and the third squares b. So
+    #   the derivative is the product of three local derivatives.
+    #   Example: d_three_steps(0.0) returns 6.0.
     def d_three_steps(x: float) -> float:
         a = 3 * x
         b = math.exp(a)
@@ -161,7 +177,7 @@ CHAIN1_SOLUTION = source_file(
         return outer * inner
 
 
-    # The square's local derivative is 2 * b, exp's is exp(a), and 3 * x's is 3.
+    # Squaring b has local derivative 2 * b, exp has exp(a), and 3 * x has 3.
     def d_three_steps(x: float) -> float:
         a = 3 * x
         b = math.exp(a)
@@ -217,12 +233,13 @@ CHAIN1 = Exercise(
     source=CHAIN1_SOURCE,
     solution=CHAIN1_SOLUTION,
     hints={
-        "d_cube_of_line": "outer is the derivative of u ** 3 with respect to u. inner is the derivative of "
-        "2 * x - 5 with respect to x.",
-        "d_log_of_square": "u is the inner step's value, as in d_square_of_line. outer is the derivative of log at "
-        "u, from the table in derivatives2, and inner is the derivative of x ** 2 + 1.",
-        "d_three_steps": "Multiply the three local derivatives. The square's is twice what it squares, which is b. "
-        "exp's is exp of its input, and the first step's is the number x is multiplied by.",
+        "d_cube_of_line": "Set outer to the derivative of u ** 3 with respect to u, using the power rule. Set inner "
+        "to the derivative of 2 * x - 5 with respect to x.",
+        "d_log_of_square": "Set u to the value of the inner step, the same way d_square_of_line does. outer is the "
+        "derivative of log at u, which the table in derivatives2 gives. inner is the derivative of x ** 2 + 1.",
+        "d_three_steps": "Multiply the three local derivatives together. Squaring has local derivative 2 times the "
+        "value being squared, which is b. exp is its own derivative, so its local derivative is exp of its input "
+        "a. The local derivative of 3 * x is 3.",
     },
     introduces=("chain rule",),
     check=check_chain1,
@@ -232,11 +249,13 @@ CHAIN2_LESSON = prose(
     """
     The chain rule follows one path from an input to the output. Often an
     input reaches the output along more than one path. In
-    `f(x, y) = x * y + x`, `x` feeds both the product and the sum.
+    `f(x, y) = x * y + x`, `x` appears in two places. It is a factor of the
+    product `x * y`, and it is also added on its own.
 
-    Nudge `x` and both paths move the output at once. The product moves it by
-    `y` per unit of `x`, and the plain `+ x` moves it by 1. The moves add up,
-    so the partial with respect to `x` is `y + 1`.
+    When `x` increases, both places change the output at the same time.
+    Through the product, the output changes by `y` for each unit of change in
+    `x`. Through the `+ x` term, it changes by 1 for each unit. The two
+    changes add up, so the partial derivative with respect to `x` is `y + 1`.
 
     ```python
     x, y = 2.0, 5.0
@@ -244,24 +263,27 @@ CHAIN2_LESSON = prose(
     d_y = x        # 2.0, y has one path
     ```
 
-    So when a value feeds several places, its derivative is the sum over its
-    paths, with each path's part found by the chain rule. Along one path, hold
-    the value's other uses still. So the path through one factor of a product
-    gives the other factors.
+    In general, when a value is used in several places, its derivative is the
+    sum of the contributions of all its paths. The chain rule gives the
+    contribution of each path. To work out one path, treat the value's other
+    uses as constants. That is why the path through one factor of a product
+    contributes the product of the other factors.
 
-    `x * x` is the plain case. The path through the first `x` gives the second
-    `x`, and the path through the second gives the first. Together they give
-    `2 * x`, as the power rule says.
+    `x * x` is the simplest example. The path through the first `x`
+    contributes the second `x`, and the path through the second `x`
+    contributes the first. Together they give `2 * x`, which matches the
+    power rule.
 
-    The same goes for a step whose result is used more than once. With
-    `a = x + y` and `f = a * a + a`, the derivative of `f` with respect to `a`
-    adds up the three paths through `a`. The chain rule then carries it back to
-    `x` and `y`.
+    The same applies to an intermediate result that is used more than once.
+    Take `a = x + y` and `f = a * a + a`. The derivative of `f` with respect
+    to `a` adds up three paths, two through `a * a` and one through `+ a`.
+    Then the chain rule carries that derivative back to `x` and `y`. Since
+    `a = x + y`, the local derivative of `a` with respect to each input is 1.
 
     ```python
     a = x + y          # 7.0
     d_a = a + a + 1    # 15.0, two paths through a * a and one through + a
-    d_x = d_a * 1      # 15.0, since a moves one for one with x
+    d_x = d_a * 1      # 15.0, since the derivative of a with respect to x is 1
     ```
     """,
 )
@@ -272,7 +294,7 @@ CHAIN2_SOURCE = source_file(
 
 
     # In f(x, y) = x * y + x, x reaches f along two paths, so its partial
-    # derivative adds them up.
+    # derivative is the sum of the contributions of the two paths.
     def partials_of_product_plus_x(
         x: float,
         y: float,
@@ -285,6 +307,7 @@ CHAIN2_SOURCE = source_file(
 
     # TODO: Return the partial derivatives of f(x, y) = x * y * x, first with
     #   respect to x, then with respect to y.
+    #   Example: partials_of_reuse(2.0, 3.0) returns (12.0, 4.0).
     def partials_of_reuse(
         x: float,
         y: float,
@@ -293,8 +316,10 @@ CHAIN2_SOURCE = source_file(
 
 
     # TODO: Finish the line that sets d_a. Here f(x, y) = a * a + 3 * a, where
-    #   a = x * y, and d_a is the derivative of f with respect to a, adding up
-    #   the paths through a. The lines after it carry d_a back to x and y.
+    #   a = x * y. d_a is the derivative of f with respect to a, which adds up
+    #   the contributions of all the paths through a. The lines after it use
+    #   the chain rule to turn d_a into the partials for x and y.
+    #   Example: partials_through_a(2.0, 3.0) returns (45.0, 30.0).
     def partials_through_a(
         x: float,
         y: float,
@@ -310,6 +335,7 @@ CHAIN2_SOURCE = source_file(
     # TODO: Return the partial derivatives of f(x, y) = (x + y) * x + y, first
     #   with respect to x, then with respect to y. x and y each reach f along
     #   two paths.
+    #   Example: partials_of_two_paths(2.0, 3.0) returns (7.0, 3.0).
     def partials_of_two_paths(
         x: float,
         y: float,
@@ -333,7 +359,8 @@ CHAIN2_SOLUTION = source_file(
         return d_x, d_y
 
 
-    # Each x in the product gives the rest of it, x * y, and the two paths add up.
+    # The path through each x contributes the other two factors, x * y, and
+    # the two paths add up.
     def partials_of_reuse(
         x: float,
         y: float,
@@ -341,7 +368,7 @@ CHAIN2_SOLUTION = source_file(
         return 2 * x * y, x * x
 
 
-    # a * a gives a through each of its two a's, and 3 * a gives 3.
+    # Each of the two paths through a * a contributes a, and 3 * a contributes 3.
     def partials_through_a(
         x: float,
         y: float,
@@ -354,8 +381,8 @@ CHAIN2_SOLUTION = source_file(
         return d_x, d_y
 
 
-    # x gives x + y through the outer x and x through the x in x + y.
-    # y gives x through x + y and 1 on its own.
+    # x contributes x + y through the outer x, and x through the x inside x + y.
+    # y contributes x through x + y, and 1 through the final + y.
     def partials_of_two_paths(
         x: float,
         y: float,
@@ -392,17 +419,18 @@ def check_chain2(checker: Checker) -> None:
 CHAIN2 = Exercise(
     name="chain2",
     chapter=CHAIN_RULE,
-    title="Values that take several paths",
+    title="Values used in more than one place",
     lesson=CHAIN2_LESSON,
     source=CHAIN2_SOURCE,
     solution=CHAIN2_SOLUTION,
     hints={
-        "partials_of_reuse": "x reaches f twice, once through each x of the product. Each path gives the rest of the "
-        "product, x * y, and the paths add up. y has one path.",
-        "partials_through_a": "a reaches f three times, twice in a * a and once in 3 * a. Add up what each path "
-        "gives.",
-        "partials_of_two_paths": "Through the outer x, the path of x gives x + y, and through the x inside x + y it "
-        "gives x. y gives x through x + y, and 1 on its own.",
+        "partials_of_reuse": "x appears twice in the product, so it has two paths. The path through each x "
+        "contributes the other two factors, which multiply to x * y. Add the two paths. y appears once, so it has "
+        "one path.",
+        "partials_through_a": "a appears three times in f, twice in a * a and once in 3 * a. Add up the "
+        "contributions of the three paths.",
+        "partials_of_two_paths": "For x, the path through the outer x contributes x + y, and the path through the x "
+        "inside x + y contributes x. For y, the path through x + y contributes x, and the final + y contributes 1.",
     },
     introduces=(),
     check=check_chain2,
@@ -410,9 +438,10 @@ CHAIN2 = Exercise(
 
 CHAIN3_LESSON = prose(
     """
-    Write a calculation as small named steps, and the steps with the values
-    flowing between them form a **computation graph**. Here is one, run
-    forward from its inputs.
+    Any calculation can be written as a sequence of small named steps. The
+    steps, together with the values passed between them, form a
+    **computation graph**. Here is a small one, computed forward from its
+    inputs.
 
     ```python
     a, b, c, r = 2.0, -3.0, 10.0, -2.0
@@ -421,14 +450,18 @@ CHAIN3_LESSON = prose(
     L = q * r      # -8.0
     ```
 
-    Now walk it backward from `L` to find how `L` moves with every value. How
-    `L` moves with `a` is the partial derivative of `L` with respect to `a`.
-    Deep learning calls it the gradient of `a`, written here as `d_a`. The
-    gradient of `L` itself is 1, since `L` moves one for one with itself. Each
-    step hands gradients to its inputs by the chain rule.
+    Now go through the graph backward, starting from `L`, to find how much `L`
+    changes when each value changes. For `a`, that is the partial derivative
+    of `L` with respect to `a`. Deep learning calls it the gradient of `a`,
+    and this code writes it as `d_a`. The gradient of `L` itself is 1,
+    because the derivative of any value with respect to itself is 1.
 
-    - An addition passes its gradient to each input unchanged, since each input moves the sum one for one.
-    - A multiplication gives each input the gradient times the other input.
+    Each step then passes a gradient back to each of its inputs. By the chain
+    rule, an input's gradient is the gradient of the step's result times the
+    step's local derivative for that input.
+
+    - An addition passes the gradient of its result unchanged to each input, because its local derivatives are all 1.
+    - A multiplication gives each input the gradient of its result times the other input, which is the local derivative.
 
     ```python
     d_L = 1.0
@@ -440,9 +473,11 @@ CHAIN3_LESSON = prose(
     d_b = d_p * a    # -4.0
     ```
 
-    Walking backward this way is **backpropagation**. Each step only needs its
-    own inputs and the gradient handed down to it. When a value feeds two
-    steps, its gradient is the sum of what both hand it, as in chain2.
+    Computing gradients backward through the graph like this is called
+    **backpropagation**. Each step needs only its own inputs and the gradient
+    of its result. When a value is used by two steps, its gradient is the sum
+    of the gradients both steps pass back to it. This is the same adding up
+    of paths as in chain2.
     """,
 )
 
@@ -467,7 +502,10 @@ CHAIN3_SOURCE = source_file(
 
 
     # TODO: Finish the backward lines, so this returns the gradients of L with
-    #   respect to x, y and z. The first two lines run the graph forward.
+    #   respect to x, y and z. The first two lines compute s and L, going
+    #   forward through the graph. Each backward line computes one gradient
+    #   from the gradients above it.
+    #   Example: backward_small(2.0, -3.0, 4.0) returns (4.0, 4.0, -1.0).
     def backward_small(
         x: float,
         y: float,
@@ -486,8 +524,10 @@ CHAIN3_SOURCE = source_file(
 
 
     # TODO: Finish the backward lines, so this returns the gradients of L with
-    #   respect to x and y. q is used twice in q * q, and x feeds two steps, so
-    #   their gradients add up what each use hands them.
+    #   respect to x and y. q is used twice in q * q, and x is an input to both
+    #   p = x * y and q = p + x. So the gradient of q is the sum of what its
+    #   two uses pass back, and the same goes for the gradient of x.
+    #   Example: backward_reuse(2.0, 3.0) returns (64.0, 32.0).
     def backward_reuse(
         x: float,
         y: float,
@@ -541,8 +581,8 @@ CHAIN3_SOLUTION = source_file(
         return d_x, d_y, d_z
 
 
-    # q * q hands q its gradient once through each q. x gets a part from p = x * y
-    # and a part from q = p + x.
+    # q * q passes d_L * q back to q once for each of its two q's. x gets one
+    # part from p = x * y and one part from q = p + x.
     def backward_reuse(
         x: float,
         y: float,
@@ -594,8 +634,8 @@ CHAIN3 = Exercise(
     hints={
         "backward_small": "L = s * z is a multiplication, so s gets d_L times z, and z gets d_L times s. "
         "s = x + y is an addition, so x and y each get d_s unchanged.",
-        "backward_reuse": "q * q hands q the gradient times the other q, once for each q, and the two add up. "
-        "x gets d_p * y from p = x * y and d_q from q = p + x.",
+        "backward_reuse": "q * q is a multiplication, so each of its two q's gets d_L times the other q. Add those "
+        "two parts to get d_q. x gets d_p * y from p = x * y and d_q from q = p + x.",
     },
     introduces=("computation graph", "backpropagation"),
     check=check_chain3,
