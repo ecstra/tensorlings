@@ -30,12 +30,13 @@ VQVAE = Chapter(
         """
         # Vector quantization
 
-        A vector quantizer swaps each vector for the nearest of a fixed set of
-        vectors, a codebook, so a model's output becomes a list of code ids.
-        This chapter builds the swap, the straight through trick that lets a
-        gradient pass it, and the two losses of VQ-VAE that keep the codebook
-        and the encoder together. An image comes out as a small grid of
-        tokens, which a model like your GPT could learn to write.
+        A vector quantizer replaces each vector with the nearest vector from a
+        fixed set called a codebook. So a model's output becomes a list of
+        code ids. This chapter builds that replacement, and the straight
+        through trick that lets a gradient pass through it. It also builds the
+        two losses of VQ-VAE, which keep the codebook and the encoder close to
+        each other. An image becomes a small grid of tokens, which a model
+        like your GPT could learn to generate.
 
         ## Further reading
 
@@ -275,27 +276,30 @@ def measure_vq_table(seeds: range = range(3)) -> dict[str, list[tuple[float, int
 
 VQ1_LESSON = prose(
     """
-    A vector quantizer keeps a codebook, K vectors the model learns. It
-    swaps each vector it is given for the nearest codebook entry, by squared
-    distance. After the swap a vector is an id from 0 to K - 1, a token.
-    VQ-VAE used a codebook of 512.
+    A vector quantizer keeps a codebook, a set of K vectors that the model
+    learns. It replaces each input vector with the nearest codebook entry,
+    measured by squared distance. After that, the vector can be stored as the
+    id of its entry, a number from 0 to K - 1. That id is a token. VQ-VAE
+    used a codebook of 512 entries.
 
     ```python
     codebook = torch.tensor([[1.0, 0.0], [0.0, 1.0], [-1.0, 0.0]])
     z = torch.tensor([[0.9, 0.1], [-0.8, 0.3]])
-    # nearest entries: 0 and 2, so z becomes [[1, 0], [-1, 0]]
+    # the nearest entries are 0 and 2, so z becomes [[1, 0], [-1, 0]]
     ```
 
-    Broadcasting gives every distance at once. `z.unsqueeze(1)` has shape
-    `(n, 1, d)` and `codebook.unsqueeze(0)` has shape `(1, K, d)`, so their
-    difference is `(n, K, d)`, every vector against every entry.
+    Broadcasting computes every distance at once. `z.unsqueeze(1)` has shape
+    `(n, 1, d)` and `codebook.unsqueeze(0)` has shape `(1, K, d)`. So their
+    difference has shape `(n, K, d)`, which holds every vector minus every
+    entry.
 
-    The swap is a hard step, an `argmin`, and soft1 showed what that means.
-    No gradient passes it, so the encoder in front of it could never learn.
+    The replacement is a hard choice made by `argmin`, and soft1 showed what
+    that means. No gradient flows through it, so the encoder before it could
+    never learn.
 
-    VQ-VAE's answer is the straight through trick. Going forwards, use the
-    codebook entry. Going backwards, hand the gradient to the encoder's
-    vector as if the swap weren't there.
+    VQ-VAE solves this with the straight through trick. In the forward pass,
+    use the codebook entry. In the backward pass, give the gradient to the
+    encoder's vector unchanged, as if the replacement had not happened.
 
     ```python
     a = torch.tensor(2.0, requires_grad=True)
@@ -303,11 +307,11 @@ VQ1_LESSON = prose(
     out = a + (b - a).detach()    # tensor(5.), the value of b
     ```
 
-    The two `a`s cancel, so `out` has the value of `b`. But `.detach()`
-    hides the bracket from autograd, so the gradient of `out` with respect to
-    `a` is 1, as if `out` were `a` itself. With the encoder's vector for `a`
-    and its codebook entry for `b`, that is the trick. The codebook gets no
-    gradient this way, and vq2 gives it a loss of its own.
+    The two `a`s cancel, so `out` has the value of `b`. But `.detach()` hides
+    `(b - a)` from autograd. So the gradient of `out` with respect to `a` is
+    1, as if `out` were `a` itself. Put the encoder's vector in place of `a`
+    and its codebook entry in place of `b`, and you have the trick. The
+    codebook gets no gradient this way, so vq2 gives it a loss of its own.
     """,
 )
 
@@ -325,6 +329,9 @@ VQ1_SOURCE = source_file(
 
     # TODO: Return the squared distance from every row of z, of shape (n, d), to
     #   every row of codebook, of shape (K, d), as a tensor of shape (n, K).
+    #   Example: squared_distances(torch.tensor([[0.9, 0.1]]),
+    #   torch.tensor([[1.0, 0.0], [0.0, 1.0]])) returns about
+    #   tensor([[0.0200, 1.6200]]).
     def squared_distances(
         z: Tensor,
         codebook: Tensor,
@@ -332,8 +339,10 @@ VQ1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the id of the nearest codebook row for every row of z, of
-    #   shape (n,).
+    # TODO: Return the index of the nearest codebook row for every row of z, as
+    #   a tensor of shape (n,).
+    #   Example: nearest_codes(torch.tensor([[0.9, 0.1]]),
+    #   torch.tensor([[1.0, 0.0], [0.0, 1.0]])) returns tensor([0]).
     def nearest_codes(
         z: Tensor,
         codebook: Tensor,
@@ -341,7 +350,8 @@ VQ1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return every row of z swapped for its nearest codebook row.
+    # TODO: Return a tensor with the shape of z, in which every row of z is
+    #   replaced by its nearest codebook row.
     def quantize(
         z: Tensor,
         codebook: Tensor,
@@ -349,8 +359,9 @@ VQ1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return a tensor whose value is quantized, but whose gradient goes
-    #   to z unchanged, as if the swap weren't there, and none to quantized.
+    # TODO: Return a tensor whose value equals quantized. In the backward pass,
+    #   its gradient must go to z unchanged, as if the replacement had not
+    #   happened, and no gradient may go to quantized.
     def straight_through(
         z: Tensor,
         quantized: Tensor,
@@ -395,7 +406,7 @@ def check_straight_through(found: object) -> None:
         raise Mismatch("The gradient that reaches z should be the gradient handed to the output, unchanged.")
 
     if codebook_gradient is not None and codebook_gradient.abs().sum() > 0:
-        raise Mismatch("The codebook got a gradient through straight_through. Detach the bracket, so only z gets it.")
+        raise Mismatch("The codebook got a gradient through straight_through. Detach (quantized - z), so only z gets a gradient.")
 
 
 def check_vq1(checker: Checker) -> None:
@@ -424,7 +435,7 @@ def check_vq1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="quantize",
-        description="swaps every row for its nearest entry",
+        description="replaces every row with its nearest entry",
         inputs=(
             (small_tensor(727, 5, 2) / 3, CODEBOOK),
         ),
@@ -433,7 +444,7 @@ def check_vq1(checker: Checker) -> None:
     )
     checker.test(
         function="straight_through",
-        description="gives the entry forwards and the gradient to z backwards",
+        description="returns the entry going forward and passes the gradient to z going backward",
         run=check_straight_through,
     )
 
@@ -448,9 +459,9 @@ VQ1 = Exercise(
     hints={
         "squared_distances": "z.unsqueeze(1) minus codebook.unsqueeze(0) has shape (n, K, d). Square it and sum over "
         "dim=2.",
-        "nearest_codes": "The argmin of squared_distances over dim=1.",
+        "nearest_codes": "Take the argmin of squared_distances over dim=1.",
         "quantize": "Index codebook with nearest_codes.",
-        "straight_through": "z plus the detached difference between quantized and z.",
+        "straight_through": "Return z plus the detached difference between quantized and z.",
     },
     introduces=(),
     check=check_vq1,
@@ -464,41 +475,45 @@ VQ1 = Exercise(
 
 VQ2_LESSON = prose(
     """
-    The straight through trick trains the encoder, but nothing moves the
-    codebook. VQ-VAE adds two losses, each with one side held still by
-    `.detach()`.
+    The straight through trick trains the encoder, but nothing updates the
+    codebook. VQ-VAE adds two losses. In each one, `.detach()` holds one side
+    fixed, so only the other side gets a gradient.
 
     - The codebook loss pulls each chosen entry toward the encoder's vector, `mse(quantized, z.detach())`.
     - The commitment loss pulls the encoder's vector toward its entry, `beta * mse(z, quantized.detach())`.
 
-    The paper used `beta` of 0.25 throughout, and found results changed
-    little from 0.1 to 2.0. Without the commitment loss nothing stops the
-    encoder's outputs from wandering away from every entry.
+    The paper used a `beta` of 0.25 throughout, and found that results
+    changed little for values from 0.1 to 2.0. Without the commitment loss,
+    nothing stops the encoder's outputs from drifting far away from every
+    entry.
 
-    An image becomes tokens. Two stride 2 convolutions turn an MNIST digit
-    into a grid of 7 by 7 vectors, and each becomes its nearest entry's id.
-    So a digit is 49 tokens from a codebook of 32 here, and the decoder draws
-    it back from them.
+    Here is how an image becomes tokens. Two convolutions with stride 2 turn
+    a 28 by 28 MNIST digit into a 7 by 7 grid of vectors. Each vector is
+    replaced by the id of its nearest entry. So a digit becomes 49 tokens
+    from a codebook of 32 entries, and the decoder rebuilds the digit from
+    them.
 
     ```python
     z = torch.zeros(2, 8, 7, 7)                  # (batch, vector size, height, width)
     z.permute(0, 2, 3, 1).reshape(-1, 8).shape    # torch.Size([98, 8]), one row per grid cell
     ```
 
-    Where the entries start matters. `nn.Embedding` draws them from the
-    standard normal, far from the encoder's small vectors. A few entries end
-    up nearest to everything, and the rest are never chosen, so no loss ever
-    moves them. Jukebox's authors call this codebook collapse. SoundStream
-    groups the encoder's vectors from the first batch with k-means, and
-    starts the entries at the group centres. The simplest version starts
-    them at different vectors picked at random, as `torch.randperm` does.
+    The starting values of the entries matter. `nn.Embedding` draws them from
+    the standard normal, which puts them far from the encoder's small
+    vectors. A few entries end up nearest to every vector, and the rest are
+    never chosen, so no loss ever updates them. Jukebox's authors call this
+    codebook collapse. SoundStream instead groups the encoder's vectors from
+    the first batch with k-means and starts the entries at the group centres.
+    The simplest version starts each entry at a different encoder vector,
+    picked at random. `torch.randperm(n)` returns the numbers 0 to n - 1 in
+    random order, so its first few numbers pick different vectors.
 
     ```python
     torch.randperm(6, generator=torch.Generator().manual_seed(0))    # tensor([2, 5, 3, 0, 1, 4])
     ```
 
-    Here is that model trained 1,500 steps on MNIST on MPS, on 3 seeds. The
-    same network with no quantizer is the first row, and the scores are on
+    Here is that model trained for 1,500 steps on MNIST on MPS, on 3 seeds.
+    The first row is the same network with no quantizer. The scores are on
     2,000 validation digits.
 
     | Model | Reconstruction error | Codes used, of 32 |
@@ -510,22 +525,23 @@ VQ2_LESSON = prose(
     | First batch, no commitment loss | 0.056 to 0.081 | 1 to 3 |
     | First batch, no straight through | 0.081 | 1 |
 
-    Started from the first batch, every entry gets used and the error falls
-    by about half. Without the commitment loss, the encoder's vectors grew to
-    an average size of 0.7 to 1.7 million, far from every entry. Without the
-    codebook loss the entries stayed put while the encoder moved on. Without
-    vq1's straight through trick, no gradient from the rebuilt digit reached
-    the encoder, and every digit came out as one code. The
-    quantizer keeps a digit in 49 ids of 5 bits each, for about 6 times the
-    error of no quantizer.
+    When the entries start from the first batch, every entry gets used and
+    the error falls by about half. Without the commitment loss, the encoder's
+    vectors grew to an average length of 0.7 to 1.7 million, far from every
+    entry. Without the codebook loss, the entries stayed where they started
+    while the encoder's vectors kept changing. Without vq1's straight through
+    trick, no gradient from the rebuilt digit reached the encoder, and the
+    model used only 1 code. The quantizer stores a digit as 49 ids of 5 bits
+    each, at about 6 times the error of the model with no quantizer.
 
-    Jukebox also resets an entry that falls out of use to an encoder vector
-    from the current batch. VQ-VAE's appendix moves the entries by a running
-    average of the vectors each one wins, in place of the codebook loss.
+    Jukebox also resets any entry that stops being used to an encoder vector
+    from the current batch. VQ-VAE's appendix replaces the codebook loss with
+    a different update. It sets each entry to a running average of the
+    encoder vectors assigned to it.
 
-    Tokens are what other models can learn to write. VQ-VAE trained a second
-    model, a PixelCNN, on its grids to draw new images, and VQGAN later used
-    a transformer for that.
+    Other models can learn to generate tokens. VQ-VAE trained a second model,
+    a PixelCNN, on its grids of tokens to generate new images. VQGAN later
+    used a transformer for that.
     """,
 )
 
@@ -548,9 +564,9 @@ VQ2_SOURCE = source_file(
 
 
     # TODO: Return the codebook loss and the commitment loss, in that order. The
-    #   codebook loss is the mean squared error of quantized against z held
-    #   still. The commitment loss is beta times the mean squared error of z
-    #   against quantized held still.
+    #   codebook loss is the mean squared error between quantized and z, with z
+    #   detached so it gets no gradient. The commitment loss is beta times the
+    #   mean squared error between z and quantized, with quantized detached.
     def vq_losses(
         z: Tensor,
         quantized: Tensor,
@@ -559,8 +575,9 @@ VQ2_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the token id of every cell of z, of shape (batch, size,
-    #   height, width), as a tensor of shape (batch, height, width).
+    # TODO: z has shape (batch, size, height, width), so each grid cell holds a
+    #   vector of size numbers. Return the token id of every cell's vector, as
+    #   a tensor of shape (batch, height, width).
     def image_tokens(
         z: Tensor,
         codebook: Tensor,
@@ -569,7 +586,8 @@ VQ2_SOURCE = source_file(
 
 
     # TODO: Return how many of the codes, from 0 to codes - 1, appear at least
-    #   once in tokens, as a plain int.
+    #   once in tokens, as a Python int.
+    #   Example: codes_used(torch.tensor([0, 2, 2]), 4) returns 2.
     def codes_used(
         tokens: Tensor,
         codes: int,
@@ -577,9 +595,10 @@ VQ2_SOURCE = source_file(
         ...
 
 
-    # TODO: Return a codebook of codes rows, each a different row of vectors,
-    #   picked as the first codes ids of torch.randperm(len(vectors)) drawn
-    #   with generator.
+    # TODO: Return a starting codebook with codes rows, each a different row of
+    #   vectors. Shuffle the row indices with
+    #   torch.randperm(len(vectors), generator=generator), and take the rows at
+    #   the first codes of those indices.
     def first_codebook(
         vectors: Tensor,
         codes: int,
@@ -634,10 +653,10 @@ def check_vq_losses(found: object) -> None:
     commitment_to_z, commitment_to_q = torch.autograd.grad(commitment_loss, [z, quantized], allow_unused=True)
 
     if codebook_to_z is not None and codebook_to_z.abs().sum() > 0:
-        raise Mismatch("The codebook loss sent a gradient to z. Hold z still with .detach() in it.")
+        raise Mismatch("The codebook loss sent a gradient to z. Use z.detach() in that loss.")
 
     if commitment_to_q is not None and commitment_to_q.abs().sum() > 0:
-        raise Mismatch("The commitment loss sent a gradient to quantized. Hold quantized still with .detach() in it.")
+        raise Mismatch("The commitment loss sent a gradient to quantized. Use quantized.detach() in that loss.")
 
     if codebook_to_q is None or commitment_to_z is None:
         raise Mismatch("Each loss should send a gradient to its own side, the codebook loss to quantized and the commitment loss to z.")
@@ -646,7 +665,7 @@ def check_vq_losses(found: object) -> None:
 def check_vq2(checker: Checker) -> None:
     checker.test(
         function="vq_losses",
-        description="pulls each side toward the other, one at a time",
+        description="pulls each side toward the other, with the other side detached",
         run=check_vq_losses,
     )
     check_on_inputs(
@@ -693,14 +712,14 @@ VQ2 = Exercise(
     source=VQ2_SOURCE,
     solution=VQ2_SOLUTION,
     hints={
-        "vq_losses": "Each loss is an F.mse_loss between quantized and z, with .detach() on the side that holds "
-        "still. The codebook loss detaches z, and the commitment loss detaches quantized and is scaled by beta.",
-        "image_tokens": "permute z to (batch, height, width, size), reshape to rows of size, take nearest_codes, and "
-        "reshape the ids to (batch, height, width).",
-        "codes_used": "torch.bincount of the flattened tokens with minlength=codes counts each code. Count the counts "
-        "above 0, and turn the result into an int.",
-        "first_codebook": "torch.randperm(len(vectors), generator=generator) shuffles the row ids with no repeats. Keep "
-        "the first codes of them and index vectors with those.",
+        "vq_losses": "Each loss is an F.mse_loss between quantized and z, with .detach() on the side that is held "
+        "fixed. The codebook loss detaches z. The commitment loss detaches quantized and is multiplied by beta.",
+        "image_tokens": "Permute z to (batch, height, width, size) and reshape it to rows of size numbers. Take "
+        "nearest_codes of those rows, then reshape the ids to (batch, height, width).",
+        "codes_used": "torch.bincount of the flattened tokens with minlength=codes counts how often each code appears. "
+        "Count how many of those counts are above 0, and turn the result into an int.",
+        "first_codebook": "torch.randperm(len(vectors), generator=generator) lists the row indices in random order with "
+        "no repeats. Keep the first codes of them and index vectors with those.",
     },
     introduces=(),
     check=check_vq2,
@@ -714,14 +733,15 @@ VQ2 = Exercise(
 
 QUIZ12_LESSON = prose(
     """
-    This quiz has no examples and no new tools. Each function combines moves
-    from Section 9. If a step is unclear, the exercise in the table shows it.
+    This quiz has no examples and no new tools. Each function combines steps
+    from Section 9. If a step is unclear, the exercise listed in the table
+    shows how it works.
 
-    | Function | Moves | Shown in |
+    | Function | What it uses | Shown in |
     |---|---|---|
-    | `reparameterize` | a Gaussian sample as the mean plus the spread times noise | sampling3 |
+    | `reparameterize` | a Gaussian sample as the mean plus the standard deviation times noise | sampling3 |
     | `kl_to_standard` | the KL divergence from a diagonal Gaussian to the standard one, in closed form | vae1 |
-    | `discriminator_loss` | binary cross entropy that calls real samples 1 and generated ones 0 | gan1 |
+    | `discriminator_loss` | binary cross entropy with label 1 for real samples and 0 for generated ones | gan1 |
     | `noise_to` | a clean sample noised to its step in one jump | diffusion1 |
     | `nearest_codes` | each vector's closest codebook row by squared distance | vq1 |
     """,
@@ -731,15 +751,15 @@ QUIZ12_SOURCE = source_file(
     '''
     # quiz12.py
     #
-    # No examples and no new tools. Each function combines moves from Section 9.
+    # No examples and no new tools. Each function combines steps from Section 9.
 
     import torch
     import torch.nn.functional as F
     from torch import Tensor
 
 
-    # TODO: Return a sample of a Gaussian with mean and log_variance, given its
-    #   standard normal noise of the same shape.
+    # TODO: Return a sample from a Gaussian with the given mean and
+    #   log_variance. noise is standard normal noise of the same shape.
     def reparameterize(
         mean: Tensor,
         log_variance: Tensor,
@@ -748,8 +768,9 @@ QUIZ12_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the KL divergence of each row's diagonal Gaussian, with mean
-    #   and log_variance, from the standard normal, one number per row.
+    # TODO: Each row of mean and log_variance describes a diagonal Gaussian.
+    #   Return the KL divergence between each row's Gaussian and the standard
+    #   normal, one number per row.
     def kl_to_standard(
         mean: Tensor,
         log_variance: Tensor,
@@ -757,8 +778,9 @@ QUIZ12_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the discriminator's loss for its scores, logits, on real
-    #   samples and on generated ones, summed over the two kinds.
+    # TODO: Return the discriminator's loss. real_scores and fake_scores are its
+    #   logits on real samples and on generated samples. Add the loss on the
+    #   real samples to the loss on the generated ones.
     def discriminator_loss(
         real_scores: Tensor,
         fake_scores: Tensor,
@@ -766,9 +788,9 @@ QUIZ12_SOURCE = source_file(
         ...
 
 
-    # TODO: Return x0 noised to step t in one jump, for x0 of any shape whose
-    #   first dimension is the batch. alpha_bars holds every step's alpha bar,
-    #   t one step per sample, and noise is the shape of x0.
+    # TODO: Return x0 noised to step t in one jump. x0 can have any shape whose
+    #   first dimension is the batch. alpha_bars holds the alpha bar of every
+    #   step, t holds one step per sample, and noise has the shape of x0.
     def noise_to(
         x0: Tensor,
         t: Tensor,
@@ -778,8 +800,8 @@ QUIZ12_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the index of each row of z's closest codebook row by squared
-    #   distance.
+    # TODO: For each row of z, return the index of the closest codebook row by
+    #   squared distance.
     def nearest_codes(
         z: Tensor,
         codebook: Tensor,
@@ -863,7 +885,7 @@ def check_quiz12(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="reparameterize",
-        description="adds the spread times the noise to the mean",
+        description="adds the standard deviation times the noise to the mean",
         inputs=(
             (quiz12_tensor(1210, 3, 2), quiz12_tensor(1211, 3, 2), quiz12_tensor(1212, 3, 2)),
         ),
@@ -922,15 +944,16 @@ QUIZ12 = Exercise(
     source=QUIZ12_SOURCE,
     solution=QUIZ12_SOLUTION,
     hints={
-        "reparameterize": "The spread is torch.exp(0.5 * log_variance). Add the spread times the noise to the mean.",
-        "kl_to_standard": "Half of mean squared plus the variance minus the log variance minus 1, summed over the last "
-        "dimension.",
-        "discriminator_loss": "F.binary_cross_entropy_with_logits of the real scores against ones, plus that of the "
-        "fake scores against zeros.",
-        "noise_to": "alpha_bars[t] reshaped to (len(t), 1, ...) lines each sample up with its step. Then the square "
-        "root of it times x0 plus the square root of 1 minus it times the noise.",
-        "nearest_codes": "z.unsqueeze(1) - codebook.unsqueeze(0) gives every difference. Square, sum over the last "
-        "dimension, and argmin over the codes.",
+        "reparameterize": "The standard deviation is torch.exp(0.5 * log_variance). Add the standard deviation times "
+        "the noise to the mean.",
+        "kl_to_standard": "Take mean squared plus the variance minus the log variance minus 1, sum it over the last "
+        "dimension, and multiply by 0.5.",
+        "discriminator_loss": "Add F.binary_cross_entropy_with_logits of the real scores against ones and of the fake "
+        "scores against zeros.",
+        "noise_to": "Reshape alpha_bars[t] to (len(t), 1, ...), so each sample lines up with its own step. Multiply "
+        "x0 by the square root of that, and add the noise times the square root of 1 minus that.",
+        "nearest_codes": "z.unsqueeze(1) - codebook.unsqueeze(0) gives every difference. Square it, sum over the last "
+        "dimension, and take the argmin over the codes.",
     },
     introduces=(),
     check=check_quiz12,

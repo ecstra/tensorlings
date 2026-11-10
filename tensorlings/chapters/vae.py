@@ -33,11 +33,13 @@ VAE = Chapter(
         """
         # Variational autoencoders
 
-        A variational autoencoder makes an autoencoder's code random, and pulls
-        every code toward a standard normal while it trains. Then new data
-        comes from drawing a code and decoding it. This chapter builds the
-        encoder and its KL term, trains a small VAE on MNIST by its ELBO, and
-        measures what its code space gives that a plain autoencoder's doesn't.
+        A variational autoencoder, or VAE, is an autoencoder whose code is
+        random. During training, an extra loss term pulls the distribution of
+        every code toward a standard normal distribution. To make new data, you
+        draw a code from the standard normal and decode it. This chapter builds
+        the encoder and its KL term, trains a small VAE on MNIST with its ELBO
+        loss, and measures what a VAE's codes can do that a plain
+        autoencoder's codes cannot.
 
         ## Further reading
 
@@ -126,45 +128,57 @@ KL_REFERENCE = reference_namespace(ENCODER_INIT + ENCODER_FORWARD, KL_PARTS)
 
 VAE1_LESSON = prose(
     """
-    An autoencoder squeezes an input into a small code and builds it back, as
-    autoencoder1 did. A variational autoencoder, a VAE, from Kingma and
-    Welling, makes the code random. The encoder gives a mean and a log
-    variance for each number of the code, and the code is drawn from them
-    with sampling3's trick.
+    An autoencoder compresses an input into a small code and then rebuilds
+    the input from that code, as in autoencoder1. A variational autoencoder,
+    or VAE, from Kingma and Welling, makes the code random. For each number in
+    the code, the encoder outputs a mean and a log variance. The code is then
+    drawn from a normal distribution with that mean and variance, using the
+    reparameterization trick from sampling3.
 
-    The encoder is a hidden layer with two heads, one Linear for the means and
-    one for the log variances, as sampling3 explained.
+    The encoder is one hidden layer followed by two heads. A head is a final
+    Linear layer that reads the hidden layer. One head outputs the means and
+    the other outputs the log variances. sampling3 explained why a model
+    outputs the log variance instead of the standard deviation.
 
-    Training pulls every code's normal toward the standard normal, mean 0 and
-    spread 1. It measures how far apart they are with a KL divergence, which
-    is 0 when two distributions match and grows as they part. For a normal
-    against the standard normal it has a closed form, a formula with no
-    sampling in it. It is summed over the numbers of the code.
+    Training pulls the normal distribution of every code toward the standard
+    normal, which has mean 0 and standard deviation 1. The distance between
+    two distributions is measured by the **KL divergence**. It is 0 when the
+    two distributions are the same, and it grows as they become more
+    different. For a normal distribution against the standard normal, the KL
+    divergence has a closed form, which means an exact formula with no
+    sampling in it. The KL of a whole code is that formula summed over the
+    numbers in the code.
 
     ```text
     KL = 0.5 * sum(mean ** 2 + variance - log_variance - 1)
     ```
 
-    Each part pulls its own way. `mean ** 2` pulls the mean to 0.
-    `variance - log_variance - 1` is 0 at a variance of 1 and grows on either
-    side, so it pulls the spread to 1.
+    Each part of the formula pulls toward a different target. `mean ** 2` is
+    smallest when the mean is 0, so it pulls the mean to 0. The part
+    `variance - log_variance - 1` is 0 when the variance is 1 and grows when
+    the variance is above or below 1. So it pulls the variance to 1.
 
-    The closed form is the average of `log q(z) - log p(z)` over codes z drawn
-    from the code's own normal q, with p the standard normal. The log density
-    of a normal at z is this.
+    You can also get the KL by sampling. Call the code's own normal
+    distribution q and the standard normal p. Draw many codes z from q,
+    compute `log q(z) - log p(z)` for each, and average. The closed form is
+    exactly the value this average approaches. The log density of a normal
+    distribution at a point z is given by this formula.
 
     ```text
     log q(z) = -0.5 * (log(2 * pi) + log_variance + (z - mean) ** 2 / variance)
     ```
 
-    Averaging over draws reaches the closed form slowly. Here is a code of 2
-    numbers, with means 0.5 and -1 and variances 1 and 0.25, on 3 seeds.
+    The sampled average gets close to the closed form only slowly as the
+    number of draws grows. Here is a code of 2 numbers, with means 0.5 and -1
+    and variances 1 and 0.25. Each cell gives the range of results over 3
+    random seeds.
 
     | Draws | 100 | 10,000 | Closed form |
     |---|---|---|---|
     | KL | 0.89 to 1.02 | 0.933 to 0.951 | 0.943 |
 
-    The closed form costs one line and has no noise, which is why VAEs use it.
+    The closed form is one line of code and has no random noise, which is why
+    VAEs use it.
     """,
 )
 
@@ -182,18 +196,22 @@ VAE1_SOURCE = source_file(
     variance = log_variance.exp()                       # tensor([1.0000, 0.2500])
 
 
-    # TODO: Finish forward. Run x, of shape (batch, 784), through hidden and a
-    #   ReLU, then return the mean head's output and the log variance head's
-    #   output, each of shape (batch, code).
+    # TODO: Finish forward. Pass x, of shape (batch, 784), through self.hidden
+    #   and then a ReLU. Feed the result to both heads and return two tensors,
+    #   the output of self.mean and the output of self.log_variance, each of
+    #   shape (batch, code).
 ''' + indented(ENCODER_INIT) + '''
 
         def forward(self, x: Tensor) -> tuple[Tensor, Tensor]:
             ...
 
 
-    # TODO: Return the KL divergence of each code's normal from the standard
-    #   normal, by the closed form, summed over the last dimension. mean and
-    #   log_variance have shape (batch, code), and the result (batch,).
+    # TODO: Return the KL divergence between each code's normal distribution
+    #   and the standard normal, using the closed form from the lesson. Sum over
+    #   the last dimension. mean and log_variance have shape (batch, code), and
+    #   the result has shape (batch,).
+    #   Example: kl_to_standard(torch.tensor([[0.5, -1.0]]),
+    #   log_variance.unsqueeze(0)) returns about tensor([0.9431]).
     def kl_to_standard(
         mean: Tensor,
         log_variance: Tensor,
@@ -201,8 +219,11 @@ VAE1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the log density of a normal with mean and log_variance at
-    #   each entry of z, entry by entry, with the formula from the lesson.
+    # TODO: Return the log density of a normal distribution with the given mean
+    #   and log_variance, evaluated at each entry of z. Use the lesson's
+    #   formula entry by entry, so the result has the same shape as z.
+    #   Example: log_normal(torch.tensor(0.0), torch.tensor(0.0),
+    #   torch.tensor(0.0)) returns about tensor(-0.9189).
     def log_normal(
         z: Tensor,
         mean: Tensor,
@@ -211,10 +232,13 @@ VAE1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the KL divergence of each code by sampling, of shape (batch,).
-    #   Draw noise of shape (count, *mean.shape) with torch.randn and generator,
-    #   make z by the trick, and average log q(z) - log p(z), each summed over
-    #   the code, over the count draws. p is the standard normal.
+    # TODO: Estimate the KL divergence of each code by sampling, and return it
+    #   with shape (batch,). Draw noise of shape (count, *mean.shape) with
+    #   torch.randn and generator. Turn the noise into codes z with the
+    #   reparameterization trick. For each draw, compute log q(z) - log p(z)
+    #   with log_normal, where q is the code's normal and p is the standard
+    #   normal. Sum that over the code dimension, then average over the count
+    #   draws.
     def kl_by_sampling(
         mean: Tensor,
         log_variance: Tensor,
@@ -304,7 +328,7 @@ def check_vae1(checker: Checker) -> None:
     checker.test_method(
         class_name="Encoder",
         method="forward",
-        description="gives a mean and a log variance per code number",
+        description="returns a mean and a log variance for each number in the code",
         run=check_encoder,
     )
     check_on_inputs(
@@ -352,12 +376,12 @@ VAE1 = Exercise(
     hints={
         "Encoder.forward": "Pass x through self.hidden and torch.relu. Feed that to self.mean and self.log_variance "
         "and return both.",
-        "kl_to_standard": "log_variance.exp() is the variance. Put the four parts together, sum over dim=-1, and "
-        "halve it.",
+        "kl_to_standard": "log_variance.exp() is the variance. Combine the four terms of the formula, sum over "
+        "dim=-1, and multiply by 0.5.",
         "log_normal": "Write the lesson's formula with math.log(2 * math.pi) and log_variance.exp() as the variance.",
-        "kl_by_sampling": "The spread is torch.exp of half the log variance. A sample is the mean plus the spread "
-        "times the noise. The standard normal is log_normal with "
-        "zeros for the mean and the log variance. Sum the gap over dim=-1, then average over dim=0.",
+        "kl_by_sampling": "The standard deviation is torch.exp of half the log variance. A sample is the mean plus "
+        "the standard deviation times the noise. For log p, call log_normal with zeros for the mean and the log "
+        "variance. Sum log q minus log p over dim=-1, then average over dim=0.",
     },
     introduces=(),
     check=check_vae1,
@@ -477,44 +501,50 @@ def elbo_parts(
 
 VAE2_LESSON = prose(
     """
-    A VAE trains on the negative ELBO, the evidence lower bound of Kingma and
-    Welling. The ELBO is a lower bound on the log likelihood of each image, so
-    raising it trains a likelihood model, as Section 2 did. Its negative has
-    two parts per image.
+    A VAE is trained to minimize the negative ELBO. ELBO stands for evidence
+    lower bound, a term from Kingma and Welling. The ELBO is a lower bound on
+    the log likelihood of each image. So raising the ELBO trains the VAE by
+    likelihood, as Section 2 did for other models. The negative ELBO of an
+    image is the sum of two parts.
 
-    - Reconstruction is how badly the decoder builds the image back from a drawn code, a binary cross entropy summed over its 784 pixels.
-    - KL is vae1's distance from the code's normal to the standard normal.
+    - The reconstruction loss measures how badly the decoder rebuilds the image from a sampled code, as a binary cross entropy summed over 784 pixels.
+    - The KL term is vae1's KL divergence between the code's normal distribution and the standard normal.
 
-    Each pixel, from 0 to 1, is read as the chance of ink, and the decoder's
-    784 outputs are logits for those chances. `reduction="sum"` adds the loss
-    up over every pixel and image instead of averaging it, so dividing by the
-    batch size gives the loss per image.
+    Each pixel value is between 0 and 1, and it is treated as the probability
+    that the pixel has ink. The decoder's 784 outputs are logits for those
+    probabilities. `reduction="sum"` adds up the loss over every pixel and
+    every image instead of averaging it. Dividing that sum by the batch size
+    gives the loss per image.
 
     ```python
     F.binary_cross_entropy_with_logits(torch.zeros(2, 3), torch.ones(2, 3), reduction="sum")    # tensor(4.1589)
     ```
 
-    The two parts pull against each other. Reconstruction wants each code to
-    say exactly which image it came from. KL wants every code to look like the
-    same standard normal draw. The model settles in between.
+    The two parts work against each other. The reconstruction loss is lowest
+    when each code says exactly which image it came from. The KL term is
+    lowest when every code is a draw from the same standard normal, which
+    says nothing about the image. Training ends up at a balance between the
+    two.
 
-    Here is the run behind this exercise on MNIST, with a code of 64 numbers
-    and a hidden layer of 256. Each loss is per image, on 2,000 new images.
+    Here is the training run behind this exercise, on MNIST with a code of 64
+    numbers and a hidden layer of 256 units. Each loss is the average per
+    image on 2,000 images the model never trained on.
 
     | Steps | 0 | 400 | 2,000 |
     |---|---|---|---|
     | Reconstruction | 551.4 | 129.3 | 90.0 |
     | KL | 0.35 | 19.1 | 24.4 |
 
-    The KL starts near 0, since a fresh encoder gives codes close to the
-    standard normal. It rises as the codes start to carry each image.
+    The KL starts near 0, because a freshly initialized encoder outputs means
+    near 0 and variances near 1. It rises as the codes start to carry
+    information about each image.
 
-    New digits need only the decoder. Draw codes from the standard normal and
-    decode them. Training pulled every code toward that normal, so these
-    draws land where the decoder learned to read. After 4,000 steps on 3
-    seeds, a digit classifier is more than 90% sure of 44.3% to 46.1% of
-    1,000 such samples. vae3 shows what the same draws give a plain
-    autoencoder.
+    Making new digits needs only the decoder. Draw codes from the standard
+    normal and decode them. Training pulled every code toward that normal, so
+    these random codes look like the codes the decoder saw in training. After
+    4,000 training steps, a digit classifier gives one digit a probability
+    above 0.9 for 44.3% to 46.1% of 1,000 such samples, over 3 seeds. vae3
+    shows what the same random codes give for a plain autoencoder.
     """,
 )
 
@@ -538,9 +568,11 @@ VAE2_SOURCE = source_file(
 ''' + indented(ENCODER_FORWARD) + '''
 
 
-    # TODO: Finish forward. Encode x, draw the code with sampling3's trick from
-    #   noise of the mean's shape, drawn with torch.randn and generator, and
-    #   decode it. Return the decoder's logits, the mean and the log variance.
+    # TODO: Finish forward. Encode x to get the mean and the log variance. Draw
+    #   noise with the shape of the mean, using torch.randn and generator, and
+    #   turn it into a code with the reparameterization trick. Decode the code
+    #   and return three tensors, the decoder's logits, the mean and the log
+    #   variance.
 ''' + indented(VAE_INIT) + '''
 
         def forward(
@@ -551,10 +583,12 @@ VAE2_SOURCE = source_file(
             ...
 
 
-    # TODO: Return the negative ELBO per image, as one number in a tensor. Add
-    #   the binary cross entropy of the logits against x, summed over every
-    #   pixel and image, to vae1's KL summed over every code number and image,
-    #   then divide by the number of images.
+    # TODO: Return the negative ELBO per image, as a tensor holding one number.
+    #   Compute the binary cross entropy of logits against x, summed over every
+    #   pixel and every image. Add vae1's KL, summed over every code number and
+    #   every image. Then divide the total by the number of images.
+    #   Example: negative_elbo(torch.zeros(1, 784), torch.ones(1, 784),
+    #   torch.zeros(1, 4), torch.zeros(1, 4)) returns about tensor(543.4275).
     def negative_elbo(
         logits: Tensor,
         x: Tensor,
@@ -564,10 +598,11 @@ VAE2_SOURCE = source_file(
         ...
 
 
-    # TODO: Return count new digits, of shape (count, 784), with pixels from 0
-    #   to 1. Draw codes from the standard normal with torch.randn and generator,
-    #   as many numbers each as model.decoder[0] takes, decode them and take the
-    #   sigmoid. Run in eval mode without recording for autograd, then put the
+    # TODO: Return count new digits as a tensor of shape (count, 784), with
+    #   pixel values from 0 to 1. Draw count codes from the standard normal with
+    #   torch.randn and generator. Each code has as many numbers as
+    #   model.decoder[0] takes as input. Decode the codes and apply a sigmoid.
+    #   Do this in eval mode with autograd recording turned off, then put the
     #   model back in training mode.
     def sample_digits(
         model: nn.Module,
@@ -681,13 +716,13 @@ def check_vae2(checker: Checker) -> None:
     checker.test_method(
         class_name="VAE",
         method="forward",
-        description="encodes, draws the code by the trick and decodes",
+        description="encodes, draws the code with the reparameterization trick, and decodes",
         run=check_vae_forward,
     )
     check_on_inputs(
         checker=checker,
         function="negative_elbo",
-        description="adds reconstruction and KL, per image",
+        description="adds the reconstruction loss and the KL, per image",
         inputs=(
             (
                 small_tensor(677, 3, 784) / 2,
@@ -707,7 +742,7 @@ def check_vae2(checker: Checker) -> None:
     checker.test_method(
         class_name="VAE",
         method="forward",
-        description="learns MNIST, a negative ELBO below 170 after 400 steps",
+        description="learns MNIST, reaching a negative ELBO below 170 after 400 steps",
         run=check_vae_learns,
     )
 
@@ -720,11 +755,11 @@ VAE2 = Exercise(
     source=VAE2_SOURCE,
     solution=VAE2_SOLUTION,
     hints={
-        "VAE.forward": "self.encoder gives the mean and the log variance of x. Noise is torch.randn(mean.shape, "
-        "generator=generator). "
-        "Decode mean plus the spread times the noise, and return the logits with the mean and the log variance.",
-        "negative_elbo": "F.binary_cross_entropy_with_logits with reduction=\"sum\" gives the reconstruction. Add half "
-        "the sum of the KL parts, then divide by len(x).",
+        "VAE.forward": "self.encoder returns the mean and the log variance of x. The noise is torch.randn(mean.shape, "
+        "generator=generator). Decode the mean plus the standard deviation times the noise. Return the logits, the "
+        "mean and the log variance.",
+        "negative_elbo": "F.binary_cross_entropy_with_logits with reduction=\"sum\" gives the reconstruction loss. Add "
+        "vae1's KL formula summed over everything, then divide by len(x).",
         "sample_digits": "model.decoder[0].in_features is the code size. Inside torch.no_grad(), decode "
         "torch.randn(count, size, generator=generator) and take torch.sigmoid.",
     },
@@ -943,24 +978,28 @@ def code_space_numbers(
 
 VAE3_LESSON = prose(
     """
-    autoencoder1's plain autoencoder also squeezes images into codes and
-    decodes them back. So why the noise and the KL? The answer is in where
-    the codes land.
+    The plain autoencoder from autoencoder1 also compresses images into codes
+    and decodes them back. So why add the noise and the KL term? The answer
+    is in where the codes end up.
 
-    An autoencoder puts its codes wherever training pushed them. Here an
-    autoencoder and a VAE, each with a code of 64 numbers, trained 4,000
-    steps on MNIST, on 3 seeds. Across images, the autoencoder's code numbers
-    spread about 2.2 on average.
+    An autoencoder's codes end up wherever training happened to push them.
+    Here an autoencoder and a VAE, each with a code of 64 numbers, were
+    trained for 4,000 steps on MNIST, on 3 seeds. For the autoencoder, the
+    standard deviation of each code number across images is about 2.2 on
+    average.
 
-    The VAE puts each image into only 22 or 23 of its 64 numbers. On the rest
-    the KL wins, the mean sits at 0 and the spread at 1, so they carry nothing
-    about the image. Drawn with their noise, the codes of all images together
-    spread about 1.01, the standard normal's own spread.
+    The VAE stores information about each image in only 22 or 23 of its 64
+    numbers. On the other numbers the KL term wins. Their mean stays at 0 and
+    their variance at 1, so they carry nothing about the image. Take the codes
+    of all images, drawn with their noise. Each code number then has a
+    standard deviation of about 1.01 across images, close to the standard
+    normal's 1.
 
-    A new digit means drawing a code and decoding it. A digit classifier, a
-    small MLP that gets 97.4% of new images right, judges each one. The table
-    gives the share of 1,000 decoded samples it is more than 90% sure of. It
-    is sure of 93.9% of real images.
+    To make a new digit, you draw a code and decode it. A digit classifier
+    judges each result. It is a small MLP that classifies 97.4% of unseen
+    images correctly. The table gives the share of 1,000 decoded samples for
+    which the classifier gives one digit a probability above 0.9. On real
+    images that share is 93.9%.
 
     | Codes drawn from | Autoencoder | VAE |
     |---|---|---|
@@ -969,26 +1008,29 @@ VAE3_LESSON = prose(
     | a normal matched to its codes | 24.6% to 27.0% | 46.2% to 48.1% |
     | halfway between two images' codes | 44.4% to 46.7% | 51.3% to 52.8% |
 
-    Drawn from the standard normal, the autoencoder's codes miss where its
-    decoder learned to read. Even a normal matched to the mean and spread of
-    each number lands on a sure digit only a quarter of the time. Its codes
-    fill part of that normal, and the rest is holes. The VAE's KL packed its
-    codes into the standard normal, so a plain draw does nearly twice as well.
+    Codes drawn from the standard normal mostly fall away from the
+    autoencoder's real codes, so its decoder has never seen codes like them.
+    Even a normal matched to the mean and standard deviation of each code
+    number gives a confident digit only about a quarter of the time. The
+    autoencoder's real codes fill only part of that normal, and the rest of
+    it is empty holes. The VAE's KL term packed its codes into the standard
+    normal, so drawing from the standard normal works nearly twice as well.
 
-    The last row tests the holes directly. Halfway between two real images'
-    codes, the VAE decodes a sure digit more often than the autoencoder, on
-    every seed.
+    The last row tests for holes directly. It decodes the point halfway
+    between the codes of two real images. At those points the VAE decodes a
+    confident digit more often than the autoencoder, on every seed.
 
-    Ghosh and colleagues measured the same gap on MNIST with FID. It scores
-    how far generated images sit from real ones, and lower is better. A VAE
-    drawn from the standard normal scored 19.21, against 58.73 for an
-    autoencoder drawn from a normal fitted to its codes. Fitting a mix of 10
-    normals to the autoencoder's codes after training brought it to 10.66,
-    better than the VAE. So what a VAE buys is that a plain standard normal
-    works, with no second step to fit.
+    Ghosh and colleagues measured the same gap on MNIST with FID. FID scores
+    how far a set of generated images is from a set of real ones, and lower
+    is better. A VAE sampled from the standard normal scored 19.21. An
+    autoencoder sampled from a normal fitted to its codes scored 58.73.
+    Fitting a mixture of 10 normals to the autoencoder's codes after training
+    brought it to 10.66, better than the VAE. So the advantage of a VAE is
+    that sampling from a plain standard normal works, with no second fitting
+    step after training.
 
-    gan3 sets a VAE against a GAN and measures how close the samples of each
-    land to real data.
+    gan3 compares a VAE with a GAN and measures how close each one's samples
+    are to real data.
     """,
 )
 
@@ -1005,10 +1047,10 @@ VAE3_SOURCE = source_file(
     halfway = (codes[0] + codes[1]) / 2                      # tensor([2., 6.])
 
 
-    # TODO: Return the share of images that classifier is more than threshold
-    #   sure of, its largest softmax chance being above threshold, as a plain
-    #   number. Run in eval mode without recording for autograd, then put the
-    #   classifier back in training mode.
+    # TODO: Return the fraction of images that classifier is confident about,
+    #   as a Python float. An image counts as confident when its largest
+    #   softmax probability is above threshold. Run the classifier in eval mode
+    #   with autograd recording turned off, then put it back in training mode.
     def confident_share(
         classifier: nn.Module,
         images: Tensor,
@@ -1017,8 +1059,9 @@ VAE3_SOURCE = source_file(
         ...
 
 
-    # TODO: Return count codes drawn from a normal matched to codes, of shape
-    #   (count, size). Each number gets the mean and the spread it has over the
+    # TODO: Return count new codes, of shape (count, size), drawn from a normal
+    #   distribution matched to codes, which has shape (rows, size). Each code
+    #   number gets the mean and the standard deviation of its column over the
     #   rows of codes. Draw the noise with torch.randn and generator.
     def matched_codes(
         codes: Tensor,
@@ -1028,9 +1071,10 @@ VAE3_SOURCE = source_file(
         ...
 
 
-    # TODO: Return count codes, each halfway between two rows of codes, of
-    #   shape (count, size). Draw the first rows' ids, then the second rows',
-    #   each with torch.randint(0, len(codes), (count,), generator=generator).
+    # TODO: Return count codes, each halfway between two randomly chosen rows
+    #   of codes, as a tensor of shape (count, size). First draw the indices of
+    #   the first rows, then the indices of the second rows, each with
+    #   torch.randint(0, len(codes), (count,), generator=generator).
     def midpoint_codes(
         codes: Tensor,
         count: int,
@@ -1039,8 +1083,9 @@ VAE3_SOURCE = source_file(
         ...
 
 
-    # TODO: Return confident_share of the images decoder makes from codes, the
-    #   sigmoid of its outputs, decoded without recording for autograd.
+    # TODO: Turn codes into images by passing them through decoder and applying
+    #   a sigmoid, with autograd recording turned off. Return confident_share of
+    #   classifier on those images at threshold.
     def decoded_share(
         decoder: nn.Module,
         classifier: nn.Module,
@@ -1166,7 +1211,7 @@ def check_decoded_share(found: object) -> None:
 def check_vae3(checker: Checker) -> None:
     checker.test(
         function="confident_share",
-        description="gives the share the classifier is sure of, in eval mode",
+        description="returns the fraction of images the classifier is confident about, in eval mode",
         run=check_confident_share,
     )
     check_on_inputs(
@@ -1207,11 +1252,12 @@ VAE3 = Exercise(
     solution=VAE3_SOLUTION,
     hints={
         "confident_share": "Inside torch.no_grad(), torch.softmax(classifier(images), dim=1).max(dim=1).values is each "
-        "image's largest chance. Compare it with threshold and take the mean of the matches as floats.",
-        "matched_codes": "codes.mean(dim=0) and codes.std(dim=0) give one mean and spread per number. Add the mean to "
-        "the spread times torch.randn(count, codes.shape[1], generator=generator).",
-        "midpoint_codes": "Draw two id tensors in turn with torch.randint and the generator. Index codes with each, add "
-        "the two rows and halve them.",
+        "image's largest probability. Compare it with threshold, turn the booleans into floats, and take their mean.",
+        "matched_codes": "codes.mean(dim=0) and codes.std(dim=0) give one mean and one standard deviation per code "
+        "number. Add the mean to the standard deviation times torch.randn(count, codes.shape[1], "
+        "generator=generator).",
+        "midpoint_codes": "Draw two tensors of indices, one after the other, with torch.randint and the generator. "
+        "Index codes with each, add the two sets of rows, and divide by 2.",
         "decoded_share": "Decode inside torch.no_grad(), take torch.sigmoid, and pass the images to confident_share.",
     },
     introduces=(),

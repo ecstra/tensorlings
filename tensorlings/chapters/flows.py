@@ -33,10 +33,11 @@ FLOWS = Chapter(
         """
         # Normalizing flows
 
-        A flow turns noise into samples through layers that can be run
-        backwards exactly, so it gives the exact likelihood of any point. This
-        chapter derives the change of variables, builds RealNVP's affine
-        coupling layer, and trains a flow on two moons by maximum likelihood.
+        A normalizing flow, or flow, turns noise into samples through layers
+        that can be run backwards exactly. Because of that, it can compute the
+        exact likelihood of any point. This chapter derives the change of
+        variables formula, builds RealNVP's affine coupling layer, and trains
+        a flow on a dataset called two moons by maximum likelihood.
 
         ## Further reading
 
@@ -97,7 +98,7 @@ class Coupling(nn.Module):
             nn.Linear(hidden, 2),
         )
 
-    # The kept number and the moved one, the first or the second of each point by flip.
+    # Splits each point into the kept and the moved number. flip says which is kept.
     def halves(self, x: Tensor) -> tuple[Tensor, Tensor]:
         first, second = x[:, :1], x[:, 1:]
 
@@ -231,45 +232,52 @@ REFERENCE = reference_namespace(
 
 FLOW1_LESSON = prose(
     """
-    A flow makes samples the way a GAN does, by pushing noise through a
-    network. Its network can also run backwards exactly, and that buys
-    something a GAN lacks, the exact likelihood of any point.
+    A flow makes samples the same way a GAN does, by passing noise through a
+    network. But a flow's network can also be run backwards exactly. That
+    gives a flow something a GAN does not have, the exact likelihood of any
+    point.
 
-    Run it backwards. A point `x` goes in, the backward map `g` gives its
-    noise `z = g(x)`, and `z` is standard normal. The density of `x` follows
-    from `z`'s by the change of variables.
+    Think of the network run backwards as a function `g`. A data point `x`
+    goes in, and `g` returns the noise that produces it, `z = g(x)`. That
+    noise follows a standard normal distribution. The **change of variables**
+    formula then gives the density of `x` from the density of `z`.
 
     ```text
     log p(x) = log N(g(x)) + log |det J_g(x)|
     ```
 
-    `N` is the standard normal's density. `J_g` is the Jacobian of `g`, the
-    matrix of how each output moves with each input. Its determinant says how
-    much `g` stretches a small area around `x`. Where `g` squeezes a wide
-    region of `x` into a small one of `z`, the density of `x` is lower than
-    `z`'s by that factor.
+    `N` is the density of the standard normal. `J_g` is the Jacobian of `g`,
+    the matrix of partial derivatives of each output of `g` with respect to
+    each input. The absolute value of its determinant says how much `g`
+    stretches or shrinks a small area around `x`. Suppose `g` squeezes a wide
+    region of `x` into a small region of `z`. The same probability is then
+    spread over the wider region, so the density of `x` is lower than the
+    density of `z` by that factor.
 
     For `g(v) = 2 * v` in 2 dimensions, the Jacobian is `[[2, 0], [0, 2]]`.
-    With zeros off the diagonal, the determinant is the product of the
-    diagonal, 4. Every small square grows to 4 times its area.
+    When a matrix has zeros off the diagonal, its determinant is the product
+    of the diagonal entries, here 4. So `g` turns every small square into one
+    with 4 times the area.
 
-    In one dimension take `x = 3z`. The values of `x` spread 3 times as wide,
-    so their density is 3 times lower. Here `g(x) = x / 3` has derivative 1/3,
-    so `log p(x) = log N(x / 3) - log 3`.
+    In one dimension, take `x = 3 * z`. The values of `x` spread over a range
+    3 times as wide as `z`, so their density is 3 times lower. Here
+    `g(x) = x / 3`, whose derivative is 1/3. So
+    `log p(x) = log N(x / 3) + log(1/3)`, which is `log N(x / 3) - log 3`.
 
     ```python
     torch.distributions.Normal(0.0, 3.0).log_prob(torch.tensor(0.0))    # tensor(-2.0176), log N(0) - log 3
     ```
 
-    The standard normal in `d` dimensions has the log density
-    `-||z||^2 / 2 - (d / 2) log(2 pi)`, summed over each point's numbers.
+    In `d` dimensions, the log density of the standard normal at a point `z`
+    is `-||z||^2 / 2 - (d / 2) * log(2 * pi)`. Here `||z||^2` is the sum of
+    the squares of the point's `d` numbers.
 
-    For any `g`, `torch.autograd.functional.jacobian(g, x)` builds the
-    Jacobian at one point, and `torch.linalg.slogdet` gives the log of its
-    determinant's size as `.logabsdet`. That costs a backward pass per
-    dimension, and a determinant whose cost grows with the cube of the
-    dimension.
-    flow2's layer is built so its determinant comes nearly free.
+    For any `g`, `torch.autograd.functional.jacobian(g, x)` computes the
+    Jacobian at one point `x`. `torch.linalg.slogdet` of that matrix returns
+    the log of the absolute value of its determinant as `.logabsdet`. This is
+    expensive. It takes one backward pass per dimension, and the time to
+    compute the determinant grows with the cube of the dimension. flow2's
+    layer is designed so that its determinant costs almost nothing.
     """,
 )
 
@@ -287,15 +295,21 @@ FLOW1_SOURCE = source_file(
     size = torch.linalg.slogdet(jacobian).logabsdet                                # tensor(1.3863), log 4
 
 
-    # TODO: Return the log density of a standard normal at each row of z, of
-    #   shape (batch, d), as one number per row.
+    # TODO: Return the log density of the standard normal at each row of z,
+    #   which has shape (batch, d). Return one number per row, so the result
+    #   has shape (batch,).
+    #   Example: normal_log_prob(torch.zeros(1, 2)) returns about
+    #   tensor([-1.8379]).
     def normal_log_prob(z: Tensor) -> Tensor:
         ...
 
 
     # TODO: Return the log density of each row of x, where x = scale * z + shift
-    #   for each number, with z standard normal. scale and shift hold one number
-    #   per dimension. Use normal_log_prob and the change of variables.
+    #   and z is standard normal. scale and shift hold one number per
+    #   dimension, and the formula applies to each number of a row. Use
+    #   normal_log_prob and the change of variables.
+    #   Example: affine_log_prob(torch.zeros(1, 1), torch.tensor([3.0]),
+    #   torch.tensor([0.0])) returns about tensor([-2.0176]).
     def affine_log_prob(
         x: Tensor,
         scale: Tensor,
@@ -304,8 +318,10 @@ FLOW1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the log of the size of the determinant of g's Jacobian at x,
-    #   one point of shape (d,).
+    # TODO: Return the log of the absolute value of the determinant of g's
+    #   Jacobian at x. x is one point of shape (d,).
+    #   Example: log_abs_det(lambda v: 2 * v, torch.ones(2)) returns about
+    #   tensor(1.3863).
     def log_abs_det(
         g: Callable[[Tensor], Tensor],
         x: Tensor,
@@ -313,8 +329,10 @@ FLOW1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the log density of one point x, of shape (d,), when g maps it
-    #   to standard normal noise, by the change of variables.
+    # TODO: Return the log density of one point x, of shape (d,), using the
+    #   change of variables. g maps x to noise that is standard normal.
+    #   Example: flow_log_prob(lambda v: v / 3, torch.zeros(1)) returns about
+    #   tensor(-2.0176).
     def flow_log_prob(
         g: Callable[[Tensor], Tensor],
         x: Tensor,
@@ -373,7 +391,7 @@ def check_flow1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="affine_log_prob",
-        description="matches a normal with that mean and spread",
+        description="matches a normal with that mean and standard deviation",
         inputs=(
             (small_tensor(682, 4, 2), torch.tensor([3.0, 0.5]), torch.tensor([1.0, -2.0])),
             (small_tensor(683, 3, 3), torch.tensor([-2.0, 1.5, 4.0]), torch.tensor([0.0, 0.5, -1.0])),
@@ -384,7 +402,7 @@ def check_flow1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="log_abs_det",
-        description="gives the log size of the Jacobian's determinant at a point",
+        description="gives the log of the absolute determinant of the Jacobian at a point",
         inputs=(
             (Described(squeeze, "g(v) = (v0 / 2, 3 v1 + v0)"), torch.tensor([0.4, -1.0])),
             (Described(bend, "g(v) = (v0 + sin(v1) / 2, v1 exp(0.3 v0))"), torch.tensor([1.0, 2.0])),
@@ -415,14 +433,13 @@ FLOW1 = Exercise(
     source=FLOW1_SOURCE,
     solution=FLOW1_SOLUTION,
     hints={
-        "normal_log_prob": "Sum z ** 2 over the last dimension and halve it with a minus sign. Then take away "
-        "z.shape[-1] / 2 times math.log(2 * math.pi).",
-        "affine_log_prob": "Undo the map to get z: take the shift off x and divide by the scale. Then "
-        "normal_log_prob(z), minus the sum of the logs of the "
-        "scale's sizes, torch.log(scale.abs()).sum().",
-        "log_abs_det": "torch.autograd.functional.jacobian(g, x) gives the matrix, and torch.linalg.slogdet of it has "
-        ".logabsdet.",
-        "flow_log_prob": "normal_log_prob of g(x), plus log_abs_det(g, x).",
+        "normal_log_prob": "Sum z ** 2 over the last dimension and multiply by -0.5. Then subtract z.shape[-1] / 2 "
+        "times math.log(2 * math.pi).",
+        "affine_log_prob": "Undo the map to get z, by subtracting the shift from x and dividing by the scale. Return "
+        "normal_log_prob(z) minus the sum of the logs of the absolute scales, torch.log(scale.abs()).sum().",
+        "log_abs_det": "torch.autograd.functional.jacobian(g, x) returns the Jacobian matrix. torch.linalg.slogdet of "
+        "it has the field .logabsdet.",
+        "flow_log_prob": "Return normal_log_prob of g(x) plus log_abs_det(g, x).",
     },
     introduces=(),
     check=check_flow1,
@@ -462,35 +479,43 @@ def measure_coupling(seed: int = 0) -> dict[str, float]:
 
 FLOW2_LESSON = prose(
     """
-    A determinant through `slogdet` is slow and a general network has no
-    inverse. RealNVP, from Dinh, Sohl-Dickstein and Bengio, makes a layer with
-    both for free. Split each point in two. One part passes through unchanged,
-    and a small network reads it to scale and shift the other.
+    Computing a determinant with `slogdet` is slow, and a general network
+    cannot be inverted. RealNVP, from Dinh, Sohl-Dickstein and Bengio, is a
+    layer whose inverse and determinant are both cheap. It splits each point
+    into two parts. The first part passes through unchanged. A small network
+    reads the first part and outputs `s` and `t`, which scale and shift the
+    second part.
 
     ```text
     y1 = x1
     y2 = x2 * exp(s(x1)) + t(x1)
     ```
 
-    `y1` ignores `x2`, so the Jacobian is triangular, and its determinant is
-    the product of its diagonal. That is 1 for the kept part and `exp(s)` for
-    each scaled number, so the log determinant is the sum of `s`.
+    `y1` does not depend on `x2`, so the Jacobian is triangular, which means
+    every entry above its diagonal is 0. The determinant of a triangular
+    matrix is the product of its diagonal entries. Those entries are 1 for
+    the kept part and `exp(s)` for each scaled number. So the log determinant
+    is the sum of `s`.
 
-    Inverting never inverts the network. `x1 = y1`, so the network reads the
-    same input and gives the same `s` and `t`, and `x2 = (y2 - t) * exp(-s)`.
-    The network can be anything, since it only ever runs forwards.
+    Inverting the layer never requires inverting the network. Since
+    `x1 = y1`, the network gets the same input during the inverse and outputs
+    the same `s` and `t`. Then `x2 = (y2 - t) * exp(-s)`. So the network can
+    be anything, because it only ever runs forwards.
 
-    The points here have 2 numbers, so each half is one number. The network
-    turns the kept number into `s` and `t`. A tanh keeps `s` between -1 and 1,
-    so one layer scales by at most e. A layer never changes its kept half, so
-    a flow stacks layers that take turns, by `flip`.
+    The points in this chapter have 2 numbers, so each part is one number.
+    The network turns the kept number into `s` and `t`. A tanh keeps `s`
+    between -1 and 1, so one layer multiplies the moved number by a factor
+    between `1 / e` and `e`. A layer never changes its kept number. So a flow
+    stacks layers that alternate which number they keep, as set by `flip`.
 
-    `.chunk(2, dim=1)` splits a tensor into two along its columns.
+    `.chunk(2, dim=1)` splits a tensor into two equal parts along its
+    columns.
 
-    On 1,000 points and 3 seeds, a layer's inverse gave back its input within
-    0.000001, the rounding of 32 bit numbers. For each seed's first point, the
-    sum of `s` gave log determinants from -0.997 to 0.692. flow1's `slogdet`
-    of the full Jacobian matched each within 0.000001.
+    On 1,000 points and 3 seeds, running a layer and then its inverse gave
+    back the input to within 0.000001. That difference is the rounding error
+    of 32 bit floats. For the first point of each seed, the sum of `s` gave
+    log determinants between -0.997 and 0.692. flow1's `slogdet` of the full
+    Jacobian matched each of them to within 0.000001.
     """,
 )
 
@@ -506,10 +531,12 @@ FLOW2_SOURCE = source_file(
 
 
     # TODO: Finish forward and inverse. forward takes points x of shape
-    #   (batch, 2) and returns y and the log determinant of each point, of shape
-    #   (batch,). The kept half passes through, and the moved half becomes
-    #   moved * exp(s) + t, with s and t from scale_and_shift of the kept half.
-    #   inverse undoes forward exactly.
+    #   (batch, 2). It returns y, of the same shape, and the log determinant of
+    #   each point, of shape (batch,). Split x with self.halves. The kept half
+    #   passes through unchanged. The moved half becomes moved * exp(s) + t,
+    #   with s and t from self.scale_and_shift of the kept half. Put the two
+    #   halves back together with self.join. inverse takes y and undoes forward
+    #   exactly.
 ''' + indented(COUPLING_INIT) + '''
 
         def forward(self, x: Tensor) -> tuple[Tensor, Tensor]:
@@ -638,21 +665,23 @@ FLOW2 = Exercise(
 
 FLOW3_LESSON = prose(
     """
-    A flow of 8 coupling layers, taking turns, learns two moons, two curved
-    arcs of points. Its training is maximum likelihood, as in likelihood3.
-    The loss is the mean of `-log p(x)` over a batch, and the change of
-    variables gives `log p(x)` exactly.
+    This exercise trains a flow of 8 coupling layers, which alternate the
+    number they keep. The data is two moons, two curved arcs of points. The
+    flow is trained by maximum likelihood, as in likelihood3. The loss is the
+    mean of `-log p(x)` over a batch, and the change of variables gives
+    `log p(x)` exactly.
 
-    `log_prob` runs a batch forwards through every layer and adds up their
-    log determinants. The points come out as noise, and the standard normal's
-    log density of that noise joins the sum. `sample` goes the other way. It
-    draws noise and runs it backwards, through the layers in reverse order,
-    each one's `inverse`.
+    `log_prob` runs a batch forwards through every layer and adds up the
+    layers' log determinants. The points come out of the last layer as noise.
+    The standard normal's log density of that noise is added to the sum.
+    `sample` goes the other way. It draws noise and runs it backwards,
+    calling each layer's `inverse`, with the layers in reverse order.
 
-    Here it is against the best single normal, fitted with the data's own
-    mean and covariance, and against gan3's VAE. The covariance holds each
-    number's spread and how the two numbers vary together. A sample counts as
-    on the moons within 0.15 of the arcs. Each range covers 3 seeds.
+    The table compares the flow with two other models. One is the best single
+    normal distribution, fitted with the data's own mean and covariance. The
+    covariance holds each number's variance and how the two numbers vary
+    together. The other is gan3's VAE. A sample counts as on the moons when
+    it is within 0.15 of the arcs. Each range covers 3 seeds.
 
     | Model | Mean log density of new points | Samples on the moons |
     |---|---|---|
@@ -663,16 +692,16 @@ FLOW3_LESSON = prose(
     | Flow, 2,000 steps | -0.35 to -0.38 | 98.5% to 99.1% |
 
     The normal puts nearly two thirds of its samples off the arcs. The flow
-    bends space so that the round cloud of noise lands on both of them. Its
-    log density improves only a little after 1,000 steps here, while its
-    samples keep sharpening.
+    bends space so that the round cloud of noise is mapped onto both arcs.
+    After 1,000 steps its log density improves only a little, but the share
+    of its samples on the moons keeps growing.
 
-    The VAE gives only its ELBO, a bound below its log density. A closer
-    estimate from 500 codes per point still comes to only -0.77 to -0.81. A
-    GAN gives no density at all. When the likelihood of each point matters,
-    a flow gives it exactly.
+    The VAE gives only its ELBO, which is a lower bound on its log density. A
+    more accurate estimate from 500 codes per point still reaches only -0.77
+    to -0.81. A GAN gives no density at all. When you need the likelihood of
+    each point, a flow gives it exactly.
 
-    `reversed(layers)` walks a list from its end.
+    `reversed(layers)` goes through a list from its last item to its first.
 
     ```python
     list(reversed([1, 2, 3]))    # [3, 2, 1]
@@ -705,10 +734,13 @@ FLOW3_SOURCE = source_file(
 ''' + indented(MOONS_PART) + '''
 
 
-    # TODO: Finish log_prob and sample. log_prob gives the log density of each
-    #   row of x, shape (batch,), running x through every layer in order. sample
-    #   draws torch.randn(count, 2, generator=rng) and runs it through every
-    #   layer's inverse in reverse order, without recording for autograd.
+    # TODO: Finish log_prob and sample. log_prob returns the log density of
+    #   each row of x, as a tensor of shape (batch,). It runs x through every
+    #   layer in order, adds up the layers' log determinants, and adds
+    #   normal_log_prob of the final output. sample draws
+    #   torch.randn(count, 2, generator=rng) and runs it through every layer's
+    #   inverse, in reverse order, with autograd recording turned off. It
+    #   returns the points, of shape (count, 2).
 ''' + indented(FLOW_INIT) + '''
 
         def log_prob(self, x: Tensor) -> Tensor:
@@ -722,9 +754,10 @@ FLOW3_SOURCE = source_file(
             ...
 
 
-    # TODO: Train flow for steps steps with Adam at a rate of 3e-3, each on
-    #   two_moons(256, 0.05, rng), minimizing the mean of -log p. Return the last
-    #   loss as a plain number.
+    # TODO: Train flow for steps steps with Adam at a learning rate of 3e-3.
+    #   Each step draws a new batch with two_moons(256, 0.05, rng) and minimizes
+    #   the mean of -log p over that batch. Return the last loss as a Python
+    #   float.
     def train_flow(
         flow: nn.Module,
         steps: int,
@@ -934,7 +967,7 @@ def check_train_flow(found: object) -> None:
     if log_prob < -1.3:
         raise Mismatch(
             f"After 250 steps of train_flow, the mean log density of new moon points is {log_prob:.3f}, but it should "
-            "pass -1.3. The best single normal gets -1.89.",
+            "be above -1.3. The best single normal gets -1.89.",
         )
 
 
@@ -966,12 +999,13 @@ FLOW3 = Exercise(
     source=FLOW3_SOURCE,
     solution=FLOW3_SOLUTION,
     hints={
-        "Flow.log_prob": "Start a total at torch.zeros(len(x)). Each layer gives x and its log determinants, which "
-        "join the total. Return normal_log_prob of the last x plus the total.",
+        "Flow.log_prob": "Start a total at torch.zeros(len(x)). Each layer returns the new x and its log "
+        "determinants, and the log determinants go into the total. Return normal_log_prob of the final x plus the "
+        "total.",
         "Flow.sample": "Draw the noise, then inside torch.no_grad() loop over reversed(self.layers), setting z to "
         "layer.inverse(z).",
-        "train_flow": "Make the optimizer once. Each step, the loss is minus flow.log_prob(batch).mean(), then "
-        "zero_grad, backward and step.",
+        "train_flow": "Create the optimizer once, before the loop. In each step the loss is minus "
+        "flow.log_prob(batch).mean(). Then call zero_grad, backward and step.",
     },
     introduces=(),
     check=check_flow3,

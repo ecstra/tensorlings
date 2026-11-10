@@ -37,11 +37,12 @@ DIGIT_DIFFUSION = Chapter(
         """
         # Project: digits from noise
 
-        Section 9's project. You build a small U-Net that predicts the noise
-        in an MNIST digit and takes the digit it should be as a condition,
-        train it for minutes outside the app, and sample new digits with
-        classifier free guidance. A LeNet from lenet1 then scores whether
-        each sample is the digit that was asked for.
+        This is Section 9's project. You build a small U-Net that predicts the
+        noise in an MNIST digit. It also takes the digit the image should
+        show as an input, called a condition. You train it for a few minutes
+        outside the app, then sample new digits with classifier free
+        guidance. A LeNet from lenet1 then checks whether each sample is the
+        digit that was asked for.
 
         ## Further reading
 
@@ -71,7 +72,7 @@ def to_picture(x: Tensor) -> Tensor:
 '''
 
 BLOCK_PART = '''
-# Two convolutions, each with GroupNorm and SiLU, with the condition added to every channel between them.
+# Two convolutions with GroupNorm and SiLU. The condition is added to every channel between them.
 class ConditionedBlock(nn.Module):
     def __init__(
         self,
@@ -107,7 +108,7 @@ class DigitUNet(nn.Module):
         super().__init__()
         self.steps = steps
         self.time = nn.Sequential(nn.Linear(16, 4 * width), nn.SiLU(), nn.Linear(4 * width, 4 * width))
-        # Ten digits, and one row more for the null label that means no digit at all.
+        # One row per digit, and one more for the null label, which means no digit.
         self.labels = nn.Embedding(11, 4 * width)
         self.down1 = ConditionedBlock(1, width, 4 * width)
         self.down2 = ConditionedBlock(width, 2 * width, 4 * width)
@@ -165,34 +166,39 @@ DIGITS_REFERENCE = namespace_of(SCHEDULE_PART + TIME_PART + SAMPLING_PART + GUID
 DIGITS1_LESSON = prose(
     """
     This is Section 9's project. diffusion2 trained a small MLP to predict
-    the noise in 2D points. Here a U-Net, as unet1 built it, predicts the
-    noise in MNIST digits. It takes the digit it should be as a condition,
-    as diffusion4 did for points.
+    the noise in 2D points. Here a U-Net like the one unet1 built predicts
+    the noise in MNIST digits. Like diffusion4's model for points, it is
+    conditioned on a label, here the digit the image should show.
 
-    Diffusion works on numbers around 0, so pixels from 0 to 255 move to the
-    range -1 to 1. Each 28 by 28 digit also gets a border of 2 pixels of
-    black, -1, to make 32 by 32. That is the size of DDPM's CIFAR-10 images.
-    32 halves cleanly down to 1, so a deeper U-Net fits it too. This one
-    halves only twice, which 28 by 28 would also allow.
+    Diffusion works on numbers centered around 0, so pixel values from 0 to
+    255 are rescaled to the range -1 to 1. Each 28 by 28 digit also gets a
+    black border 2 pixels wide, with value -1, which makes it 32 by 32. That
+    is the size of DDPM's CIFAR-10 images. 32 can be halved again and again
+    down to 1, so a deeper U-Net would fit it too. This U-Net halves the size
+    only twice, which 28 by 28 would also allow.
 
-    The condition is one vector per image, the step's time features after a
-    small MLP plus the digit's row from an `nn.Embedding`. Row 10 is the null
-    label, which diffusion4 used for the unconditional pass of guidance.
-    Every block adds the condition to each of its channels, after its first
-    convolution.
+    The condition is one vector per image, the sum of two parts. The first is
+    the step's time features passed through a small MLP. The second is the
+    digit's row of an `nn.Embedding`. Row 10 is the null label, which
+    guidance uses for its prediction without a label, as in diffusion4. Every
+    block adds the condition to its channels after its first convolution,
+    one number of the condition per channel.
 
     ```python
     condition = torch.ones(2, 4)
     condition[:, :, None, None].shape    # torch.Size([2, 4, 1, 1]), one number per channel
     ```
 
-    The way down keeps the output of each level for the way back up, joined
-    on the channels, as unet1's skips did.
+    On the way down, the U-Net keeps the output of each level. On the way
+    back up, it concatenates each kept output with the upsampled tensor of
+    the same size, along the channels. These are unet1's skip connections.
 
-    The blocks use `nn.GroupNorm(8, channels)` in place of BatchNorm. It splits
-    the channels into 8 groups and normalizes each group of each image on its
-    own, with its own mean and spread. LayerNorm is the case of a single
-    group. So a sample doesn't depend on the others in its batch.
+    The blocks use `nn.GroupNorm(8, channels)` instead of BatchNorm.
+    GroupNorm splits the channels into 8 groups. It normalizes each group of
+    each image separately, with that group's own mean and standard deviation.
+    LayerNorm is the special case with a single group. Since nothing is
+    shared across the batch, one sample's output does not depend on the other
+    samples in its batch.
     """,
 )
 
@@ -217,26 +223,30 @@ DIGITS1_SOURCE = source_file(
 ''' + indented(BLOCK_PART) + '''
 
 
-    # TODO: Return images, uint8 digits of shape (n, 28, 28) from 0 to 255, as
-    #   floats from -1 to 1 of shape (n, 1, 32, 32), with a border of 2 pixels
-    #   of -1 on every side.
+    # TODO: images holds uint8 digits of shape (n, 28, 28), with pixel values
+    #   from 0 to 255. Return them as floats of shape (n, 1, 32, 32). Map 0 to
+    #   -1 and 255 to 1, and add a border of 2 pixels with value -1 on every
+    #   side.
     def to_model_range(images: Tensor) -> Tensor:
         ...
 
 
-    # TODO: Return x, of shape (n, 1, 32, 32), as pictures from 0 to 1 of shape
-    #   (n, 1, 28, 28), the border cut off and every pixel clamped to 0 to 1.
+    # TODO: Undo to_model_range for x, of shape (n, 1, 32, 32). Cut off the
+    #   2 pixel border, map -1 to 0 and 1 to 1, and clamp every pixel to the
+    #   range 0 to 1. Return pictures of shape (n, 1, 28, 28).
     def to_picture(x: Tensor) -> Tensor:
         ...
 
 
-    # TODO: Finish forward. The condition is self.time of the time features of
-    #   t, plus self.labels of labels. down1 reads x. down2 reads down1's
-    #   output pooled to half with F.avg_pool2d, and middle reads down2's
-    #   output pooled again. On the way up, F.interpolate in its default
-    #   nearest mode doubles each result, which is joined with the output of
-    #   the same size from the way down, the upsampled one first, before up2
-    #   and then up1. self.out gives the predicted noise.
+    # TODO: Finish forward. The condition is self.time applied to the time
+    #   features of t, plus self.labels applied to labels. Every block takes its
+    #   input and the condition. down1 reads x. down2 reads down1's output,
+    #   halved in size with F.avg_pool2d. middle reads down2's output, halved
+    #   again. On the way up, F.interpolate doubles the size, in its default
+    #   nearest neighbor mode. Concatenate each doubled result with the output
+    #   of the same size from the way down, the doubled one first, and feed
+    #   that to up2 and then to up1. self.out of up1's output is the predicted
+    #   noise.
 ''' + indented(UNET_INIT) + '''
 
         def forward(
@@ -336,7 +346,7 @@ def check_digits1(checker: Checker) -> None:
     checker.test_method(
         class_name="DigitUNet",
         method="forward",
-        description="conditions every block and joins the skips",
+        description="conditions every block and concatenates the skip connections",
         run=check_unet_forward,
     )
 
@@ -349,9 +359,9 @@ DIGITS1 = Exercise(
     source=DIGITS1_SOURCE,
     solution=DIGITS1_SOLUTION,
     hints={
-        "to_model_range": "Turn the images to floats with a channel of 1, divide by 127.5 and take away 1, so 0 "
-        "becomes -1 and 255 becomes 1. Then pad 2 pixels on every side with F.pad, filling with -1.0.",
-        "to_picture": "Slice [:, :, 2:30, 2:30], add 1, halve, and .clamp(0, 1).",
+        "to_model_range": "Convert the images to floats and add a channel dimension of size 1. Divide by 127.5 and "
+        "subtract 1, so 0 becomes -1 and 255 becomes 1. Then pad 2 pixels on every side with F.pad, filling with -1.0.",
+        "to_picture": "Slice [:, :, 2:30, 2:30], add 1, divide by 2, and call .clamp(0, 1).",
         "DigitUNet.forward": "Each torch.cat puts the F.interpolate(..., scale_factor=2) result first and the matching "
         "output from the way down second, on dim=1.",
     },
@@ -415,27 +425,30 @@ DIGITS_REFERENCE.update(namespace_of(SCHEDULE_PART + TIME_PART + SAMPLING_PART +
 
 DIGITS2_LESSON = prose(
     """
-    Training is diffusion2's loop on digits. Pick a step for each image and
-    noise the image to that step in one jump with `noise_to`. Then score the
-    model on how well it predicts the noise. The schedule is the DDPM
-    paper's, 1,000 steps with betas from 0.0001 to 0.02.
+    Training uses diffusion2's loop on digits. Pick a random step for each
+    image and noise the image to that step in one jump with `noise_to`. The
+    loss is the mean squared error between the model's predicted noise and
+    the true noise. The schedule is the one from the DDPM paper, 1,000 steps
+    with betas from 0.0001 to 0.02.
 
-    One time in ten the label is swapped for the null label, as diffusion4's
-    `drop_labels` does. That trains one model to work both with a digit and
-    with none, which guidance needs in digits3.
+    One time in ten, the label is replaced by the null label, with
+    diffusion4's `drop_labels`. That trains one model to predict the noise
+    both with a digit label and with no label. Guidance in digits3 needs both
+    predictions.
 
-    The random draws come from a generator on the CPU. So the noise and the
-    steps are made there, then moved to the device, as dna2 moved its
-    batches.
+    The random numbers come from a generator on the CPU. So the noise and the
+    steps are created on the CPU and then moved to the device, as dna2 moved
+    its batches.
 
-    Once the checks above the last one pass, train from the project folder
-    with `.venv/bin/python run.py train digits2`. It runs 4,000 steps of 128
-    digits. The run behind this project took about 21 minutes on MPS while
-    other training shared the machine. One batch's loss jumps around, from
-    0.029 at step 500 to between 0.018 and 0.025 after that.
+    Once every check except the last one passes, train from the project
+    folder with `.venv/bin/python run.py train digits2`. It runs 4,000 steps
+    with batches of 128 digits. The run behind this project took about 21
+    minutes on MPS while other training jobs shared the machine. The printed
+    loss is for a single batch, so it jumps around. It was 0.029 at step 500
+    and between 0.018 and 0.025 after that.
 
     The last check measures the trained model's loss on 1,000 test digits it
-    never saw, at random steps. It asks for less than 0.05, and the run
+    never saw, at random steps. It requires a loss below 0.05, and the run
     behind this project got 0.017.
     """,
 )
@@ -444,7 +457,7 @@ DIGITS2_SOURCE = source_file(
     '''
     # digits2.py
     #
-    # Train once the checks above the last one pass, from the project folder.
+    # Once every check except the last one passes, train from the project folder.
     #
     #     .venv/bin/python run.py train digits2
 
@@ -485,12 +498,13 @@ DIGITS2_SOURCE = source_file(
 ''' + indented(UNET_FORWARD) + '''
 
 
-    # TODO: Return the noise prediction loss for a batch of x0, digits in the
-    #   model's range, with their labels. First drop labels to NULL with
-    #   drop_labels at 0.1, then draw a step for each image with torch.randint,
-    #   then the noise with torch.randn of x0's shape, all with generator. Noise
-    #   x0 to its step with noise_to, move what the model reads and the noise
-    #   to device, and take the mean squared error.
+    # TODO: Return the noise prediction loss for a batch x0 of digits, already
+    #   in the model's range, with their labels. Draw everything with generator,
+    #   in this order. First replace labels with NULL using drop_labels with
+    #   p = 0.1. Then draw a step for each image with torch.randint. Then draw
+    #   noise of x0's shape with torch.randn. Noise x0 to its steps with
+    #   noise_to. Move the model's three inputs and the noise to device, and
+    #   return the mean squared error between the model's output and the noise.
     def digit_loss(
         model: nn.Module,
         x0: Tensor,
@@ -647,13 +661,13 @@ def check_trained_unet(found: type) -> None:
 def check_digits2(checker: Checker) -> None:
     checker.test(
         function="digit_loss",
-        description="drops labels, noises each digit to its step, scores the noise",
+        description="drops labels, noises each digit to its step, and compares the predicted noise with the true noise",
         run=check_digit_loss,
     )
     checker.test_method(
         class_name="DigitUNet",
         method="forward",
-        description="trained, predicts the noise in test digits",
+        description="after training, predicts the noise in test digits",
         run=check_trained_unet,
     )
 
@@ -666,9 +680,9 @@ DIGITS2 = Exercise(
     source=DIGITS2_SOURCE,
     solution=DIGITS2_SOLUTION,
     hints={
-        "digit_loss": "Pass the labels through drop_labels first, with 0.1 and NULL, then draw t, then the noise, "
-        "all from generator. noise_to gives the noisy digits. Move them, t, the labels and the noise to device "
-        "before the model and F.mse_loss.",
+        "digit_loss": "Pass the labels through drop_labels first, with 0.1 and NULL. Then draw t, then the noise, all "
+        "from generator. noise_to gives the noisy digits. Move them, t, the labels and the noise to device before "
+        "calling the model and F.mse_loss.",
     },
     introduces=(),
     check=check_digits2,
@@ -729,39 +743,42 @@ DIGITS_REFERENCE.update(namespace_of(SCHEDULE_PART + TIME_PART + SAMPLING_PART +
 
 DIGITS3_LESSON = prose(
     """
-    digits2's model predicts noise. Sampling runs it backwards from pure
-    noise, with DDIM's 50 steps in place of DDPM's 1,000, as diffusion3 did.
-    Guidance pushes each step toward the digit asked for, with diffusion4's
-    `guided_noise`.
+    digits2's model predicts noise. Sampling starts from pure noise and
+    removes it step by step, with 50 DDIM steps instead of DDPM's 1,000, as
+    in diffusion3. Guidance with diffusion4's `guided_noise` pushes each step
+    toward the digit that was asked for.
 
-    Images add one rule the 2D points never needed. Each step makes a guess
-    at the finished digit, and a pixel guess outside -1 to 1 is impossible.
-    So `clipped_ddim` clamps the guess, then works out the noise again from
-    the clamped guess, so the two still agree. Without that second line,
-    strong guidance pulls the steps apart. DDPM's own code clamps this guess
-    when it samples, and OpenAI's guided diffusion code works the noise out
-    again from it for DDIM.
+    Images need one rule that the 2D points did not. Each DDIM step computes
+    an estimate of the finished digit, `x0`. A pixel value outside -1 to 1 is
+    impossible in a real image. So `clipped_ddim` clamps `x0` to the range -1
+    to 1. Then it recomputes the noise `eps` from `x` and the clamped `x0`,
+    so that `eps` and `x0` agree again. Without that recomputation, strong
+    guidance ruins the samples. DDPM's own code clamps `x0` when it samples.
+    OpenAI's guided diffusion code also recomputes the noise from it for
+    DDIM.
 
-    To score the samples, a LeNet from lenet1, trained on real digits, reads
-    each one. The score is the share it reads as the digit that was asked
-    for. Trained 3,000 steps, the LeNet gets 97.8% of real test digits right.
+    To score the samples, a LeNet from lenet1, trained on real digits,
+    classifies each one. The score is the share of samples it classifies as
+    the digit that was asked for. After 3,000 training steps, the LeNet
+    classifies 97.8% of real test digits correctly.
 
-    Here is the trained model from digits2, 20 samples of each digit, 50
-    steps each.
+    Here are the scores for the trained model from digits2, with 20 samples
+    of each digit and 50 steps per sample.
 
     | Sampler | w = 0 | w = 1 | w = 2 | w = 4 |
     |---|---|---|---|---|
     | `clipped_ddim` | 71.0% | 92.5% | 95.5% | 97.5% |
-    | Clamped, noise not worked out again | 76.5% | 33.0% | 7.0% | 1.0% |
+    | Clamped, noise not recomputed | 76.5% | 33.0% | 7.0% | 1.0% |
     | diffusion3's `ddim_sample`, no clamp | 44.0% | 59.5% | 67.5% | 76.5% |
 
-    Guidance lifts `clipped_ddim` from 71% to 97.5%. At w = 4 the LeNet reads
-    the samples as well as it reads real test digits. The clamp without its
-    second line falls apart as w grows, down to 1%. With no clamp, guidance
-    helps but stays well behind.
+    Guidance raises the score of `clipped_ddim` from 71% to 97.5%. At w = 4
+    the LeNet classifies the samples about as well as real test digits.
+    Clamping without recomputing the noise gets worse as w grows, down to 1%.
+    With no clamp at all, guidance helps, but the score stays well below
+    `clipped_ddim`.
 
-    Ho and Salimans found the same trade. Guidance buys samples that look
-    more like their class, at the cost of variety.
+    Ho and Salimans found the same tradeoff. Guidance gives samples that look
+    more like their class, but with less variety.
     """,
 )
 
@@ -781,7 +798,7 @@ DIGITS3_SOURCE = source_file(
     clamped = torch.tensor([-1.7, 0.2, 1.3]).clamp(-1, 1)    # tensor([-1.0000,  0.2000,  1.0000])
 
 
-    # The schedule, ddim_sample and guided_noise of 69_diffusion.
+    # The schedule, ddim_sample and guided_noise from 69_diffusion.
 ''' + indented(SCHEDULE_PART) + '''
 
 
@@ -806,9 +823,11 @@ DIGITS3_SOURCE = source_file(
 ''' + indented(UNET_FORWARD) + '''
 
 
-    # TODO: Finish the loop, diffusion3's ddim_sample with one change. The guess
-    #   at the clean image, x0, is clamped to -1 to 1, and then eps is worked
-    #   out again from x and the clamped x0, before the step to the next time.
+    # TODO: Finish the loop. It is diffusion3's ddim_sample with one change.
+    #   After computing the estimate of the clean image, x0, clamp it to the
+    #   range -1 to 1. Then recompute eps from x and the clamped x0, by solving
+    #   the jump formula for the noise. Then take the step to the next time as
+    #   ddim_sample does.
     def clipped_ddim(
         predict_noise: Callable[[Tensor, Tensor], Tensor],
         shape: tuple[int, ...],
@@ -826,10 +845,11 @@ DIGITS3_SOURCE = source_file(
         return x
 
 
-    # TODO: Return images of the digits in labels, sampled from model with
-    #   clipped_ddim for steps steps, guided with guided_noise at strength w
-    #   and NULL as the null label. The schedule is linear_betas(1000, 1e-4,
-    #   0.02) through alpha_bars_of, and the shape is (len(labels), 1, 32, 32).
+    # TODO: Return one sampled image for each digit in labels, as a tensor of
+    #   shape (len(labels), 1, 32, 32). Sample from model with clipped_ddim for
+    #   steps steps. Its noise prediction is guided_noise at strength w, with
+    #   NULL as the null label. The alpha bars come from alpha_bars_of applied
+    #   to linear_betas(1000, 1e-4, 0.02).
     def guided_digits(
         model: nn.Module,
         labels: Tensor,
@@ -840,8 +860,9 @@ DIGITS3_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the share of pictures that classifier reads as their label,
-    #   as a plain number, without recording for autograd.
+    # TODO: Return the fraction of pictures whose highest scoring class from
+    #   classifier equals their label. Return it as a Python float, and run the
+    #   classifier with autograd recording turned off.
     def share_right(
         classifier: nn.Module,
         pictures: Tensor,
@@ -1001,7 +1022,7 @@ def check_trained_samples(found: type) -> None:
     share = DIGITS_REFERENCE["share_right"](judge(), DIGITS_REFERENCE["to_picture"](samples), labels)
 
     if share < 0.85:
-        raise Mismatch(f"The LeNet reads {share:.0%} of 50 guided samples as the digit asked for, but it should pass 85%.")
+        raise Mismatch(f"The LeNet classifies {share:.0%} of 50 guided samples as the digit asked for, but it should be at least 85%.")
 
 
 DIGITS3_TIME_LIMIT = 300
@@ -1010,7 +1031,7 @@ DIGITS3_TIME_LIMIT = 300
 def check_digits3(checker: Checker) -> None:
     checker.test(
         function="clipped_ddim",
-        description="clamps the guess at the clean image and works the noise out again",
+        description="clamps the clean image estimate and recomputes the noise",
         run=check_clipped_ddim,
     )
     checker.test(
@@ -1020,13 +1041,13 @@ def check_digits3(checker: Checker) -> None:
     )
     checker.test(
         function="share_right",
-        description="gives the share read as the digit asked for",
+        description="returns the fraction classified as the digit asked for",
         run=check_share_right,
     )
     # This test runs only the course's own sampler on the saved model, so running out of time means a busy machine.
     checker.test(
         function="guided_digits",
-        description="from the trained model, samples a LeNet reads right",
+        description="draws samples from the trained model that a LeNet classifies correctly",
         run=check_trained_samples,
         when_late=f"The course's own sampler was still drawing digits from your trained model after "
         f"{DIGITS3_TIME_LIMIT} seconds. That means the machine is too busy, not that your file has a problem. Save "
@@ -1042,12 +1063,13 @@ DIGITS3 = Exercise(
     source=DIGITS3_SOURCE,
     solution=DIGITS3_SOLUTION,
     hints={
-        "clipped_ddim": "Take eps from predict_noise and x0 from it as ddim_sample does, then clamp x0 to -1 to 1. "
-        "Work eps out again by turning the jump's formula around for the noise, with x and the clamped x0. The step "
-        "to before follows ddim_sample.",
+        "clipped_ddim": "Get eps from predict_noise, and x0 from eps, as ddim_sample does. Then clamp x0 to -1 to 1. "
+        "Recompute eps by solving the jump formula for the noise, using x and the clamped x0. The step to the "
+        "earlier time is the same as in ddim_sample.",
         "guided_digits": "Make a lambda of x and t that calls guided_noise with model, labels, NULL and w. Pass it to "
-        "clipped_ddim with the shape, the schedule, steps and generator.",
-        "share_right": "Inside torch.no_grad(), compare classifier(pictures).argmax(dim=1) with labels and average.",
+        "clipped_ddim with the shape, the alpha bars, steps and generator.",
+        "share_right": "Inside torch.no_grad(), compare classifier(pictures).argmax(dim=1) with labels, turn the "
+        "matches into floats, and take their mean.",
     },
     introduces=(),
     check=check_digits3,

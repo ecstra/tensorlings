@@ -32,11 +32,12 @@ GAN = Chapter(
         """
         # GANs
 
-        A generative adversarial network trains two models against each
-        other. A generator turns noise into samples, and a discriminator
-        learns to tell them from real data. This chapter builds both losses
-        from the paper, trains them on a ring of points in 2D, measures mode
-        collapse, and weighs sharp samples against unstable training.
+        A generative adversarial network, or GAN, trains two models against
+        each other. A generator turns random noise into samples. A
+        discriminator learns to tell those samples apart from real data. This
+        chapter builds both losses from the original paper and trains the two
+        models on a ring of points in 2D. It measures mode collapse, and it
+        weighs the GAN's sharp samples against its unstable training.
 
         ## Further reading
 
@@ -335,37 +336,45 @@ def measure_modes_over_time(lr: float = 5e-3) -> list[list[int]]:
 
 GAN1_LESSON = prose(
     """
-    Goodfellow and colleagues set two networks against each other. The
-    generator turns random noise into a sample. The discriminator scores a
-    sample, high for real data and low for the generator's fakes.
+    Goodfellow and colleagues introduced the GAN, which trains two networks
+    against each other. The generator turns random noise into a sample. The
+    discriminator gives each sample a score. The score should be high for
+    real data and low for the generator's samples, which are called fakes.
 
-    The discriminator trains as a plain classifier, real against fake, with
-    binary cross entropy. Its scores are logits, and
-    `F.binary_cross_entropy_with_logits` takes the sigmoid itself, as in
-    activations2 and conv4. Real samples get the label 1 and fakes 0.
+    The discriminator is trained as an ordinary binary classifier of real
+    against fake, with binary cross entropy. Its scores are logits.
+    `F.binary_cross_entropy_with_logits` applies the sigmoid to them itself,
+    as in activations2 and conv4. Real samples get the label 1 and fakes get
+    the label 0.
 
     The paper first writes the generator's goal as minimizing
-    `log(1 - D(G(z)))`, with D the discriminator's chance that a sample is
-    real. That is the generator making the discriminator wrong. Then it points
-    out a problem with it. Early on, when the fakes are poor, the
-    discriminator rejects them with confidence, and this loss saturates.
+    `log(1 - D(G(z)))`. Here z is the noise and G(z) is a fake. D is the
+    probability the discriminator gives that a sample is real, the sigmoid of
+    its score. Minimizing this loss pushes D(G(z)) up, so the generator
+    learns to make the discriminator wrong. Then the paper points out a
+    problem. Early in training the fakes are poor, so the discriminator
+    rejects them confidently. There this loss saturates, which means it is
+    nearly flat and its gradient is close to 0.
 
     Here is the derivative of each loss with respect to a fake's score.
 
-    | Score | D's chance of real | `log(1 - D)` | `-log D` |
+    | Score | D | `log(1 - D)` | `-log D` |
     |---|---|---|---|
     | -5 | 0.007 | -0.0067 | -0.9933 |
     | -2 | 0.119 | -0.1192 | -0.8808 |
     | 0 | 0.5 | -0.5 | -0.5 |
     | 2 | 0.881 | -0.8808 | -0.1192 |
 
-    At a score of -5 the paper's first loss pushes 150 times weaker. So the
-    paper trains the generator to maximize `log D(G(z))` instead, which is
-    binary cross entropy of the fake scores against the label real. It pulls
-    hardest exactly where the fakes are worst. Most GANs use this one.
+    At a score of -5, the derivative of the first loss is about 150 times
+    smaller than the derivative of `-log D`. So the paper trains the
+    generator to maximize `log D(G(z))` instead. That is the same as
+    minimizing the binary cross entropy of the fake scores against the label
+    1, which means real. Its gradient is largest exactly where the fakes are
+    worst. Most GANs use this loss.
 
-    `1 - sigmoid(s)` equals `sigmoid(-s)`, so `log(1 - D)` is
-    `F.logsigmoid(-s)`. That stays exact even when the sigmoid rounds to 1.
+    Because `1 - sigmoid(s)` equals `sigmoid(-s)`, `log(1 - D)` equals
+    `F.logsigmoid(-s)`. `F.logsigmoid` stays accurate even when the sigmoid
+    would round to 1 and `log(1 - D)` would become `log(0)`.
     """,
 )
 
@@ -382,9 +391,12 @@ GAN1_SOURCE = source_file(
     logs = F.logsigmoid(torch.tensor([0.0, 3.0]))                              # tensor([-0.6931, -0.0486])
 
 
-    # TODO: Return the discriminator's loss, the binary cross entropy of
-    #   real_scores against the label 1 plus that of fake_scores against the
-    #   label 0. Both are logits, one per sample.
+    # TODO: Return the discriminator's loss. It is the binary cross entropy of
+    #   real_scores against the label 1, plus the binary cross entropy of
+    #   fake_scores against the label 0. Both inputs are 1D tensors of logits,
+    #   one per sample.
+    #   Example: discriminator_loss(torch.tensor([2.0]), torch.tensor([2.0]))
+    #   returns about tensor(2.2539).
     def discriminator_loss(
         real_scores: Tensor,
         fake_scores: Tensor,
@@ -392,15 +404,19 @@ GAN1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the generator's loss that most GANs use, the binary cross
+    # TODO: Return the generator loss that most GANs use, the binary cross
     #   entropy of fake_scores against the label 1.
+    #   Example: generator_loss(torch.tensor([0.0])) returns about
+    #   tensor(0.6931).
     def generator_loss(fake_scores: Tensor) -> Tensor:
         ...
 
 
     # TODO: Return the paper's first generator loss, the mean of
-    #   log(1 - sigmoid(s)) over the fake scores s, written so it stays exact
-    #   for any score.
+    #   log(1 - sigmoid(s)) over the fake scores s. Compute it in a way that
+    #   stays accurate for any score, as the end of the lesson shows.
+    #   Example: minimax_generator_loss(torch.tensor([0.0, 40.0])) returns
+    #   about tensor(-20.3466).
     def minimax_generator_loss(fake_scores: Tensor) -> Tensor:
         ...
     ''',
@@ -475,7 +491,7 @@ def check_gan1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="minimax_generator_loss",
-        description="gives the mean of log(1 - D), exact for any score",
+        description="returns the mean of log(1 - D), accurate for any score",
         inputs=(
             (scores_for_check(675, 5),),
             (torch.tensor([-3.0, 0.0, 40.0]),),
@@ -495,7 +511,8 @@ GAN1 = Exercise(
     hints={
         "discriminator_loss": "Call F.binary_cross_entropy_with_logits twice, once on the real scores with "
         "torch.ones_like of them, once on the fake scores with torch.zeros_like, and add the two.",
-        "generator_loss": "The fakes get the label real here, so the targets are torch.ones_like(fake_scores).",
+        "generator_loss": "Here the fakes get the label 1, meaning real, so the targets are "
+        "torch.ones_like(fake_scores).",
         "minimax_generator_loss": "log(1 - sigmoid(s)) is log(sigmoid(-s)), which F.logsigmoid of the negated scores "
         "gives. Take its mean.",
     },
@@ -510,29 +527,35 @@ GAN1 = Exercise(
 
 GAN2_LESSON = prose(
     """
-    Training alternates. Each step first trains the discriminator on a batch
-    of real points and a batch of fakes. Then it trains the generator to fool
-    the discriminator as it now stands.
+    GAN training alternates between the two networks. Each step first trains
+    the discriminator on a batch of real points and a batch of fakes. Then it
+    trains the generator to fool the discriminator, as the discriminator is
+    after that update.
 
-    The fakes reach the discriminator's loss through `.detach()`. That step
-    should change the discriminator alone, and detach cuts the fakes off from
-    the generator's graph, so no gradient flows back into the generator. gan3
-    shows what goes wrong without it.
+    The fakes go into the discriminator's loss through `.detach()`. The
+    discriminator's update should change only the discriminator. `.detach()`
+    cuts the fakes off from the generator's computation graph, so no
+    gradient from that loss flows back into the generator. gan3 shows what
+    goes wrong without it.
 
-    The data is a ring of 8 clusters, points around 8 places on a circle of
-    radius 2. Each cluster is one mode. A generator that turns 2 random numbers
-    into a point should learn to put its points on all 8.
+    The data is a ring of 8 clusters of points around 8 evenly spaced
+    centers on a circle of radius 2. Each cluster is called a mode. The
+    generator turns 2 random numbers into a point, and it should learn to put
+    its points on all 8 modes.
 
     ```python
     centers = mode_centers(8)           # shape (8, 2), on a circle of radius 2
     centers[torch.tensor([0, 0, 3])]    # rows 0, 0 and 3, repeats allowed
     ```
 
-    Two numbers say how a generator does, on 2,000 of its samples. One is how
-    many modes get at least 2% of the samples within 0.2 of their center. The
-    other is the share of all samples that land that close to any mode.
+    Two numbers measure how well a generator does, computed on 2,000 of its
+    samples. The first is the number of modes covered. A mode counts as
+    covered when at least 2% of the samples are within 0.2 of its center. The
+    second is the share of all samples that are within 0.2 of any mode's
+    center.
 
-    Here are runs of 4,000 steps, 5 seeds at each learning rate.
+    Here are training runs of 4,000 steps, with 5 seeds at each learning
+    rate.
 
     | Learning rate | Modes covered, 5 seeds | Samples near a mode |
     |---|---|---|
@@ -540,19 +563,22 @@ GAN2_LESSON = prose(
     | 1e-3 | 8, 8, 8, 8, 8 | 89% to 93% |
     | 5e-3 | 8, 5, 7, 8, 7 | 92% to 96% |
 
-    At 1e-4 the generator has barely started. At 1e-3 every run finds all 8
-    modes. At 5e-3 the samples are the sharpest of all, yet 3 runs of 5 are
-    missing whole modes at 4,000 steps.
+    At 1e-4 the generator has barely started learning. At 1e-3 every run
+    finds all 8 modes. At 5e-3 the samples sit closest to the modes, but 3 of
+    the 5 runs are missing whole modes at 4,000 steps.
 
-    At 5e-3 this is **mode collapse**. The generator only has to fool the
-    discriminator, so it can pile its samples onto the modes the discriminator
-    accepts. Nothing in its loss asks for every mode. Metz and colleagues
-    saw a GAN on a ring like this one hop from mode to mode, one at a time.
-    Carried on to 12,000 steps, the runs at 5e-3 here lose and regain modes
-    too, and 4 of 5 end missing one.
+    Missing modes like this is called **mode collapse**. The generator only
+    has to fool the discriminator, so it can put all its samples on the modes
+    the discriminator accepts as real. Nothing in its loss asks it to cover
+    every mode. Metz and colleagues saw a GAN on a ring like this one jump
+    from mode to mode, covering one at a time. When the runs at 5e-3 here
+    continue to 12,000 steps, they also lose modes and regain them. 4 of the
+    5 end up missing one mode.
 
-    `torch.cdist(a, b)` gives the distance from every row of `a` to every row
-    of `b`, and `.min(dim=1)` the nearest one with its index.
+    `torch.cdist(a, b)` returns the distance from every row of `a` to every
+    row of `b`, as a matrix with one row for each row of `a`. `.min(dim=1)`
+    then gives, for each row of `a`, the smallest distance and the index of
+    the nearest row of `b`.
     """,
 )
 
@@ -568,7 +594,7 @@ GAN2_SOURCE = source_file(
     from torch import Tensor
 
     nearest = torch.cdist(torch.tensor([[0.0, 0.1]]), torch.tensor([[0.0, 0.0], [2.0, 0.0]])).min(dim=1)
-    # values tensor([0.1000]), indices tensor([0]), the first center is closest
+    # values tensor([0.1000]), indices tensor([0]), so the first center is closest
 
 
     # discriminator_loss and generator_loss from gan1, then the ring and the networks.
@@ -578,10 +604,11 @@ GAN2_SOURCE = source_file(
 ''' + indented(RING_PART) + '''
 
 
-    # TODO: Return count points of a ring of modes clusters. Draw which mode each
-    #   point belongs to with torch.randint(0, modes, (count,), generator=generator),
-    #   then its noise with 0.05 * torch.randn(count, 2, generator=generator), in
-    #   that order. Each point is its mode's center plus its noise.
+    # TODO: Return count points from a ring of modes clusters, as a tensor of
+    #   shape (count, 2). First draw the mode of each point with
+    #   torch.randint(0, modes, (count,), generator=generator). Then draw the
+    #   noise with 0.05 * torch.randn(count, 2, generator=generator). Keep that
+    #   order. Each point is the center of its mode plus its noise.
     def ring_points(
         count: int,
         modes: int,
@@ -590,11 +617,12 @@ GAN2_SOURCE = source_file(
         ...
 
 
-    # TODO: Take one step of training. First the discriminator, on real and on
-    #   the generator's fakes made from noise and detached, with d_opt. Then the
-    #   generator, on the discriminator's scores of the same fakes, with g_opt.
-    #   Zero each optimizer's gradients before its backward. Return both losses
-    #   as plain numbers, the discriminator's first.
+    # TODO: Do one training step. Make the fakes by passing noise through
+    #   generator. First update the discriminator with d_opt, using its loss on
+    #   real and on the detached fakes. Then update the generator with g_opt,
+    #   using its loss on the discriminator's scores of the same fakes. Zero
+    #   each optimizer's gradients before the matching backward. Return both
+    #   losses as Python floats, the discriminator's loss first.
     def train_step(
         generator: nn.Module,
         discriminator: nn.Module,
@@ -606,9 +634,12 @@ GAN2_SOURCE = source_file(
         ...
 
 
-    # TODO: Return how many modes samples cover and the share of samples near a
-    #   mode. A sample is near when its nearest center is less than near away. A
-    #   mode is covered when at least 2% of all samples are near it.
+    # TODO: Return a tuple of two numbers, how many modes the samples cover and
+    #   the share of samples near a mode. A sample is near a mode when the
+    #   distance to its nearest center is less than near. A mode is covered
+    #   when at least 2% of all samples are near it.
+    #   Example: coverage(torch.tensor([[2.0, 0.0], [2.0, 0.1], [0.0, 0.0]]),
+    #   mode_centers(8), 0.2) returns (1, 0.6666666865348816).
     def coverage(
         samples: Tensor,
         centers: Tensor,
@@ -617,8 +648,9 @@ GAN2_SOURCE = source_file(
         ...
 
 
-    # TODO: Return count points from generator, made from
-    #   torch.randn(count, 2, generator=rng), without recording for autograd.
+    # TODO: Return count points from generator. Pass it the noise
+    #   torch.randn(count, 2, generator=rng), with autograd recording turned
+    #   off.
     def sample(
         generator: nn.Module,
         count: int,
@@ -703,8 +735,9 @@ def naming_a_missing_detach(found: object) -> object:
                 raise
 
             raise Mismatch(
-                "train_step's second backward ran into the graph its first backward freed. The fakes reached the "
-                "discriminator's loss still tied to the generator. Detach them there, with fake.detach().",
+                "train_step's second backward needed the part of the graph that its first backward had already freed. "
+                "The fakes went into the discriminator's loss still connected to the generator. Detach them there, "
+                "with fake.detach().",
             ) from error
 
     return step
@@ -850,12 +883,12 @@ GAN2 = Exercise(
     source=GAN2_SOURCE,
     solution=GAN2_SOLUTION,
     hints={
-        "ring_points": "mode_centers(modes) indexed with the drawn modes gives each point's center. Add the noise.",
-        "train_step": "Make the fakes once from the noise with the generator. The discriminator's loss takes "
-        "discriminator(fake.detach()). After its "
-        "step, the generator's loss takes discriminator(fake). Return d_loss.item() and g_loss.item().",
-        "coverage": "torch.cdist(samples, centers).min(dim=1) gives each sample's nearest distance and center. "
-        "torch.bincount with minlength counts the near samples per center.",
+        "ring_points": "Index mode_centers(modes) with the drawn modes to get each point's center. Then add the noise.",
+        "train_step": "Make the fakes once, by calling the generator on the noise. The discriminator's loss takes "
+        "discriminator(fake.detach()). After the discriminator's step, the generator's loss takes "
+        "discriminator(fake). Return d_loss.item() and g_loss.item().",
+        "coverage": "torch.cdist(samples, centers).min(dim=1) gives each sample's distance to its nearest center and "
+        "that center's index. torch.bincount with minlength counts the near samples at each center.",
         "sample": "Inside torch.no_grad(), run generator on the noise.",
     },
     introduces=(),
@@ -871,9 +904,10 @@ GAN2 = Exercise(
 
 GAN3_LESSON = prose(
     """
-    GANs earned their place with their samples. Here is how far samples land
-    from the nearest mode of the ring. The GAN and a VAE of 66_vae's kind both
-    trained for 8,000 steps with the same layers.
+    GANs became popular because of the quality of their samples. The table
+    shows how far samples are from the nearest mode of the ring. A GAN and a
+    VAE like the one in 66_vae were both trained for 8,000 steps with the
+    same layers.
 
     | Model, 3 seeds | Mean distance to the nearest mode | Samples near a mode |
     |---|---|---|
@@ -881,39 +915,44 @@ GAN3_LESSON = prose(
     | GAN | 0.064 to 0.072 | 95% to 96% |
     | VAE | 0.20 to 0.23 | 64% to 67% |
 
-    The GAN's samples sit almost as close to the modes as the data does. The
-    VAE reaches every mode but smears its samples along the ring between
-    them. Its loss rewards a decoder that lands near the data on average, and
-    a point between two modes is near both. The discriminator has no such
-    average, since any point that doesn't look real loses. Weighting the VAE's
-    reconstruction 4 times higher still reached every mode, but put fewer
-    samples near one, 53% to 57%.
+    The GAN's samples are almost as close to the modes as the real data is.
+    The VAE reaches every mode, but it spreads its samples along the ring
+    between the modes. The VAE's loss rewards a decoder whose outputs are
+    near the data on average, and a point between two modes is fairly near
+    both. The discriminator does not average like this. It gives a low score
+    to any point that does not look real. Weighting the VAE's reconstruction
+    loss 4 times higher still reached every mode, but it put fewer samples
+    near a mode, 53% to 57%.
 
-    The price is training. In gan2, a rate of 1e-4 had barely started after
-    4,000 steps, and 5e-3 lost modes. A VAE, a flow or a diffusion model
-    lowers one loss, and a falling loss says training works. A GAN's two
-    losses fight each other, and neither says the samples are good.
+    The cost of a GAN is harder training. In gan2, a learning rate of 1e-4
+    had barely started after 4,000 steps, and 5e-3 lost modes. A VAE, a flow
+    or a diffusion model minimizes a single loss, and a falling loss tells
+    you that training is working. A GAN has two losses that work against
+    each other, and neither one tells you whether the samples are good.
 
-    The `train_step` below raises no error and still trains wrong. Its fakes
-    reach the discriminator's loss without `.detach()`, so that backward also
-    fills the generator's gradients, with the discriminator's goal. They are
-    zeroed only at the top, so the generator's own backward adds to them.
+    The `train_step` in this exercise raises no error but still trains
+    incorrectly. Its fakes go into the discriminator's loss without
+    `.detach()`. So the discriminator's backward also fills the generator's
+    gradients, pushing the generator toward the discriminator's goal. The
+    gradients are zeroed only at the start of the step. So the generator's
+    own backward adds its gradients on top of those wrong ones.
 
     | Step, 2,000 steps at 1e-3 | Modes covered, 5 seeds | Samples near a mode |
     |---|---|---|
     | Fixed | 8, 8, 8, 8, 7 | 73% to 87% |
     | Missing detach | 4, 5, 5, 4, 5 | 86% to 89% |
 
-    The broken step looks healthy, with sharp samples and no error, yet it
-    drops modes on every seed. Added together, the two gradients pull each
-    fake's score toward 0, where the discriminator can't call it either way,
-    instead of toward real. Adding `.detach()` to the fakes in the
-    discriminator's loss fixes it.
+    The broken step looks healthy, with sharp samples and no error, but it
+    drops modes on every seed. The two gradients added together push each
+    fake's score toward 0 instead of toward real. A score of 0 means a
+    probability of 0.5, so the discriminator cannot tell whether that fake
+    is real. Adding `.detach()` to the fakes in the discriminator's loss
+    fixes the bug.
 
-    So reach for a GAN when samples must be sharp and there is time to tune
-    it. Diffusion, which 69_diffusion builds, took over image generation,
-    while neural codecs like SoundStream and EnCodec, the kind sound2
-    quantizes, still train against a discriminator.
+    So use a GAN when samples must be sharp and there is time to tune its
+    training. Diffusion models, which 69_diffusion builds, have taken over
+    image generation. Neural audio codecs like SoundStream and EnCodec, the
+    kind sound2 quantizes, still train against a discriminator.
     """,
 )
 
@@ -939,13 +978,16 @@ GAN3_SOURCE = source_file(
 ''' + indented(RING_PART) + '''
 
 
-    # TODO: This step raises no error and trains wrong, as the lesson says. Fix
-    #   the one line that lets the discriminator's backward reach the generator.
+    # TODO: This step raises no error but trains incorrectly, as the lesson
+    #   explains. Fix the one line that lets the discriminator's backward send
+    #   gradients into the generator.
 ''' + indented(BUGGY_STEP_PART) + '''
 
 
-    # TODO: Return the mean distance from each sample to its nearest center, as a
-    #   plain number.
+    # TODO: Find the distance from each sample to its nearest center, and
+    #   return the mean of those distances as a Python float.
+    #   Example: nearest_distance(torch.tensor([[0.0, 0.3]]),
+    #   torch.tensor([[0.0, 0.0], [2.0, 0.0]])) returns about 0.3.
     def nearest_distance(
         samples: Tensor,
         centers: Tensor,
@@ -1024,7 +1066,7 @@ def check_fixed_step(found: object) -> None:
 def check_gan3(checker: Checker) -> None:
     checker.test(
         function="train_step",
-        description="updates the generator with its own gradients alone",
+        description="updates the generator with only its own gradients",
         run=check_fixed_step,
     )
     check_on_inputs(
@@ -1048,10 +1090,10 @@ GAN3 = Exercise(
     source=GAN3_SOURCE,
     solution=GAN3_SOLUTION,
     hints={
-        "train_step": "The discriminator's loss should see the fakes cut off from the generator. Add .detach() where "
-        "its loss takes the generator's output.",
-        "nearest_distance": "torch.cdist of the samples and centers, the smallest of each row with .min(dim=1), then "
-        "the mean as a plain number.",
+        "train_step": "The discriminator's loss should get fakes that are cut off from the generator. Add .detach() "
+        "where that loss takes the generator's output.",
+        "nearest_distance": "Take torch.cdist of the samples and the centers, then the smallest value in each row with "
+        ".min(dim=1). Return the mean of those as a Python float.",
     },
     introduces=(),
     check=check_gan3,

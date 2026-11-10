@@ -35,11 +35,11 @@ DIFFUSION = Chapter(
         # Diffusion
 
         A diffusion model learns to undo noise. Training adds Gaussian noise
-        to the data in many small steps, and the model learns to guess the
-        noise that was added. Sampling starts from pure noise and takes the
-        noise away a step at a time. This chapter builds DDPM on points in 2D,
-        then DDIM's faster sampling and classifier free guidance, the pieces
-        most image generators are made of.
+        to the data in many small steps, and the model learns to predict the
+        noise that was added. Sampling starts from pure noise and removes the
+        predicted noise one step at a time. This chapter builds DDPM on points
+        in 2D. Then it adds DDIM's faster sampling and classifier free
+        guidance, which most image generators are built from.
 
         ## Further reading
 
@@ -86,7 +86,7 @@ def noise_to(
 '''
 
 TIME_PART = '''
-# The sine and cosine features of position2, here for the step t out of steps.
+# Sine and cosine features of step t, like position2's features of a position.
 def time_features(
     t: Tensor,
     steps: int,
@@ -204,7 +204,7 @@ class ConditionalDenoiser(nn.Module):
     ) -> None:
         super().__init__()
         self.steps = steps
-        # One row more than the classes, for the null label that means no label at all.
+        # One more row than there are classes, for the null label, which means no label.
         self.labels = nn.Embedding(classes + 1, 16)
         self.net = nn.Sequential(
             nn.Linear(features + 32, hidden),
@@ -506,38 +506,41 @@ def run_watching_autograd(
 
 DIFFUSION1_LESSON = prose(
     """
-    A diffusion model learns to undo noise. First comes the forward process,
-    which adds a little Gaussian noise at each of many steps until nothing of
-    the data is left. DDPM takes 1,000 steps, with an amount `beta` that
-    rises in a line from 0.0001 to 0.02.
+    A diffusion model learns to undo noise. It starts with the **forward
+    process**, which adds a little Gaussian noise to the data at each of many
+    steps. At the end nothing of the data is left. DDPM uses 1,000 steps. The
+    amount of noise added at step t is set by `beta_t`. It increases linearly
+    from 0.0001 at the first step to 0.02 at the last.
 
     ```text
     x_t = sqrt(1 - beta_t) * x_(t-1) + sqrt(beta_t) * noise
     ```
 
-    The `sqrt(1 - beta_t)` shrinks the point a little as the noise grows.
-    Together they keep the spread at 1, so after enough steps every point is
-    plain Gaussian noise of spread 1.
+    The factor `sqrt(1 - beta_t)` shrinks the point a little while noise is
+    added. Together the two terms keep the variance at 1 if it starts at 1.
+    After enough steps, every point is standard Gaussian noise, with mean 0
+    and standard deviation 1.
 
-    Running 500 steps one at a time would make training slow. The steps
-    combine into one jump. With `alpha_t = 1 - beta_t` and `alpha_bar_t` the
-    product of every `alpha` up to step t, any step comes straight from the
-    data.
+    To get the noisy point at step 500, you could apply the formula 500
+    times, but that would make training slow. Instead, the steps combine
+    into a single jump. Let `alpha_t = 1 - beta_t`, and let `alpha_bar_t` be
+    the product of every `alpha` from step 1 up to step t. Then the noisy
+    point at any step comes straight from the data.
 
     ```text
     x_t = sqrt(alpha_bar_t) * x_0 + sqrt(1 - alpha_bar_t) * noise
     ```
 
-    `alpha_bar_t` says how much of the data is left. Here it is on DDPM's
-    schedule.
+    `alpha_bar_t` measures how much of the data is left at step t. Here are
+    its values on DDPM's schedule.
 
     | Step | 1 | 100 | 250 | 500 | 1,000 |
     |---|---|---|---|---|---|
     | `alpha_bar` | 0.9999 | 0.897 | 0.524 | 0.0786 | 0.00004 |
 
-    To check the jump, 100,000 copies of the number 3 went through 500 steps
-    one at a time. They came out with a mean of 0.838 and a spread of 0.959.
-    The jump gives 0.841 and 0.960.
+    To check the jump, 100,000 copies of the number 3 went through 500 noise
+    steps one at a time. The results had a mean of 0.838 and a standard
+    deviation of 0.959. The jump formula predicts 0.841 and 0.960.
 
     The code counts steps from 0, so `alpha_bars[t]` is the paper's
     `alpha_bar` at step t + 1.
@@ -558,7 +561,10 @@ DIFFUSION1_SOURCE = source_file(
     column = torch.tensor([0.5, 0.9]).reshape(2, 1, 1)                # shape (2, 1, 1), one number per row
 
 
-    # TODO: Return steps amounts of noise, rising in a line from start to end.
+    # TODO: Return a tensor of steps values of beta that increase linearly from
+    #   start to end, including both ends.
+    #   Example: linear_betas(5, 0.1, 0.5) returns
+    #   tensor([0.1000, 0.2000, 0.3000, 0.4000, 0.5000]).
     def linear_betas(
         steps: int,
         start: float,
@@ -567,14 +573,20 @@ DIFFUSION1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return alpha_bar for every step, the product of 1 - beta over every
-    #   step up to and including it.
+    # TODO: Return alpha_bar for every step, as a tensor with the shape of
+    #   betas. Entry t is the product of 1 - beta over steps 0 to t, including
+    #   step t.
+    #   Example: alpha_bars_of(torch.tensor([0.1, 0.2, 0.5])) returns
+    #   tensor([0.9000, 0.7200, 0.3600]).
     def alpha_bars_of(betas: Tensor) -> Tensor:
         ...
 
 
-    # TODO: Return x after one step of noise, by the lesson's first formula,
-    #   with beta as the amount and noise as the Gaussian noise.
+    # TODO: Return x after one step of noise, using the lesson's first formula.
+    #   beta is the amount of noise for this step, and noise is the Gaussian
+    #   noise to add.
+    #   Example: noise_step(torch.tensor([3.0]), 0.36, torch.tensor([0.5]))
+    #   returns tensor([2.7000]).
     def noise_step(
         x: Tensor,
         beta: float,
@@ -583,9 +595,13 @@ DIFFUSION1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return x0 after the jump to step t, in one go. t holds one step per
-    #   row of x0, of shape (batch,), and x0 may have any shape after the
-    #   batch, like (batch, 2) or (batch, 1, 28, 28).
+    # TODO: Return the noisy version of x0 at step t, in one go, using the jump
+    #   formula. t has shape (batch,) and holds one step for each row of x0.
+    #   x0 can have any shape after the batch dimension, like (batch, 2) or
+    #   (batch, 1, 28, 28), and noise has the same shape as x0.
+    #   Example: noise_to(torch.full((2, 1), 3.0), torch.tensor([0, 2]),
+    #   torch.tensor([0.9, 0.72, 0.36]), torch.zeros(2, 1)) returns
+    #   tensor([[2.8460], [1.8000]]).
     def noise_to(
         x0: Tensor,
         t: Tensor,
@@ -619,7 +635,7 @@ def check_diffusion1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="linear_betas",
-        description="rises in a line from start to end",
+        description="increases linearly from start to end",
         inputs=(
             (5, 0.1, 0.5),
             (1000, 1e-4, 0.02),
@@ -671,11 +687,11 @@ DIFFUSION1 = Exercise(
     source=DIFFUSION1_SOURCE,
     solution=DIFFUSION1_SOLUTION,
     hints={
-        "linear_betas": "torch.linspace gives evenly spaced numbers from start to end, steps of them.",
-        "alpha_bars_of": "torch.cumprod of 1 - betas along dim=0.",
+        "linear_betas": "torch.linspace returns steps evenly spaced numbers from start to end.",
+        "alpha_bars_of": "Take torch.cumprod of 1 - betas along dim=0.",
         "noise_step": "Multiply x by the square root of 1 - beta, and add the square root of beta times noise.",
-        "noise_to": "alpha_bars[t] picks one number per row. Reshape it to (len(t), 1, 1, ...) with as many 1s as x0 "
-        "has dimensions after the batch, then use the jump's formula.",
+        "noise_to": "alpha_bars[t] picks one number for each row. Reshape it to (len(t), 1, 1, ...), with as many 1s "
+        "as x0 has dimensions after the batch, so it broadcasts against x0. Then apply the jump formula.",
     },
     introduces=(),
     check=check_diffusion1,
@@ -688,43 +704,51 @@ DIFFUSION1 = Exercise(
 
 DIFFUSION2_LESSON = prose(
     """
-    The model learns the way back. It sees a noisy point `x_t` and its step
-    `t`, and guesses the noise that was mixed in. Knowing the noise gives
-    the data back, since the jump's formula turns around.
+    The model learns to reverse the process. It gets a noisy point `x_t` and
+    its step `t`, and it predicts the noise that was added. If you know the
+    noise, you can recover the data by solving the jump formula for `x_0`.
 
     ```text
     x_0 = (x_t - sqrt(1 - alpha_bar_t) * noise) / sqrt(alpha_bar_t)
     ```
 
-    Training repeats one move. Draw a random step for each point of a batch,
-    and fresh noise. Jump the batch to those steps, and score the model's
-    guess of the noise by the mean squared error. That is DDPM's whole loss.
+    Each training step does the same thing. Draw a random step for each
+    point of a batch, and draw fresh noise. Jump the batch to those steps
+    with that noise. Then compute the mean squared error between the model's
+    prediction and the true noise. That is DDPM's whole loss.
 
-    The step goes in as sine and cosine features, as position2 did for
-    positions, so the model can tell step 10 from step 900.
+    The step `t` goes into the model as sine and cosine features, the way
+    position2 encoded positions. That lets the model tell step 10 from step
+    900.
 
-    Why guess the noise, and not the data? Either guess gives the other, by
-    the formula above. The two differ in how the loss weighs the steps.
+    Why predict the noise instead of the data? Each prediction gives the
+    other through the formula above. The difference is in how much weight
+    the loss gives to each step.
 
     ```text
-    guess - noise = sqrt(alpha_bar_t / (1 - alpha_bar_t)) * (x_0 - x_0 guess)
+    noise_guess - noise = sqrt(alpha_bar_t / (1 - alpha_bar_t)) * (x_0 - x_0_guess)
     ```
 
-    So scoring the noise is scoring `x_0` with each step weighted by
-    `alpha_bar_t / (1 - alpha_bar_t)`. That weight is large at early steps
-    and near 0 at late ones. DDPM's authors found this weighting gave better
-    samples on images than guessing `x_0`. Guessing the noise reached an FID
-    of 3.17 on CIFAR-10, the best at the time. FID measures how far a batch
-    of generated images sits from real ones, so lower is better.
+    Squaring both sides shows that the squared error of the noise is the
+    squared error of `x_0` times `alpha_bar_t / (1 - alpha_bar_t)`. So
+    training on the noise is training on `x_0` with each step weighted by
+    that factor. The weight is large at early steps and near 0 at late ones.
+    DDPM's authors found this weighting gave better samples on images than
+    predicting `x_0`. Predicting the noise reached an FID of 3.17 on
+    CIFAR-10, the best score at the time. FID measures how far a set of
+    generated images is from real ones, so lower is better.
 
-    The ring shows the same. Draw 2,000 points from a trained model, and score
-    them by the mean gap between their sorted radii and the data's. Points
-    squeezed onto the circle score badly, since the data spreads a little
-    off it, and so do points that stray.
+    The data in this chapter is a ring, points on a circle of radius 1 with a
+    little noise in the radius. Draw 2,000 points from a trained model and
+    sort their radii, their distances from the origin. Then take the mean
+    absolute difference from the sorted radii of 2,000 data points. Points
+    squeezed exactly onto the circle score badly, because the real data lies
+    a little off it. Points that stray far from it also score badly.
 
-    Each model below trained 12,000 steps on three seeds. DDPM kept an
-    average of its weights over training, an exponential moving average with
-    decay 0.9999. These runs sample from such an average, at 0.999.
+    Each model below trained for 12,000 steps, on three seeds. DDPM samples
+    from an average of the model's weights over training, an exponential
+    moving average with decay 0.9999. These runs also sample from such an
+    average, with decay 0.999.
 
     | Guess | Gap to the data's radii | Average distance from the ring |
     |---|---|---|
@@ -732,9 +756,9 @@ DIFFUSION2_LESSON = prose(
     | `x_0` | 0.031 to 0.038 | 0.016 to 0.022 |
     | A second draw of the data | 0.0014 | 0.040 |
 
-    Guessing the noise lands within a hundredth of the data. Guessing `x_0`
-    squeezes the points onto the circle, closer than the data itself sits.
-    Its gap is four to eight times larger on the same seed.
+    Predicting the noise gives a gap below 0.01. Predicting `x_0` squeezes
+    the points onto the circle, closer to it than the real data is. Its gap
+    is four to eight times larger than the noise model's on the same seed.
     """,
 )
 
@@ -759,8 +783,10 @@ DIFFUSION2_SOURCE = source_file(
 ''' + indented(TIME_PART) + '''
 
 
-    # TODO: Finish forward. Join x, of shape (batch, features), with the time
-    #   features of t, one step per row, and run net.
+    # TODO: Finish forward. x has shape (batch, features), and t has shape
+    #   (batch,) with one step per row. Concatenate x with the time features of
+    #   t along dim 1, run the result through self.net, and return the
+    #   predicted noise, of shape (batch, features).
 ''' + indented(DENOISER_INIT) + '''
 
         def forward(
@@ -771,11 +797,12 @@ DIFFUSION2_SOURCE = source_file(
             ...
 
 
-    # TODO: Return DDPM's loss on x0. Draw one step per row with
-    #   torch.randint(0, len(alpha_bars), (len(x0),), generator=generator),
-    #   then noise of x0's shape with torch.randn and generator, in that order.
-    #   Jump x0 to those steps, and return the mean squared error between
-    #   model's guess and the noise.
+    # TODO: Return DDPM's loss on the clean batch x0. First draw one step per
+    #   row with torch.randint(0, len(alpha_bars), (len(x0),), generator=generator).
+    #   Then draw noise with the shape of x0, using torch.randn and generator.
+    #   Jump x0 to those steps with noise_to. Return the mean squared error
+    #   between the noise and model's prediction for the noisy batch at those
+    #   steps.
     def diffusion_loss(
         model: nn.Module,
         x0: Tensor,
@@ -871,7 +898,7 @@ def check_denoiser_learns(found: type) -> None:
     last = sum(losses[-100:]) / 100
 
     if last > 0.4:
-        raise Mismatch(f"After 600 steps the loss averages {last:.3f}, but it should fall below 0.4. A guess of 0 scores 1.")
+        raise Mismatch(f"After 600 steps the loss averages {last:.3f}, but it should fall below 0.4. A model that always predicts 0 scores 1.")
 
 
 def check_diffusion2(checker: Checker) -> None:
@@ -883,13 +910,13 @@ def check_diffusion2(checker: Checker) -> None:
     )
     checker.test(
         function="diffusion_loss",
-        description="scores the guess of the noise at a random step",
+        description="gives the mean squared error of the noise prediction at random steps",
         run=check_diffusion_loss,
     )
     checker.test_method(
         class_name="Denoiser",
         method="forward",
-        description="learns to guess the noise on the ring",
+        description="learns to predict the noise on the ring",
         run=check_denoiser_learns,
     )
 
@@ -902,10 +929,10 @@ DIFFUSION2 = Exercise(
     source=DIFFUSION2_SOURCE,
     solution=DIFFUSION2_SOLUTION,
     hints={
-        "Denoiser.forward": "time_features(t, self.steps) gives 16 numbers per row. torch.cat them after x on dim=1, "
-        "then run self.net.",
-        "diffusion_loss": "Draw t, then the noise. noise_to(x0, t, alpha_bars, noise) is the noisy batch, and "
-        "F.mse_loss compares model of it and t with the noise.",
+        "Denoiser.forward": "time_features(t, self.steps) gives 16 numbers per row. Put them after x with torch.cat "
+        "on dim=1, then run self.net.",
+        "diffusion_loss": "Draw t first, then the noise. noise_to(x0, t, alpha_bars, noise) is the noisy batch. "
+        "F.mse_loss compares the model's output on that batch and t with the noise.",
     },
     introduces=(),
     check=check_diffusion2,
@@ -920,29 +947,33 @@ DIFFUSION2 = Exercise(
 
 DIFFUSION3_LESSON = prose(
     """
-    Sampling runs the forward process backwards. Start from pure noise at
-    step 1,000, and at every step take away the model's guess of the noise.
-    DDPM's step back is this, with a little fresh noise added at every step
-    but the last.
+    Sampling runs the forward process backwards. It starts from pure noise at
+    step 1,000, and at every step it removes some of the noise that the model
+    predicts. Call the model's prediction of the noise `eps`. DDPM's step
+    from `x_t` back to `x_(t-1)` is this formula. It adds a little fresh
+    noise at every step except the last.
 
     ```text
-    x_(t-1) = (x_t - beta_t / sqrt(1 - alpha_bar_t) * guess) / sqrt(1 - beta_t) + sqrt(beta_t) * noise
+    x_(t-1) = (x_t - beta_t / sqrt(1 - alpha_bar_t) * eps) / sqrt(1 - beta_t) + sqrt(beta_t) * noise
     ```
 
-    That is 1,000 runs of the model for one batch of samples. DDIM, from
-    Song and colleagues, takes a shortcut. From the guess it works out where
-    `x_0` would be. Then it jumps straight to an earlier step with that same
-    guess of the noise, and adds no fresh noise. So it can skip steps,
-    visiting only every 20th or every 50th.
+    That means 1,000 runs of the model for one batch of samples. DDIM, from
+    Song and colleagues, takes a shortcut. It uses `eps` to compute an
+    estimate of `x_0`. Then it uses the jump formula to go straight to an
+    earlier step. The `x_0` estimate takes the place of the data, and the
+    same `eps` takes the place of the noise. It adds no fresh noise. So it can skip steps and visit only
+    every 20th or every 50th step. Below, `before` is the earlier step it
+    jumps to.
 
     ```text
-    x_0 guess = (x_t - sqrt(1 - alpha_bar_t) * guess) / sqrt(alpha_bar_t)
-    x_before  = sqrt(alpha_bar_before) * x_0 guess + sqrt(1 - alpha_bar_before) * guess
+    x_0_guess = (x_t - sqrt(1 - alpha_bar_t) * eps) / sqrt(alpha_bar_t)
+    x_before  = sqrt(alpha_bar_before) * x_0_guess + sqrt(1 - alpha_bar_before) * eps
     ```
 
-    Here is diffusion2's model after 12,000 steps of training, drawing 2,000
-    points. The score is diffusion2's gap to the data's radii. A second draw
-    of the data scores 0.0014 and pure noise 0.49.
+    Here diffusion2's model, after 12,000 steps of training, draws 2,000
+    points with each sampler. The score is diffusion2's gap to the data's
+    radii. A second draw of the data scores 0.0014, and pure noise scores
+    0.49.
 
     | Sampler | Steps | Gap to the data's radii |
     |---|---|---|
@@ -952,28 +983,29 @@ DIFFUSION3_LESSON = prose(
     | DDIM | 20 | 0.037 |
     | DDIM | 10 | 0.094 |
 
-    DDIM at 100 and 50 steps stays within 0.015 of the data, running the
-    model 10 and 20 times less than DDPM. Below that the gap grows, so each
-    skipped step trades a little quality for speed. The DDIM paper reports
-    10 to 50 times faster sampling on images.
+    DDIM at 100 and 50 steps keeps the gap below 0.015, while running the
+    model only 100 or 50 times instead of 1,000. With fewer steps the gap
+    grows, so skipping steps trades a little quality for speed. The DDIM
+    paper reports 10 to 50 times faster sampling on images.
 
     DDIM can skip steps because it adds no fresh noise. Its path from a given
-    start is fixed, so fewer and larger steps follow nearly the same path.
-    Here is how far DDIM's points land from its own 1,000 step points, all
-    from the same start noise, on 3 seeds.
+    starting noise is fixed, so fewer, larger steps follow nearly the same
+    path. The table gives the average distance between DDIM's points with
+    fewer steps and its points with 1,000 steps. All runs start from the same
+    noise, on 3 seeds.
 
     | DDIM steps | 50 | 20 | 10 |
     |---|---|---|---|
     | Distance from the 1,000 step points | 0.011 to 0.012 | 0.035 to 0.038 | 0.094 to 0.099 |
 
-    Two DDPM runs from that same start end 1.29 apart on average, on a ring
-    of radius 1. Each of DDPM's steps adds its own fresh noise. The DDIM paper
-    saw the same on images, where 20 steps already drew nearly the picture
-    of 1,000.
+    Two DDPM runs from that same starting noise end 1.29 apart on average, on
+    a ring of radius 1. That is because each DDPM step adds its own fresh
+    noise. The DDIM paper saw the same on images, where 20 steps already drew
+    nearly the same picture as 1,000 steps.
 
-    Both samplers take the model as `predict_noise(x, t)`, a function. That
-    lets the same samplers serve any model, the conditional one of diffusion4
-    included.
+    Both samplers take the model as a function, `predict_noise(x, t)`. That
+    way the same samplers work with any model, including the conditional one
+    in diffusion4.
     """,
 )
 
@@ -997,8 +1029,9 @@ DIFFUSION3_SOURCE = source_file(
 ''' + indented(SCHEDULE_PART) + '''
 
 
-    # TODO: Return x one step back, DDPM's step from step t, given eps, the
-    #   model's guess of the noise, and fresh noise to add.
+    # TODO: Return x after one DDPM step back from step t, using the lesson's
+    #   first formula. eps is the model's prediction of the noise, and noise is
+    #   the fresh noise to add.
     def ddpm_step(
         eps: Tensor,
         x: Tensor,
@@ -1010,11 +1043,12 @@ DIFFUSION3_SOURCE = source_file(
         ...
 
 
-    # TODO: Return a batch of samples of shape, by DDPM. Start x from
-    #   torch.randn(shape, generator=generator). For every step t from the
-    #   last down to 0, ask predict_noise(x, a tensor of shape[0] copies of t),
-    #   then draw noise of shape with generator, or use zeros at step 0, and
-    #   take ddpm_step. Record nothing for autograd.
+    # TODO: Return a batch of samples with the given shape, using DDPM. Start x
+    #   from torch.randn(shape, generator=generator). For every step t from the
+    #   last one down to 0, get eps by calling predict_noise on x and a tensor
+    #   that holds shape[0] copies of t. Then draw fresh noise of the given
+    #   shape with generator, or use zeros at step 0, and apply ddpm_step. Turn
+    #   off autograd recording for the whole loop.
     def ddpm_sample(
         predict_noise: Callable[[Tensor, Tensor], Tensor],
         shape: tuple[int, ...],
@@ -1025,12 +1059,13 @@ DIFFUSION3_SOURCE = source_file(
         ...
 
 
-    # TODO: Return a batch of samples of shape, by DDIM with steps steps. Start x
-    #   from torch.randn(shape, generator=generator). Visit the steps
-    #   range(0, len(alpha_bars), len(alpha_bars) // steps), last first. At each,
-    #   ask predict_noise as ddpm_sample does, work out the x_0 guess, and jump
-    #   to the next step visited, or to alpha_bar 1 after step 0. Record
-    #   nothing for autograd.
+    # TODO: Return a batch of samples with the given shape, using DDIM with
+    #   steps steps. Start x from torch.randn(shape, generator=generator). Visit
+    #   the steps in range(0, len(alpha_bars), len(alpha_bars) // steps),
+    #   largest first. At each step t, get eps from predict_noise as ddpm_sample
+    #   does, and compute the x_0 estimate. Then jump to the next step you will
+    #   visit. After step 0 there is no next step, so jump with an alpha_bar of
+    #   1. Turn off autograd recording for the whole loop.
     def ddim_sample(
         predict_noise: Callable[[Tensor, Tensor], Tensor],
         shape: tuple[int, ...],
@@ -1078,7 +1113,7 @@ def check_ddpm_sample(found: object) -> None:
     )
 
     if len(recorded) != 20:
-        raise Mismatch(f"ddpm_sample over 20 steps asked predict_noise {len(recorded)} times, but it should ask once per step.")
+        raise Mismatch(f"ddpm_sample over 20 steps called predict_noise {len(recorded)} times, but it should call it once per step.")
 
     if any(recorded):
         raise Mismatch("ddpm_sample recorded for autograd. Run the loop inside torch.no_grad().")
@@ -1100,7 +1135,7 @@ def check_ddim_sample(found: object) -> None:
         )
 
         if len(recorded) != wanted_calls:
-            raise Mismatch(f"ddim_sample with {steps} steps asked predict_noise {len(recorded)} times, but it should ask {wanted_calls}.")
+            raise Mismatch(f"ddim_sample with {steps} steps called predict_noise {len(recorded)} times, but it should call it {wanted_calls} times.")
 
         if any(recorded):
             raise Mismatch("ddim_sample recorded for autograd. Run the loop inside torch.no_grad().")
@@ -1116,7 +1151,7 @@ def check_diffusion3(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="ddpm_step",
-        description="takes away the guess and adds a little noise",
+        description="removes the predicted noise and adds a little fresh noise",
         inputs=(
             (small_tensor(703, 4, 2) / 3, small_tensor(704, 4, 2) / 3, 12, Described(SMALL_BETAS, "betas of 20 steps"), Described(SMALL_ALPHA_BARS, "their alpha_bars"), small_tensor(705, 4, 2) / 3),
             (small_tensor(706, 3, 2) / 3, small_tensor(707, 3, 2) / 3, 0, Described(SMALL_BETAS, "betas of 20 steps"), Described(SMALL_ALPHA_BARS, "their alpha_bars"), torch.zeros(3, 2)),
@@ -1126,7 +1161,7 @@ def check_diffusion3(checker: Checker) -> None:
     )
     checker.test(
         function="ddpm_sample",
-        description="walks every step back from noise",
+        description="goes back through every step from pure noise",
         run=check_ddpm_sample,
     )
     checker.test(
@@ -1144,12 +1179,12 @@ DIFFUSION3 = Exercise(
     source=DIFFUSION3_SOURCE,
     solution=DIFFUSION3_SOLUTION,
     hints={
-        "ddpm_step": "Take betas[t] / (1 - alpha_bars[t]).sqrt() * eps from x, divide by (1 - betas[t]).sqrt(), and add "
-        "betas[t].sqrt() * noise.",
+        "ddpm_step": "Subtract betas[t] / (1 - alpha_bars[t]).sqrt() * eps from x, divide by (1 - betas[t]).sqrt(), "
+        "and add betas[t].sqrt() * noise.",
         "ddpm_sample": "Loop t over range(len(betas) - 1, -1, -1) inside torch.no_grad(). torch.full((shape[0],), t) "
-        "is the step for every row.",
-        "ddim_sample": "Keep the visited steps in a list, last first. The step after position i is times[i + 1], and "
-        "after the last one use torch.tensor(1.0) for alpha_bar.",
+        "holds the step t for every row.",
+        "ddim_sample": "Keep the visited steps in a list, largest first. The step visited after position i is "
+        "times[i + 1]. After the last one, use torch.tensor(1.0) as the alpha_bar to jump to.",
     },
     introduces=(),
     check=check_diffusion3,
@@ -1162,33 +1197,39 @@ DIFFUSION3 = Exercise(
 
 DIFFUSION4_LESSON = prose(
     """
-    A model that should draw a chosen class takes the label as one more
-    input, as an embedding. Classifier free guidance, from Ho and Salimans,
-    then makes it follow the label harder. Earlier guidance steered each
-    step with the gradient of a separate classifier trained on noisy data.
-    This needs no classifier.
+    To make a model draw samples of a chosen class, give it the class label
+    as one more input, as an embedding. Classifier free guidance, from Ho and
+    Salimans, then makes the samples match the label more strongly. Earlier
+    guidance methods steered each step with the gradient of a separate
+    classifier trained on noisy data. Classifier free guidance needs no
+    classifier.
 
-    Training drops the label now and then, 10% of the time here. A dropped
-    label becomes a null id, one more row of the embedding. So one model
-    learns both, a guess of the noise given the class and one given nothing.
+    During training, the label is dropped at random, 10% of the time here. A
+    dropped label is replaced by a null id, which has its own extra row in
+    the embedding table. So one model learns two predictions of the noise,
+    one given the class and one given no class.
 
-    Sampling mixes the two guesses with a strength `w`.
+    Sampling combines the two predictions with a guidance strength `w`.
 
     ```text
-    guess = (1 + w) * guess(x, t, label) - w * guess(x, t, null)
+    eps = (1 + w) * eps(x, t, label) - w * eps(x, t, null)
     ```
 
-    The difference between the two guesses points toward what makes the
-    class that class. A larger `w` pushes further along it.
+    The difference `eps(x, t, label) - eps(x, t, null)` points toward what
+    makes this class different from the others. The formula equals
+    `eps(x, t, label)` plus `w` times that difference. So a larger `w` pushes
+    further in that direction.
 
-    Here is the toy of the paper's Figure 2. Three classes of 2D points, each
-    a Gaussian of spread 0.6 around its own point on a circle of radius 1.
-    The classes overlap. Even the best classifier here, which picks the
-    nearest centre, reads 13.5% of the data as another class.
+    Here is the toy example from the paper's Figure 2. There are three
+    classes of 2D points. Each class is a Gaussian with standard deviation
+    0.6 around its own centre on a circle of radius 1. The classes overlap.
+    Even the best possible classifier here, which picks the nearest centre,
+    puts 13.5% of the data in the wrong class.
 
-    A model trained 12,000 steps drew 1,000 points of each class, with DDIM
-    in 50 steps, on 3 seeds. Spread is how far a class's points sit from
-    their own mean.
+    A model trained for 12,000 steps drew 1,000 points of each class, with 50
+    DDIM steps, on 3 seeds. A point is read as the class whose centre is
+    nearest. The spread is the root mean square distance of a class's points
+    from their own mean, averaged over the classes.
 
     | `w` | Read as the asked class | Spread | Distance to the nearest other centre |
     |---|---|---|---|
@@ -1198,12 +1239,13 @@ DIFFUSION4_LESSON = prose(
     | 1 | 99.6% to 99.9% | 0.60 to 0.67 | 2.04 to 2.14 |
     | 2 | 100% | 0.55 to 0.71 | 2.26 to 2.47 |
 
-    At `w` = 0 the model draws each class as the data has it, overlap
-    included. By `w` = 1 guidance makes nearly every point read as its
-    class, with less variety. As `w` grows the points also move away from
-    the other classes, as the paper's Figure 2 shows. By `w` = 2 the spread
-    stops falling, as the points keep moving out. On images the paper found
-    the same trade, more fidelity and less variety as `w` grows.
+    At `w` = 0 the model draws each class the way the data has it, overlap
+    included. At `w` = 1 nearly every point is read as the asked class, and
+    the points have less variety. As `w` grows, the points also move away
+    from the other classes, as the paper's Figure 2 shows. At `w` = 2 the
+    spread stops falling, because the points keep moving outward. On images
+    the paper found the same pattern. As `w` grows, samples match their class
+    more closely but vary less.
     """,
 )
 
@@ -1232,8 +1274,9 @@ DIFFUSION4_SOURCE = source_file(
 ''' + indented(SAMPLING_PART) + '''
 
 
-    # TODO: Finish forward. Join x, the time features of t and the label
-    #   embedding of labels, in that order, and run net.
+    # TODO: Finish forward. Concatenate x, the time features of t and the label
+    #   embedding of labels along dim 1, in that order. Run the result through
+    #   self.net and return the predicted noise.
 ''' + indented(CONDITIONAL_INIT) + '''
 
         def forward(
@@ -1245,8 +1288,10 @@ DIFFUSION4_SOURCE = source_file(
             ...
 
 
-    # TODO: Return labels with each one replaced by null where its draw from
-    #   torch.rand(len(labels), generator=generator) is below p.
+    # TODO: Return a copy of labels in which some labels are replaced by null.
+    #   Draw one random number per label with
+    #   torch.rand(len(labels), generator=generator). Replace a label by null
+    #   when its random number is below p, and keep it otherwise.
     def drop_labels(
         labels: Tensor,
         p: float,
@@ -1256,8 +1301,9 @@ DIFFUSION4_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the guided guess of the noise, model's guess given labels
-    #   and its guess given null labels, mixed with strength w.
+    # TODO: Return the guided prediction of the noise. Compute model's
+    #   prediction given labels, and its prediction with every label set to
+    #   null. Combine the two with the lesson's formula at strength w.
     def guided_noise(
         model: nn.Module,
         x: Tensor,
@@ -1269,8 +1315,9 @@ DIFFUSION4_SOURCE = source_file(
         ...
 
 
-    # TODO: Return one 2D sample for each of labels, by ddim_sample with steps
-    #   steps and guided_noise as the guess of the noise.
+    # TODO: Return one 2D sample for each entry of labels, as a tensor of shape
+    #   (len(labels), 2). Use ddim_sample with steps steps, and give it a
+    #   predict_noise function that returns guided_noise.
     def guided_sample(
         model: nn.Module,
         labels: Tensor,
@@ -1427,7 +1474,7 @@ def check_diffusion4(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="drop_labels",
-        description="swaps about p of the labels for the null one",
+        description="replaces about a fraction p of the labels with the null label",
         inputs=(
             (torch.tensor([0, 1, 2, 3, 0, 1, 2, 3, 0, 1]), 0.3, 4, seeded(712)),
             (torch.tensor([5, 5, 2, 7, 1, 0]), 0.5, 9, seeded(713)),
@@ -1437,12 +1484,12 @@ def check_diffusion4(checker: Checker) -> None:
     )
     checker.test(
         function="guided_noise",
-        description="mixes the guesses given the label and given nothing",
+        description="combines the predictions given the label and given the null label",
         run=check_guided_noise,
     )
     checker.test(
         function="guided_sample",
-        description="samples with DDIM and the guided guess",
+        description="samples with DDIM and the guided noise prediction",
         run=check_guided_sample,
     )
 
@@ -1458,9 +1505,10 @@ DIFFUSION4 = Exercise(
         "ConditionalDenoiser.forward": "torch.cat x, time_features(t, self.steps) and self.labels(labels) on dim=1, "
         "then run self.net.",
         "drop_labels": "torch.where picks null where the draws are below p, and the label everywhere else.",
-        "guided_noise": "torch.full_like(labels, null) gives null labels. Then the formula in the lesson.",
-        "guided_sample": "Hand ddim_sample a lambda of x and t that calls guided_noise, the shape (len(labels), 2), "
-        "steps and generator.",
+        "guided_noise": "torch.full_like(labels, null) makes a tensor of null labels. Then apply the formula from the "
+        "lesson.",
+        "guided_sample": "Pass ddim_sample a lambda of x and t that calls guided_noise, then the shape (len(labels), 2), "
+        "alpha_bars, steps and generator.",
     },
     introduces=(),
     check=check_diffusion4,
