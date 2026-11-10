@@ -25,12 +25,12 @@ BROKEN_TRAINING = Chapter(
         """
         # Project, a broken training run
 
-        Section 4's project is the names model of Section 3 with slips planted
+        Section 4's project is the names model of Section 3 with bugs planted
         in it. Nothing crashes, but its numbers make no sense. You find each
-        slip with a check from Karpathy's recipe or the CS231n notes, then
-        tune the fixed run with Adam, warmup, cosine decay and clipping until it
-        beats a target. It needs the names data, which Section 3's project
-        downloads.
+        bug with a check from Karpathy's recipe or the CS231n notes. Then you
+        tune the fixed run with Adam, warmup, cosine decay and clipping until
+        its validation loss beats a target. The project needs the names data,
+        which Section 3's project downloads.
 
         ```bash
         .venv/bin/python run.py data names
@@ -172,29 +172,31 @@ class SlippedNamesMLP(ReferenceNamesMLP):
 
 BROKEN1_LESSON = prose(
     """
-    Section 4's project starts with a broken run. The file holds the names
-    model of Section 3 with four slips planted in it, one for each check
+    Section 4's project starts with a broken training run. The file holds the
+    names model of Section 3 with four bugs planted in it, one for each check
     below. Nothing crashes, but the numbers make no sense.
 
-    Here the file trained like names3 for 10,000 steps on three seeds, on
-    contexts from its own `build_contexts`. Its validation loss started at
-    6.1 to 6.9, where a fresh model gives 3.30. After 100 steps it read 0.19
-    to 0.54, far below the 2.10 of Karpathy's long runs. At the end it was
-    116 to 1,429. The fixed file started at 3.29 to 3.30 and ended at 2.217
-    to 2.219.
+    Here is what happened when the file trained like names3 for 10,000 steps
+    on three seeds, using contexts from its own `build_contexts`. Its
+    validation loss started at 6.1 to 6.9, where a fresh model gives 3.30.
+    After 100 steps it was 0.19 to 0.54, far below the 2.10 that Karpathy's
+    long runs reach. At the end it was 116 to 1,429. The fixed file started
+    at 3.29 to 3.30 and ended at 2.217 to 2.219.
 
-    Guessing wastes hours. Karpathy's recipe and the CS231n notes go through
-    cheap checks in order, and each one here points at one part.
+    Guessing where the bugs are wastes hours. Karpathy's recipe and the CS231n
+    notes run cheap checks in a fixed order instead. Here each check points at
+    one part of the file.
 
-    - look at the data: each context with the character after it, which should start with `...` then `e`, as in names2's table.
+    - look at the data: list each context with the character after it. The list should start with `...` then `e`, as in names2's table.
     - the loss at the start: it should be near `log(27)`, 3.30.
-    - every layer's gradient: after one backward pass, no parameter should be left without one.
-    - the training loop: a sound loop trains the model down, and the same loop with its gradients piling up sends the loss up.
+    - every layer's gradient: after one backward pass, every parameter should have a gradient.
+    - the training loop: a correct loop lowers the loss, but gradients that add up across steps make the loss rise.
 
-    Run each check in a Python prompt with the tools of debug1 to debug5,
-    then fix what it finds. From the project folder, this opens a prompt that
-    has run your file. The lines after it turn the ids of `emma`'s contexts
-    back into characters, each context next to the character after it.
+    Run each check in a Python prompt with the tools from debug1 to debug5,
+    then fix what it finds. From the project folder, the command below runs
+    your file and then leaves you in a Python prompt. The Python lines after
+    it turn the ids of `emma`'s contexts back into characters. They show each
+    context next to the character after it.
 
     ```bash
     PYTHONPATH=. .venv/bin/python -i exercises/29_broken_training/broken1.py
@@ -209,8 +211,8 @@ BROKEN1_LESSON = prose(
     list(zip(contexts, [chars[i] for i in Y.tolist()]))
     ```
 
-    The checks of this exercise say which part is still off and what they
-    saw, so you can work one at a time.
+    This exercise's checks say which part is still broken and what they
+    measured. So you can fix the bugs one at a time.
     """,
 )
 
@@ -218,7 +220,7 @@ BROKEN1_SOURCE = source_file(
     '''
     # broken1.py
     #
-    # The names model of Section 3, with four slips planted in it. Find each
+    # The names model of Section 3, with four bugs planted in it. Find each
     # one with a check from Karpathy's recipe and fix it.
 
     import torch
@@ -227,8 +229,8 @@ BROKEN1_SOURCE = source_file(
     from torch import Tensor
 
 
-    # TODO: Look at the contexts this gives with the next id of each. Something
-    #   is off. Fix it.
+    # TODO: Look at the contexts this returns, each next to the id of the
+    #   character that follows it. Something is wrong. Fix it.
     def build_contexts(
         names: list[str],
         chars: list[str],
@@ -248,9 +250,9 @@ BROKEN1_SOURCE = source_file(
         return torch.tensor(X), torch.tensor(Y)
 
 
-    # TODO: Two slips, one in each method. The loss at the start is far from
-    #   log(27), and one layer never gets a gradient. Fix both, so the model
-    #   matches names2's NamesMLP.
+    # TODO: There are two bugs here, one in each method. The loss at the start
+    #   is far from log(27), and one layer never gets a gradient. Fix both, so
+    #   the model matches names2's NamesMLP.
     class NamesMLP(nn.Module):
         def __init__(
             self,
@@ -275,8 +277,8 @@ BROKEN1_SOURCE = source_file(
             return self.head(torch.tanh(self.hidden(vectors)))
 
 
-    # TODO: Trained for long, this loop's loss climbs instead of falling. Find
-    #   the slip and fix it.
+    # TODO: Over a long run, this loop's loss goes up instead of down. Find the
+    #   bug and fix it.
     def train_names(
         model: nn.Module,
         X: Tensor,
@@ -308,7 +310,8 @@ BROKEN1_SOLUTION = source_file(
     from torch import Tensor
 
 
-    # The context went into X after it had moved on, so it already held the answer.
+    # The context was added to X after the window had moved on, so it already
+    # held the character it should predict.
     def build_contexts(
         names: list[str],
         chars: list[str],
@@ -353,7 +356,7 @@ BROKEN1_SOLUTION = source_file(
             return self.head(torch.tanh(self.norm(self.hidden(vectors))))
 
 
-    # Without zero_grad every step's gradient piled onto the ones before.
+    # Without zero_grad, every step's gradient was added to the ones from earlier steps.
     def train_names(
         model: nn.Module,
         X: Tensor,
@@ -406,7 +409,7 @@ def check_start(found: type) -> None:
     theirs = names_model(660)
 
     if not torch.allclose(model.head.weight, theirs.head.weight):
-        raise Mismatch("NamesMLP's head should start at a tenth of what nn.Linear drew.")
+        raise Mismatch("NamesMLP's head weights should start at a tenth of nn.Linear's random starting values.")
 
 
 def check_every_gradient(found: type) -> None:
@@ -439,7 +442,7 @@ def check_train_names(found: object) -> None:
     actual, expected = validation_loss_of(mine), validation_loss_of(theirs)
 
     if abs(actual - expected) > 1e-3:
-        raise Mismatch(f"After 400 steps of train_names the validation loss is {actual:.3f}, where a sound loop reaches {expected:.3f}. Check what each step starts from.")
+        raise Mismatch(f"After 400 steps of train_names the validation loss is {actual:.3f}, where a correct loop reaches {expected:.3f}. Check which gradient each step starts from.")
 
 
 def check_broken1(checker: Checker) -> None:
@@ -462,7 +465,7 @@ def check_broken1(checker: Checker) -> None:
     )
     checker.test(
         function="train_names",
-        description="trains like a sound loop",
+        description="trains like a correct loop",
         run=check_train_names,
     )
 
@@ -478,10 +481,10 @@ BROKEN1 = Exercise(
         "build_contexts": "Look at the order of the three lines in the inner loop. Which context does X get, the one "
         "before the character or the one after?",
         "NamesMLP.__init__": "The head should start small, so the scores start nearly equal. Shrink its weights to a "
-        "tenth of what nn.Linear drew, as names2 did.",
+        "tenth of nn.Linear's random starting values, as names2 did.",
         "NamesMLP.forward": "One module made in __init__ is never called here. Run hidden, norm, tanh and head in that "
         "order, as names2 did.",
-        "train_names": "Compare the loop with sgd1's. One of its three lines is missing.",
+        "train_names": "Compare the loop with sgd1's. One of the three lines in sgd1's loop is missing here.",
     },
     introduces=(),
     check=check_broken1,
@@ -498,21 +501,26 @@ TUNED_TARGET = 2.20
 
 BROKEN2_LESSON = prose(
     """
-    With the slips fixed, tune the run. names3 trained with plain SGD and one
-    drop of the rate. Swap in what Section 4 built.
+    With the bugs fixed, the next step is to tune the training run. names3
+    trained with plain SGD and lowered the learning rate once. Replace that
+    with the tools Section 4 built.
 
-    - Adam at 0.003.
+    - Adam at a learning rate of 0.003.
     - 200 steps of warmup, then cosine decay to a tenth of the base rate.
-    - minibatches of 64, which halves the variance of each step's gradient, at twice the work per step.
+    - minibatches of 64. This halves the variance of each step's gradient, but each step does twice the work.
     - the global gradient norm clipped at 1.3.
 
-    The cap comes from the norms, as in clipping2. Unclipped, their 90th
-    percentile came out at 1.29 to 1.31, so 1.3 clips about one step in ten.
-    Weight decay is left out. It pays off on a model with room to memorize,
-    like adamw2's wide one.
+    The clipping threshold of 1.3 comes from the gradient norms themselves,
+    as in clipping2. In a run without clipping, the 90th percentile of the
+    norms was 1.29 to 1.31. So a threshold of 1.3 clips about one step in
+    ten.
 
-    Each row trained for 10,000 steps on three seeds. The last column says
-    how much worse each row ended than the tuned run, seed by seed.
+    Weight decay is left out. It helps a model that has enough room to
+    memorize its training data, like adamw2's wide model.
+
+    Each row of the table trained for 10,000 steps on three seeds. The last
+    column gives how much higher each row's final validation loss was than
+    the tuned run's, compared seed by seed.
 
     | Run | Validation loss | Worse than tuned by |
     |---|---|---|
@@ -525,16 +533,16 @@ BROKEN2_LESSON = prose(
     | tuned, one loss 1000 times, not clipped | 2.194 to 2.197 | 0.025 to 0.030 |
     | tuned, one loss 1000 times, clipped | 2.166 to 2.169 | 0.000 |
 
-    The cosine decay buys the most. Without it, Adam ends behind names3's
-    loop on every seed. Batches of 64 buy the next most, and warmup a little
-    on every seed.
+    Cosine decay helps the most. Without it, the Adam run ends with a higher
+    loss than names3's loop on every seed. Batches of 64 help the next most.
+    Warmup helps a little, on every seed.
 
-    The last two rows scaled the loss at step 5,000 by 1000, as clipping2
-    did. Unclipped, that one step cost about as much as halving the batch.
-    Clipped, it changed nothing.
+    The last two rows multiplied the loss at step 5,000 by 1000, as clipping2
+    did. Without clipping, that one bad step raised the final loss about as
+    much as halving the batch size did. With clipping, it changed nothing.
 
-    The check trains your tuned run for 10,000 steps and needs it below 2.20.
-    It takes a minute or two, so let it finish.
+    The check trains your tuned run for 10,000 steps and needs the validation
+    loss to end below 2.20. That takes a minute or two, so let it finish.
     """,
 )
 
@@ -554,8 +562,12 @@ BROKEN2_SOURCE = source_file(
 ''' + INDENTED_NAMES_MLP + '''
 
 
-    # TODO: Return the rate at step. It warms up over warmup steps to base, as
-    #   warmup1 does, then falls along a cosine to base / 10 at step total.
+    # TODO: Return the learning rate at step. Over the first warmup steps it
+    #   rises linearly to base, as in warmup1, with step 0 giving
+    #   base / warmup. After that it falls along a cosine curve from base to
+    #   base / 10, which it reaches at step total.
+    #   Example: rate_at(0, 0.003, 200, 10000) returns 1.5e-05, and
+    #   rate_at(200, 0.003, 200, 10000) returns 0.003.
     def rate_at(
         step: int,
         base: float,
@@ -565,9 +577,10 @@ BROKEN2_SOURCE = source_file(
         ...
 
 
-    # TODO: Finish the two lines with ..., so each step sets the rate from
-    #   rate_at, with base 0.003 and 200 warmup steps, and clips the global
-    #   norm at 1.3 between backward and step.
+    # TODO: Replace the two ... placeholders. The first sets each step's
+    #   learning rate from rate_at, with base 0.003, 200 warmup steps and
+    #   steps as the total. The second clips the global gradient norm at 1.3,
+    #   between backward and step.
     def train_tuned(
         model: nn.Module,
         X: Tensor,
@@ -736,7 +749,7 @@ def check_train_tuned_steps(found: object) -> None:
         raise Mismatch(
             f"After 300 steps of train_tuned the weights differ from the tuned reference's by up to {gap:.2g}, and the "
             f"validation loss is {validation_loss_of(mine):.4f} where the reference reaches {validation_loss_of(theirs):.4f}. "
-            "Check the rate each step and the clip at 1.3 between backward and step.",
+            "Check the learning rate you set each step, and the clipping at 1.3 between backward and step.",
         )
 
 
@@ -758,7 +771,7 @@ def check_broken2(checker: Checker) -> None:
     )
     checker.test(
         function="train_tuned",
-        description="steps like the tuned reference",
+        description="matches the tuned reference step by step",
         run=check_train_tuned_steps,
     )
     checker.test(
@@ -776,7 +789,7 @@ BROKEN2 = Exercise(
     source=BROKEN2_SOURCE,
     solution=BROKEN2_SOLUTION,
     hints={
-        "rate_at": "warmup1's warmup_cosine works the rate out the same way, with base / 10 as its minimum.",
+        "rate_at": "warmup1's warmup_cosine computes the rate the same way, with base / 10 as its minimum.",
         "train_tuned": "Take the rate from rate_at, with base 0.003, 200 warmup steps and steps as the total. The "
         "missing line clips with torch.nn.utils.clip_grad_norm_ on model.parameters() at 1.3.",
     },

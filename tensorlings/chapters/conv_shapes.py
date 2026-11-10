@@ -28,10 +28,11 @@ CONV_SHAPES = Chapter(
         # Channels, padding, stride and dilation
 
         A convolution layer has more settings than its kernel size. This
-        chapter covers the channels it reads and writes, the padding that keeps
-        the edges, the stride that shrinks the output, and the dilation that
-        widens its view. It ends with picking them for the shapes a model
-        needs, and the 1 by 1 convolution.
+        chapter covers the channels it reads and writes, and the padding that
+        adds a border of zeros around its input. It also covers the stride
+        that makes the output smaller, and the dilation that widens what each
+        output sees. It ends with choosing these settings to get the shapes a
+        model needs, and with the 1 by 1 convolution.
 
         ## Further reading
 
@@ -66,11 +67,12 @@ def reference_output_size(
 
 CHANNELS1_LESSON = prose(
     """
-    DNA written one hot has 4 numbers per base, one each for A, C, G and T.
-    The DNA project at the end of this section reads it that way. A colour
-    image has 3 numbers per pixel, red, green and blue. Each such number is a
-    **channel**. So DNA is a tensor of shape `(channels, length)`, and an
-    image is `(channels, height, width)`.
+    In one hot form, DNA has 4 numbers per base, one each for A, C, G and T.
+    The DNA project at the end of this section reads DNA in this form. A
+    colour image has 3 numbers per pixel, one each for red, green and blue.
+    Each of these numbers per position is a **channel**. So one hot DNA is a
+    tensor of shape `(channels, length)`, and an image is a tensor of shape
+    `(channels, height, width)`.
 
     ```python
     dna = torch.tensor([[1.0, 0.0, 0.0],     # A
@@ -79,20 +81,24 @@ CHANNELS1_LESSON = prose(
                         [0.0, 0.0, 0.0]])    # T, so the 3 bases read A, G, C
     ```
 
-    The layers inside a model make many more channels, each one a map of where
-    some pattern showed up.
+    The layers inside a model produce many more channels. Each of those
+    channels is a map of where one pattern appeared in the input.
 
     A kernel reads every input channel at once. For 3 input channels it has
-    shape `(3, kh, kw)`, one 2D kernel per channel. Its output at a place is
-    the sum of the three 2D convolutions there. A layer with many output
-    channels has one such kernel for each. So its weight has shape
-    `(out channels, in channels, kh, kw)`, plus one bias per output channel.
+    shape `(3, kh, kw)`, which is one 2D kernel per input channel. Its output
+    at a position is the sum of the three 2D convolutions at that position. A
+    layer with many output channels has one such kernel for each output
+    channel. So the layer's weight has shape
+    `(out channels, in channels, kh, kw)`, and the layer also has one bias
+    per output channel.
 
-    `nn.Conv2d(3, 16, 3)` is that layer, 16 kernels of shape `(3, 3, 3)`. It
-    learns `16 * 3 * 3 * 3 + 16` numbers, 448. A Linear layer from a 32 by 32
-    colour image to 16 channels of the same size would learn over 50 million.
+    `nn.Conv2d(3, 16, 3)` is such a layer, with 16 kernels of shape
+    `(3, 3, 3)`. It learns `16 * 3 * 3 * 3 + 16` numbers, which is 448. A
+    Linear layer from a 32 by 32 colour image to 16 channels of the same size
+    would learn over 50 million.
 
-    `sum(...)` adds up the tensors a loop gives, like any numbers.
+    Python's `sum(...)` adds up the tensors from a loop, the same way it adds
+    up numbers.
     """,
 )
 
@@ -119,9 +125,10 @@ CHANNELS1_SOURCE = source_file(
 
 
     # TODO: Finish the line in the loop, so this returns the convolution of
-    #   image, of shape (in channels, h, w), with kernels, of shape
-    #   (out channels, in channels, kh, kw). Each output channel adds up
-    #   conv_one of every input channel with its own 2D kernel.
+    #   image with kernels. image has shape (in channels, h, w), and kernels
+    #   has shape (out channels, in channels, kh, kw). Output channel out is
+    #   the sum over every input channel c of conv_one of that channel with
+    #   its own 2D kernel, kernels[out, c].
     def multi_channel_conv(
         image: Tensor,
         kernels: Tensor,
@@ -135,7 +142,8 @@ CHANNELS1_SOURCE = source_file(
 
 
     # TODO: Return how many numbers nn.Conv2d(in_channels, out_channels, k)
-    #   learns, its weights and its biases.
+    #   learns, counting its weights and its biases.
+    #   Example: conv_parameters(3, 16, 3) returns 448.
     def conv_parameters(
         in_channels: int,
         out_channels: int,
@@ -144,9 +152,10 @@ CHANNELS1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return how many numbers a Linear layer learns that maps a flattened
-    #   image of shape (channels, h, w) to out_channels maps of the same h and w,
-    #   its weights and its biases.
+    # TODO: Return how many numbers a Linear layer learns, counting its weights
+    #   and its biases, when it maps a flattened image of shape (channels, h, w)
+    #   to out_channels channels of the same h and w.
+    #   Example: linear_parameters(1, 4, 5, 2) returns 840.
     def linear_parameters(
         channels: int,
         h: int,
@@ -261,7 +270,7 @@ CHANNELS1 = Exercise(
         "conv_parameters": "Each of the out_channels kernels holds in_channels * k * k weights, and each output "
         "channel has one bias.",
         "linear_parameters": "The Linear has channels * h * w inputs and out_channels * h * w outputs. Count one "
-        "weight per pair and one bias per output.",
+        "weight for each pair of an input and an output, and one bias per output.",
     },
     introduces=(),
     check=check_channels1,
@@ -274,23 +283,25 @@ CHANNELS1 = Exercise(
 
 PADDING1_LESSON = prose(
     """
-    Without padding, each layer shrinks the image by `k - 1`. The pixels at
-    the edges also take part in fewer outputs than the ones in the middle.
-    **Padding** puts a border of zeros around the input first. With `p` zeros
-    on every side, an input of size `n` gives an output of size
-    `n + 2p - k + 1`.
+    Without padding, each layer makes the image `k - 1` pixels smaller in
+    each dimension. The pixels at the edges also appear in fewer outputs than
+    the pixels in the middle. **Padding** adds a border of zeros around the
+    input before the convolution. With `p` zeros on every side, an input of
+    size `n` gives an output of size `n + 2p - k + 1`.
 
-    For an odd kernel size, `p = (k - 1) / 2` keeps the size the same. That is
-    the usual choice, padding 1 for a 3 by 3 kernel, which lets layers stack
-    without the image shrinking away.
+    For an odd kernel size, `p = (k - 1) / 2` keeps the output the same size
+    as the input. That is the usual choice, for example padding 1 for a 3 by 3
+    kernel. It lets you stack many layers without the image shrinking away.
 
     ```python
     image = torch.ones(2, 2)
     F.pad(image, (1, 1, 1, 1))    # a 4 by 4 tensor, a border of zeros around the ones
     ```
 
-    `F.pad` takes the zeros to add as `(left, right, top, bottom)`, last
-    dimension first. `nn.Conv2d(3, 16, 3, padding=1)` pads inside the layer.
+    `F.pad` takes the number of zeros to add on each side as
+    `(left, right, top, bottom)`. The last dimension comes first, so left and
+    right pad the width. `nn.Conv2d(3, 16, 3, padding=1)` does the padding
+    inside the layer.
     """,
 )
 
@@ -307,6 +318,7 @@ PADDING1_SOURCE = source_file(
 
 
     # TODO: Return image, of shape (h, w), with p zeros added on every side.
+    #   The result has shape (h + 2 * p, w + 2 * p).
     def pad_zeros(
         image: Tensor,
         p: int,
@@ -316,6 +328,7 @@ PADDING1_SOURCE = source_file(
 
     # TODO: Return the output size of a convolution with kernel size k and
     #   padding p on an input of size n.
+    #   Example: padded_size(32, 3, 1) returns 32.
     def padded_size(
         n: int,
         k: int,
@@ -324,8 +337,9 @@ PADDING1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the padding that keeps the size the same for an odd kernel
-    #   size k, as a whole number.
+    # TODO: Return the padding that keeps the output the same size as the
+    #   input, for an odd kernel size k. Return it as an int.
+    #   Example: same_padding(3) returns 1.
     def same_padding(k: int) -> int:
         ...
     ''',
@@ -426,10 +440,10 @@ PADDING1 = Exercise(
     source=PADDING1_SOURCE,
     solution=PADDING1_SOLUTION,
     hints={
-        "pad_zeros": "F.pad with p zeros on each of the four sides, (p, p, p, p).",
-        "padded_size": "Padding adds p to each side, so the input is n + 2 * p long. Then the kernel fits that minus "
-        "k plus 1 times.",
-        "same_padding": "k - 1 split between the two sides. Use // so it comes out a whole number.",
+        "pad_zeros": "Call F.pad with p zeros on each of the four sides, (p, p, p, p).",
+        "padded_size": "Padding adds p to each side, so the padded input has length n + 2 * p. The kernel fits in "
+        "that length minus k, plus 1, positions.",
+        "same_padding": "Split k - 1 zeros evenly between the two sides. Use // so the result is an int.",
     },
     introduces=("padding",),
     check=check_padding1,
@@ -442,13 +456,14 @@ PADDING1 = Exercise(
 
 STRIDE1_LESSON = prose(
     """
-    The kernel can move more than one place at a time. With a **stride** of
-    `s` it moves `s` places between outputs, so the output is about `s` times
-    smaller. A stride of 2 halves the height and the width, which is how most
-    image models shrink the image as they go deeper.
+    The kernel can move more than one position at a time. With a **stride** of
+    `s`, it moves `s` positions between one output and the next, so the output
+    is about `s` times smaller. A stride of 2 halves the height and the width.
+    Most image models shrink the image this way as their layers go deeper.
 
     With padding `p`, the output size is `(n + 2p - k) // s + 1`. The `//`
-    rounds down, since a kernel that would hang off the end is left out.
+    rounds down, because a position where the kernel would stick out past the
+    end of the input is skipped.
 
     ```python
     x = torch.arange(7.0)
@@ -474,6 +489,7 @@ STRIDE1_SOURCE = source_file(
 
     # TODO: Return the output size of a convolution with kernel size k, padding p
     #   and stride s on an input of size n.
+    #   Example: strided_size(32, 3, 1, 2) returns 16.
     def strided_size(
         n: int,
         k: int,
@@ -483,8 +499,9 @@ STRIDE1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the convolution of x with w at stride s, from windows that
-    #   x.unfold gives.
+    # TODO: Return the convolution of x with w at stride s. Get the windows of x
+    #   from x.unfold, s positions apart, and take the dot product of each
+    #   window with w.
     def strided_conv1d(
         x: Tensor,
         w: Tensor,
@@ -493,8 +510,9 @@ STRIDE1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return an nn.Conv2d from in_channels to out_channels with a 3 by 3
-    #   kernel that halves the height and the width of an even sized image.
+    # TODO: Return an nn.Conv2d from in_channels to out_channels, with a 3 by 3
+    #   kernel, that halves the height and the width of an image whose height
+    #   and width are even.
     def halving_conv(
         in_channels: int,
         out_channels: int,
@@ -613,22 +631,24 @@ STRIDE1 = Exercise(
 
 DILATION1_LESSON = prose(
     """
-    **Dilation** spreads a kernel's taps out. With a dilation of `d`, the taps
-    sit `d` places apart, so a kernel of 3 with dilation 2 reads positions 0,
-    2 and 4. So it spans 5 places with the same 3 weights.
+    Each weight of a kernel reads one input position, called a tap.
+    **Dilation** spreads the taps out. With a dilation of `d`, the taps are `d`
+    positions apart. So a kernel of size 3 with dilation 2 reads positions 0,
+    2 and 4. It spans 5 positions with the same 3 weights.
 
-    The **receptive field** of an output is the stretch of the input it can
-    see. One layer with kernel `k` sees `k` places. Each layer stacked on top
-    adds `k - 1` more, times its dilation, at stride 1. So three layers of 3
-    see 7 places, and three layers of 3 with dilations 1, 2 and 4 see 15.
+    The **receptive field** of an output is the range of input positions that
+    can affect it. One layer with kernel size `k` and dilation 1 sees `k`
+    positions. At stride 1, each layer stacked on top adds `k - 1` more
+    positions, times that layer's dilation. So three layers of size 3 see 7
+    positions. Three layers of size 3 with dilations 1, 2 and 4 see 15.
 
-    Dilation widens the view without more weights, and without the shrinking
-    a stride brings. Models of sound and of long sequences lean on it, as
-    Section 6 shows.
+    Dilation widens the receptive field without adding weights, and without
+    shrinking the output the way a stride does. Models of sound and of long
+    sequences rely on it, as Section 6 shows.
 
     `x[::2]` takes every second entry, starting at the first.
-    `F.conv1d(x, w, dilation=2)` and `nn.Conv2d(..., dilation=2)` take it as
-    an argument.
+    `F.conv1d(x, w, dilation=2)` and `nn.Conv2d(..., dilation=2)` take the
+    dilation as an argument.
     """,
 )
 
@@ -643,7 +663,9 @@ DILATION1_SOURCE = source_file(
     every_second = x[::2]                            # tensor([0., 2., 4.])
 
 
-    # TODO: Return how many places a kernel of size k spans with dilation d.
+    # TODO: Return how many input positions a kernel of size k spans with
+    #   dilation d, from its first tap to its last.
+    #   Example: spanned(3, 2) returns 5.
     def spanned(
         k: int,
         d: int,
@@ -652,8 +674,8 @@ DILATION1_SOURCE = source_file(
 
 
     # TODO: Finish the last line, so this returns the convolution of x with w
-    #   at dilation d. Each window covers spanned(k, d) places, and the kernel
-    #   reads every d-th one of them.
+    #   at dilation d. Each window covers spanned(k, d) positions, and the
+    #   kernel reads every d-th position of it, starting with the first.
     def dilated_conv1d(
         x: Tensor,
         w: Tensor,
@@ -664,8 +686,9 @@ DILATION1_SOURCE = source_file(
         return ...
 
 
-    # TODO: Return the receptive field of a stack of layers at stride 1, given
-    #   as a list of (k, d) pairs, one per layer.
+    # TODO: layers describes a stack of layers at stride 1, as a list of (k, d)
+    #   pairs, one per layer. Return the receptive field of the stack.
+    #   Example: receptive_field([(3, 1), (3, 2), (3, 4)]) returns 15.
     def receptive_field(layers: list[tuple[int, int]]) -> int:
         ...
     ''',
@@ -709,7 +732,7 @@ def check_dilation1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="spanned",
-        description="gives the places a dilated kernel spans",
+        description="gives the positions a dilated kernel spans",
         inputs=(
             (3, 1),
             (3, 2),
@@ -751,8 +774,9 @@ DILATION1 = Exercise(
     source=DILATION1_SOURCE,
     solution=DILATION1_SOLUTION,
     hints={
-        "spanned": "k taps with d - 1 gaps between each pair, so d * (k - 1) + 1.",
-        "dilated_conv1d": "windows[:, ::d] keeps every d-th place of each window. Multiply that by w with @.",
+        "spanned": "A kernel of size k has k taps, with d - 1 empty positions between each neighbouring pair of "
+        "taps. Add up the taps and the empty positions.",
+        "dilated_conv1d": "windows[:, ::d] keeps every d-th position of each window. Multiply that by w with @.",
         "receptive_field": "Start from 1 and add (k - 1) * d for each layer.",
     },
     introduces=(),
@@ -766,26 +790,30 @@ DILATION1 = Exercise(
 
 CONV5_LESSON = prose(
     """
-    A **1 by 1 convolution** reads one pixel at a time, every channel of it.
-    It is a Linear layer from the input channels to the output channels,
-    applied at every pixel with the same weights. Models use it to change the
-    number of channels cheaply. ResNet-50 shrinks 256 channels to 64 with one,
-    runs its 3 by 3 there, then grows them back. Without biases, those three
-    layers learn 69,632 weights. One 3 by 3 layer from 256 channels to 256
+    A **1 by 1 convolution** reads one pixel at a time, with all of that
+    pixel's channels. It is a Linear layer from the input channels to the
+    output channels, applied at every pixel with the same weights. Models use
+    it to change the number of channels cheaply.
+
+    ResNet-50 uses a 1 by 1 convolution to shrink 256 channels to 64. It runs
+    its 3 by 3 convolution on those 64 channels, then a second 1 by 1
+    convolution grows them back to 256. Without biases, those three layers
+    learn 69,632 weights. A single 3 by 3 layer from 256 channels to 256
     would learn 589,824, over 8 times as many.
 
-    The usual settings, for a 3 by 3 kernel or bigger:
+    Here are the usual settings for a kernel of 3 by 3 or bigger.
 
     - keep the size: stride 1, padding `(k - 1) // 2`, as in VGG.
     - halve the size: stride 2, padding `(k - 1) // 2`.
     - ResNet's first layer: a 7 by 7 kernel, stride 2, padding 3, so 224 becomes 112.
 
-    To plan a model, follow the size through each layer with the formula of
-    stride1. A padding that makes a layer give a wanted size solves
-    `(n + 2p - k) // s + 1 = target`.
+    To plan a model, follow the size through each layer with the formula from
+    stride1. To make a layer give a target size, find a padding `p` that
+    solves `(n + 2p - k) // s + 1 = target`.
 
-    `weight @ x.reshape(c, -1)` multiplies a weight of shape `(out, c)` by
-    every pixel's channels at once.
+    For `x` of shape `(c, h, w)`, `x.reshape(c, -1)` has one column per
+    pixel. So `weight @ x.reshape(c, -1)` multiplies a weight of shape
+    `(out, c)` by every pixel's channels at once.
     """,
 )
 
@@ -800,8 +828,9 @@ CONV5_SOURCE = source_file(
     pixels = x.reshape(3, -1)                        # shape (3, 4), one column per pixel
 
 
-    # TODO: Return the 1 by 1 convolution of x, of shape (c, h, w), with weight,
-    #   of shape (out, c), as shape (out, h, w), with no bias.
+    # TODO: x has shape (c, h, w), and weight has shape (out, c). Return the
+    #   1 by 1 convolution of x with weight, with no bias, as a tensor of shape
+    #   (out, h, w).
     def pointwise(
         x: Tensor,
         weight: Tensor,
@@ -809,8 +838,10 @@ CONV5_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the sizes after each layer in turn, starting from size n.
-    #   layers is a list of (k, s, p) triples, one per layer.
+    # TODO: An input of size n goes through the layers in order. layers is a
+    #   list of (k, s, p) triples, one per layer, giving its kernel size,
+    #   stride and padding. Return a list of the size after each layer.
+    #   Example: sizes_through(224, [(7, 2, 3), (3, 2, 1)]) returns [112, 56].
     def sizes_through(
         n: int,
         layers: list[tuple[int, int, int]],
@@ -818,8 +849,10 @@ CONV5_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the smallest padding p from 0 to k that makes a kernel of k
-    #   at stride s turn size n into target, or None if none does.
+    # TODO: Return the smallest padding p from 0 to k, including k, that makes
+    #   a convolution with kernel size k and stride s turn an input of size n
+    #   into an output of size target. Return None if no such padding exists.
+    #   Example: padding_for(224, 112, 7, 2) returns 3.
     def padding_for(
         n: int,
         target: int,
@@ -979,7 +1012,7 @@ CONV5 = Exercise(
     hints={
         "pointwise": "Take c, h, w from x.shape, multiply weight by x.reshape(c, -1), then reshape the result to "
         "(-1, h, w).",
-        "sizes_through": "For each (k, s, p), work out the new n with stride1's formula and append it.",
+        "sizes_through": "For each (k, s, p), compute the new n with stride1's formula and append it.",
         "padding_for": "Try each p in range(k + 1) and return the first whose output size equals target. After the "
         "loop, return None.",
     },

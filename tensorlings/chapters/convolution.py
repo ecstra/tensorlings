@@ -32,14 +32,15 @@ CONVOLUTION = Chapter(
         """
         # Convolution
 
-        Section 5 builds toward its DNA project, a convolutional net that finds
-        patterns in DNA. A convolution slides one small set of weights along
-        its input and takes a dot product at every place. This
-        chapter shows it is a Linear layer with most weights zero and the rest
-        shared, builds it in 1D and 2D, matches PyTorch's, and shows why a
-        model built from it finds a pattern wherever it sits. It ends with the
-        convolution theorem, which turns a long convolution into a product of
-        spectra.
+        Section 5 builds toward its DNA project, a convolutional network that
+        finds patterns in DNA. A convolution slides one small set of weights
+        along its input and takes a dot product at every position. This
+        chapter shows that a convolution is a Linear layer whose weights are
+        mostly zero, with the rest shared. It builds convolution in 1D and 2D
+        and checks it against PyTorch's version. Then it shows why a model
+        built from convolutions finds a pattern wherever it appears. It ends
+        with the convolution theorem, which turns a long convolution into a
+        product of spectra.
 
         ## Further reading
 
@@ -91,10 +92,11 @@ def reference_conv_matrix(
 
 CONV1_LESSON = prose(
     """
-    Section 5 builds toward a net that finds patterns in DNA, and its block is
-    the **convolution**. Start in one dimension, with a signal `x` of length `n` and a small set of weights
-    `w` of length `k`, the **kernel**. The output at position `i` is the dot
-    product of `w` with the `k` numbers of `x` starting at `i`.
+    Section 5 builds toward a network that finds patterns in DNA. Its main
+    building block is the **convolution**. Start in one dimension. Take a
+    signal `x` of length `n` and a small set of weights `w` of length `k`,
+    called the **kernel**. The output at position `i` is the dot product of
+    `w` with the `k` entries of `x` that start at position `i`.
 
     ```python
     x = torch.tensor([1.0, 2.0, 3.0, 4.0])
@@ -103,17 +105,21 @@ CONV1_LESSON = prose(
     # position 1: 1 * 2 + 0 * 3 - 1 * 4 = -2
     ```
 
-    The kernel fits in `n - k + 1` places, so that is the output's length.
+    The kernel fits in `n - k + 1` positions along `x`, so the output has
+    length `n - k + 1`.
 
-    Every output is a weighted sum of inputs, so a convolution is a Linear
-    layer. Its weight matrix has one row per output. Row `i` holds `w` in
-    columns `i` to `i + k - 1` and zeros everywhere else. So most weights are
-    zero, and the rest are the same few numbers shared by every row.
+    Every output is a weighted sum of inputs, so a convolution is a special
+    kind of Linear layer. Its weight matrix has one row per output. Row `i`
+    holds `w` in columns `i` to `i + k - 1`, and zeros everywhere else. So
+    most weights are zero, and the rest are the same `k` numbers, shared by
+    every row.
 
-    That is why convolutions are cheap. A Linear from 32 inputs to 30 outputs
-    learns 960 weights. A convolution of the same shapes learns 3.
+    This sharing is why convolutions are cheap. A Linear layer from 32 inputs
+    to 30 outputs learns 960 weights. A convolution with the same input and
+    output lengths learns only 3, the entries of its kernel.
 
-    `matrix[i, a:b] = w` writes `w` into row `i`, columns `a` up to `b`.
+    `matrix[i, a:b] = w` writes `w` into row `i`, in columns `a` up to but
+    not including `b`.
     """,
 )
 
@@ -129,8 +135,11 @@ CONV1_SOURCE = source_file(
 
 
     # TODO: Finish the line in the loop, so this returns the weight matrix of a
-    #   convolution with kernel w on inputs of length n, one row per output, w
-    #   placed at columns row to row + k - 1.
+    #   convolution with kernel w on inputs of length n. The matrix has shape
+    #   (n - k + 1, n), one row per output. Each row holds w in columns row to
+    #   row + k - 1, and zeros elsewhere.
+    #   Example: conv_matrix(torch.tensor([1.0, 2.0]), 3) returns
+    #   tensor([[1., 2., 0.], [0., 1., 2.]]).
     def conv_matrix(
         w: Tensor,
         n: int,
@@ -144,8 +153,10 @@ CONV1_SOURCE = source_file(
         return matrix
 
 
-    # TODO: Return the convolution of x with the kernel w, worked out as
-    #   conv_matrix times x.
+    # TODO: Return the convolution of x with the kernel w, computed as the
+    #   matrix product of conv_matrix and x.
+    #   Example: for x = torch.tensor([1.0, 2.0, 3.0, 4.0]) and
+    #   w = torch.tensor([1.0, 0.0, -1.0]), it returns tensor([-2., -2.]).
     def conv_as_linear(
         x: Tensor,
         w: Tensor,
@@ -153,9 +164,11 @@ CONV1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return how many weights a Linear layer from n inputs to the
-    #   convolution's n - k + 1 outputs learns, without a bias, and how many the
-    #   convolution learns.
+    # TODO: Return two counts as a tuple. First, how many weights a Linear
+    #   layer without a bias learns when it maps n inputs to n - k + 1
+    #   outputs. Second, how many weights a convolution with a kernel of
+    #   length k learns.
+    #   Example: weight_counts(32, 3) returns (960, 3).
     def weight_counts(
         n: int,
         k: int,
@@ -265,12 +278,15 @@ CONV1 = Exercise(
 
 CONV2_LESSON = prose(
     """
-    Nobody builds that matrix in practice. A convolution is computed as a
-    sliding dot product, the kernel moved one place at a time.
+    In practice, nobody builds that matrix. A convolution is computed as a
+    sliding dot product. The kernel moves along `x` one position at a time,
+    and at each position it takes the dot product with the entries under it.
 
-    A loop over the positions is the plainest way. `x.unfold(0, k, 1)` does it
-    without a loop. It cuts `x` into every window of length `k`, one step
-    apart, as rows of a matrix. Each row times the kernel is then one output.
+    A loop over the positions is the most direct way to compute it.
+    `x.unfold(0, k, 1)` does the same without a loop. It returns every window
+    of length `k` in `x`, each one starting one position after the last, as
+    the rows of a matrix. The dot product of each row with the kernel is one
+    output.
 
     ```python
     x = torch.tensor([1.0, 2.0, 3.0, 4.0])
@@ -278,14 +294,15 @@ CONV2_LESSON = prose(
     ```
 
     PyTorch's `F.conv1d(x, w)` works on batches with channels, which the next
-    chapter explains. For now, an input of shape `(batch, 1, length)` and a
-    weight of shape `(1, 1, k)` give an output of shape
-    `(batch, 1, length - k + 1)`. `.view(1, 1, -1)` gives a tensor those
-    extra dimensions of size 1.
+    chapter explains. For now, use an input of shape `(batch, 1, length)` and
+    a weight of shape `(1, 1, k)`. They give an output of shape
+    `(batch, 1, length - k + 1)`. On a 1D tensor, `.view(1, 1, -1)` adds
+    those two extra dimensions of size 1 in front.
 
-    In maths, a convolution flips the kernel before sliding it. Deep learning
-    skips the flip, which makes no difference to a kernel that is learned, and
-    still calls it convolution.
+    In mathematics, a convolution flips the kernel before sliding it. Deep
+    learning skips the flip but still calls the operation convolution. For a
+    learned kernel the flip makes no difference, because training can learn
+    the flipped kernel instead.
     """,
 )
 
@@ -302,7 +319,8 @@ CONV2_SOURCE = source_file(
 
 
     # TODO: Finish the line in the loop, so this returns the convolution of x
-    #   with w, one dot product of w with each window of x.
+    #   with w. Each output is the dot product of w with the window of x that
+    #   begins at start and has length k.
     def slide(
         x: Tensor,
         w: Tensor,
@@ -316,8 +334,8 @@ CONV2_SOURCE = source_file(
         return torch.stack(outputs)
 
 
-    # TODO: Return the same convolution with no loop, from the windows that
-    #   x.unfold gives.
+    # TODO: Return the same convolution without a loop. Get the windows of x
+    #   from x.unfold, then take the dot product of each window with w.
     def unfold_conv(
         x: Tensor,
         w: Tensor,
@@ -325,8 +343,8 @@ CONV2_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the convolution of every row of x, of shape (batch, length),
-    #   with w, using F.conv1d. The result has shape (batch, length - k + 1).
+    # TODO: x has shape (batch, length). Use F.conv1d to convolve every row of
+    #   x with w, and return the result with shape (batch, length - k + 1).
     def batch_conv(
         x: Tensor,
         w: Tensor,
@@ -367,7 +385,8 @@ CONV2_SOLUTION = source_file(
         return x.unfold(0, len(w), 1) @ w
 
 
-    # F.conv1d wants (batch, channels, length) and a weight of (out channels, in channels, k).
+    # F.conv1d expects an input of shape (batch, channels, length) and a weight
+    # of shape (out channels, in channels, k).
     def batch_conv(
         x: Tensor,
         w: Tensor,
@@ -436,15 +455,15 @@ CONV2 = Exercise(
 
 CONV3_LESSON = prose(
     """
-    An image is two dimensional, and so is its kernel. A kernel of shape
-    `(kh, kw)` slides across the image's rows and columns. At each place it
-    multiplies the patch under it by its weights and adds them all up. An image
-    of shape `(h, w)` gives an output with `h - kh + 1` rows and `w - kw + 1`
-    columns.
+    An image is two dimensional, and so is the kernel that convolves it. A
+    kernel of shape `(kh, kw)` slides across the image's rows and columns. At
+    each position, it multiplies the patch of the image under it by its
+    weights, elementwise, and adds up the results. An image of shape `(h, w)`
+    gives an output with `h - kh + 1` rows and `w - kw + 1` columns.
 
-    Each output says how much the patch at that place looks like the kernel.
-    This kernel answers to a vertical edge, bright on the left and dark on
-    the right.
+    Each output measures how much the patch at that position looks like the
+    kernel. The kernel below gives a large output at a vertical edge, where
+    the image is bright on the left and dark on the right.
 
     ```python
     edge = torch.tensor([[1.0, 0.0, -1.0],
@@ -452,12 +471,13 @@ CONV3_LESSON = prose(
                          [1.0, 0.0, -1.0]])
     ```
 
-    `image[i:i + kh, j:j + kw]` is the patch at row `i` and column `j`.
+    `image[i:i + kh, j:j + kw]` is the patch whose top left corner is at row
+    `i` and column `j`.
 
     `F.conv2d` takes images of shape `(batch, channels, height, width)` and a
-    weight of shape `(out channels, in channels, kh, kw)`. With one channel in
-    and out, `image[None, None]` and `kernel[None, None]` add the two size 1
-    dimensions in front.
+    weight of shape `(out channels, in channels, kh, kw)`. With one input
+    channel and one output channel, `image[None, None]` and
+    `kernel[None, None]` add the two dimensions of size 1 in front.
     """,
 )
 
@@ -475,6 +495,7 @@ CONV3_SOURCE = source_file(
 
     # TODO: Return the output shape of a convolution of an image of shape (h, w)
     #   with a kernel of shape (kh, kw), as a tuple.
+    #   Example: output_shape(28, 28, 3, 3) returns (26, 26).
     def output_shape(
         h: int,
         w: int,
@@ -485,7 +506,8 @@ CONV3_SOURCE = source_file(
 
 
     # TODO: Finish the line in the loops, so this returns the convolution of
-    #   image with kernel, one sum of patch times kernel at every place.
+    #   image with kernel. output[i, j] is the sum of the elementwise product
+    #   of kernel and the patch whose top left corner is at row i, column j.
     def conv2d_loop(
         image: Tensor,
         kernel: Tensor,
@@ -501,8 +523,8 @@ CONV3_SOURCE = source_file(
         return output
 
 
-    # TODO: Return the convolution of every image in images, of shape
-    #   (batch, h, w), with kernel, using F.conv2d, as shape
+    # TODO: images has shape (batch, h, w). Use F.conv2d to convolve every
+    #   image with kernel, and return the result with shape
     #   (batch, h - kh + 1, w - kw + 1).
     def batch_conv2d(
         images: Tensor,
@@ -631,29 +653,35 @@ CONV3 = Exercise(
 
 CONV4_LESSON = prose(
     """
-    Here are signals of 32 numbers, noise plus, in half of them, a short
-    pattern of 3. The task is to say whether the pattern is there. In
-    training it only ever started in the first 13 positions. The test moved it
-    to positions 16 to 28.
+    Take signals of 32 numbers each. Every signal is random noise, and half of
+    them also contain a short pattern of 3 numbers. The task is to say whether
+    a signal contains the pattern. In the training signals, the pattern only
+    ever started in the first 13 positions. In the test signals, it was moved
+    to start at positions 16 to 28. The table gives each model's accuracy.
 
     | Model | Weights | Training | Pattern where it was | Pattern moved |
     |---|---|---|---|---|
     | MLP, 32 to 64 to 1 | 2177 | 100% | 100% | 47.3% |
-    | convolution of 4 kernels of 3, then the largest response | 21 | 100% | 100% | 100% |
+    | convolution with 4 kernels of length 3, then the largest response | 21 | 100% | 100% | 100% |
 
-    Both learned. The MLP has a separate weight for every position, and the
-    weights at the right never saw the pattern. So for a moved pattern it says
-    "no" every time. Its 47.3% is the share of moved signals that had no
-    pattern at all. The convolution slides the same kernel everywhere,
-    so it answers to the pattern wherever it sits. The largest response over
-    all positions then says whether it showed up anywhere.
+    Both models learned the training signals. The MLP has a separate weight
+    for every position, and the weights for the later positions never saw the
+    pattern. So when the pattern moves there, the MLP says "no" every time.
+    Its 47.3% is the fraction of moved test signals that had no pattern at
+    all.
 
-    That is the idea of Section 5. A pattern in DNA means the same wherever it
-    sits, and a convolution doesn't have to learn it again for every place.
+    The convolution slides the same kernel over every position, so it
+    responds to the pattern wherever it is. The largest response over all
+    positions then says whether the pattern appeared anywhere.
 
-    `nn.Conv1d(1, 4, 3)` holds 4 kernels of 3. `.amax(dim=2)` keeps the
-    largest number along the positions. `F.binary_cross_entropy_with_logits`
-    from activations2 is the loss for a yes or no.
+    This is the main idea of Section 5. A pattern in DNA means the same thing
+    wherever it appears. A convolution learns the pattern once, instead of
+    learning it again for every position.
+
+    `nn.Conv1d(1, 4, 3)` holds 4 kernels of length 3. `.amax(dim=2)` keeps the
+    largest value along dimension 2, which holds the positions.
+    `F.binary_cross_entropy_with_logits` from activations2 is the loss for a
+    yes or no answer.
     """,
 )
 
@@ -670,9 +698,10 @@ CONV4_SOURCE = source_file(
     largest = responses.amax(dim=2)                  # tensor([[2.]])
 
 
-    # TODO: Finish forward. It gives x a channel dimension, runs conv, then a
-    #   ReLU, keeps each kernel's largest response along the positions, and
-    #   runs head. The result is one score per signal, shape (batch,).
+    # TODO: Finish forward. x has shape (batch, length). Give x a channel
+    #   dimension, run self.conv, then a ReLU. Keep each kernel's largest
+    #   response along the positions, then run self.head. Return one score per
+    #   signal, with shape (batch,).
     class Detector(nn.Module):
         def __init__(self) -> None:
             super().__init__()
@@ -683,9 +712,10 @@ CONV4_SOURCE = source_file(
             ...
 
 
-    # TODO: Return the share of signals the model labels right, a score above
-    #   0 meaning the pattern is there, as a plain number, without recording for
-    #   autograd.
+    # TODO: Return the fraction of signals the model labels correctly, as a
+    #   plain number. A score above 0 means the model says the pattern is
+    #   there. y holds 1.0 where the pattern is and 0.0 where it is not. Run
+    #   the model without autograd recording.
     def accuracy(
         model: nn.Module,
         x: Tensor,
@@ -694,8 +724,9 @@ CONV4_SOURCE = source_file(
         ...
 
 
-    # TODO: Finish the line that sets loss, the binary cross entropy of the
-    #   model's scores on x against y, so this trains with Adam.
+    # TODO: Finish the line that sets loss to the binary cross entropy of the
+    #   model's scores on x against the labels y. Then this loop trains the
+    #   model with Adam.
     def train_detector(
         model: nn.Module,
         x: Tensor,
@@ -869,7 +900,7 @@ def check_conv4(checker: Checker) -> None:
     x, y = pattern_signals(50, 16, 0, 13, torch.Generator().manual_seed(723))
     checker.test(
         function="accuracy",
-        description="gives the share labelled right, recording nothing",
+        description="gives the fraction labelled correctly, without autograd recording",
         run=lambda found: check_accuracy(found, x, y),
     )
     checker.test(
@@ -916,16 +947,19 @@ CONV4 = Exercise(
 
 FFT1_LESSON = prose(
     """
-    A long kernel is slow to slide. An echo in a room lasts thousands of
-    samples, and sliding k weights along n samples costs about n times k
-    multiplications. The Fourier transform gives a faster road, and a new way
-    to see what a kernel does.
+    Sliding a long kernel is slow. Sliding `k` weights along `n` samples costs
+    about `n * k` multiplications. Kernels can be long. The echo in a room
+    lasts thousands of samples, so a kernel that adds that echo to a sound is
+    that long too. The Fourier transform gives a faster way to compute a
+    convolution. It also gives a new way to see what a kernel does.
 
-    Any signal of n samples is a sum of waves, one for each frequency from 0
-    up to n / 2 cycles across the signal. `torch.fft.rfft` says how much of
-    each wave the signal holds. It gives one complex number per frequency,
-    which holds the wave's strength and its shift, and `.abs()` is the
-    strength. `torch.fft.irfft` adds the waves back up into the signal.
+    Any signal of `n` samples can be written as a sum of waves. There is one
+    wave for each frequency from 0 up to `n / 2`, where the frequency is how
+    many cycles the wave makes across the signal. `torch.fft.rfft` computes
+    how much of each wave the signal contains. It returns one complex number
+    per frequency, which holds the wave's strength and its shift. `.abs()`
+    gives the strength. `torch.fft.irfft` does the reverse and adds the waves
+    back up into the signal.
 
     ```python
     t = torch.arange(16)
@@ -934,46 +968,53 @@ FFT1_LESSON = prose(
     ```
 
     These strengths, one per frequency, are the signal's **spectrum**. `rfft`
-    adds over all 16 samples without dividing, so a wave of size 1 shows as
-    n / 2, here 8.
+    sums over all 16 samples without dividing. So a wave with a height of 1
+    shows up with strength `n / 2`, which is 8 here.
 
-    The convolution theorem says that convolving two signals multiplies their
-    spectra. Take both spectra, multiply them frequency by frequency, and turn
-    the product back with `irfft`. That costs about n log n.
+    The convolution theorem says that the spectrum of a convolution is the
+    product of the two signals' spectra. So to convolve two signals, take both
+    spectra, multiply them frequency by frequency, and turn the product back
+    into a signal with `irfft`. That costs about `n * log(n)` operations.
 
-    Three details make it match `F.conv1d` and keep it fast.
+    Three details make the result match `F.conv1d` and keep it fast.
 
-    The waves wrap around, so the plain product gives a circular convolution.
-    There the end of the kernel spills onto the start of the signal. Zeros
-    added to both, up to the full output length of n + k - 1, stop that.
-    `rfft(x, n=size)` adds zeros up to `size`, and `irfft(spectrum, n=size)`
-    gives that length back.
+    First, the waves repeat forever, so the product of the spectra gives a
+    circular convolution. In a circular convolution the kernel wraps around.
+    When it slides past the end of the signal, its end lands on the start of
+    the signal. Adding zeros to both signals, up to the full output length
+    `n + k - 1`, prevents this. `rfft(x, n=size)` adds zeros to `x` up to
+    length `size`, and `irfft(spectrum, n=size)` returns a signal of that
+    length.
 
-    The FFT inside `rfft` is fastest when the length is a power of 2. So add
-    zeros up to the first power of 2 at or above n + k - 1. Then keep the
-    first n + k - 1 outputs. `.bit_length()` counts the bits a whole number
-    needs, so `2 ** (m - 1).bit_length()` is the first power of 2 at or above
+    Second, the FFT, the fast algorithm inside `rfft`, is fastest when the
+    length is a power of 2. So add zeros up to the smallest power of 2 that is
+    at least `n + k - 1`, then keep the first `n + k - 1` outputs.
+    `.bit_length()` gives the number of bits an integer needs in binary. So
+    `2 ** (m - 1).bit_length()` is the smallest power of 2 that is at least
     `m`.
 
-    The theorem's convolution flips the kernel, and `F.conv1d` doesn't, as
-    conv2 said. So flip the kernel with `.flip(0)` first. Then keep the
-    outputs where it fits fully, from k - 1 up to n.
+    Third, the convolution in the theorem flips the kernel, and `F.conv1d`
+    does not, as conv2 said. So reverse the kernel with `.flip(0)` first.
+    Then keep only the outputs where the kernel fits fully inside the signal,
+    from position `k - 1` up to but not including position `n`.
 
-    For 100,000 samples and a kernel of 10,000, n + k - 1 is 109,999, which is
-    317 times 347. Over ten timed trials here, the spectra at that length beat
-    `F.conv1d` by 3.5 to 4.7 times. Padded to 131,072 they were 28 to 38 times
-    faster.
+    Take 100,000 samples and a kernel of 10,000. Then `n + k - 1` is 109,999,
+    which is 317 times 347. Over ten timed trials here, the spectra at that
+    length were 3.5 to 4.7 times faster than `F.conv1d`. Padded to 131,072,
+    the next power of 2, they were 28 to 38 times faster.
 
-    A kernel's spectrum shows what it does to each frequency. Here is an
-    average of 4 samples, with zeros added up to 16.
+    A kernel's spectrum shows how much of each frequency it keeps. Here is the
+    spectrum of a kernel that averages 4 samples, with zeros added up to
+    length 16.
 
     | Frequency | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 |
     |---|---|---|---|---|---|---|---|---|---|
     | Strength kept | 1.00 | 0.91 | 0.65 | 0.32 | 0.00 | 0.21 | 0.27 | 0.18 | 0.00 |
 
-    It keeps slow changes and mostly wipes out fast ones, so it smooths. A
-    learned kernel is a filter like this one, and its spectrum says which
-    frequencies it listens to.
+    The kernel keeps the low frequencies, which are slow changes, and mostly
+    removes the high frequencies, which are fast changes. So it smooths the
+    signal. A learned kernel is a filter like this one, and its spectrum shows
+    which frequencies it responds to.
     """,
 )
 
@@ -990,8 +1031,11 @@ FFT1_SOURCE = source_file(
     strengths = torch.fft.rfft(signal).abs()    # 8 at frequency 3, about 0 elsewhere
 
 
-    # TODO: Return how strongly kernel keeps each frequency, from 0 up to n // 2,
-    #   once zeros fill it out to n samples.
+    # TODO: Add zeros to kernel up to length n, and return the strength of each
+    #   frequency in its spectrum, from frequency 0 up to n // 2.
+    #   Example: frequency_response(torch.full((4,), 0.25), 16) returns
+    #   tensor([1.0000, 0.9061, 0.6533, 0.3182, 0.0000, 0.2126, 0.2706, 0.1802,
+    #   0.0000]), the lesson's table.
     def frequency_response(
         kernel: Tensor,
         n: int,
@@ -999,8 +1043,9 @@ FFT1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the circular convolution of a and b, two signals of the same
-    #   length, by multiplying their spectra. The result has that length too.
+    # TODO: a and b are two signals of the same length. Return their circular
+    #   convolution, computed by multiplying their spectra. The result has the
+    #   same length as a.
     def circular_convolve(
         a: Tensor,
         b: Tensor,
@@ -1011,10 +1056,11 @@ FFT1_SOURCE = source_file(
     padded = 2 ** (10 - 1).bit_length()              # 16, the first power of 2 at or above 10
 
 
-    # TODO: Return the full convolution of signal and kernel by multiplying their
-    #   spectra. It has length len(signal) + len(kernel) - 1. Add zeros up to
-    #   the first power of 2 at or above that length, so nothing wraps around,
-    #   then keep only that many outputs.
+    # TODO: Return the full convolution of signal and kernel, computed by
+    #   multiplying their spectra. The full convolution has length
+    #   len(signal) + len(kernel) - 1. Add zeros to both up to the smallest
+    #   power of 2 that is at least that length, so nothing wraps around. Then
+    #   keep only the first len(signal) + len(kernel) - 1 outputs.
     def fft_convolve(
         signal: Tensor,
         kernel: Tensor,
@@ -1022,8 +1068,9 @@ FFT1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return what F.conv1d gives for signal and kernel, as one row of length
-    #   len(signal) - len(kernel) + 1, using fft_convolve.
+    # TODO: Return the same result F.conv1d gives for signal and kernel, as a
+    #   1D tensor of length len(signal) - len(kernel) + 1. Compute it with
+    #   fft_convolve.
     def conv1d_by_fft(
         signal: Tensor,
         kernel: Tensor,
@@ -1297,8 +1344,8 @@ FFT1 = Exercise(
     solution=FFT1_SOLUTION,
     hints={
         "frequency_response": "torch.fft.rfft with n=n adds the zeros, then .abs() gives the strengths.",
-        "circular_convolve": "Multiply torch.fft.rfft(a) by torch.fft.rfft(b), then torch.fft.irfft the product "
-        "with n=len(a), which an odd length needs.",
+        "circular_convolve": "Multiply torch.fft.rfft(a) by torch.fft.rfft(b), then apply torch.fft.irfft to the "
+        "product with n=len(a). An odd length needs that n.",
         "fft_convolve": "Find the first power of 2 at or above the full length with .bit_length(), as the line that "
         "sets padded does. Pass it as n to both rfft calls and to irfft, then slice off the first length outputs.",
         "conv1d_by_fft": "Call fft_convolve with kernel.flip(0), then slice from k - 1 up to len(signal).",

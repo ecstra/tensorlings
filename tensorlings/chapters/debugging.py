@@ -35,11 +35,12 @@ DEBUGGING = Chapter(
         """
         # Debugging training
 
-        A broken training run rarely crashes. It trains a little worse, and
-        nothing says why. This chapter goes through the checks of Karpathy's
-        recipe for training neural networks and Stanford's CS231n notes, one at
-        a time. Check the loss at the start, overfit one batch, read each
-        layer's gradient, look at the data, and watch for the usual slips.
+        A broken training run rarely crashes. Instead the model trains a
+        little worse than it should, and nothing tells you why. This chapter
+        goes through the checks from Karpathy's recipe for training neural
+        networks and Stanford's CS231n notes, one at a time. You check the
+        loss at the start, overfit one batch, read each layer's gradient, look
+        at the data, and watch for the most common mistakes.
 
         ## Further reading
 
@@ -99,30 +100,36 @@ def reference_overfit(
 
 DEBUG1_LESSON = prose(
     """
-    A broken training run rarely crashes. It runs, the loss falls a little,
-    and the model comes out worse than it should be. Karpathy's recipe for
-    training neural networks answers that with small checks, each run before
-    trusting the next step. This chapter goes through them, with one more from
+    A broken training run rarely crashes. It runs, the loss goes down a
+    little, and the model ends up worse than it should be. Karpathy's recipe
+    for training neural networks deals with this through a series of small
+    checks. You run each check and make sure it passes before you trust the
+    next step. This chapter goes through those checks, plus one more from
     Stanford's CS231n notes.
 
     The first check is the loss before any training. For a model that knows
-    nothing it is `log(classes)`, as init3 said. A start far above that means
-    the model starts confidently wrong, and something in it is off.
+    nothing, the cross entropy loss is about `log(classes)`, as init3 said. A
+    starting loss far above that means the model is confidently wrong before
+    it has learned anything, so something in the model is broken.
 
-    The second is a baseline that ignores the inputs. The best such model
-    always predicts each class's share of the labels. Its loss is the
-    entropy of those shares, which is minus the sum of `share * log(share)`.
-    Entropy measures how evenly the labels spread over the classes. It is 0
-    when one class has every label, and `log(classes)` when all have the same
-    share. A trained model that doesn't beat it isn't using its inputs at all.
+    The second check compares the model with a baseline that ignores its
+    inputs. A class's share is the fraction of the labels that belong to that
+    class. The best model that ignores its inputs always predicts each class's
+    share as that class's probability. Its loss is the entropy of the shares,
+    `-(share * log(share))` summed over the classes.
+
+    Entropy measures how evenly the labels are spread over the classes. It is
+    0 when every label is the same class. It is `log(classes)` when every
+    class has the same share. A trained model whose loss is not below this
+    baseline is not using its inputs at all.
 
     ```python
     shares = torch.tensor([0.5, 0.25, 0.25])
     -(shares * shares.log()).sum()    # tensor(1.0397), below log(3) = 1.0986
     ```
 
-    A class with no labels has a share of 0, and `0 * log(0)` comes out as
-    `nan` in PyTorch, so leave those classes out first.
+    A class with no labels has a share of 0. In PyTorch `0 * log(0)` gives
+    `nan`, so remove those classes before you compute the entropy.
     """,
 )
 
@@ -141,10 +148,12 @@ DEBUG1_SOURCE = source_file(
     entropy = -(shares * shares.log()).sum()         # tensor(1.0397)
 
 
-    # TODO: Return the loss of the best model that ignores its inputs, the
-    #   entropy of the class shares of the labels y, as a plain number. A
-    #   class out of classes that no label belongs to has a share of 0, so
-    #   leave it out.
+    # TODO: Return the baseline loss for the labels y, as a plain number. That
+    #   is the entropy of the class shares, the loss of the best model that
+    #   ignores its inputs. y holds class indices from 0 to classes - 1. Leave
+    #   out any class that has no labels, since its share is 0.
+    #   Example: baseline_loss(torch.tensor([0, 0, 1, 2]), 3) returns about
+    #   1.0397.
     def baseline_loss(
         y: Tensor,
         classes: int,
@@ -152,9 +161,10 @@ DEBUG1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return whether the model's loss on x and y, before any training,
-    #   is at most tolerance above log(classes), with classes the width of its
-    #   output.
+    # TODO: Compute the model's cross entropy loss on x and y, without
+    #   training it. Return True if that loss is at most log(classes) +
+    #   tolerance, and False otherwise. classes is the number of columns in
+    #   the model's output, one score per class.
     def starts_well(
         model: nn.Module,
         x: Tensor,
@@ -164,8 +174,8 @@ DEBUG1_SOURCE = source_file(
         ...
 
 
-    # TODO: This classifier starts far above log(classes). Find the slip in it
-    #   and fix it.
+    # TODO: This classifier's loss before training is far above log(classes).
+    #   Find the mistake in it and fix it.
     class Classifier(nn.Module):
         def __init__(
             self,
@@ -219,7 +229,8 @@ DEBUG1_SOLUTION = source_file(
         return F.cross_entropy(logits, y).item() - math.log(logits.shape[1]) <= tolerance
 
 
-    # The * 20 blew every score up, so the model started sure of a random class.
+    # The * 20 made every score 20 times too large, so the untrained model was
+    # confidently sure of a random class.
     class Classifier(nn.Module):
         def __init__(
             self,
@@ -265,7 +276,7 @@ def check_fixed_classifier(found: type) -> None:
             start = F.cross_entropy(scores, labels).item()
 
             if start > math.log(3) + 0.3:
-                raise Mismatch(f"Classifier(6, 16, 3) starts at a loss of {start:.2f} on 60 points, far above log(3) = 1.10, so it starts confidently wrong.")
+                raise Mismatch(f"Classifier(6, 16, 3) has a loss of {start:.2f} on 60 points before training, far above log(3) = 1.10, so it starts out confidently wrong.")
 
         expect_tensor(
             call="Classifier(6, 16, 3) on x of shape (5, 6)",
@@ -295,7 +306,7 @@ def check_debug1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="starts_well",
-        description="says whether the start is near log(classes)",
+        description="says whether the starting loss is near log(classes)",
         inputs=(
             (Described(seeded_classifier(593), "a fresh classifier with 3 classes"), Described(x, "60 points"), Described(y, "their labels"), 0.3),
             (Described(seeded_classifier(593, ScaledClassifier), "a classifier whose scores are 20 times too large"), Described(x, "60 points"), Described(y, "their labels"), 0.3),
@@ -306,7 +317,7 @@ def check_debug1(checker: Checker) -> None:
     checker.test_method(
         class_name="Classifier",
         method="forward",
-        description="gives the plain scores, so the start is near log(classes)",
+        description="returns unscaled scores, so the starting loss is near log(classes)",
         run=check_fixed_classifier,
     )
 
@@ -321,9 +332,9 @@ DEBUG1 = Exercise(
     hints={
         "baseline_loss": "Count the labels with torch.bincount and minlength=classes, keep the counts above 0, and "
         "divide by len(y) for the shares. Then take minus the sum of shares times their logs.",
-        "starts_well": "Take the cross entropy of model(x) against y without autograd, and subtract "
-        "math.log of the output's width. Compare that gap with tolerance.",
-        "Classifier.forward": "The scores are multiplied by something they shouldn't be.",
+        "starts_well": "Compute the cross entropy of model(x) against y without autograd, and subtract "
+        "math.log of the number of output columns. Compare that difference with tolerance.",
+        "Classifier.forward": "The scores are multiplied by a number that should not be there.",
     },
     introduces=(),
     check=check_debug1,
@@ -336,25 +347,32 @@ DEBUG1 = Exercise(
 
 DEBUG2_LESSON = prose(
     """
-    Karpathy's next check takes one small batch and trains on it alone, and
-    CS231n's notes do the same. Any model worth training can learn a handful
-    of examples by heart,
-    so the loss should fall close to 0. If it can't, the bug is most likely
-    in the model, the loss or the loop, and it is cheap to find.
+    Karpathy's next check trains the model on one small batch and nothing
+    else. CS231n's notes recommend the same check. Any model worth training
+    can learn a handful of examples by heart, so the loss on that batch should
+    fall close to 0. If it does not, the bug is most likely in the model, the
+    loss or the training loop. A bug found on one small batch is cheap to
+    track down.
 
-    One classic slip is a model that ends with softmax while the loss is
-    `F.cross_entropy`. The loss takes a softmax of its own, so the model's
-    probabilities, all between 0 and 1, get squashed a second time. The scores
-    can then never spread far enough apart. With 3 classes the loss can't go
-    below about 0.55, however long it trains.
+    One classic mistake is a model that ends with a softmax while the loss is
+    `F.cross_entropy`. `F.cross_entropy` applies its own softmax to the scores
+    it receives. So the model's probabilities, which are all between 0 and 1,
+    go through a softmax a second time. Scores between 0 and 1 are too close
+    together for that second softmax to give the right class a probability
+    near 1. With 3 classes the loss can never go below about 0.55, however
+    long the model trains.
+
+    The best case is a probability of 1 for the right class and 0 for the
+    others. Even that gives a loss of 0.5514, the floor this model can never
+    get under.
 
     ```python
     probabilities = torch.tensor([[1.0, 0.0, 0.0]])
     F.cross_entropy(probabilities, torch.tensor([0]))    # tensor(0.5514), the floor
     ```
 
-    Train on one batch with Adam at a rate of 0.01. A sound model gets near 0
-    within a few hundred steps.
+    Train on the one batch with Adam at a learning rate of 0.01. A correct
+    model gets its loss near 0 within a few hundred steps.
     """,
 )
 
@@ -371,9 +389,10 @@ DEBUG2_SOURCE = source_file(
     floor = F.cross_entropy(probabilities, torch.tensor([0]))    # tensor(0.5514)
 
 
-    # TODO: Train model for steps steps of Adam at lr on the cross entropy of
-    #   the one batch x and y. Return the loss of the last step, as a plain
-    #   number, as sgd1's train does.
+    # TODO: Train model on the one batch x and y with Adam at learning rate lr,
+    #   for steps steps, with F.cross_entropy as the loss. Return the loss of
+    #   the last step as a plain number. That is the loss computed before the
+    #   last update, as sgd1's train returns it.
     def overfit_one_batch(
         model: nn.Module,
         x: Tensor,
@@ -384,7 +403,8 @@ DEBUG2_SOURCE = source_file(
         ...
 
 
-    # TODO: This classifier can't overfit one batch. Find the slip and fix it.
+    # TODO: This classifier can't get its loss near 0 on one batch. Find the
+    #   mistake and fix it.
     class Classifier(nn.Module):
         def __init__(
             self,
@@ -432,7 +452,7 @@ DEBUG2_SOLUTION = source_file(
         return loss.item()
 
 
-    # F.cross_entropy takes a softmax itself, so the model hands it the raw scores.
+    # F.cross_entropy applies its own softmax, so the model must return the raw scores.
     class Classifier(nn.Module):
         def __init__(
             self,
@@ -510,7 +530,7 @@ DEBUG2 = Exercise(
     hints={
         "overfit_one_batch": "Make a torch.optim.Adam over model.parameters() at lr, then run the loop of sgd1 "
         "with F.cross_entropy, and return the last loss as a plain number.",
-        "Classifier.forward": "F.cross_entropy wants raw scores, and this forward hands it something else.",
+        "Classifier.forward": "F.cross_entropy expects raw scores, but this forward returns something else.",
     },
     introduces=(),
     check=check_debug2,
@@ -525,25 +545,30 @@ DEBUG2 = Exercise(
 
 DEBUG3_LESSON = prose(
     """
-    After one backward pass, every parameter should have a gradient. A layer
-    whose gradient is `None` took no part in the loss. Its forward was never
-    called, or its output was thrown away, so it never trains, and nothing
-    warns you. CS231n's notes watch each layer's gradient too.
+    After one backward pass, every parameter should have a gradient. If a
+    layer's gradient is still `None`, that layer took no part in computing the
+    loss. Either its forward was never called, or its output was thrown away.
+    Such a layer never trains, and nothing warns you about it. CS231n's notes
+    also recommend watching each layer's gradient.
 
-    `model.named_parameters()` gives each parameter with its name, like
-    `hidden.weight`. A gradient's size is its norm, from clipping1.
+    `model.named_parameters()` gives each parameter together with its name,
+    like `hidden.weight`. To measure how big a gradient is, use its norm from
+    clipping1, the square root of the sum of its squared entries.
 
     ```python
     [name for name, parameter in model.named_parameters() if parameter.grad is None]    # the ones left out
     ```
 
-    Sound layers can still differ a lot. Take a fresh names model on three
-    seeds. Its norms ran from about 0.003 for the norm layer's weight to 1.1
-    to 1.3 for the head's, nearly 500 times apart. A vanishing gradient is
-    far smaller, like residual2's average gradient of `6e-24` at the first of
-    51 plain layers.
-    Huge norms anywhere mean it explodes. Logging every layer's norm during
-    training catches both early.
+    Even in a correct model, the gradient norms of different layers can differ
+    a lot. Take a fresh names model, built with three different seeds. After
+    one backward pass, its smallest norm was about 0.003, for the norm layer's
+    weight. Its largest was 1.1 to 1.3, for the head's weight. Those are
+    nearly 500 times apart.
+
+    A vanishing gradient is far smaller than that. One example is residual2's
+    average gradient of `6e-24` at the first of 51 plain layers. Huge norms in
+    any layer mean the gradient is exploding. Logging every layer's norm
+    during training catches both problems early.
     """,
 )
 
@@ -561,19 +586,23 @@ DEBUG3_SOURCE = source_file(
     names = [name for name, _ in layer.named_parameters()]    # ['weight', 'bias']
 
 
-    # TODO: Return a dict from each parameter's name in model to the norm of its
-    #   gradient, as a plain number, and 0.0 for a parameter with no gradient.
+    # TODO: Return a dict that maps each parameter's name in model to the norm
+    #   of its gradient, as a plain number. Use 0.0 for a parameter whose
+    #   .grad is None.
     def gradient_norms(model: nn.Module) -> dict[str, float]:
         ...
 
 
-    # TODO: Return the names in norms whose norm is 0.0, in order.
+    # TODO: Return a list of the names in norms whose norm is 0.0, in the
+    #   order of the dict.
+    #   Example: silent_layers({"a": 0.0, "b": 1.5, "c": 0.0}) returns
+    #   ['a', 'c'].
     def silent_layers(norms: dict[str, float]) -> list[str]:
         ...
 
 
-    # TODO: One of this model's layers never trains. Find out which, with
-    #   gradient_norms, and fix forward so every layer is used.
+    # TODO: One of this model's layers never trains. Use gradient_norms to find
+    #   out which one, then fix forward so every layer is used.
     class Classifier(nn.Module):
         def __init__(
             self,
@@ -736,7 +765,7 @@ def check_uses_every_layer(found: type) -> None:
 
         if isinstance(actual, Tensor) and actual.shape == expected.shape and not torch.allclose(actual, expected, atol=1e-6):
             raise Mismatch(
-                "Classifier(6, 16, 3) uses every layer but gives other scores than the fix. Change only what "
+                "Classifier(6, 16, 3) uses every layer but gives different scores from the fixed model. Change only what "
                 "self.head reads, so it runs hidden, relu, middle, relu and head in that order.",
             )
 
@@ -783,7 +812,7 @@ DEBUG3 = Exercise(
         "gradient_norms": "Loop over model.named_parameters(). Store 0.0 when .grad is None, and otherwise the square "
         "root of the sum of the gradient's squares.",
         "silent_layers": "Keep the names whose norm equals 0.0, in a list comprehension over norms.items().",
-        "Classifier.forward": "Look at what self.head reads. middle's output is worked out and then never used.",
+        "Classifier.forward": "Look at what self.head reads. middle's output is computed and then never used.",
     },
     introduces=(),
     check=check_debug3,
@@ -796,23 +825,26 @@ DEBUG3 = Exercise(
 
 DEBUG4_LESSON = prose(
     """
-    Karpathy's first step comes before any model. Look at the data. Read
-    examples with their labels, count the labels, and look for repeats. Bugs
-    in the data look like a model that learns badly.
+    Karpathy's first step comes before you build any model, and it is to look
+    at the data. Read examples together with their labels, count how many
+    labels each class has, and look for repeated examples. A bug in the data
+    shows up as a model that learns badly.
 
-    A common one is shuffling the inputs and the labels apart. Each needs the
-    same order, or every example ends up with someone else's label. The model
-    then can't beat the baseline of debug1 on new data, whatever it does.
+    A common data bug is shuffling the inputs and the labels with two
+    different orders. Both must be shuffled with the same order. Otherwise
+    each input ends up paired with another example's label. A model trained on
+    that data can't beat debug1's baseline on new data, whatever it does.
 
     ```python
     perm = torch.randperm(5, generator=generator)
     inputs[perm], labels[perm]    # one order for both, so pairs stay together
     ```
 
-    `torch.unique(x, dim=0)` gives the different rows of x, so the number of
-    rows minus the number of different rows counts the repeats. A validation
-    example repeated in the training set makes the validation loss look better
-    than it is.
+    `torch.unique(x, dim=0)` returns the distinct rows of `x`, with each
+    repeated row kept only once. So the number of rows minus the number of
+    distinct rows is the number of repeats. If a validation example also
+    appears in the training set, the validation loss looks better than it
+    really is.
     """,
 )
 
@@ -827,8 +859,9 @@ DEBUG4_SOURCE = source_file(
     different = torch.unique(x, dim=0)               # tensor([[1., 2.], [3., 4.]])
 
 
-    # TODO: Return x and y shuffled with one order from torch.randperm with
-    #   generator, so each example keeps its label.
+    # TODO: Return x and y shuffled in the same random order, so each input
+    #   stays with its label. Make that one order with torch.randperm,
+    #   passing generator.
     def shuffle_together(
         x: Tensor,
         y: Tensor,
@@ -837,8 +870,8 @@ DEBUG4_SOURCE = source_file(
         ...
 
 
-    # TODO: This splits the data into minibatches, but the labels no longer
-    #   belong to their inputs. Fix it.
+    # TODO: This shuffles the data and splits it into minibatches, but the
+    #   labels end up paired with the wrong inputs. Fix it.
     def make_batches(
         x: Tensor,
         y: Tensor,
@@ -852,7 +885,8 @@ DEBUG4_SOURCE = source_file(
         return [(x[start:start + batch_size], y[start:start + batch_size]) for start in range(0, len(x), batch_size)]
 
 
-    # TODO: Return how many rows of x repeat a row that came before.
+    # TODO: Return how many rows of x are copies of an earlier row.
+    #   Example: for the x at the top of this file, repeated_rows(x) returns 1.
     def repeated_rows(x: Tensor) -> int:
         ...
     ''',
@@ -879,7 +913,8 @@ DEBUG4_SOLUTION = source_file(
         return x[order], y[order]
 
 
-    # Two orders pair each input with another example's label, so one order serves both.
+    # Two separate orders paired each input with another example's label, so
+    # one order is used for both.
     def make_batches(
         x: Tensor,
         y: Tensor,
@@ -924,7 +959,7 @@ def check_make_batches(found: object) -> None:
     expected = torch.randperm(10, generator=torch.Generator().manual_seed(620))
 
     if torch.equal(order, torch.arange(10)):
-        raise Mismatch("make_batches keeps the examples in their first order, so it no longer shuffles. Keep one torch.randperm order for both.")
+        raise Mismatch("make_batches keeps the examples in their original order, so it no longer shuffles. Keep one torch.randperm order for both.")
 
     if not torch.equal(order, expected):
         raise Mismatch(
@@ -987,21 +1022,24 @@ DEBUG4 = Exercise(
 
 DEBUG5_LESSON = prose(
     """
-    A few slips come up again and again. Each one still runs, and a short run
-    can even look better at first. Over a whole run it comes out worse.
+    A few mistakes come up again and again. Code with one of them still runs,
+    and a short run can even look better at first. Over a full training run,
+    the model comes out worse.
 
-    - no `zero_grad`: each step's gradient is added to every earlier one, so the steps grow and point the wrong way.
-    - the wrong mode: dropout and BatchNorm act differently in training and in use. Measuring calls `model.eval()` first and `model.train()` after, as nanoGPT does.
-    - a summed loss: `reduction="sum"` makes the loss grow with the batch, so with SGD the right rate changes with the batch size.
+    - no `zero_grad`: each new gradient is added to the gradients already in `.grad`, so the steps grow and point the wrong way.
+    - the wrong mode: dropout and BatchNorm behave differently in training and in use. Evaluation code calls `model.eval()` first and `model.train()` after, as nanoGPT does.
+    - a summed loss: `reduction="sum"` makes the loss grow with the batch size. So with SGD, the right learning rate changes whenever the batch size changes.
 
-    `F.cross_entropy` takes the mean over the batch by default. With
-    `reduction="sum"` it adds up instead, so a batch of 64 gives a gradient
-    64 times larger. With SGD the steps grow 64 times with it. Adam's steps
-    stay about its rate, as adamw2 showed.
+    By default `F.cross_entropy` returns the mean loss over the batch. With
+    `reduction="sum"` it returns the sum instead, so a batch of 64 gives a
+    gradient 64 times larger. SGD's steps are proportional to the gradient, so
+    they also grow 64 times. Adam's steps stay about the size of its learning
+    rate, as adamw2 showed.
 
-    Here the classifier of these checks trained on 2000 points, with
-    minibatches of 32 and SGD at 0.1, on three seeds. The table gives the
-    loss on all 2000 points.
+    The table below comes from training the classifier used in this chapter's
+    checks on 2000 points. Each run used minibatches of 32 and SGD at a
+    learning rate of 0.1, with three seeds. Each cell is the loss on all 2000
+    points after that many steps, as a range over the seeds.
 
     | Loop | 10 steps | 200 steps | 1000 steps |
     |---|---|---|---|
@@ -1009,10 +1047,11 @@ DEBUG5_LESSON = prose(
     | no `zero_grad` | 0.59 to 0.83 | 1.33 to 1.60 | 1.56 to 115 |
     | summed loss | 0.66 to 0.91 | 0.66 to 0.71 | 0.61 to 0.71 |
 
-    Both slips were ahead after 10 steps on every seed, and far behind by the
-    end. Karpathy lists the first two, with debug2's softmax, among the most
-    common neural net mistakes. These are the ones that hide best. Each
-    function below has one of them.
+    On every seed, both broken loops had a lower loss than the correct loop
+    after 10 steps, and a much higher loss by the end. Karpathy's list of the
+    most common neural net mistakes includes the first two above, along with
+    debug2's softmax. The three mistakes above are the ones that hide best.
+    Each function below has one of them.
     """,
 )
 
@@ -1026,8 +1065,8 @@ DEBUG5_SOURCE = source_file(
     from torch import Tensor
 
 
-    # TODO: This trains with SGD, but each step's gradient piles onto the ones
-    #   before. Fix it.
+    # TODO: This trains with SGD, but each step's gradient is added to the
+    #   gradients of all the earlier steps. Fix it.
     def train_steps(
         model: nn.Module,
         x: Tensor,
@@ -1045,8 +1084,8 @@ DEBUG5_SOURCE = source_file(
         return loss.item()
 
 
-    # TODO: This measures a model with dropout, but its answer changes from run
-    #   to run. Fix it.
+    # TODO: This measures the accuracy of a model with dropout, but it returns
+    #   a different answer each time it is called on the same data. Fix it.
     def accuracy(
         model: nn.Module,
         x: Tensor,
@@ -1056,7 +1095,7 @@ DEBUG5_SOURCE = source_file(
             return (model(x).argmax(dim=1) == y).float().mean().item()
 
 
-    # TODO: This loss grows with the size of the batch. Fix it.
+    # TODO: This loss gets larger as the batch gets larger. Fix it.
     def batch_loss(
         model: nn.Module,
         x: Tensor,
@@ -1263,15 +1302,16 @@ DEBUG5 = Exercise(
 
 QUIZ6_LESSON = prose(
     """
-    This quiz has no examples and no new tools. Each function combines moves
-    from Section 4. If a step is unclear, the exercise in the table shows it.
+    This quiz has no examples and no new tools. Each function combines
+    techniques from Section 4. If a step is unclear, go back to the exercise
+    the table lists for it.
 
-    | Function | Moves | Shown in |
+    | Function | Techniques | Shown in |
     |---|---|---|
     | `decay_weights_only_` | decoupled weight decay, in place under no_grad, on the parameters of two or more dimensions only | adamw1, adamw2, modules1 |
-    | `clipped_step` | clear, backward, clip the global norm, step | sgd1, clipping2 |
-    | `warmup_to_picked_rate` | the range test's losses smoothed, a tenth of the best rate picked, then a warmup to it | schedule2, warmup1 |
-    | `start_excess` | the loss before training, less the loss of guessing the class shares | init3, debug1 |
+    | `clipped_step` | clear the gradients, run backward, clip the global norm, step | sgd1, clipping2 |
+    | `warmup_to_picked_rate` | smooth the range test's losses, pick a tenth of the best rate, then warm up to it | schedule2, warmup1 |
+    | `start_excess` | the loss before training, minus the loss of always guessing the class shares | init3, debug1 |
     """,
 )
 
@@ -1279,7 +1319,8 @@ QUIZ6_SOURCE = source_file(
     '''
     # quiz6.py
     #
-    # No examples and no new tools. Each function combines moves from Section 4.
+    # No examples and no new tools. Each function combines techniques from
+    # Section 4.
 
     import math
 
@@ -1290,10 +1331,10 @@ QUIZ6_SOURCE = source_file(
 
 
     # TODO: Shrink, in place, every parameter of model that has two or more
-    #   dimensions, by the fraction lr * weight_decay of itself. So lr 0.1 and
-    #   weight_decay 0.5 take 5% off each such number. Leave the parameters of
-    #   one dimension, like biases, as they are. Change them without autograd
-    #   recording it, and return nothing.
+    #   dimensions, by subtracting lr * weight_decay times its own value. For
+    #   example, lr 0.1 and weight_decay 0.5 take 5% off each such number.
+    #   Leave parameters with one dimension, like biases, unchanged. Change
+    #   them without autograd recording the change, and return nothing.
     def decay_weights_only_(
         model: nn.Module,
         lr: float,
@@ -1303,8 +1344,8 @@ QUIZ6_SOURCE = source_file(
 
 
     # TODO: Clear the gradients, run backward on loss, clip the global norm at
-    #   max_norm, and step optimizer. Return the norm from before clipping, as a
-    #   plain number.
+    #   max_norm, and step optimizer. Return the global norm from before
+    #   clipping, as a plain number.
     def clipped_step(
         model: nn.Module,
         optimizer: torch.optim.Optimizer,
@@ -1314,12 +1355,13 @@ QUIZ6_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the learning rate at step of a warmup toward a rate picked
-    #   by a range test, where losses[i] is the loss the test got at rates[i].
-    #   Smooth losses with beta, correcting for the average starting at 0.
-    #   The base rate is a tenth of the rate where the smoothed loss is lowest.
-    #   The rate climbs to base over warmup steps, step 0 giving base / warmup,
-    #   and stays at base after that.
+    # TODO: A learning rate range test tried each rate in rates, and got the
+    #   loss losses[i] at rates[i]. Smooth losses with an exponential moving
+    #   average with beta, correcting for the average starting at 0. The base
+    #   rate is a tenth of the rate where the smoothed loss is lowest. Return
+    #   the learning rate at step of a linear warmup to base over warmup
+    #   steps. Step 0 gives base / warmup, step 1 gives 2 * base / warmup, and
+    #   so on. The rate reaches base at step warmup - 1 and stays there.
     def warmup_to_picked_rate(
         rates: list[float],
         losses: list[float],
@@ -1330,10 +1372,11 @@ QUIZ6_SOURCE = source_file(
         ...
 
 
-    # TODO: Return how far the model's loss on x and y starts above the loss of
-    #   always guessing each class's share of y, as a plain number. A class's
-    #   share is the fraction of the labels in y that are that class. Work out
-    #   the model's cross entropy without autograd, since nothing trains here.
+    # TODO: Return the model's cross entropy loss on x and y before training,
+    #   minus the loss of always guessing each class's share of y, as a plain
+    #   number. A class's share is the fraction of the labels in y that belong
+    #   to that class. Compute the model's loss without autograd, since nothing
+    #   trains here.
     def start_excess(
         model: nn.Module,
         x: Tensor,
@@ -1548,7 +1591,7 @@ def check_quiz6(checker: Checker) -> None:
     )
     checker.test(
         function="clipped_step",
-        description="clears, backs up, clips and steps",
+        description="clears the gradients, runs backward, clips and steps",
         run=check_clipped_step,
     )
     check_on_inputs(
@@ -1571,7 +1614,7 @@ def check_quiz6(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="start_excess",
-        description="gives how far the starting loss sits above guessing the class shares",
+        description="gives the starting loss minus the loss of guessing the class shares",
         inputs=(
             (fresh_classifier(653, 3), Described(small_tensor(654, 20, 6) / 3, "20 points"), lopsided_labels(14, 4, 2)),
             (fresh_classifier(655, 4), Described(small_tensor(656, 12, 6) / 3, "12 points"), lopsided_labels(3, 0, 9)),
@@ -1596,7 +1639,7 @@ QUIZ6 = Exercise(
         "warmup_to_picked_rate": "Smooth as schedule2's smooth does, dividing the kth average by 1 - beta ** k. "
         "Find the position of the smallest smoothed loss and take a tenth of that rate as base. Then warm up as "
         "warmup1's warmup_rate does.",
-        "start_excess": "The start is F.cross_entropy of model(x) and y inside torch.no_grad, with .item(). The "
+        "start_excess": "The starting loss is F.cross_entropy of model(x) and y inside torch.no_grad, with .item(). The "
         "guessing loss is debug1's baseline_loss. Count each class with torch.bincount, keep the counts above "
         "zero and divide by len(y). Then take minus the sum of each share times its log.",
     },

@@ -26,10 +26,11 @@ POOLING = Chapter(
         """
         # Pooling
 
-        Pooling sums up a patch of a feature map in one number, its largest or
-        its average. This chapter builds max and average pooling, matches
-        PyTorch's, and shows why pooling the responses of a convolution turns
-        "this pattern is here" into "this pattern is somewhere".
+        Pooling replaces a patch of a feature map with one number, either the
+        largest value in the patch or its average. This chapter builds max and
+        average pooling and checks them against PyTorch's versions. Then it
+        shows why pooling the responses of a convolution turns "this pattern
+        is here" into "this pattern is somewhere".
 
         ## Further reading
 
@@ -68,10 +69,12 @@ def cross_images(
 
 POOLING1_LESSON = prose(
     """
-    **Pooling** cuts a feature map into patches and keeps one number per
-    patch. Max pooling keeps the largest, average pooling the mean. With
-    patches of `k` by `k` that don't overlap, the height and the width shrink
-    `k` times, and there are no weights to learn.
+    A feature map is one channel of a convolution's output, like the maps in
+    channels1. **Pooling** cuts a feature map into patches and keeps one
+    number per patch. Max pooling keeps the largest number in each patch, and
+    average pooling keeps the mean. With patches of `k` by `k` that don't
+    overlap, the height and the width each become `k` times smaller. Pooling
+    has no weights to learn.
 
     ```python
     image = torch.tensor([[1.0, 2.0, 0.0, 0.0],
@@ -81,17 +84,18 @@ POOLING1_LESSON = prose(
     # max pooling with k = 2: tensor([[4., 1.], [2., 5.]])
     ```
 
-    Max pooling keeps whether a pattern showed up in a patch and forgets
-    exactly where. A stride of 2 in a convolution shrinks the image too, and
-    many newer models use that in place of pooling.
+    Max pooling records whether a pattern appeared somewhere in a patch, but
+    not exactly where. A convolution with a stride of 2 also shrinks the
+    image, and many newer models use that instead of pooling.
 
-    Pooling over a whole map at once is global pooling. Global average
-    pooling turns each channel of shape `(h, w)` into one number, and ResNet
-    uses it before its last Linear layer.
+    Pooling over a whole map at once is called global pooling. Global average
+    pooling turns each channel of shape `(h, w)` into one number, its mean.
+    ResNet uses it before its last Linear layer.
 
     `F.max_pool2d` and `F.avg_pool2d` take `x` of shape
-    `(batch, channels, h, w)`, then the patch size. `.mean(dim=(2, 3))`
-    averages over two dimensions at once.
+    `(batch, channels, h, w)` as their first argument and the patch size as
+    their second. `.mean(dim=(2, 3))` averages over dimensions 2 and 3 at
+    once.
     """,
 )
 
@@ -111,7 +115,9 @@ POOLING1_SOURCE = source_file(
 
 
     # TODO: Finish the line in the loops, so this returns max pooling of image,
-    #   of shape (h, w), with patches of k by k that don't overlap.
+    #   of shape (h, w), with patches of k by k that don't overlap. output[i, j]
+    #   is the largest value in the patch at patch row i and patch column j.
+    #   Example: max_pool(image, 2) returns tensor([[4., 1.], [2., 5.]]).
     def max_pool(
         image: Tensor,
         k: int,
@@ -126,8 +132,8 @@ POOLING1_SOURCE = source_file(
         return output
 
 
-    # TODO: Return average pooling of x, of shape (batch, channels, h, w), with
-    #   patches of k by k, using F.avg_pool2d.
+    # TODO: x has shape (batch, channels, h, w). Return average pooling of x
+    #   with patches of k by k that don't overlap, using F.avg_pool2d.
     def average_pool(
         x: Tensor,
         k: int,
@@ -135,8 +141,9 @@ POOLING1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return global average pooling of x, of shape
-    #   (batch, channels, h, w), one number per channel, shape (batch, channels).
+    # TODO: x has shape (batch, channels, h, w). Return global average pooling
+    #   of x, the mean of each channel's map, as a tensor of shape
+    #   (batch, channels).
     def global_average(x: Tensor) -> Tensor:
         ...
     ''',
@@ -244,40 +251,45 @@ POOLING1 = Exercise(
 
 POOLING2_LESSON = prose(
     """
-    A convolution's responses move with the pattern. Shift the image two
-    places right and the map of responses shifts two places right too. So a
-    convolution alone still says where. The head after it decides whether the
-    answer depends on the place.
+    A convolution's responses move with the pattern. If you shift the image
+    two positions right, the map of responses shifts two positions right too.
+    So the output of a convolution still says where the pattern is. The head
+    after the convolution decides whether the final answer depends on the
+    position.
 
-    Here images of 16 by 16 held noise and, in half of them, a small cross.
-    In training the cross sat in the left part, and the test moved it right.
-    Every model starts with 4 kernels of 3 by 3 and a ReLU, and each was
-    trained three times from different seeds.
+    Here each image is 16 by 16 and holds random noise. Half of the images
+    also hold a small cross. In the training images the cross was in the left
+    part, and in the test images it was moved to the right. Every model
+    starts with 4 kernels of 3 by 3 and a ReLU. Each model was trained three
+    times from different seeds, and the table gives its accuracy.
 
-    | Then | Weights | Training | Cross where it was | Cross moved |
+    | After the ReLU | Weights | Training | Cross where it was | Cross moved |
     |---|---|---|---|---|
     | flatten, then a Linear head | 825 | 100% | 99.8% to 99.9% | 47.5% to 47.7% |
     | global max pool, then a Linear head | 45 | 100% | 100% | 100% |
     | global average pool, then a Linear head | 45 | 97.0% to 98.8% | 96.3% to 98.3% | 95.6% to 97.6% |
 
-    Flattening hands the head one weight per place again, so it is back to
-    the MLP of conv4. For a moved cross it says no, so its score sits at the
-    47.4% of moved images that had no cross at all. The global max keeps each
-    kernel's strongest response wherever it was, so the head sees the same
-    numbers wherever the cross is.
+    Flattening gives the head a separate weight for every position again, so
+    the model works like the MLP of conv4. For a moved cross it says no. So
+    its accuracy is close to 47.4%, the fraction of moved images that had no
+    cross at all. The global max keeps each kernel's strongest response,
+    wherever that response was. So the head sees the same numbers wherever
+    the cross is.
 
-    The global average gives the same numbers wherever the cross is too. But
-    it spreads one small cross over all 196 places of the map, so the cross
-    counts for little. Max suits a small pattern that shows up once. Average
-    suits features spread over the whole map, which is why ResNet ends with
-    one.
+    The global average also gives the same numbers wherever the cross is. But
+    it averages over all 196 positions of the map, so one small cross changes
+    the average only a little. Max pooling suits a small pattern that appears
+    once. Average pooling suits features spread over the whole map, which is
+    why ResNet ends with it.
 
-    Real models pool a little at a time, a 2 by 2 max or a stride of 2 after
-    a few layers. That tolerates small shifts and shrinks the map. A global
-    pool at the end then gives one vector per image.
+    Real models pool a little at a time, with a 2 by 2 max pool or a stride of
+    2 after every few layers. That lets the model tolerate small shifts, and
+    it shrinks the map. A global pool at the end then gives one vector per
+    image.
 
-    `.flatten(1)` lays out everything after the batch dimension in one row
-    per example. `.amax(dim=(2, 3))` takes the largest over two dimensions.
+    `.flatten(1)` flattens every dimension after the batch dimension, giving
+    one row per example. `.amax(dim=(2, 3))` takes the largest value over
+    dimensions 2 and 3.
     """,
 )
 
@@ -293,9 +305,10 @@ POOLING2_SOURCE = source_file(
     rows = maps.flatten(1)                           # shape (2, 36)
 
 
-    # TODO: Finish forward. It gives x, of shape (batch, h, w), a channel
-    #   dimension, runs conv and a ReLU, keeps each channel's largest response
-    #   over the whole map, and runs head. The result has shape (batch,).
+    # TODO: Finish forward. x has shape (batch, h, w). Give x a channel
+    #   dimension, then run self.conv and a ReLU. Keep each channel's largest
+    #   response over the whole map, then run self.head. Return one score per
+    #   image, with shape (batch,).
     class PooledDetector(nn.Module):
         def __init__(self) -> None:
             super().__init__()
@@ -306,9 +319,9 @@ POOLING2_SOURCE = source_file(
             ...
 
 
-    # TODO: Finish forward. It runs conv and a ReLU like PooledDetector, then
-    #   flattens the maps into one row per image for head. The result has shape
-    #   (batch,).
+    # TODO: Finish forward. Run self.conv and a ReLU as in PooledDetector. Then
+    #   flatten the maps into one row per image, run self.head on those rows,
+    #   and return one score per image, with shape (batch,).
     class FlatDetector(nn.Module):
         def __init__(self, size: int) -> None:
             super().__init__()
@@ -433,7 +446,7 @@ def check_pooling2(checker: Checker) -> None:
     checker.test_method(
         class_name="PooledDetector",
         method="forward",
-        description="finds the cross where it never saw it, once trained",
+        description="once trained, finds the cross in positions it never saw",
         run=check_pooled_finds_moved,
     )
 
@@ -446,7 +459,7 @@ POOLING2 = Exercise(
     source=POOLING2_SOURCE,
     solution=POOLING2_SOLUTION,
     hints={
-        "PooledDetector.forward": "Like conv4's Detector, with .amax(dim=(2, 3)) over the height and the width.",
+        "PooledDetector.forward": "Follow conv4's Detector, but take .amax(dim=(2, 3)) over the height and the width.",
         "FlatDetector.forward": "Pass torch.relu(self.conv(x.unsqueeze(1))).flatten(1) to self.head, then "
         ".squeeze(1).",
     },
