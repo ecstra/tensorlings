@@ -31,12 +31,13 @@ STATE_SPACE = Chapter(
         """
         # State space models
 
-        An RNN with its tanh taken out is a linear recurrence, and a linear
-        recurrence can run two ways, as a loop for generating and as a
-        convolution for training. This chapter builds that model, the
-        diagonal form that real models use and the rule that keeps it stable,
-        then Mamba's selective step, which lets the input decide what the
-        state keeps.
+        Take the tanh out of an RNN and what is left is a linear recurrence.
+        A linear recurrence can be computed in two ways, as a loop when
+        generating and as a convolution when training. This chapter builds
+        that model. Then it builds the diagonal form that real models use,
+        and the rule that keeps that form stable. It ends with Mamba's
+        selective step, which lets each input decide how much of the state
+        is kept.
 
         ## Further reading
 
@@ -114,57 +115,63 @@ def stable_matrix(
 
 SSM1_LESSON = prose(
     """
-    An RNN's step runs its state through a tanh. Take the tanh out and the
-    step is linear. This is a state space model, the block behind S4 and
-    Mamba.
+    Each step of an RNN passes its state through a tanh. If you take the tanh
+    out, the step becomes linear. This linear version is called a state space
+    model, and it is the building block behind S4 and Mamba.
 
     ```text
     h[t] = A @ h[t - 1] + B * x[t]
     y[t] = C @ h[t]
     ```
 
-    Here each input `x[t]` is one number, and the state `h` holds n numbers,
-    starting at zeros. `A` is n by n, and `B` and `C` hold n numbers each.
+    Here each input `x[t]` is one number. The state `h` holds n numbers and
+    starts at zeros. `A` is an n by n matrix, and `B` and `C` hold n numbers
+    each.
 
-    Linear steps unroll. Write out the first few, and every output turns out
-    to be a weighted sum of the inputs so far.
+    Because each step is linear, you can unroll the loop. Write out the first
+    few steps, and you find that every output is a weighted sum of the inputs
+    so far.
 
     ```text
     y[t] = (C @ B) * x[t] + (C @ A @ B) * x[t - 1] + (C @ A @ A @ B) * x[t - 2] + ...
     ```
 
-    The weights `C @ A^j @ B`, for j = 0, 1, 2 and on, form a kernel. So `y`
-    is `x` convolved with that kernel, and each output sees only the inputs
-    up to its own step. Take a state of one number, `A = 0.5` and `B = C = 1`.
-    The kernel is 1, 0.5, 0.25, 0.125 and on, a weighted sum that fades into
-    the past.
+    The weights `C @ A^j @ B`, for j = 0, 1, 2 and so on, form a kernel. Here
+    `A^j` means `A` multiplied by itself j times. So `y` is `x` convolved with
+    that kernel, and each output depends only on the inputs up to its own
+    step. For example, take a state of one number with `A = 0.5` and
+    `B = C = 1`. The kernel is 1, 0.5, 0.25, 0.125 and so on, so older inputs
+    get smaller and smaller weights.
 
-    The same model runs two ways.
+    So the same model can be computed in two ways.
 
-    | Way | Fits |
+    | Way | Suits |
     |---|---|
     | the loop, one step at a time | generating, where each input arrives after the last output |
     | the convolution, every output at once | training, where the whole sequence is known already |
 
-    The loop is a chain of steps, each waiting on the one before. The
-    convolution has no chain, so a GPU computes every output at once, and
-    fft1 makes a long kernel cheap. An RNN can't do this, since its tanh stops
-    the unrolling. For 64 sequences of 2,000 steps, the two ways here agreed
-    to within 0.00001.
+    In the loop, each step has to wait for the one before it. The convolution
+    has no such chain, so a GPU can compute every output at once. The FFT
+    method from fft1 also makes a convolution with a long kernel cheap. An RNN
+    cannot be computed this way, because its tanh is not linear, so its loop
+    does not unroll into a weighted sum. For 64 sequences of 2,000 steps, the
+    outputs of the two ways agreed to within 0.00001.
 
-    On the CPU, the loop run on all 64 at once took 21 ms, and `F.conv1d`
-    with the 2,000 entry kernel took 38 ms. The same convolution through the
-    FFT, as fft1 did it, took 1.5 ms, 14 times quicker than the loop.
+    On the CPU, the loop took 21 ms for all 64 sequences at once. `F.conv1d`
+    with the kernel of 2,000 entries took 38 ms. The same convolution computed
+    with the FFT, as in fft1, took 1.5 ms, which is 14 times faster than the
+    loop.
 
-    To get the convolution from `F.conv1d`, flip the kernel, as fft1 did. Then
-    put `len(x) - 1` zeros in front of `x`, so the first output sees `x[0]`
-    alone.
+    To compute this convolution with `F.conv1d`, first flip the kernel, as in
+    fft1. Then put `len(x) - 1` zeros in front of `x`, so the first output
+    depends on `x[0]` alone.
 
     ```python
     F.pad(torch.tensor([[1.0, 2.0]]), (2, 0))    # tensor([[0., 0., 1., 2.]])
     ```
 
-    `F.pad` takes how many zeros go on the left, then on the right.
+    `F.pad(x, (left, right))` adds `left` zeros on the left and `right` zeros
+    on the right of the last dimension of `x`.
     """,
 )
 
@@ -181,9 +188,13 @@ SSM1_SOURCE = source_file(
     left = F.pad(torch.tensor([[1.0, 2.0]]), (2, 0))    # tensor([[0., 0., 1., 2.]])
 
 
-    # TODO: Run the state space model along x, of shape (length,), one step at a
-    #   time from a state of zeros, and return every output, shape (length,).
-    #   A has shape (n, n), and B and C have shape (n,).
+    # TODO: Run the state space model over x one step at a time, starting from
+    #   a state h of zeros, and return every output y[t]. x has shape
+    #   (length,), A has shape (n, n), and B and C have shape (n,). The result
+    #   has shape (length,).
+    #   Example: ssm_loop(torch.tensor([1.0, 0.0, 0.0]), torch.tensor([[0.5]]),
+    #   torch.tensor([1.0]), torch.tensor([1.0])) returns
+    #   tensor([1.0000, 0.5000, 0.2500]).
     def ssm_loop(
         x: Tensor,
         A: Tensor,
@@ -194,8 +205,11 @@ SSM1_SOURCE = source_file(
 
 
     # TODO: Return the first length entries of the kernel, C @ A^j @ B for
-    #   j = 0 up to length - 1. Each A^j @ B is A @ the one before it, so
-    #   keep it from one entry to the next.
+    #   j = 0 up to length - 1, as a tensor of shape (length,). Each A^j @ B
+    #   equals A @ (A^(j - 1) @ B). So keep the product from one entry, and
+    #   multiply it by A to get the product for the next entry.
+    #   Example: ssm_kernel(torch.tensor([[0.5]]), torch.tensor([1.0]),
+    #   torch.tensor([1.0]), 4) returns tensor([1.0000, 0.5000, 0.2500, 0.1250]).
     def ssm_kernel(
         A: Tensor,
         B: Tensor,
@@ -205,8 +219,9 @@ SSM1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the same outputs as ssm_loop, as x convolved with the kernel
-    #   of len(x) entries, using F.conv1d.
+    # TODO: Return the same outputs as ssm_loop, computed instead as x convolved
+    #   with the kernel of len(x) entries. Use ssm_kernel and F.conv1d, and do
+    #   not call ssm_loop.
     def ssm_convolve(
         x: Tensor,
         A: Tensor,
@@ -246,7 +261,7 @@ SSM1_SOLUTION = source_file(
         return torch.stack(outputs)
 
 
-    # Each entry multiplies one more A into the last one, so no power is computed twice.
+    # Each entry multiplies the last A^j @ B by A once more, so no power is computed twice.
     def ssm_kernel(
         A: Tensor,
         B: Tensor,
@@ -310,8 +325,8 @@ def check_convolve_without_loop(found: object) -> None:
 
     if calls:
         raise Mismatch(
-            "ssm_convolve called ssm_loop. Build its outputs from ssm_kernel with F.conv1d instead, so the two ways "
-            "are computed apart and can be compared.",
+            "ssm_convolve called ssm_loop. Compute its outputs from ssm_kernel with F.conv1d instead, so the two ways "
+            "are computed separately and can be compared.",
         )
 
 
@@ -360,9 +375,11 @@ SSM1 = Exercise(
     hints={
         "ssm_loop": "Start h at torch.zeros_like(B). For each value of x, set h to A @ h + B * value and keep "
         "C @ h. Return torch.stack of what you kept.",
-        "ssm_kernel": "Keep a running product that starts as B. Each step, keep C @ it, then multiply A into it.",
-        "ssm_convolve": "Get ssm_kernel for len(x) entries. Give x the shape (1, 1, length) and pad length - 1 "
-        "zeros on the left. Then F.conv1d it with the flipped kernel as (1, 1, length), and .flatten().",
+        "ssm_kernel": "Keep a running product that starts as B. In each pass of the loop, save C @ product as the "
+        "next entry, then replace the product with A @ product.",
+        "ssm_convolve": "Get the kernel from ssm_kernel with len(x) entries. Reshape x to (1, 1, length) and pad it "
+        "with length - 1 zeros on the left. Then call F.conv1d with the flipped kernel reshaped to (1, 1, length), "
+        "and .flatten() the result.",
     },
     introduces=(),
     check=check_ssm1,
@@ -375,8 +392,10 @@ SSM1 = Exercise(
 
 SSM2_LESSON = prose(
     """
-    A full `A` costs n times n multiplications at every step. S4D and Mamba
-    make `A` diagonal instead, so each entry of the state runs on its own.
+    With a full matrix `A`, each step costs n times n multiplications. S4D and
+    Mamba make `A` diagonal instead, which means every entry off its diagonal
+    is 0. Then each entry of the state is updated on its own. Write `a` for
+    the diagonal of `A`, and `b` and `c` for the vectors `B` and `C`.
 
     ```text
     h[t][i] = a[i] * h[t - 1][i] + b[i] * x[t]
@@ -385,43 +404,51 @@ SSM2_LESSON = prose(
     The kernel then needs no matrix at all. Its entry j is the sum over i of
     `c[i] * b[i] * a[i] ** j`.
 
-    After j steps, each `a[i]` has been multiplied in j times. If its size is
-    above 1, that grows without end and the state blows up. Below 1 it fades.
-    So the model is stable when every `a[i]` lies between -1 and 1.
+    After j steps, each state entry has been multiplied by its `a[i]` j times.
+    If the absolute value of `a[i]` is above 1, `a[i] ** j` grows without
+    limit and the state blows up. If it is below 1, `a[i] ** j` shrinks
+    toward 0, so old inputs fade. So the model is stable when every `a[i]`
+    lies strictly between -1 and 1.
 
     | `a` | `a ** 10` | `a ** 50` |
     |---|---|---|
     | 1.1 | 2.59 | 117.39 |
     | 0.9 | 0.349 | 0.005 |
 
-    These models don't hope training keeps every `a` below 1. They build it
-    in. Each state entry has a rate of decay through time, `rate = -exp(log_rate)`
-    for a learned `log_rate`, so the rate is always negative. Decaying at that
-    rate for a time `step` multiplies the state by `exp(step * rate)`. Turning
-    the rate into a step like this is called discretization.
+    These models do not rely on training to keep every `a` below 1. They
+    build that guarantee into the formula. Each state entry has a decay rate,
+    `rate = -exp(log_rate)`, where `log_rate` is learned. Since `exp` is
+    always positive, the rate is always negative. Decaying at that rate for a
+    length of time `step` multiplies the state by `exp(step * rate)`. Turning
+    a rate into the multiplier for one step like this is called
+    discretization.
 
     ```text
     a     = exp(step * rate)
     b_bar = (a - 1) / rate * b
     ```
 
-    The `b_bar` formula assumes the input holds still through the step, which
-    S4D calls the zero order hold. With the rate below 0 and the step above 0,
-    `a` lands between 0 and 1 whatever training does. Stable by construction.
+    The `b_bar` formula assumes the input stays constant during the step,
+    which S4D calls the zero order hold. With the rate below 0 and the step
+    above 0, `step * rate` is negative. So `a` is always between 0 and 1,
+    whatever values training picks. The model is stable by construction.
 
-    A state of 4 learns a running sum here, which an `a` of exactly 1 keeps,
-    so training pushes every `a` toward 1. Each kind trains 400 steps on
-    sequences of 1,000, then runs 20,000.
+    Here is an experiment. A state of 4 entries learns to output a running
+    sum of its inputs. A running sum needs an `a` of exactly 1, so training
+    pushes every `a` toward 1. Both versions train for 400 steps on sequences
+    of 1,000. Then each one runs on a sequence of 20,000 steps.
 
     | `a` learned | Largest `a`, seeds 0, 1, 2 | Loss after training | Largest output |
     |---|---|---|---|
     | as it is | 1.032, 0.752, 1.037 | 3.6e25, 0.24, 9.8e28 | inf, 0.92, inf |
     | as `exp(rate)`, a step of 1 | 0.9998, 0.9995, 0.9997 | 0.0014, 0.0002, 0.0016 | 3.3, 2.9, 3.3 |
 
-    Two plain runs passed 1 and blew up, and one stalled. The built in form
-    neared 1 every time.
+    When `a` was learned as it is, two runs pushed it past 1 and their outputs
+    blew up to infinity. The third run stopped improving at a loss of 0.24.
+    The built in form brought `a` close to 1 every time.
 
-    The step sets the memory. Here is a rate of -1.
+    The step size controls how long the state remembers. Here is a rate of -1
+    with three step sizes.
 
     | `step` | `a` | Steps for the state to fade to half |
     |---|---|---|
@@ -429,9 +456,10 @@ SSM2_LESSON = prose(
     | 0.1 | 0.905 | 6.9 |
     | 1 | 0.368 | 0.7 |
 
-    A small step remembers for a long time, and a large one forgets almost at
-    once. The steps to fade to half solve `a ** steps = 0.5`, which gives
-    `log(0.5) / log(a)`. ssm3 lets the input choose the step.
+    A small step remembers for a long time, and a large step forgets almost
+    at once. The number of steps for the state to fade to half its size is
+    called its half life. It is the solution of `a ** steps = 0.5`, which is
+    `log(0.5) / log(a)`. In ssm3, the input chooses the step.
     """,
 )
 
@@ -449,8 +477,11 @@ SSM2_SOURCE = source_file(
 
 
     # TODO: Return the first length entries of the kernel of a diagonal state,
-    #   entry j being the sum over i of c[i] * b[i] * a[i] ** j. a, b and c
-    #   have shape (n,). The powers line above gives every a[i] ** j at once.
+    #   as a tensor of shape (length,). Entry j is the sum over i of
+    #   c[i] * b[i] * a[i] ** j, and a, b and c have shape (n,). The line that
+    #   sets powers above computes every a[i] ** j at once, one row per j.
+    #   Example: diagonal_kernel(torch.tensor([0.5]), torch.tensor([1.0]),
+    #   torch.tensor([2.0]), 3) returns tensor([2.0000, 1.0000, 0.5000]).
     def diagonal_kernel(
         a: Tensor,
         b: Tensor,
@@ -460,14 +491,17 @@ SSM2_SOURCE = source_file(
         ...
 
 
-    # TODO: Return True when every entry of a is between -1 and 1, so the state
-    #   fades, as a plain bool.
+    # TODO: Return True if every entry of a is strictly between -1 and 1, which
+    #   means the state fades, and False otherwise. Return a Python bool, not
+    #   a tensor.
     def is_stable(a: Tensor) -> bool:
         ...
 
 
-    # TODO: Return a and b_bar from the lesson's formulas, with the rate taken
-    #   as -exp(log_rate).
+    # TODO: Return the pair (a, b_bar) from the lesson's formulas, with
+    #   rate = -exp(log_rate). log_rate and b have shape (n,).
+    #   Example: discretize(torch.tensor([0.0]), torch.tensor([1.0]), 1.0)
+    #   returns (tensor([0.3679]), tensor([0.6321])).
     def discretize(
         log_rate: Tensor,
         b: Tensor,
@@ -476,8 +510,10 @@ SSM2_SOURCE = source_file(
         ...
 
 
-    # TODO: Return how many steps each entry of a, between 0 and 1, takes to
-    #   fade to half.
+    # TODO: Return the half life of each entry of a, which is the number of
+    #   steps it takes for the state to fade to half its size. Every entry of a
+    #   is between 0 and 1.
+    #   Example: half_life(torch.tensor([0.5])) returns tensor([1.]).
     def half_life(a: Tensor) -> Tensor:
         ...
     ''',
@@ -621,13 +657,13 @@ SSM2 = Exercise(
     source=SSM2_SOURCE,
     solution=SSM2_SOLUTION,
     hints={
-        "diagonal_kernel": "a ** torch.arange(length).unsqueeze(1) has one row of powers per j. Multiply that "
-        "matrix by c * b.",
+        "diagonal_kernel": "a ** torch.arange(length).unsqueeze(1) has one row of powers per j. Use @ to multiply "
+        "that matrix by c * b.",
         "is_stable": "a.abs() < 1 checks every entry, .all() asks whether all are True, and bool(...) makes it a "
         "plain bool.",
         "discretize": "The rate is minus torch.exp of log_rate, and a is torch.exp of step times that rate. Then "
         "b_bar = (a - 1) / rate * b.",
-        "half_life": "math.log(0.5) divided by torch.log(a).",
+        "half_life": "Divide math.log(0.5) by torch.log(a).",
     },
     introduces=(),
     check=check_ssm2,
@@ -654,12 +690,13 @@ def marked_sequences(
 
 SSM3_LESSON = prose(
     """
-    ssm2's model is the same at every step. Its step, `b` and `c` are fixed
-    once training ends. So it weighs each input by how long ago it came, never
-    by what it is. It can't pick out one input by its content.
+    The model in ssm2 does the same thing at every step. Its step size, `b`
+    and `c` are fixed once training ends. So the weight it gives an input
+    depends only on how long ago that input arrived, never on its value. It
+    cannot pick out one input because of what that input contains.
 
-    Mamba fixes this with a selective step. It computes the step, `B` and `C`
-    from each input, so the update itself depends on the input.
+    Mamba fixes this with a selective step. It computes the step size, `B` and
+    `C` from each input, so the update itself depends on the input.
 
     ```text
     delta[t] = softplus(Linear(x[t]))
@@ -668,32 +705,36 @@ SSM3_LESSON = prose(
     y[t]     = C[t] @ h[t]
     ```
 
-    Here `u[t]` is the value the state takes in. `softplus(z)` is
-    `log(1 + exp(z))`, a smooth ReLU that is always above 0, so `delta` is a
-    valid step. Mamba writes in `delta * B`, a simpler form than ssm2's
-    `b_bar`.
+    Here `u[t]` is the value written into the state at step t. `softplus(z)`
+    is `log(1 + exp(z))`, a smooth version of ReLU that is always above 0.
+    That makes `delta` a valid step size. In place of the `b_bar` from ssm2,
+    Mamba uses the simpler `delta * B`.
 
-    A large `delta` makes `a` near 0, which clears the state and writes the
-    new value in. A `delta` near 0 makes `a` near 1 and writes almost nothing,
-    so the state is kept. The model chooses, step by step, what to keep.
+    A large `delta` makes `a` close to 0. That clears the old state and
+    writes the new value in. A `delta` close to 0 makes `a` close to 1 and
+    writes almost nothing, so the state stays as it was. So at each step, the
+    model uses the input to decide whether to keep the state or replace it.
 
-    The test is selective copying at its smallest. Each sequence holds 16
-    values with one of them marked, and the model has to give back the marked
-    value at the end. Here are both models after 200 steps of training.
+    The test here is the smallest version of a task called selective copying.
+    Each sequence holds 16 values, and one of them is marked. The model has to
+    output the marked value at the end of the sequence. Here are both models
+    after 200 steps of training.
 
     | Model | Mean squared error on new sequences |
     |---|---|
     | always 0 | 1.11 |
-    | fixed, ssm2's kind | 1.02 |
+    | fixed, like ssm2 | 1.02 |
     | selective | 0.002 |
 
-    The fixed model ends barely better than guessing 0, since the mark can sit
-    anywhere. The selective one learned to open at the mark and hold
-    everywhere else, which is derive1's gate again.
+    The fixed model ends barely better than always predicting 0, because the
+    mark can be at any position. The selective model learned to write the
+    value into the state at the marked step and to keep the state unchanged
+    at every other step. That is the same idea as the gate in derive1.
 
-    It costs ssm1's convolution. With a step that changes at every input there
-    is no single kernel. So Mamba runs the loop, as a scan written to run fast
-    on a GPU.
+    The selective step has a cost. It loses the convolution from ssm1, because
+    a step size that changes with every input gives no single kernel. So Mamba
+    runs the loop instead. This loop is called a scan, and Mamba's version is
+    written to run fast on a GPU.
     """,
 )
 
@@ -709,10 +750,11 @@ SSM3_SOURCE = source_file(
     smooth = F.softplus(torch.tensor([-5.0, 0.0, 5.0]))    # tensor([0.0067, 0.6931, 5.0067])
 
 
-    # TODO: Run the selective step along the sequences and return y, of shape
-    #   (batch, steps). u and delta have shape (batch, steps), rate has shape
-    #   (n,), and B and C have shape (batch, steps, n). h starts at zeros of
-    #   shape (batch, n).
+    # TODO: Run the selective step from the lesson over every sequence and
+    #   return y, of shape (batch, steps). u and delta have shape
+    #   (batch, steps), rate has shape (n,), and B and C have shape
+    #   (batch, steps, n). The state h starts as zeros of shape (batch, n). At
+    #   each step t, apply the lesson's formulas for a[t], h[t] and y[t].
     def selective_scan(
         u: Tensor,
         delta: Tensor,
@@ -723,10 +765,11 @@ SSM3_SOURCE = source_file(
         ...
 
 
-    # TODO: Finish forward. x has shape (batch, steps, 2), each step a value and
-    #   its mark. Compute delta with to_delta and a softplus, and B and C with
-    #   to_b and to_c, all from x. Run selective_scan on the values with the
-    #   rate -exp(log_rate), and return y at the last step, shape (batch,).
+    # TODO: Finish forward. x has shape (batch, steps, 2), and each step holds a
+    #   value and its mark. Compute delta as the softplus of to_delta(x), with
+    #   shape (batch, steps). Compute B with to_b and C with to_c, also from x.
+    #   Run selective_scan on the values with rate = -exp(log_rate). Return y
+    #   at the last step, of shape (batch,).
     class SelectiveSSM(nn.Module):
         def __init__(self, n: int) -> None:
             super().__init__()
@@ -942,9 +985,10 @@ SSM3 = Exercise(
     source=SSM3_SOURCE,
     solution=SSM3_SOLUTION,
     hints={
-        "selective_scan": "Loop over t, with step as delta[:, t] given a trailing dim by .unsqueeze(1). Set h to "
-        "torch.exp(step * rate) * h plus step * B[:, t] * u[:, t].unsqueeze(1). Keep (C[:, t] * h).sum(dim=1), and "
-        "stack along dim=1.",
+        "selective_scan": "Loop over t. Let step be delta[:, t].unsqueeze(1), which adds a trailing dimension so it "
+        "multiplies against h of shape (batch, n). Set h to torch.exp(step * rate) * h plus "
+        "step * B[:, t] * u[:, t].unsqueeze(1). Save (C[:, t] * h).sum(dim=1) at each step, and stack the saved "
+        "outputs along dim=1.",
         "SelectiveSSM.forward": "F.softplus(self.to_delta(x)).squeeze(2) is delta. The values are x[:, :, 0], and "
         "the last step of y is y[:, -1].",
     },
@@ -961,15 +1005,16 @@ SSM3 = Exercise(
 
 QUIZ8_LESSON = prose(
     """
-    This quiz has no examples and no new tools. Each function combines moves
-    from Section 6. If a step is unclear, the exercise in the table shows it.
+    This quiz has no examples and no new tools. Each function combines steps
+    you learned in Section 6. If a step is unclear, the exercises listed in
+    the table show how it works.
 
-    | Function | Moves | Shown in |
+    | Function | Steps | Shown in |
     |---|---|---|
-    | `input_gated_scan` | a sigmoid gate and a tanh value from each step's input, blended into the state, every state kept | gating1, derive1, rnn2 |
-    | `gated_causal_conv` | zeros on the left only, a dilated convolution, then half the channels gating the other half | causal1, dilated1, gating1 |
-    | `bidirectional_summary` | the forward output at the last step joined with the backward output at the first | bidir1, rnn2 |
-    | `diagonal_ssm_conv` | a diagonal state discretized and its kernel built, then a causal convolution with the kernel flipped | ssm2, ssm1 |
+    | `input_gated_scan` | a sigmoid gate and a tanh value from each step's input, mixed into the state by the gate, every state kept | gating1, derive1, rnn2 |
+    | `gated_causal_conv` | zeros on the left only, a dilated convolution, then one half of the channels times the sigmoid of the other half | causal1, dilated1, gating1 |
+    | `bidirectional_summary` | the forward output at the last step joined with the backward output at the first step | bidir1, rnn2 |
+    | `diagonal_ssm_conv` | discretizing a diagonal state, building its kernel, then a causal convolution with the flipped kernel | ssm2, ssm1 |
     """,
 )
 
@@ -977,7 +1022,7 @@ QUIZ8_SOURCE = source_file(
     '''
     # quiz8.py
     #
-    # No examples and no new tools. Each function combines moves from Section 6.
+    # No examples and no new tools. Each function combines steps from Section 6.
 
     import torch
     import torch.nn as nn
@@ -985,12 +1030,12 @@ QUIZ8_SOURCE = source_file(
     from torch import Tensor
 
 
-    # TODO: Return the hidden state after every step of x, of shape (batch,
-    #   steps, inputs), as one tensor of shape (batch, steps, hidden). W_g and
+    # TODO: x has shape (batch, steps, inputs). Return the hidden state after
+    #   every step of x, as one tensor of shape (batch, steps, hidden). W_g and
     #   W_v have shape (hidden, inputs), and there are no biases. The state h
-    #   starts at zeros. At each step, with x_t that step's inputs, the gate is
-    #   g = sigmoid(x_t W_g^T) and the new value is v = tanh(x_t W_v^T). Then
-    #   h becomes g * v + (1 - g) * h.
+    #   starts at zeros. At each step, let x_t be that step's inputs, of shape
+    #   (batch, inputs). The gate is g = sigmoid(x_t @ W_g.T) and the new value
+    #   is v = tanh(x_t @ W_v.T). Then h becomes g * v + (1 - g) * h.
     def input_gated_scan(
         x: Tensor,
         W_g: Tensor,
@@ -999,12 +1044,13 @@ QUIZ8_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the gated causal convolution of x, of shape (batch, channels,
-    #   length), with weight, of shape (2 * out, channels, k), at the given
-    #   dilation. Causal means no output sees a later input. Add dilation *
-    #   (k - 1) zeros on the left of x only, then convolve at that dilation.
-    #   Split the result's channels into two halves, and return the first half
-    #   times the sigmoid of the second, of shape (batch, out, length).
+    # TODO: Return the gated causal convolution of x with weight at the given
+    #   dilation. x has shape (batch, channels, length), and weight has shape
+    #   (2 * out, channels, k), with no bias. Causal means no output depends on
+    #   a later input. Pad x with dilation * (k - 1) zeros on the left only,
+    #   then convolve at that dilation. Split the channels of the result into
+    #   two halves. Return the first half times the sigmoid of the second
+    #   half, of shape (batch, out, length).
     def gated_causal_conv(
         x: Tensor,
         weight: Tensor,
@@ -1013,11 +1059,11 @@ QUIZ8_SOURCE = source_file(
         ...
 
 
-    # TODO: Return one summary row per sequence of x, of shape (batch, steps,
-    #   features), from rnn, an nn.RNN with bidirectional=True and
-    #   batch_first=True. Join the forward direction's output at the last step
-    #   with the backward direction's output at the first step, forward first.
-    #   The result has shape (batch, 2 * hidden).
+    # TODO: Return one summary row for each sequence in x, which has shape
+    #   (batch, steps, features). rnn is an nn.RNN with bidirectional=True and
+    #   batch_first=True. Run rnn on x. Then join the forward direction's
+    #   output at the last step with the backward direction's output at the
+    #   first step, forward first. The result has shape (batch, 2 * hidden).
     def bidirectional_summary(
         rnn: nn.RNN,
         x: Tensor,
@@ -1025,12 +1071,13 @@ QUIZ8_SOURCE = source_file(
         ...
 
 
-    # TODO: Return what a diagonal state space model gives for x, of shape
-    #   (length,), worked out as a convolution. Discretize first, with rate =
-    #   -exp(log_rate), a = exp(step * rate), and b becoming (a - 1) / rate * b.
-    #   Entry j of the kernel is the sum of c * b * a ** j, for j from 0 to
-    #   len(x) - 1. Convolve causally, with len(x) - 1 zeros on the left of x
-    #   and the kernel flipped. The result has shape (length,).
+    # TODO: Return the outputs of a diagonal state space model on x, of shape
+    #   (length,), computed as a convolution. Discretize first, with
+    #   rate = -exp(log_rate), a = exp(step * rate) and
+    #   b_bar = (a - 1) / rate * b. Entry j of the kernel is the sum of
+    #   c * b_bar * a ** j, for j from 0 to len(x) - 1. Then convolve causally,
+    #   with len(x) - 1 zeros on the left of x and the kernel flipped. The
+    #   result has shape (length,).
     def diagonal_ssm_conv(
         x: Tensor,
         log_rate: Tensor,
@@ -1240,12 +1287,12 @@ QUIZ8 = Exercise(
     hints={
         "input_gated_scan": "Start h as zeros of shape (batch, hidden). Step t's inputs are x[:, t]. Keep each new "
         "h in a list and stack the list on dim 1, as rnn2's loop does.",
-        "gated_causal_conv": "k is weight.shape[2]. F.pad takes the zeros for the left and the right as a pair, and "
-        "F.conv1d takes dilation= as nn.Conv1d does. Splitting the channels is .chunk(2, dim=1), as gating1's glu "
-        "does.",
-        "bidirectional_summary": "rnn(x) gives the outputs and the last states. Each step's output holds the "
-        "forward state in its first hidden features and the backward state in the rest. Take step -1 of one and "
-        "step 0 of the other.",
+        "gated_causal_conv": "k is weight.shape[2]. F.pad takes the number of zeros for the left and the right as a "
+        "pair. F.conv1d takes dilation= like nn.Conv1d does. .chunk(2, dim=1) splits the channels into two halves, "
+        "as gating1's glu does.",
+        "bidirectional_summary": "rnn(x) returns the outputs and the last states. At each step, the first hidden "
+        "features of the output are the forward state, and the rest are the backward state. Take step -1 of the "
+        "forward part and step 0 of the backward part.",
         "diagonal_ssm_conv": "Discretize as ssm2's discretize does, and build the kernel as its diagonal_kernel "
         "does. Then convolve as ssm1's ssm_convolve does, with x and the flipped kernel each shaped (1, 1, length).",
     },

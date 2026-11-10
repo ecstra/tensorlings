@@ -37,10 +37,12 @@ ADDER = Chapter(
         """
         # Project: an adder that reads
 
-        Section 6's project. A model reads a sum written as text, like
-        `123+456`, and writes the answer one character at a time. It brings
-        together an encoder and a decoder, gated RNNs, and greedy decoding,
-        and it shows where a model that learned from examples stops working. The training runs outside the app, in under a minute.
+        This is Section 6's project. A model reads a sum written as text,
+        like `123+456`, and writes the answer one character at a time. The
+        project brings together an encoder and a decoder, gated RNNs and
+        greedy decoding. It also shows where a model that learned from
+        examples stops working. The training runs outside the app and takes
+        under a minute.
 
         ## Further reading
 
@@ -111,42 +113,46 @@ ADDER1_LESSON = prose(
     `123+456`, and writes the answer, `579`, one character at a time.
     Zaremba and Sutskever trained networks to run small programs this way.
 
-    A model reads text as a sequence of **tokens**, the units it takes one at
-    a time, each turned into an id. Here every character is one token, from a
-    vocabulary of 14.
+    A model reads text as a sequence of **tokens**. A token is one unit of
+    text that the model reads at a time, and each token is turned into a
+    number called its id. Here every character is one token. The set of all
+    possible tokens is called the vocabulary, and here it has 14 tokens.
 
     ```python
     VOCABULARY = "_^$+0123456789"
     VOCABULARY.index("7")    # 11
     ```
 
-    Three of them never appear in a sum. `_` pads a short sum out to the full
-    width, `^` tells the decoder to start writing, and `$` marks the end of the
-    answer.
+    Three of these tokens never appear in a sum. `_` is padding that fills a
+    short sum out to the full width. `^` tells the decoder to start writing,
+    and `$` marks the end of the answer.
 
-    A question goes in padded on the left, like `__12+45`. rnn2 picked each
-    sequence's last real step when padding sat on the right. Padding on the
-    left makes the last step real for every sum, so the encoder's final state
-    has read the whole question.
+    A question is padded on the left, like `__12+45`. In rnn2 the padding was
+    on the right, so you had to pick out the last real step of each sequence.
+    With padding on the left, the last step is a real token for every sum. So
+    the encoder's final state has read the whole question.
 
-    The answer is written backwards, units first, so 57 comes out as `^75$`,
-    padded on the right to the longest answer. That is the order you add in by
-    hand, where each carry moves from a digit to the next one written. adder2
-    measures how much that order matters.
+    The answer is written backwards, starting with the units digit, so 57
+    becomes `^75$`. It is then padded on the right to the length of the
+    longest answer. Backwards is the order you add in by hand, because each
+    carry goes from one digit to the next digit written. adder2 measures how
+    much that order matters.
 
-    The decoder reads `^75` and learns to write `75$`, the same tokens moved
-    one step along, which is encdec1's teacher forcing.
+    During training, the decoder reads `^75` and learns to write `75$`. The
+    targets are the same tokens shifted one step to the left. This is teacher
+    forcing, from encdec1.
 
-    Numbers of up to 3 digits make a million different sums. One sum in 11
-    is held out by a fixed rule, `is_held_out`, and never trained on. So the
-    test asks for sums the model has never seen, which it can't answer from
-    memory.
+    With numbers of up to 3 digits, there are a million different sums. A
+    fixed rule, `is_held_out`, holds out one sum in 11, and the model never
+    trains on those. The test then uses only held out sums. The model has
+    never seen them, so it cannot answer them from memory.
 
-    The rule has to mix every digit. A first try held out sums by their last
-    digits alone, so sums whose last digits matched, like 3 and 3, never
-    appeared in training. The model then got under 10 percent of the held out
-    sums right, and every new sum of the kinds it trained on. That tested a
-    different skill from adding.
+    The rule has to depend on every digit. A first version held out sums
+    based only on the last digit of each number. So no sum whose two numbers
+    ended in the same digit, like 13 + 23, ever appeared in training. The
+    model then got under 10 percent of the held out sums right. But it got
+    every new sum of the kinds it trained on right. So that test measured
+    something other than adding.
     """,
 )
 
@@ -171,21 +177,26 @@ ADDER1_SOURCE = source_file(
         return (a + 3 * b) % 11 == 0
 
 
-    # TODO: Return the id of every character of text.
+    # TODO: Return the list of ids of the characters of text, in order. The id
+    #   of a character is its index in VOCABULARY.
+    #   Example: encode("12+3") returns [5, 6, 3, 7].
     def encode(text: str) -> list[int]:
         ...
 
 
-    # TODO: Return the text that ids spell up to the first $, without any _ or
-    #   ^, so a model's output reads as the answer alone.
+    # TODO: Turn ids back into text, the reverse of encode. Keep only the text
+    #   before the first $, and remove every _ and ^ from it, so a model's
+    #   output reads as the answer alone.
+    #   Example: decode([1, 9, 11, 2, 0, 0]) returns "57".
     def decode(ids: list[int]) -> str:
         ...
 
 
-    # TODO: Return count sums as (question, answer) pairs of text, like
-    #   ("123+45", "168"). Draw both numbers at once with
-    #   torch.randint(0, 10 ** digits, (2,), generator=generator), and keep a
-    #   pair only when is_held_out gives held_out for it.
+    # TODO: Return a list of count sums as (question, answer) pairs of strings,
+    #   like ("123+45", "168"). Draw the two numbers a and b at once with
+    #   torch.randint(0, 10 ** digits, (2,), generator=generator). Keep the
+    #   pair only if is_held_out(a, b) equals held_out, and keep drawing until
+    #   you have count pairs.
     def random_sums(
         count: int,
         digits: int,
@@ -195,10 +206,12 @@ ADDER1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the questions and the answers as two tensors of ids. Each
-    #   question is padded with _ on the left to 2 * digits + 1 characters. Each
-    #   answer is reversed, gets ^ before it and $ after it, then _ on the
-    #   right up to digits + 3 characters.
+    # TODO: Return the questions and the answers of pairs as two tensors of ids.
+    #   Pad each question with _ on the left to 2 * digits + 1 characters.
+    #   Reverse each answer, put ^ before it and $ after it, then pad it with _
+    #   on the right to digits + 3 characters.
+    #   Example: for [("12+45", "57")] and digits = 3, the question is encoded
+    #   from "__12+45" and the answer from "^75$__".
     def to_tensors(
         pairs: list[tuple[str, str]],
         digits: int,
@@ -310,7 +323,7 @@ def check_adder1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="random_sums",
-        description="draws sums on the right side of the held out rule",
+        description="keeps only sums on the requested side of the held out rule",
         inputs=(
             (4, 3, seeded(460), False),
             (3, 2, seeded(461), True),
@@ -343,11 +356,11 @@ ADDER1 = Exercise(
     source=ADDER1_SOURCE,
     solution=ADDER1_SOLUTION,
     hints={
-        "encode": "VOCABULARY.index(character) for each character of text, in a list.",
+        "encode": "Build a list with VOCABULARY.index(character) for each character of text.",
         "decode": "Join VOCABULARY[index] for each id, keep the part before the first $ with .split(\"$\")[0], then "
         "take out _ and ^ with .replace.",
-        "random_sums": "Loop while the list is shorter than count. Turn the two numbers into text with an f-string, "
-        "and the answer with str(a + b).",
+        "random_sums": "Loop while the list is shorter than count. Build the question from the two numbers with an "
+        "f-string, and the answer with str(a + b).",
         "to_tensors": "question.rjust(width, \"_\") pads on the left, and (\"^\" + answer[::-1] + \"$\").ljust(digits + 3, "
         "\"_\") on the right. Encode each one and pass the lists of ids to torch.tensor.",
     },
@@ -522,46 +535,51 @@ INDENTED_ANSWER_LOSS = textwrap.indent(ANSWER_LOSS_SOLUTION.strip("\n"), "    ")
 
 ADDER2_LESSON = prose(
     """
-    This step trains for about half a minute outside the app, as dna2 did.
-    Once the checks above the last one pass, train from the project folder with
-    `.venv/bin/python run.py train adder2`.
+    This exercise trains a model outside the app for about half a minute, as
+    dna2 did. Once every check except the last one passes, train it from the
+    project folder with `.venv/bin/python run.py train adder2`.
 
-    The model is encdec1's encoder and decoder, with a GRU for each. One
-    embedding of the 14 tokens serves both. The encoder reads the padded
-    question, and its final state starts the decoder.
+    The model is the encoder and decoder from encdec1, with a GRU for each.
+    Both share one embedding of the 14 tokens. The encoder reads the padded
+    question, and its final state becomes the starting state of the decoder.
 
-    Training uses teacher forcing. The decoder reads the right answer so far,
-    `^75` for an answer of 57, and is scored on every next token at once,
-    `75$`. The padding after
-    `$` says nothing about the answer, so it takes no part in the loss.
+    Training uses teacher forcing. The decoder reads the correct answer so
+    far, `^75` for an answer of 57. At every position it predicts the next
+    token, so its targets are `75$`, and all positions are scored at once. The
+    padding after `$` carries no information about the answer, so it is left
+    out of the loss.
 
     ```python
-    F.cross_entropy(scores, targets, ignore_index=0)    # targets of 0 count for nothing
+    F.cross_entropy(scores, targets, ignore_index=0)    # targets equal to 0 are left out
     ```
 
-    `F.cross_entropy` wants one row of scores per prediction. So the scores
-    of shape `(batch, steps, 14)` become `(batch * steps, 14)` with `.reshape`,
-    and the targets become one long row the same way.
+    `F.cross_entropy` expects one row of scores per prediction. So reshape the
+    scores from `(batch, steps, 14)` to `(batch * steps, 14)` with `.reshape`.
+    Reshape the targets the same way, into one long row of `batch * steps`
+    ids.
 
-    Writing an answer goes one token at a time, as greedy1 did. The decoder
-    starts from `^`, takes its most likely token, and feeds it back in.
+    To write an answer, the model produces one token at a time, as in greedy1.
+    The decoder starts from `^`, picks its most likely next token, and feeds
+    that token back in as its next input.
 
-    Exact match is the honest score. An answer with one wrong digit is wrong,
-    however low the loss looks. Here is the run behind this project on 2,000
-    held out sums. Next to it is the same model, trained the same way, on
-    answers written in the usual order.
+    The honest score is exact match, the share of answers with every digit
+    right. An answer with one wrong digit is wrong, however low the loss
+    looks. The table shows exact match on 2,000 held out sums for the run
+    behind this project. Next to it is the same model, trained the same way,
+    on answers written in the usual order.
 
     | Steps | 1,000 | 2,000 | 3,000 | 4,000 |
     |---|---|---|---|---|
     | Units first | 88.9% | 99.8% | 99.9% | 99.95% |
     | Usual order | 5.7% | 9.4% | 21.9% | 30.3% |
 
-    In the usual order the first digit written depends on every carry below
-    it, before any of them is written. Even after 20,000 steps, five times as
-    long, the usual order gets 68.8% right. Choosing the order of the output
-    is a design decision, and here it beat a lot of training.
+    In the usual order, the first digit written depends on every carry from
+    the digits below it. But none of those digits has been written yet. Even
+    after 20,000 steps of training, five times as long, the usual order gets
+    68.8% right. The order of the output is a design choice, and here a good
+    choice did more than a lot of extra training.
 
-    The run took 23 to 27 seconds here on the Mac's GPU, an Apple M5.
+    The run took 23 to 27 seconds on this Mac's GPU, an Apple M5.
     """,
 )
 
@@ -569,7 +587,8 @@ ADDER2_SOURCE = source_file(
     '''
     # adder2.py
     #
-    # Train once the checks above the last one pass, from the project folder.
+    # Train once every check except the last one passes. Run this from the
+    # project folder.
     #
     #     .venv/bin/python run.py train adder2
 
@@ -584,13 +603,14 @@ ADDER2_SOURCE = source_file(
     rows = scores.reshape(-1, 14)    # shape (10, 14), one row per prediction
 
 
-    # adder1's pieces.
+    # The functions from adder1.
 ''' + INDENTED_ADDER_PARTS + '''
 
 
-    # TODO: Finish forward. The encoder reads the embedded questions, and its
-    #   final state starts the decoder, which reads the embedded answers so
-    #   far. Return the head's scores for every step, shape (batch, steps, 14).
+    # TODO: Finish forward. Run the encoder on the embedded questions and keep
+    #   its final state. Run the decoder on the embedded answers_so_far,
+    #   starting from that state. Return the head's scores for every step of
+    #   the decoder, of shape (batch, steps, 14).
 ''' + INDENTED_ADDER_INIT + '''
 
         def forward(
@@ -601,9 +621,10 @@ ADDER2_SOURCE = source_file(
             ...
 
 
-    # TODO: Return the cross entropy of model's scores against answers moved one
-    #   step along. The decoder reads answers[:, :-1] and should give
-    #   answers[:, 1:]. Padding, id 0, takes no part.
+    # TODO: Return the cross entropy loss for teacher forcing. Run model on
+    #   questions and answers[:, :-1], every answer token except the last.
+    #   Score its outputs against answers[:, 1:], the same tokens shifted one
+    #   step to the left. Leave out padding, which has id 0.
     def answer_loss(
         model: nn.Module,
         questions: Tensor,
@@ -612,9 +633,10 @@ ADDER2_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the ids model writes for questions, shape (batch, length).
-    #   Start every row from the ^ token, run the decoder one step at a time,
-    #   and feed each step's most likely token back in.
+    # TODO: Return the ids that model writes for questions, of shape
+    #   (batch, length). Encode the questions as forward does. Start every row
+    #   from the ^ token and run the decoder one step at a time for length
+    #   steps, feeding each step's most likely token back in as the next input.
     def greedy(
         model: nn.Module,
         questions: Tensor,
@@ -623,9 +645,11 @@ ADDER2_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the share of pairs whose answer model writes exactly right,
-    #   with greedy for digits + 2 steps and decode, in eval mode and without
-    #   recording for autograd. Then put model back in training mode.
+    # TODO: Return the fraction of pairs whose answer model writes exactly
+    #   right, as a float. Write the answers with greedy for digits + 2 steps,
+    #   with model in eval mode and without recording for autograd. Read each
+    #   one with decode and reverse it before comparing it with the answer.
+    #   Then put model back in training mode.
     def exact_match(
         model: nn.Module,
         pairs: list[tuple[str, str]],
@@ -821,7 +845,7 @@ def check_trained_adder(found: type) -> None:
     right = ADDER_REFERENCE["exact_match"](model, pairs, 3)
 
     if right < 0.95:
-        raise Mismatch(f"The trained model gets {right:.1%} of 2,000 held out sums exactly right, but it should pass 95%.")
+        raise Mismatch(f"The trained model gets {right:.1%} of 2,000 held out sums exactly right, but it should get at least 95%.")
 
 
 def check_adder2(checker: Checker) -> None:
@@ -843,13 +867,13 @@ def check_adder2(checker: Checker) -> None:
     )
     checker.test(
         function="exact_match",
-        description="gives the share of answers written exactly right",
+        description="gives the fraction of answers written exactly right",
         run=check_exact_match,
     )
     checker.test_method(
         class_name="Adder",
         method="forward",
-        description="trained, gets 95 percent of held out sums exactly right",
+        description="after training, gets 95 percent of held out sums exactly right",
         run=check_trained_adder,
     )
 
@@ -864,13 +888,13 @@ ADDER2 = Exercise(
     hints={
         "Adder.forward": "Run self.encoder on the embedded questions and keep only its last state. Pass "
         "self.embedding(answers_so_far) and that state to self.decoder, and run self.head on its outputs.",
-        "answer_loss": "Score with model on questions and every answer place but the last. Reshape the scores to "
-        "(-1, 14) and answers[:, 1:] to "
-        "(-1), then F.cross_entropy with ignore_index=0.",
-        "greedy": "Start token as torch.full((len(questions), 1), VOCABULARY.index(\"^\")). Each step, run the decoder "
-        "on its embedding with the state, take the head's argmax over dim=2, keep it, and torch.cat at the end.",
-        "exact_match": "to_tensors gives the questions. Compare decode of each row of greedy's ids, as a list, with the "
-        "answer of its pair.",
+        "answer_loss": "Run model on questions and every answer position except the last. Reshape the scores to "
+        "(-1, 14) and answers[:, 1:] to (-1), then call F.cross_entropy with ignore_index=0.",
+        "greedy": "Start token as torch.full((len(questions), 1), VOCABULARY.index(\"^\")). In each step, run the "
+        "decoder on the token's embedding and the state. The argmax of the head's scores over dim=2 is the next "
+        "token. Save each token, and torch.cat the saved tokens at the end.",
+        "exact_match": "to_tensors gives the questions. Turn greedy's ids into lists with .tolist(). Then compare "
+        "decode of each row, reversed, with the answer of its pair.",
     },
     introduces=(),
     check=check_adder2,
@@ -932,13 +956,13 @@ def longest_answer(
 
 ADDER3_LESSON = prose(
     """
-    adder2's model gets every held out sum of up to 3 digits right. This
-    project asks where that skill ends, by feeding it questions longer than
-    any it trained on.
+    The model from adder2 gets every held out sum of up to 3 digits right.
+    This exercise finds where that skill ends, by giving the model questions
+    longer than any it trained on.
 
-    Two things make a question longer. The same sum can have more `_` in
-    front, which changes nothing about the answer. Or the numbers can have
-    more digits. Here are 2,000 held out sums of each kind.
+    A question can get longer in two ways. The same sum can have more `_` in
+    front, which does not change the answer. Or the numbers can have more
+    digits. Here are the results on 2,000 held out sums of each kind.
 
     | Sums | Exactly right | Longest answer written |
     |---|---|---|
@@ -948,17 +972,19 @@ ADDER3_LESSON = prose(
     | up to 4 digits | 0% | 4 digits |
     | up to 5 digits | 0% | 4 digits |
 
-    One more padding token is enough to break it. The model never saw a
-    question of 8 tokens, so its encoder ends in a state the decoder never
-    learned to read. With 4 digit numbers it still writes at most 4 digits,
-    the longest answer it ever wrote, so `5674+6652` comes out as `1236`.
+    One extra padding token is enough to break the model. It never saw a
+    question of 8 tokens, so its encoder ends in a state that the decoder
+    never learned to read. With 4 digit numbers, it still writes at most 4
+    digits, because no answer in training was longer than that. So
+    `5674+6652` comes out as `1236`.
 
-    The model learned the sums it was shown, and not the method of adding. A
-    person who adds 3 digit numbers adds 30 digit numbers the same way.
-    Zaremba and Sutskever reached 99 percent on 9 digit sums by mixing easy
-    and hard sums in training. Their tests had the same lengths as training.
-    Kaiser and Sutskever's Neural GPU, built from convolutions, trained on
-    binary sums of up to 20 bits. It then made no mistakes on far longer ones.
+    The model learned the kinds of sums it was shown, but not the method of
+    adding. A person who can add 3 digit numbers can add 30 digit numbers the
+    same way. Zaremba and Sutskever reached 99 percent on 9 digit sums by
+    mixing easy and hard sums in training. But their test sums had the same
+    lengths as their training sums. Kaiser and Sutskever's Neural GPU, built
+    from convolutions, trained on binary sums of up to 20 bits. It then made
+    no mistakes on much longer ones.
     """,
 )
 
@@ -976,7 +1002,7 @@ ADDER3_SOURCE = source_file(
     padded = "907+8".rjust(9, "_")    # '____907+8'
 
 
-    # adder1's pieces.
+    # The functions from adder1.
 ''' + INDENTED_ADDER_PARTS + '''
 
 
@@ -992,10 +1018,12 @@ ADDER3_SOURCE = source_file(
 ''' + INDENTED_EXACT_MATCH + '''
 
 
-    # TODO: Return the questions of pairs encoded as to_tensors does, each
-    #   padded on the left with "_" to 2 * digits + 1 + extra tokens, as a
-    #   tensor of whole numbers of shape (len(pairs), 2 * digits + 1 + extra).
-    #   to_tensors is the case extra = 0.
+    # TODO: Return the questions of pairs encoded as to_tensors does, but padded
+    #   on the left with _ to 2 * digits + 1 + extra tokens. Return a tensor of
+    #   integer ids of shape (len(pairs), 2 * digits + 1 + extra). With
+    #   extra = 0, this gives the same questions as to_tensors.
+    #   Example: for [("907+8", "915")] with digits = 3 and extra = 2, the
+    #   question is encoded from "____907+8".
     def padded_questions(
         pairs: list[tuple[str, str]],
         digits: int,
@@ -1004,10 +1032,10 @@ ADDER3_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the share of pairs answered exactly right, as exact_match
+    # TODO: Return the fraction of pairs answered exactly right, as exact_match
     #   does, but with the questions from padded_questions. Write the answers
-    #   with greedy for digits + 2 steps in eval mode without recording for
-    #   autograd, and put the model back in training mode before returning.
+    #   with greedy for digits + 2 steps, in eval mode and without recording
+    #   for autograd. Put the model back in training mode before returning.
     def padded_exact_match(
         model: nn.Module,
         pairs: list[tuple[str, str]],
@@ -1017,11 +1045,12 @@ ADDER3_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the number of digits in the longest answer model writes for
-    #   pairs, as a plain whole number. Encode with to_tensors and write with
-    #   greedy for digits + 2 steps, in eval mode without recording for
-    #   autograd, then put the model back in training mode. decode drops what
-    #   comes after the end token.
+    # TODO: Return the number of digits in the longest answer that model writes
+    #   for pairs, as a Python int. Encode the questions with to_tensors and
+    #   write the answers with greedy for digits + 2 steps, in eval mode and
+    #   without recording for autograd. Then put the model back in training
+    #   mode. decode drops everything from the end token $ onward, so the
+    #   length of a decoded answer counts only its digits.
     def longest_answer(
         model: nn.Module,
         pairs: list[tuple[str, str]],
@@ -1030,8 +1059,9 @@ ADDER3_SOURCE = source_file(
         ...
 
 
-    # TODO: Return exact_match for count held out sums of each number of digits
-    #   in digit_counts, in order, each drawn with random_sums and generator.
+    # TODO: For each number of digits in digit_counts, in order, draw count held
+    #   out sums with random_sums and generator, and compute exact_match on
+    #   them. Return the list of results, one per entry of digit_counts.
     def accuracy_by_digits(
         model: nn.Module,
         digit_counts: list[int],
@@ -1106,7 +1136,7 @@ def check_padded_questions(found: object) -> None:
         actual = found(pairs, digits, extra)
 
         if isinstance(actual, Tensor) and actual.is_floating_point():
-            raise Mismatch("padded_questions should give whole numbers, the token ids, not floats.")
+            raise Mismatch("padded_questions should return integer token ids, not floats.")
 
         expect_tensor(
             call=f"padded_questions(6 sums of up to {digits} digits, {digits}, {extra})",
@@ -1263,19 +1293,19 @@ def check_accuracy_by_digits(found: object) -> None:
     if seen != expected_pairs:
         raise Mismatch(
             "accuracy_by_digits should draw count held out sums with random_sums for each number of digits in "
-            "turn, from the one generator, and pass each batch to exact_match with its digits.",
+            "turn, all from the same generator, and pass each batch to exact_match with its digits.",
         )
 
 
 def check_adder3(checker: Checker) -> None:
     checker.test(
         function="padded_questions",
-        description="pads each question on the left with extra more _",
+        description="pads each question with extra more _ on the left than to_tensors does",
         run=check_padded_questions,
     )
     checker.test(
         function="padded_exact_match",
-        description="gives the share answered right with the padded questions",
+        description="gives the fraction answered exactly right with the padded questions",
         run=check_padded_exact_match,
     )
     checker.test(
@@ -1303,8 +1333,8 @@ ADDER3 = Exercise(
         "padded_exact_match": "Follow exact_match line by line, with padded_questions in place of to_tensors.",
         "longest_answer": "Write the answers as exact_match does, then take the largest len(decode(ids)) over "
         "the rows of written.tolist().",
-        "accuracy_by_digits": "For each digits in digit_counts, exact_match(model, random_sums(count, digits, "
-        "generator, True), digits).",
+        "accuracy_by_digits": "For each digits in digit_counts, call exact_match(model, random_sums(count, digits, "
+        "generator, True), digits), and collect the results in a list.",
     },
     introduces=(),
     check=check_adder3,

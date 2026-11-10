@@ -31,9 +31,9 @@ LINEAR_ATTENTION = Chapter(
         # Linear attention
 
         Attention keeps every key and value it has seen, and compares each
-        query with all of them. This chapter drops the softmax, which turns
-        attention into an RNN whose state is a matrix, and measures what that
-        fixed state can hold and what it can't.
+        query with all of them. This chapter removes the softmax, which turns
+        attention into an RNN whose state is a matrix. Then it measures what
+        that fixed size state can hold and what it cannot.
 
         ## Further reading
 
@@ -51,44 +51,49 @@ LINEAR_ATTENTION = Chapter(
 
 LINATTN1_LESSON = prose(
     """
-    attention5 computes `softmax(q kᵀ / √d) v`. Drop the softmax, and the
-    brackets can move.
+    attention5 computes `softmax(q kᵀ / √d) v`. If you remove the softmax and
+    the division by `√d`, you can move the brackets, because matrix
+    multiplication is associative.
 
     ```text
     (q kᵀ) v = q (kᵀ v)
     ```
 
-    The left side builds a steps by steps matrix of scores. The right side
-    first builds `kᵀ v`, a size by size matrix, however long the sequence is.
+    Here q, k and v each have one row per step and size columns. The left
+    side first builds a steps by steps matrix of scores. The right side first
+    builds `kᵀ v`, a size by size matrix, however long the sequence is.
 
-    With the future masked, position t adds up only the keys and values up to
-    t. So it reads its query against a running state.
+    With the future masked, the output at position t uses only the keys and
+    values up to t. So each position can multiply its query by a running
+    state that grows by one key and one value per step.
 
     ```text
     state at t = state at t - 1 + k_t v_tᵀ
     output at t = q_t state at t
     ```
 
-    That is an RNN whose state is a matrix, and each step adds one key times
-    one value. This is linear attention. A model that writes text keeps one
-    size by size matrix as it goes, instead of every key and value so far. At
-    4,096 steps and a size of 64, that is 4,096 numbers against 524,288.
+    That is an RNN whose state is a matrix, and each step adds the product of
+    one key and one value to it. This is called linear attention. A model
+    that writes text with it keeps one size by size matrix as it goes,
+    instead of every key and value so far. At 4,096 steps and a size of 64,
+    the state is 4,096 numbers, while the keys and values are 524,288.
 
-    A column times a row, the outer product, makes such a matrix.
+    Multiplying a column by a row, which is called the outer product, makes
+    such a matrix.
 
     ```python
     torch.tensor([[1.0], [2.0]]) @ torch.tensor([[3.0, 4.0]])    # tensor([[3., 4.], [6., 8.]])
     ```
 
-    The two forms give the same outputs, up to rounding. On 2 sequences of 50
-    random steps with a size of 8, they differed by at most 0.00002 over
-    three seeds.
+    The parallel form and the recurrent form give the same outputs, up to
+    rounding. On 2 sequences of 50 random steps with a size of 8, they
+    differed by at most 0.00002 over three seeds.
 
-    Dropping the softmax has a cost. Weights can go negative, and they no
-    longer sum to 1. Katharopoulos and colleagues fix both. They pass queries
-    and keys through `F.elu(x) + 1`, which is always positive, and divide each
-    output by the sum of its weights. `F.elu` gives x above 0 and `exp(x) - 1`
-    below it.
+    Removing the softmax has a cost. The weights can be negative, and they no
+    longer add up to 1. Katharopoulos and colleagues fix both problems. They
+    pass queries and keys through `F.elu(x) + 1`, which is always positive.
+    Then they divide each output by the sum of its weights. `F.elu(x)` returns
+    x when x is above 0, and `exp(x) - 1` otherwise.
     """,
 )
 
@@ -104,9 +109,12 @@ LINATTN1_SOURCE = source_file(
     positive = F.elu(torch.tensor([-1.0, 2.0])) + 1                     # tensor([0.3679, 3.0000])
 
 
-    # TODO: Return linear attention of q, k and v, each of shape (..., steps,
-    #   size), in the parallel form. The scores q kᵀ have the future set to 0,
-    #   and they multiply v. No softmax and no scaling.
+    # TODO: Return linear attention of q, k and v in the parallel form. Each has
+    #   shape (..., steps, size). Compute the scores q kᵀ, set the scores of
+    #   future positions to 0, and multiply the scores by v. Use no softmax and
+    #   no division by the square root of size.
+    #   Example: with q, k and v all torch.ones(2, 1), it returns
+    #   tensor([[1.], [2.]]).
     def parallel_linear_attention(
         q: Tensor,
         k: Tensor,
@@ -115,9 +123,10 @@ LINATTN1_SOURCE = source_file(
         ...
 
 
-    # TODO: Finish the loop, the same outputs as a recurrence. Each step adds
-    #   the outer product of the step's key and value to state, then reads the
-    #   step's query against it.
+    # TODO: Finish the loop, so it returns the same outputs as
+    #   parallel_linear_attention, computed as a recurrence. At each step t,
+    #   add the outer product of key t and value t to state. Then the output
+    #   at step t is query t, as a row, times state.
     def recurrent_linear_attention(
         q: Tensor,
         k: Tensor,
@@ -133,9 +142,10 @@ LINATTN1_SOURCE = source_file(
         return torch.stack(outputs, dim=-2)
 
 
-    # TODO: Return the normalized form. Pass q and k through F.elu(x) + 1, set
-    #   the future's weights to 0, and divide each output by the sum of its
-    #   weights.
+    # TODO: Return the normalized form of linear attention. Pass q and k through
+    #   F.elu(x) + 1, compute the weights as parallel_linear_attention computes
+    #   its scores, and set the weights of future positions to 0. Multiply the
+    #   weights by v, then divide each output row by the sum of its weights.
     def normalized_linear_attention(
         q: Tensor,
         k: Tensor,
@@ -221,7 +231,7 @@ def check_linattn1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="parallel_linear_attention",
-        description="multiplies the scores, future set to 0, by the values",
+        description="sets the future scores to 0, then multiplies the scores by the values",
         inputs=linear_inputs(520),
         reference=reference_parallel,
         expect=expect_tensor,
@@ -252,10 +262,10 @@ LINATTN1 = Exercise(
     source=LINATTN1_SOURCE,
     solution=LINATTN1_SOLUTION,
     hints={
-        "parallel_linear_attention": "q @ k.transpose(-2, -1) gives the scores. torch.tril sets the future to 0, "
-        "then @ v.",
+        "parallel_linear_attention": "q @ k.transpose(-2, -1) gives the scores. torch.tril sets the future scores to "
+        "0. Then multiply by v with @.",
         "recurrent_linear_attention": "k[..., t, :].unsqueeze(-1) @ v[..., t, :].unsqueeze(-2) is the outer product to "
-        "add. The output is q[..., t, :].unsqueeze(-2) @ state, squeezed back with .squeeze(-2).",
+        "add. The output is q[..., t, :].unsqueeze(-2) @ state, with the extra dimension removed by .squeeze(-2).",
         "normalized_linear_attention": "The weights are torch.tril of (F.elu(q) + 1) @ (F.elu(k) + 1) transposed. "
         "Divide weights @ v by weights.sum(dim=-1, keepdim=True).",
     },
@@ -270,12 +280,14 @@ LINATTN1 = Exercise(
 
 LINATTN2_LESSON = prose(
     """
-    Linear attention's state has a fixed size, size by size, however long the
-    sequence. Softmax attention keeps every key and value, so its memory grows
-    by one key and one value per step. Each new token reads all of them.
+    The state of linear attention has a fixed size, size by size, however long
+    the sequence is. Softmax attention keeps every key and value, so its
+    memory grows by one key and one value per step. Each new token has to
+    read all of them.
 
-    Here is the cost of writing one more token, over three runs. The batch is
-    16 at size 64, on one CPU thread of this Mac.
+    Here is the cost of writing one more token, measured over three runs. The
+    batch has 16 sequences, the size is 64, and everything runs on one CPU
+    thread of this Mac. The softmax cache is the stored keys and values.
 
     | Earlier tokens | Softmax step | Linear step | Softmax cache | Linear state |
     |---|---|---|---|---|
@@ -284,13 +296,14 @@ LINATTN2_LESSON = prose(
     | 4,096 | 1.1 to 1.4 ms | 0.09 to 0.12 ms | 33.6 MB | 0.27 MB |
     | 16,384 | 5.0 to 9.7 ms | 0.12 to 0.38 ms | 134 MB | 0.27 MB |
 
-    The softmax step grows with the text, and the linear one stays flat.
-    Katharopoulos and colleagues measured their linear attention models up to
-    4,000 times faster at writing very long sequences. The fixed state has a price
-    in what it can hold.
+    The softmax step takes longer as the text grows, while the linear step
+    takes about the same time. Katharopoulos and colleagues found their linear
+    attention models up to 4,000 times faster at writing very long sequences.
+    But the fixed state limits what the model can remember.
 
-    Here is attention6's recall task with queries, keys and values of size 8,
-    each model trained for 400 steps.
+    Here is the recall task from attention6, with queries, keys and values of
+    size 8. Each model trained for 400 steps. The table shows the fraction of
+    new sequences each model got right.
 
     | Pairs | Linear attention | Softmax attention |
     |---|---|---|
@@ -299,22 +312,24 @@ LINATTN2_LESSON = prose(
     | 8 | 0.857 | 1.000 |
     | 16 | 0.573 | 1.000 |
 
-    The linear state holds 72 numbers, an 8 by 8 matrix and the sum of the
-    keys, at any number of pairs. Softmax attention keeps 16 numbers per pair,
-    256 at 16 pairs.
+    The linear state holds 72 numbers at any number of pairs, an 8 by 8 matrix
+    plus the sum of the keys. Softmax attention keeps 16 numbers per pair, a
+    key and a value of 8 numbers each, so it keeps 256 numbers at 16 pairs.
 
-    The state is a sum of key times value products. While there are few
-    pairs, their keys can point in different directions, and reading one key
-    brings back its own value cleanly. Past about size pairs, the keys have to
-    overlap, and reading one brings back part of the others too.
+    The state is a sum of outer products of keys and values. When there are
+    few pairs, their keys can point in different directions. Then multiplying
+    a query by the state brings back only the value stored with the matching
+    key. With more than about size pairs, 8 here, the keys have to overlap.
+    Then reading one key also brings back part of the other values.
 
-    So linear attention suits long sequences where a summary is enough, and
-    softmax attention suits exact recall of any earlier step. Some recent
-    models mix them, a few softmax layers among many linear ones. Newer linear
-    layers also add a gate to forget, as ssm3's selective step did.
+    So linear attention suits long sequences where a summary of the past is
+    enough. Softmax attention suits exact recall of any earlier step. Some
+    recent models mix the two, with a few softmax layers among many linear
+    ones. Newer linear attention layers also add a gate that lets the state
+    forget, as the selective step of ssm3 did.
 
-    `.sum(dim=1, keepdim=True)` keeps the summed dimension with size 1, so the
-    result still lines up with the rest.
+    `.sum(dim=1, keepdim=True)` keeps the summed dimension, with size 1. So
+    the result has the same number of dimensions as the input.
 
     ```python
     torch.ones(2, 5, 3).sum(dim=1, keepdim=True).shape    # torch.Size([2, 1, 3])
@@ -334,10 +349,13 @@ LINATTN2_SOURCE = source_file(
     totals = torch.ones(2, 5, 3).sum(dim=1, keepdim=True)    # shape (2, 1, 3)
 
 
-    # TODO: Return how many numbers each model keeps after reading pairs pairs,
-    #   with queries, keys and values of size. Linear attention keeps its size
-    #   by size state and the sum of its keys. Softmax attention keeps every key
-    #   and every value.
+    # TODO: Return how many numbers a model keeps after reading pairs pairs, when
+    #   its queries, keys and values have size numbers each. If linear is True,
+    #   the model uses linear attention, which keeps its size by size state and
+    #   the sum of its keys. Otherwise it uses softmax attention, which keeps
+    #   every key and every value.
+    #   Example: memory_numbers(16, 8, True) returns 72, and
+    #   memory_numbers(16, 8, False) returns 256.
     def memory_numbers(
         pairs: int,
         size: int,
@@ -346,11 +364,13 @@ LINATTN2_SOURCE = source_file(
         ...
 
 
-    # TODO: Finish forward, attention6's Recaller with normalized linear
-    #   attention. Pass the key rows and the query rows through F.elu(x) + 1.
-    #   The state is the keys transposed times the value rows, and the total is
-    #   the keys summed over the pairs. The query reads the state, divided by
-    #   the query times the total. Then run self.out, giving shape (batch, ids).
+    # TODO: Finish forward. It is the Recaller from attention6, with normalized
+    #   linear attention in place of softmax attention. Embed keys, values and
+    #   query with self.keys, self.values and self.queries. Pass the embedded
+    #   keys and the embedded query through F.elu(x) + 1. The state is the keys
+    #   transposed times the values, and the total is the sum of the keys over
+    #   the pairs. The output is the query times the state, divided by the
+    #   query times the total. Run self.out on it to get shape (batch, ids).
     class LinearRecaller(nn.Module):
         def __init__(
             self,
@@ -469,7 +489,7 @@ def check_linear_recaller_learns(found: type) -> None:
     accuracy = recall_accuracy(model, 4)
 
     if accuracy < 0.9:
-        raise Mismatch(f"After 400 steps on 4 pairs, LinearRecaller gets {accuracy:.1%} of new sequences right, but it should pass 90%.")
+        raise Mismatch(f"After 400 steps on 4 pairs, LinearRecaller gets {accuracy:.1%} of new sequences right, but it should get at least 90%.")
 
 
 def check_linattn2(checker: Checker) -> None:
@@ -512,7 +532,7 @@ LINATTN2 = Exercise(
         "Softmax attention keeps pairs keys and pairs values, each of size numbers.",
         "LinearRecaller.forward": "For k, put keys through self.keys and F.elu, then add 1. Make q the same way from "
         "self.queries(query), with .unsqueeze(1). Divide q @ (k.transpose(1, 2) @ self.values(values)) by "
-        "q @ k.sum(dim=1, keepdim=True) transposed, then .squeeze(1) and self.out.",
+        "q @ k.sum(dim=1, keepdim=True) transposed. Then call .squeeze(1) and run self.out.",
     },
     introduces=(),
     check=check_linattn2,

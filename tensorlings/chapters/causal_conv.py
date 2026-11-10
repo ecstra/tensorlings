@@ -35,12 +35,13 @@ CAUSAL_CONV = Chapter(
         """
         # Causal convolutions
 
-        A convolution can read a sequence too, every position at once. This
-        chapter pads it so no output sees the future, stacks dilated layers
-        the way WaveNet does to see far back with few layers, and shows why
-        that suits long signals like audio. It ends with the short time
-        Fourier transform, the spectra of a signal's overlapping windows,
-        which most audio models read.
+        A convolution can also read a sequence, and it computes every
+        position at once. This chapter pads the convolution so that no output
+        depends on a future input. Then it stacks dilated layers the way
+        WaveNet does, so the top layer sees far back with only a few layers,
+        and shows why that suits long signals like audio. It ends with the
+        short time Fourier transform, which takes the spectrum of each of a
+        signal's overlapping windows. Most audio models read its output.
 
         ## Further reading
 
@@ -80,44 +81,47 @@ def reference_inputs_used(
 CAUSAL1_LESSON = prose(
     """
     The models of Section 6 so far read a sequence with a loop, one step at a
-    time. A convolution reads it too, every position at once. To predict what
-    comes next, though, no output may see a later input.
+    time. A convolution can also read a sequence, and it computes every
+    position at once. But a model that predicts the next step must not let
+    any output depend on a later input.
 
-    `F.conv1d` with a kernel of 3 and `padding=1` makes output t from inputs
-    t - 1, t and t + 1. So output t sees input t + 1, the future. A model
-    trained this way to predict the next step would copy it and learn nothing
-    useful.
+    `F.conv1d` with a kernel of size 3 and `padding=1` computes output t from
+    inputs t - 1, t and t + 1. So output t depends on input t + 1, which is in
+    the future. A model trained this way to predict the next step would copy
+    input t + 1 and learn nothing useful.
 
-    A **causal convolution** adds its k - 1 zeros on the left only. Then
-    output t comes from inputs t - k + 1 up to t, and the output keeps the
-    input's length.
+    A **causal convolution** with a kernel of size k puts all k - 1 zeros on
+    the left. Then output t is computed from inputs t - k + 1 up to t, and the
+    output has the same length as the input.
 
     ```python
     x = torch.tensor([[[1.0, 2.0, 3.0]]])
     F.pad(x, (2, 0))    # tensor([[[0., 0., 1., 2., 3.]]])
     ```
 
-    `F.pad` takes how many zeros to add at the start and at the end of the
-    last dimension.
+    `F.pad(x, (left, right))` adds `left` zeros at the start and `right`
+    zeros at the end of the last dimension of `x`.
 
-    Autograd can check which inputs an output uses. Make the input require
-    grad, backprop one output, and the input's gradient is 0 everywhere that
-    output never looked.
+    Autograd can show which inputs an output depends on. Create the input
+    with `requires_grad=True`, and call `.backward()` on one output. The
+    input's gradient is then 0 at every position that the output does not
+    use.
 
-    | Convolution, k = 3, on 10 inputs | Inputs output 5 uses |
+    | Convolution, k = 3, on 10 inputs | Inputs that output 5 uses |
     |---|---|
     | `padding=1`, a zero on each side | 4, 5, 6 |
     | causal, two zeros on the left | 3, 4, 5 |
 
-    `.nonzero()` gives the positions of the entries that aren't 0, one row
-    each.
+    `.nonzero()` returns the positions of the entries that are not 0, one
+    position per row.
 
     ```python
     torch.tensor([0.0, 2.0, 0.0, -1.0]).nonzero()    # tensor([[1], [3]])
     ```
 
-    This check is worth keeping. A model that sees the future trains to a
-    loss that looks wonderful, then fails the moment it has to predict.
+    This check is worth keeping. A model that can see the future reaches a
+    very low loss in training. Then it fails when it has to predict for real,
+    because the future input is not there yet.
     """,
 )
 
@@ -137,9 +141,12 @@ CAUSAL1_SOURCE = source_file(
     positions = torch.tensor([0.0, 2.0, 0.0, -1.0]).nonzero().flatten().tolist()    # [1, 3]
 
 
-    # TODO: Return the causal convolution of x, of shape (batch, channels,
-    #   length), with weight, of shape (out_channels, channels, k), and bias.
-    #   Add zeros on the left only, so the output keeps the input's length.
+    # TODO: Return the causal convolution of x with weight and bias. x has shape
+    #   (batch, channels, length), weight has shape (out_channels, channels, k)
+    #   and bias has shape (out_channels,). Pad x with k - 1 zeros on the left
+    #   only, so the output has the same length as the input.
+    #   Example: causal_conv1d(torch.tensor([[[1.0, 2.0, 3.0]]]),
+    #   torch.ones(1, 1, 2), torch.zeros(1)) returns tensor([[[1., 3., 5.]]]).
     def causal_conv1d(
         x: Tensor,
         weight: Tensor,
@@ -148,9 +155,12 @@ CAUSAL1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the positions of the inputs that output position of conv
-    #   uses, as a sorted list. Start from torch.ones(1, 1, length) that
-    #   requires grad, run conv on it, and backprop that one output position.
+    # TODO: Return the input positions that the output of conv at index
+    #   position depends on, as a sorted list. Make x = torch.ones(1, 1, length)
+    #   with requires_grad=True and run conv on it. Then call .backward() on
+    #   that one output. The inputs it uses are where x.grad is not 0.
+    #   Example: for conv = lambda x: F.conv1d(x, torch.ones(1, 1, 3),
+    #   padding=1), inputs_used(conv, 10, 5) returns [4, 5, 6].
     def inputs_used(
         conv: Callable[[Tensor], Tensor],
         length: int,
@@ -159,8 +169,9 @@ CAUSAL1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return True when some output of conv uses an input after its own
-    #   position, for inputs of the given length, and False otherwise.
+    # TODO: Return True if any output of conv depends on an input at a later
+    #   position than its own, for an input of the given length. Return False
+    #   otherwise.
     def sees_future(
         conv: Callable[[Tensor], Tensor],
         length: int,
@@ -268,7 +279,7 @@ def check_causal1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="inputs_used",
-        description="finds the inputs one output uses through its gradient",
+        description="finds the inputs one output depends on from the input's gradient",
         inputs=(
             (CONVS[0], 10, 5),
             (CONVS[1], 10, 5),
@@ -298,12 +309,12 @@ CAUSAL1 = Exercise(
     source=CAUSAL1_SOURCE,
     solution=CAUSAL1_SOLUTION,
     hints={
-        "causal_conv1d": "k is weight.shape[2]. F.pad with (k - 1, 0) adds the zeros on the left, then call F.conv1d "
-        "with weight and bias.",
+        "causal_conv1d": "The kernel size k is weight.shape[2]. F.pad with (k - 1, 0) adds the zeros on the left. "
+        "Then call F.conv1d with weight and bias.",
         "inputs_used": "Make x with requires_grad=True. Call .sum() on conv(x)[..., position], then .backward(). "
         "x.grad.flatten().nonzero() gives the positions, and .flatten().tolist() makes them a list.",
-        "sees_future": "Loop over every position. If the largest input inputs_used finds is after the position, "
-        "return True. Return False after the loop.",
+        "sees_future": "Loop over every output position. If the largest input position that inputs_used returns is "
+        "greater than the output position, return True. Return False after the loop.",
     },
     introduces=(),
     check=check_causal1,
@@ -316,41 +327,47 @@ CAUSAL1 = Exercise(
 
 DILATED1_LESSON = prose(
     """
-    A causal convolution with a kernel of 2 sees 2 steps. Stack 10 of them
-    and the top layer sees 11. Seeing 1,000 steps back would take 999 layers.
+    A causal convolution with a kernel of size 2 sees 2 steps, the current
+    input and the one before it. Each extra layer adds one step, so a stack of
+    10 such layers lets the top layer see 11 steps. To see 1,000 steps back,
+    you would need 999 layers.
 
-    A **dilated** convolution spaces its kernel's taps apart. With a dilation
-    of d, a kernel of 2 reads inputs t - d and t. `nn.Conv1d` takes
-    `dilation=d`, and the zeros on the left grow to (k - 1) times d.
+    A **dilated** convolution spaces the entries of its kernel apart, so they
+    read inputs that are not next to each other. With a dilation of d, a
+    kernel of size 2 reads inputs t - d and t. `nn.Conv1d` takes
+    `dilation=d`. A causal version then needs `(k - 1) * d` zeros on the left
+    instead of k - 1.
 
     ```python
     conv = nn.Conv1d(1, 1, 2, dilation=4)    # reads inputs t - 4 and t
     ```
 
-    WaveNet stacks such layers with dilations 1, 2, 4, 8 and so on. Each
-    layer doubles how far back the top can see.
+    WaveNet stacks dilated layers with dilations 1, 2, 4, 8 and so on. Each
+    new layer doubles how many steps the top layer can see.
 
-    | Layers | Dilations | Steps the top sees |
+    | Layers | Dilations | Steps the top layer sees |
     |---|---|---|
     | 1 | 1 | 2 |
     | 2 | 1, 2 | 4 |
     | 3 | 1, 2, 4 | 8 |
     | 10 | 1 up to 512 | 1,024 |
 
-    The span of inputs one output depends on is its **receptive field**. A
-    layer with kernel k and dilation d widens it by (k - 1) times d. So a
-    stack's receptive field is 1 plus that amount summed over its layers.
+    The range of inputs that one output can depend on is called its
+    **receptive field**, counted in steps. A layer with kernel size k and
+    dilation d adds `(k - 1) * d` steps to it. So the receptive field of a
+    stack is 1 plus the sum of `(k - 1) * d` over its layers.
 
-    Each layer here also adds its input back, as `x + relu(layer(x))`. That is
-    the residual of Section 3, so the signal and its gradient pass through a
-    deep stack.
+    Each layer here also adds its input back to its output, as
+    `x + relu(layer(x))`. That is the residual connection from Section 3. It
+    lets the signal and its gradient pass through a deep stack.
 
-    WaveNet's own layer uses gating1's gate in place of the ReLU, the tanh of
-    one convolution times the sigmoid of another. Its paper found that this
-    worked better than a ReLU for audio.
+    WaveNet's own layer uses the gate from gating1 instead of the ReLU. That
+    gate is the tanh of one convolution times the sigmoid of another. The
+    WaveNet paper found that this worked better than a ReLU for audio.
 
-    `nn.ModuleList` holds a list of layers, so their weights count as the
-    model's own and `.parameters()` finds them. Loop over it in `forward`.
+    `nn.ModuleList` holds a list of layers and registers their weights as part
+    of the model, so `.parameters()` finds them. In `forward`, loop over it
+    like a list.
     """,
 )
 
@@ -363,12 +380,14 @@ DILATED1_SOURCE = source_file(
     import torch.nn.functional as F
     from torch import Tensor
 
-    widening = (2 - 1) * 4      # 4, what a layer with k = 2 and dilation 4 adds
-    layers = nn.ModuleList([nn.Conv1d(1, 1, 2), nn.Conv1d(1, 1, 2)])    # two layers the model owns
+    widening = (2 - 1) * 4      # 4, the steps a layer with k = 2 and dilation 4 adds
+    layers = nn.ModuleList([nn.Conv1d(1, 1, 2), nn.Conv1d(1, 1, 2)])    # two layers registered with the model
 
 
-    # TODO: Return the receptive field of a stack of causal convolutions, each
-    #   with kernel_size taps, with the given dilations, one per layer.
+    # TODO: Return the receptive field of a stack of causal convolutions. Every
+    #   layer has a kernel of size kernel_size, and dilations holds one
+    #   dilation per layer.
+    #   Example: receptive_field(2, [1, 2, 4, 8]) returns 16.
     def receptive_field(
         kernel_size: int,
         dilations: list[int],
@@ -376,9 +395,10 @@ DILATED1_SOURCE = source_file(
         ...
 
 
-    # TODO: Set self.left to the zeros a causal convolution with this
-    #   kernel_size and dilation needs on the left. Then finish forward, which
-    #   adds them and runs self.conv, so the output keeps the input's length.
+    # TODO: Set self.left to the number of zeros that a causal convolution with
+    #   this kernel_size and dilation needs on the left. Then finish forward.
+    #   It pads x with self.left zeros on the left and runs self.conv, so the
+    #   output has the same length as the input.
     class CausalConv1d(nn.Module):
         def __init__(
             self,
@@ -395,10 +415,11 @@ DILATED1_SOURCE = source_file(
             ...
 
 
-    # TODO: Set self.layers to an nn.ModuleList holding `layers` CausalConv1d
-    #   layers from channels to channels with a kernel of 2, the first with
-    #   dilation 1 and each next one doubling it. forward sets x to x + relu(layer(x)) for
-    #   each layer in turn, and returns x.
+    # TODO: Set self.layers to an nn.ModuleList of `layers` CausalConv1d layers.
+    #   Each one maps channels to channels with a kernel of size 2. The first
+    #   has dilation 1, and each later layer has twice the dilation of the one
+    #   before it. Then finish forward. For each layer in turn, it sets x to
+    #   x + relu(layer(x)). At the end it returns x.
     class DilatedStack(nn.Module):
         def __init__(
             self,
@@ -547,8 +568,8 @@ def check_stack_view(found: type) -> None:
 
     if dilations != [1, 2, 4, 8]:
         raise Mismatch(
-            f"DilatedStack(1, 4) should hold an nn.ModuleList of layers with dilations [1, 2, 4, 8], so the top sees "
-            f"16 steps, but its dilations are {dilations}.",
+            f"DilatedStack(1, 4) should hold an nn.ModuleList of layers with dilations [1, 2, 4, 8], so the top layer "
+            f"sees 16 steps, but its dilations are {dilations}.",
         )
 
 
@@ -556,7 +577,7 @@ def check_dilated1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="receptive_field",
-        description="adds (k - 1) times each dilation to 1",
+        description="returns 1 plus (k - 1) times the sum of the dilations",
         inputs=(
             (2, [1, 2, 4, 8]),
             (3, [1, 2, 4]),
@@ -597,8 +618,8 @@ DILATED1 = Exercise(
         "receptive_field": "Add up the dilations, multiply by kernel_size - 1, and add 1.",
         "CausalConv1d.forward": "self.left is (kernel_size - 1) * dilation. In forward, F.pad x with (self.left, 0) "
         "and pass it to self.conv.",
-        "DilatedStack.forward": "The dilation of layer number index is 2 ** index. In forward, loop over self.layers "
-        "and set x to x + torch.relu(layer(x)).",
+        "DilatedStack.forward": "The layer at position index in the list has dilation 2 ** index. In forward, loop "
+        "over self.layers and set x to x + torch.relu(layer(x)).",
     },
     introduces=(),
     check=check_dilated1,
@@ -611,43 +632,46 @@ DILATED1 = Exercise(
 
 WAVENET1_LESSON = prose(
     """
-    Two claims make WaveNet's stack worth its parts. It sees far back with
-    few layers, and it trains on every position at once.
+    WaveNet's dilated stack has two advantages. It sees far back with few
+    layers, and it computes every position at once during training.
 
-    The task here shifts a signal of noise, so output t should equal input
-    t - 10. A model has to see 10 steps back to do that. Here are two stacks
-    of 4 layers, each trained for 150 steps.
+    The task here is to shift a signal of random noise 10 steps later, so
+    output t should equal input t - 10. To do that, a model has to see 10
+    steps back. Here are two stacks of 4 layers, each trained for 150 steps.
 
-    | Stack | Steps the top sees | Mean squared error |
+    | Stack | Steps the top layer sees | Mean squared error |
     |---|---|---|
     | dilations 1, 2, 4, 8 | 16 | 0.0006 |
     | dilations 1, 1, 1, 1 | 5 | 1.007 |
 
-    An error of 1 is what always guessing 0 gets on this noise, so the plain
-    stack learned nothing. Input t - 10 is outside its view, and no amount of
-    training brings it in. Seeing 1,000 steps back takes 999 plain layers, or
-    10 dilated ones.
+    On this noise, always predicting 0 gives an error of about 1. So the plain
+    stack learned nothing. Input t - 10 is outside its receptive field, and no
+    amount of training can change that. Seeing 1,000 steps back takes 999
+    plain layers, or 10 dilated ones.
 
-    An RNN can see that far too, but it computes step t only once step t - 1
-    is done. Over 1,000 steps that is 1,000 small steps one after another,
-    forward and again backward. A dilated stack that sees 1,024 steps has 10
-    layers, and each one handles every position in a single call.
+    An RNN can also see that far back, but it can compute step t only after
+    step t - 1 is done. Over 1,000 steps, that is 1,000 small computations one
+    after another, in the forward pass and again in the backward pass. A
+    dilated stack that sees 1,024 steps has 10 layers. Each layer computes
+    every position in a single call.
 
-    Here is one forward and backward pass on 16 signals, on the CPU. The
-    stack is a `Shifter` with dilations 1 up to 512, and the GRU has the same
-    width of 8. Each time is the median of 5 runs.
+    The table below times one forward and backward pass on 16 signals, on the
+    CPU. The stack is a `Shifter` with dilations 1 up to 512 and 8 channels.
+    The GRU has a hidden size of 8 to match. Each time is the median of 5
+    runs.
 
-    | Samples | Dilated stack | GRU | GRU's time over the stack's |
+    | Samples | Dilated stack | GRU | GRU time divided by stack time |
     |---|---|---|---|
     | 1,024 | 59 ms | 74 ms | 1.3 |
     | 4,096 | 152 ms | 321 ms | 2.1 |
     | 16,384 | 501 ms | 1,667 ms | 3.3 |
 
-    The gap grows with length, since each GRU step waits for the one before,
-    and each layer of the stack covers every position at once.
+    The gap grows with the length of the signal. Each GRU step has to wait
+    for the one before it, while each layer of the stack computes every
+    position at once.
 
     So causal convolutions suit long signals, like audio at 16,000 samples a
-    second, which is what WaveNet generated.
+    second. WaveNet was built to generate audio like that.
     """,
 )
 
@@ -669,8 +693,8 @@ class CausalConv1d(nn.Module):
         return self.conv(F.pad(x, (self.left, 0)))
 
 
-# A stack of 8 channels that reads a signal of shape (batch, length) and writes
-# one of the same shape, with one layer per dilation.
+# A stack with 8 channels and one layer per dilation. It takes a signal of shape
+# (batch, length) and returns a signal of the same shape.
 class Shifter(nn.Module):
     def __init__(self, dilations: list[int]) -> None:
         super().__init__()
@@ -706,9 +730,12 @@ WAVENET1_SOURCE = source_file(
     later = F.pad(torch.tensor([[1.0, 2.0, 3.0]]), (1, 0))[:, :3]    # tensor([[0., 1., 2.]])
 
 
-    # TODO: Return how many causal layers with kernel_size taps it takes for
-    #   the top to see at least view steps. Plain layers all have dilation 1.
-    #   Dilated ones have 1, 2, 4 and so on.
+    # TODO: Return how many causal layers, each with a kernel of size
+    #   kernel_size, it takes for the top layer to see at least view steps.
+    #   If dilated is False, every layer has dilation 1. If dilated is True,
+    #   the layers have dilations 1, 2, 4 and so on.
+    #   Example: layers_for_view(1000, 2, True) returns 10, and
+    #   layers_for_view(1000, 2, False) returns 999.
     def layers_for_view(
         view: int,
         kernel_size: int,
@@ -717,8 +744,11 @@ WAVENET1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return x, of shape (batch, length), shifted delay steps later, so
-    #   position t holds x[:, t - delay] and the first delay positions hold 0.
+    # TODO: Return x, of shape (batch, length), shifted delay steps later. The
+    #   result has the same shape as x. Position t holds x[:, t - delay], and
+    #   the first delay positions hold 0.
+    #   Example: delayed(torch.tensor([[1.0, 2.0, 3.0]]), 1) returns
+    #   tensor([[0., 1., 2.]]).
     def delayed(
         x: Tensor,
         delay: int,
@@ -726,8 +756,9 @@ WAVENET1_SOURCE = source_file(
         ...
 
 
-    # TODO: Finish the line that sets loss, the mean squared error between the
-    #   model's output on x and x delayed by delay, so this trains with Adam.
+    # TODO: Finish the line that sets loss to the mean squared error between
+    #   model(x) and x delayed by delay steps. The rest of the loop then trains
+    #   the model with Adam.
     def train_shifter(
         model: nn.Module,
         delay: int,
@@ -746,9 +777,9 @@ WAVENET1_SOURCE = source_file(
         return loss.item()
 
 
-    # TODO: Return the mean squared error between the model's output on x and x
-    #   delayed by delay, over positions delay onwards only, as a plain number,
-    #   without recording for autograd.
+    # TODO: Return the mean squared error between model(x) and x delayed by
+    #   delay steps, as a Python float. Compare only the positions from delay
+    #   onwards. Compute it without recording anything for autograd.
     def shift_error(
         model: nn.Module,
         x: Tensor,
@@ -991,7 +1022,7 @@ WAVENET1 = Exercise(
     solution=WAVENET1_SOLUTION,
     hints={
         "layers_for_view": "Start with layers = 0 and seen = 1. While seen is below view, add (kernel_size - 1) "
-        "times the next layer's dilation to seen, and count the layer.",
+        "times the next layer's dilation to seen, and add 1 to layers.",
         "delayed": "F.pad with (delay, 0) adds the zeros at the start. Then keep the first x.shape[1] positions.",
         "train_shifter": "F.mse_loss takes model(x) and delayed(x, delay).",
         "shift_error": "Inside a with torch.no_grad() block, slice both the output and the target with "
@@ -1010,51 +1041,62 @@ WAVENET1 = Exercise(
 
 STFT1_LESSON = prose(
     """
-    fft1's spectrum covers a whole signal at once. It says which frequencies
-    the signal holds, but not when. Swap the two halves of a signal and the
-    strengths in its spectrum don't change at all.
+    The spectrum from fft1 covers a whole signal at once. It says which
+    frequencies the signal contains, but not when they occur. If you swap the
+    two halves of a signal, the strengths in its spectrum do not change at
+    all.
 
-    Take 512 samples of a wave with a period of 8, then 512 with a period of
-    4. That is a low note followed by a high one. With the halves swapped,
-    the high note comes first. `torch.fft.rfft(...).abs()` gives exactly the same
-    strengths for both, with peaks at frequencies 128 and 256.
+    Take 512 samples of a wave with a period of 8, followed by 512 samples of
+    a wave with a period of 4. That is a low note followed by a high one. With
+    the halves swapped, the high note comes first. `torch.fft.rfft(signal).abs()`
+    gives exactly the same strengths for both signals, with peaks at
+    frequencies 128 and 256.
 
     The **short time Fourier transform**, or STFT, cuts the signal into short
-    windows and takes the spectrum of each one.
+    pieces called windows and takes the spectrum of each window.
 
     ```python
     torch.arange(6.0).unfold(0, 4, 2)    # tensor([[0., 1., 2., 3.], [2., 3., 4., 5.]])
     ```
 
-    `x.unfold(0, size, step)` gives windows of `size` along dimension 0, one
-    starting every `step`.
+    `x.unfold(0, size, step)` cuts dimension 0 of `x` into windows of length
+    `size`, with a new window starting every `step` entries. Each window is
+    one row of the result. The number of samples from the start of one window
+    to the start of the next is called the hop.
 
-    A wave cut off sharply at a window's edges smears over many frequencies.
-    So each window is first multiplied by a Hann window, which rises from 0
-    to 1 and falls back. `torch.hann_window(n)` gives one of n samples. Take a
-    wave of 10.5 cycles in 64 samples. Its four nearest frequencies hold 90.1
-    percent of its energy without the Hann window, and 99.9 percent with it.
+    When a wave is cut off sharply at the edges of a window, its energy
+    spreads over many frequencies of the spectrum. To reduce that, each window
+    is first multiplied by a Hann window. A Hann window is a curve that rises
+    smoothly from 0 to 1 and falls back to 0. `torch.hann_window(n)` returns
+    one with n samples.
 
-    The taper costs something. It shrinks each window's edges to near 0, so
-    windows that only touched would all but drop the samples at every cut.
-    Windows of 64 that start every 32 overlap by half. Their Hann windows add
-    up to exactly 1 at every sample except the first and last 32, which only
-    one window covers. So the samples in between all count the same.
+    For example, take a wave that completes 10.5 cycles in 64 samples. Without
+    the Hann window, the four frequencies nearest to 10.5 hold 90.1 percent of
+    its energy. With the Hann window, they hold 99.9 percent.
 
-    `torch.stft` does all of this and gives one column per window. A window
-    of 64 has frequencies 0 to 32, so a period of 8 is frequency 8 and a
-    period of 4 is frequency 16. With `center=False` the first window starts
-    at sample 0. The default, `center=True`, first pads both ends, so each
-    window is centred on a multiple of the hop.
+    The Hann window has a cost. It shrinks the samples near the edges of each
+    window to almost 0. If the windows only met end to end, the samples near
+    every boundary would be almost ignored. So the windows overlap. Windows of
+    64 samples that start every 32 samples overlap by half. Their Hann windows
+    add up to exactly 1 at every sample except the first and last 32, which
+    only one window covers. So every sample in between counts the same.
+
+    `torch.stft` does all of these steps and returns one column per window. A
+    window of 64 samples has frequencies 0 to 32. A wave with a period of 8
+    completes 8 cycles in 64 samples, so it shows up at frequency 8. A period
+    of 4 shows up at frequency 16. With `center=False`, the first window
+    starts at sample 0. The default, `center=True`, first pads both ends of
+    the signal, so each window is centred on a multiple of the hop.
 
     | Signal | Loudest frequency of each window |
     |---|---|
     | low then high | 8 in the first 15 windows, then 16 in the last 16 |
     | high then low | 16 in the first 16 windows, then 8 in the last 15 |
 
-    The STFT shows what and when. Its strengths form a spectrogram, an image
-    of frequency against time. Most audio models read that image, or a
-    version of it.
+    So the STFT shows which frequencies a signal contains and when they occur.
+    Its strengths form a spectrogram, an image with frequency on one axis and
+    time on the other. Most audio models read a spectrogram, or a version of
+    one.
     """,
 )
 
@@ -1066,11 +1108,15 @@ STFT1_SOURCE = source_file(
     from torch import Tensor
 
     windows = torch.arange(6.0).unfold(0, 4, 2)    # tensor([[0., 1., 2., 3.], [2., 3., 4., 5.]])
-    taper = torch.hann_window(8)                    # rises from 0 up to 1 at the middle, then falls
+    taper = torch.hann_window(8)                    # rises from 0 to 1 at the middle, then falls back
 
 
-    # TODO: Return the windows of signal, each frame_length samples long, one
-    #   starting every hop samples, as rows of shape (count, frame_length).
+    # TODO: Cut the 1D tensor signal into windows of frame_length samples, with
+    #   a new window starting every hop samples. Return the windows as the rows
+    #   of a tensor of shape (count, frame_length), where count is the number
+    #   of windows.
+    #   Example: frames(torch.arange(6.0), 4, 2) returns
+    #   tensor([[0., 1., 2., 3.], [2., 3., 4., 5.]]).
     def frames(
         signal: Tensor,
         frame_length: int,
@@ -1079,9 +1125,11 @@ STFT1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the STFT of signal without torch.stft. Multiply each window
-    #   by a Hann window, take its spectrum with torch.fft.rfft, and give one
-    #   column per window, of shape (frame_length // 2 + 1, count).
+    # TODO: Return the STFT of signal without using torch.stft. Cut signal into
+    #   windows with frames, multiply each window by a Hann window of
+    #   frame_length samples, and take the spectrum of each window with
+    #   torch.fft.rfft. Return one column per window, so the result has shape
+    #   (frame_length // 2 + 1, count).
     def stft_by_hand(
         signal: Tensor,
         frame_length: int,
@@ -1090,8 +1138,9 @@ STFT1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the strengths of the STFT of signal from torch.stft, with
-    #   n_fft=n_fft, hop_length=hop, a Hann window of n_fft samples,
+    # TODO: Return the strengths of the STFT of signal, which are the absolute
+    #   values of its entries. Compute the STFT with torch.stft, passing
+    #   n_fft=n_fft, hop_length=hop, a Hann window of n_fft samples as window,
     #   center=False and return_complex=True.
     def spectrogram(
         signal: Tensor,
@@ -1101,8 +1150,10 @@ STFT1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the loudest frequency of each window of strengths, whose
-    #   columns are the windows, as a tensor of one number per window.
+    # TODO: strengths has one row per frequency and one column per window.
+    #   Return the loudest frequency of each window, which is the row index of
+    #   the largest strength in that column, as a tensor with one number per
+    #   window.
     def loudest_frequencies(strengths: Tensor) -> Tensor:
         ...
     ''',
@@ -1253,9 +1304,10 @@ STFT1 = Exercise(
         "frames": "Call .unfold on signal along dimension 0, with frame_length as the size and hop as the step.",
         "stft_by_hand": "Multiply frames(signal, frame_length, hop) by torch.hann_window(frame_length). Then "
         "torch.fft.rfft with dim=1 gives one row per window, and .T makes them columns.",
-        "spectrogram": "Build a torch.hann_window of n_fft places. Call torch.stft with the arguments the TODO names "
-        "and that as the window, then take .abs().",
-        "loudest_frequencies": "The frequencies run down each column, so take the argmax over dim=0.",
+        "spectrogram": "Build a torch.hann_window of n_fft samples. Call torch.stft with the arguments the TODO names "
+        "and that Hann window as window, then take .abs().",
+        "loudest_frequencies": "Each column holds the strengths of every frequency for one window, so take the "
+        "argmax over dim=0.",
     },
     introduces=(),
     check=check_stft1,

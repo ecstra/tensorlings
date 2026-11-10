@@ -32,12 +32,13 @@ ATTENTION = Chapter(
         """
         # Attention
 
-        Section 7 is about attention, the way each position of a sequence
-        gathers what it needs from the others by a weighted average. This
-        chapter starts from plain averages of the past, turns the weights into
-        a masked softmax over scores, makes the scores from queries and keys,
-        and averages values. It ends with a recall task an RNN fails and
-        attention solves.
+        Section 7 is about attention. In attention, each position of a
+        sequence collects information from the other positions by taking a
+        weighted average of them. This chapter starts with plain averages of
+        the past. Then it computes the weights as a masked softmax over
+        scores, computes the scores from queries and keys, and averages
+        values. It ends with a recall task that an RNN fails and attention
+        solves.
 
         ## Further reading
 
@@ -55,26 +56,29 @@ ATTENTION = Chapter(
 
 ATTENTION1_LESSON = prose(
     """
-    An RNN carries the past forward in one fixed set of numbers. Section 7
-    takes another road. Each position looks back at every position before it
-    and takes a weighted average of them. This is **attention**.
+    An RNN carries the past forward in one fixed set of numbers, its hidden
+    state. Section 7 takes a different approach. Each position looks back at
+    every position before it and takes a weighted average of them. This is
+    called **attention**.
 
-    It starts with the plainest weights, equal ones. Position t becomes the
-    average of positions 0 up to t, itself included. A position never looks
-    ahead, so a model that predicts the next step can't peek at the answer.
+    This exercise starts with the simplest weights, all equal. Position t is
+    replaced by the average of positions 0 up to t, including itself. A
+    position never looks at later positions, so a model that predicts the
+    next step cannot see the answer.
 
-    With a loop, each position slices the rows up to its own and takes their
-    mean.
+    With a loop, you can slice out the rows up to each position and take
+    their mean.
 
     ```python
     x = torch.tensor([[1.0, 0.0], [3.0, 2.0], [2.0, 4.0]])
     x[:2].mean(dim=0)    # tensor([2., 1.]), the average for position 1
     ```
 
-    The loop does one position at a time. A matrix does them all at once.
-    Row t of a weight matrix holds position t's weights, and the matrix times
-    `x` gives every average together. For equal weights over the past, row t
-    has `1 / (t + 1)` in its first t + 1 places and 0 after.
+    The loop handles one position at a time. A matrix multiplication can
+    handle them all at once. Put the weights of position t in row t of a
+    weight matrix `W`. Then `W @ x` computes every weighted average together.
+    For equal weights over the past, row t has `1 / (t + 1)` in its first
+    t + 1 entries and 0 in the rest.
 
     `torch.tril` keeps the lower triangle of a matrix, the diagonal and below,
     and sets the rest to 0.
@@ -83,9 +87,10 @@ ATTENTION1_LESSON = prose(
     torch.tril(torch.ones(3, 3))    # tensor([[1., 0., 0.], [1., 1., 0.], [1., 1., 1.]])
     ```
 
-    Dividing each row by its sum makes it average. With a batch of sequences,
-    `x` has shape `(batch, steps, features)`, and the same matrix works on
-    every sequence through `@`, by broadcasting.
+    If you divide each row of that triangle by its sum, the row's weights add
+    up to 1, so the row computes an average. With a batch of sequences, `x`
+    has shape `(batch, steps, features)`. The same `(steps, steps)` matrix
+    then works on every sequence through `@`, by broadcasting.
     """,
 )
 
@@ -101,20 +106,26 @@ ATTENTION1_SOURCE = source_file(
     lower = torch.tril(torch.ones(3, 3))    # tensor([[1., 0., 0.], [1., 1., 0.], [1., 1., 1.]])
 
 
-    # TODO: Return each position of x, of shape (steps, features), replaced by
-    #   the average of the positions up to and including it, with a loop.
+    # TODO: x has shape (steps, features). Use a loop to replace each position t
+    #   of x with the average of positions 0 up to t, including t itself.
+    #   Return the result, which has the same shape as x.
+    #   Example: for the x above, average_so_far_loop(x) returns
+    #   tensor([[1., 0.], [2., 1.], [2., 2.]]).
     def average_so_far_loop(x: Tensor) -> Tensor:
         ...
 
 
-    # TODO: Return the steps by steps matrix whose row t holds equal weights on
-    #   positions 0 up to t, summing to 1, and 0 after.
+    # TODO: Return a (steps, steps) matrix whose row t has equal weights on
+    #   positions 0 up to t that add up to 1, and 0 for every later position.
+    #   Example: averaging_matrix(2) returns
+    #   tensor([[1.0000, 0.0000], [0.5000, 0.5000]]).
     def averaging_matrix(steps: int) -> Tensor:
         ...
 
 
-    # TODO: Return the same averages as average_so_far_loop for x of shape
-    #   (batch, steps, features), with averaging_matrix and no loop.
+    # TODO: Return the same averages as average_so_far_loop, but for x of shape
+    #   (batch, steps, features) and without a loop. Use averaging_matrix and
+    #   a matrix multiplication.
     def average_so_far(x: Tensor) -> Tensor:
         ...
     ''',
@@ -203,7 +214,8 @@ ATTENTION1 = Exercise(
     solution=ATTENTION1_SOLUTION,
     hints={
         "average_so_far_loop": "For each t in range(len(x)), take x[: t + 1].mean(dim=0). Stack the results.",
-        "averaging_matrix": "torch.tril(torch.ones(steps, steps)), divided by its row sums with keepdim=True.",
+        "averaging_matrix": "Take torch.tril(torch.ones(steps, steps)) and divide it by its row sums, computed with "
+        "keepdim=True.",
         "average_so_far": "Build averaging_matrix for the number of steps, x.shape[1], and multiply x by it from "
         "the left with @.",
     },
@@ -218,33 +230,37 @@ ATTENTION1 = Exercise(
 
 ATTENTION2_LESSON = prose(
     """
-    Equal weights treat every past position the same. A model needs to weight
-    some more than others, so the weights should come from scores, through a
-    softmax, as soft1's soft pick did.
+    Equal weights treat every past position the same. A model needs to give
+    some positions more weight than others. So the weights should come from
+    scores passed through a softmax, as in soft1.
 
-    The future still has to stay out. Setting a future weight to 0 after the
-    softmax would leave rows that no longer sum to 1. So the scores of future
-    positions are set to minus infinity before it, and the softmax turns
-    those into weights of exactly 0.
+    Future positions must still get no weight. Setting their weights to 0
+    after the softmax would leave rows that no longer add up to 1. So the
+    scores of future positions are set to minus infinity before the softmax.
+    The softmax turns those scores into weights of exactly 0, and the other
+    weights in the row still add up to 1.
 
     ```python
     torch.softmax(torch.tensor([1.0, 2.0, float("-inf")]), dim=0)    # tensor([0.2689, 0.7311, 0.0000])
     ```
 
-    `torch.triu` with `diagonal=1` keeps what lies above the diagonal, the
-    future of each row. `.bool()` turns its ones into True.
+    `torch.triu(m, diagonal=1)` keeps the entries above the diagonal of `m`
+    and sets the rest to 0. In row t, the entries above the diagonal are the
+    positions after t, the future. `.bool()` turns each 1 into True and each 0
+    into False.
 
     ```python
     torch.triu(torch.ones(3, 3), diagonal=1).bool()
     # tensor([[False,  True,  True], [False, False,  True], [False, False, False]])
     ```
 
-    `scores.masked_fill(mask, value)` puts `value` wherever `mask` is True.
+    `scores.masked_fill(mask, value)` returns a copy of `scores` with `value`
+    wherever `mask` is True.
 
-    With every score 0, the masked softmax gives back attention1's averaging
-    matrix exactly. Any other scores give other weights, still on the past
-    alone and still summing to 1 in each row. attention3 computes the scores
-    from the data.
+    If every score is 0, the masked softmax gives exactly the averaging matrix
+    from attention1. Any other scores give other weights. Those weights are
+    still only on the past, and each row still adds up to 1. attention3
+    computes the scores from the data.
     """,
 )
 
@@ -259,20 +275,28 @@ ATTENTION2_SOURCE = source_file(
     above = torch.triu(torch.ones(2, 2), diagonal=1).bool()    # tensor([[False, True], [False, False]])
 
 
-    # TODO: Return the steps by steps mask that is True where a position would
-    #   look at the future, above the diagonal, and False elsewhere.
+    # TODO: Return a (steps, steps) mask of booleans that is True above the
+    #   diagonal and False elsewhere. Entry (t, s) is True when s is after t,
+    #   which means position t must not look at position s.
+    #   Example: future_mask(2) returns
+    #   tensor([[False, True], [False, False]]).
     def future_mask(steps: int) -> Tensor:
         ...
 
 
-    # TODO: Return the weights from scores, of shape (..., steps, steps), with
-    #   the future set to minus infinity and a softmax over each row.
+    # TODO: scores has shape (..., steps, steps). Set the scores of future
+    #   positions to minus infinity, then take a softmax over each row. Return
+    #   the resulting weights, which have the same shape as scores.
+    #   Example: masked_weights(torch.zeros(2, 2)) returns
+    #   tensor([[1.0000, 0.0000], [0.5000, 0.5000]]).
     def masked_weights(scores: Tensor) -> Tensor:
         ...
 
 
-    # TODO: Return each position of x, of shape (..., steps, features), as the
-    #   average of the past weighted by masked_weights of scores.
+    # TODO: x has shape (..., steps, features). Replace each position of x with
+    #   the weighted average of the positions up to and including it, using
+    #   masked_weights(scores) as the weights. Return the result, which has
+    #   the same shape as x.
     def weighted_average(
         scores: Tensor,
         x: Tensor,
@@ -377,9 +401,9 @@ ATTENTION2 = Exercise(
     source=ATTENTION2_SOURCE,
     solution=ATTENTION2_SOLUTION,
     hints={
-        "future_mask": "torch.triu(torch.ones(steps, steps), diagonal=1), then .bool().",
-        "masked_weights": "scores.masked_fill(future_mask(scores.shape[-1]), float(\"-inf\")), then torch.softmax "
-        "with dim=-1.",
+        "future_mask": "Call torch.triu(torch.ones(steps, steps), diagonal=1), then .bool().",
+        "masked_weights": "Call scores.masked_fill(future_mask(scores.shape[-1]), float(\"-inf\")), then "
+        "torch.softmax with dim=-1.",
         "weighted_average": "Get the weights from masked_weights, then multiply x by them from the left with @.",
     },
     introduces=(),
@@ -402,40 +426,50 @@ def seeded_module(
 
 ATTENTION3_LESSON = prose(
     """
-    attention2 took its scores as given. Now each position makes them from its
-    own features, with two Linear layers, as derive2 did with its two tables.
+    In attention2 the scores were given. Now each position computes them from
+    its own features, with two Linear layers, as derive2 did with its two
+    tables.
 
-    - A **query** says what a position is looking for.
-    - A **key** says what a position holds.
+    - A **query** describes what a position is looking for.
+    - A **key** describes what a position contains.
 
-    Position t's score for position s is the dot product of t's query and s's
-    key. With one row per position in `q` and in `k`, one matrix product gives
-    every score at once, of shape `(steps, steps)`. `.transpose(-2, -1)` swaps
-    the last two dimensions, so it works with a batch in front too.
+    The score that position t gives position s is the dot product of t's
+    query and s's key. Put one query per row in `q` and one key per row in
+    `k`. Then one matrix product, `q` times the transpose of `k`, computes
+    every score at once, with shape `(steps, steps)`. `.transpose(-2, -1)`
+    swaps the last two dimensions, so it also works with a batch dimension in
+    front.
 
     ```python
     q = torch.tensor([[1.0, 0.0], [0.0, 2.0]])
     q @ q.transpose(-2, -1)    # tensor([[1., 0.], [0., 4.]])
     ```
 
-    The scores then get divided by the square root of d, the size of a query.
-    A dot product sums d products. With random entries of spread 1, its spread
-    grows like the square root of d. Big scores make the softmax nearly a hard
-    pick, as soft2's bigger query did, and a hard pick passes almost no
-    gradient back.
+    The scores are then divided by the square root of d, the number of entries
+    in a query. Here is why. A dot product adds up d products. Suppose the
+    entries are random with a standard deviation of 1, so they typically lie
+    about 1 away from their mean of 0. Then the standard deviation of the dot
+    product grows like the square root of d. Large scores make the softmax put
+    almost all the weight on one position, as the bigger query in soft2 did.
+    A softmax like that passes almost no gradient back.
 
-    Here are random queries and keys, with 8 keys for each query.
+    Here are random queries and keys, with 8 keys for each query. The largest
+    weight is the biggest softmax weight a query gives any key, averaged over
+    the queries. The last two columns divide the scores by the square root of
+    d first.
 
-    | Size d | Spread of the scores | Largest weight | Spread, divided | Largest weight, divided |
+    | Size d | Standard deviation of the scores | Largest weight | Standard deviation, divided | Largest weight, divided |
     |---|---|---|---|---|
     | 4 | 1.99 | 0.529 | 0.99 | 0.344 |
     | 16 | 4.02 | 0.748 | 1.01 | 0.359 |
     | 64 | 8.00 | 0.875 | 1.00 | 0.361 |
     | 256 | 15.99 | 0.938 | 1.00 | 0.362 |
 
-    Without the division, a bigger model starts with sharper weights, at 256
-    already putting 94% on one key. With it, the spread stays near 1 at every
-    size. The model starts soft and learns how sharp to be.
+    Without the division, a bigger model starts with sharper weights, which
+    means more of the weight goes to a single key. At d = 256, it already puts
+    94% of the weight on one key. With the division, the standard deviation
+    stays near 1 at every size. So the model starts with soft weights and
+    learns during training how sharp to make them.
     """,
 )
 
@@ -461,9 +495,12 @@ ATTENTION3_SOURCE = source_file(
         return torch.softmax(scores.masked_fill(future, float("-inf")), dim=-1)
 
 
-    # TODO: Return the scores of the queries q against the keys k, of shapes
-    #   (..., q steps, d) and (..., k steps, d), divided by the square root of
-    #   d. The result has shape (..., q steps, k steps).
+    # TODO: Return the attention scores of the queries q against the keys k. q
+    #   has shape (..., q steps, d) and k has shape (..., k steps, d). Entry
+    #   (t, s) is the dot product of query t and key s, divided by the square
+    #   root of d. The result has shape (..., q steps, k steps).
+    #   Example: for the q above, attention_scores(q, q) returns
+    #   tensor([[0.7071, 0.0000], [0.0000, 2.8284]]).
     def attention_scores(
         q: Tensor,
         k: Tensor,
@@ -471,16 +508,18 @@ ATTENTION3_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the average, over every row of scores, of the largest
-    #   softmax weight in that row, as a plain number.
+    # TODO: Take the softmax of each row of scores, and find the largest weight
+    #   in each row. Return the average of those largest weights over all
+    #   rows, as a Python float.
+    #   Example: mean_largest_weight(torch.zeros(3, 4)) returns 0.25.
     def mean_largest_weight(scores: Tensor) -> float:
         ...
 
 
-    # TODO: Finish ScoreHead. __init__ makes self.query, then self.key, each an
-    #   nn.Linear from features to size with no bias. forward gives the masked
-    #   weights of x, of shape (..., steps, features), from attention_scores of
-    #   its queries and keys.
+    # TODO: Finish ScoreHead. In __init__, make self.query and then self.key,
+    #   each an nn.Linear from features to size with no bias. In forward, x has
+    #   shape (..., steps, features). Compute the queries and keys of x, pass
+    #   them to attention_scores, and return masked_weights of those scores.
     class ScoreHead(nn.Module):
         def __init__(
             self,
@@ -581,7 +620,7 @@ def check_score_head(found: type) -> None:
 
         # The check seeds the weights before __init__ runs, so layers made in another order start from other numbers.
         if not (torch.equal(head.query.weight, reference.query.weight) and torch.equal(head.key.weight, reference.key.weight)):
-            raise Mismatch(f"{call} starts from other weights than expected. Make self.query first, then self.key, since the check seeds the weights in that order.")
+            raise Mismatch(f"{call} starts from different weights than expected. Make self.query first, then self.key, because the check creates the weights from a fixed seed in that order.")
 
         x = small_tensor(480 + size, 2, 5, features) / 2
 
@@ -635,11 +674,11 @@ ATTENTION3 = Exercise(
     source=ATTENTION3_SOURCE,
     solution=ATTENTION3_SOLUTION,
     hints={
-        "attention_scores": "q @ k.transpose(-2, -1), then divide by math.sqrt(q.shape[-1]).",
-        "mean_largest_weight": "torch.softmax with dim=-1, then .amax(dim=-1) for each row's largest weight, then "
-        ".mean().item().",
-        "ScoreHead.forward": "In __init__, nn.Linear(features, size, bias=False) twice. In forward, pass "
-        "self.query(x) and self.key(x) to attention_scores, then to masked_weights.",
+        "attention_scores": "Compute q @ k.transpose(-2, -1), then divide it by math.sqrt(q.shape[-1]).",
+        "mean_largest_weight": "Apply torch.softmax with dim=-1, then .amax(dim=-1) to get each row's largest weight, "
+        "then .mean().item().",
+        "ScoreHead.forward": "In __init__, use nn.Linear(features, size, bias=False) for both layers. In forward, "
+        "pass self.query(x) and self.key(x) to attention_scores, then pass the result to masked_weights.",
     },
     introduces=(),
     check=check_attention3,
@@ -652,18 +691,21 @@ ATTENTION3 = Exercise(
 
 ATTENTION4_LESSON = prose(
     """
-    ScoreHead's weights would average x itself. A full head makes a third
-    Linear, the **value** of each position, what it passes on when it is
-    picked. The weights average the values, and an output Linear maps the
-    result back to the features size.
+    The weights from ScoreHead would average x itself. A full attention head
+    adds a third Linear layer that computes the **value** of each position.
+    The value is what a position passes on to the positions that give it
+    weight. The weights average the values, and an output Linear layer maps
+    the result back to the size of the features.
 
-    Why make queries, keys and values at all, instead of comparing x with
+    Why compute queries, keys and values at all, instead of comparing x with
     itself? There are two reasons.
 
-    Compared with itself, every position becomes its own best match. A row's
-    dot product with itself is the sum of its squares, always large, while two
-    different rows mix signs and partly cancel. Here is the weight each of 8
-    positions puts on itself, for random rows with no future mask.
+    First, if x is compared with itself, every position becomes its own best
+    match. The dot product of a row with itself is the sum of its squares,
+    which is always large. The dot product of two different rows mixes
+    positive and negative products, which partly cancel. Here is the average
+    weight that each of 8 positions puts on itself, for random rows with no
+    future mask.
 
     | Features | Weight on itself |
     |---|---|
@@ -671,33 +713,35 @@ ATTENTION4_LESSON = prose(
     | 16 | 0.775 |
     | 64 | 0.992 |
 
-    At 64 features each position takes back 99% of itself and learns almost
-    nothing from the others. Queries and keys from their own Linears can make
-    any position match any other.
+    At 64 features, each position puts 99% of the weight on itself and takes
+    almost nothing from the others. Queries and keys computed by their own
+    Linear layers can make any position match any other.
 
-    Training shows the difference. Here a model copies the token right before
-    each position, out of 16 kinds, in sequences of 12. It adds a learned row
-    per position to each token, so it can tell positions apart. One version
-    compares x with itself and averages x, and the other is SingleHead. Each
-    trained for 600 steps, over three seeds.
+    Training shows the difference. Here a model has to output, at each
+    position, the token right before it. There are 16 different tokens, and
+    each sequence has 12. The model adds a learned row for each position to
+    each token's embedding, so it can tell positions apart. One version
+    compares x with itself and averages x. The other uses SingleHead. Each
+    version trained for 600 steps, with three different seeds.
 
-    | Attention | Previous token right |
+    | Attention | Previous token predicted correctly |
     |---|---|
     | x with itself | 57.3% to 83.0% |
     | SingleHead | 100% on every seed |
 
-    Without the Linears a position keeps finding itself. 19.0% to 44.5% of
-    its answers were its own token, against 6.3% by chance.
+    Without the Linear layers, a position keeps matching itself. From 19.0% to
+    44.5% of its answers were its own token, where chance would give 6.3%.
 
-    The features that make a good match are often not the ones worth passing
-    on. A name is found by "this is a name", and passes on which name it is.
-    Separate keys and values let a position be found by one thing and pass
-    on another.
+    Second, the features that make a good match are often not the features
+    worth passing on. For example, a position might be found because it holds
+    a name, but what it should pass on is which name it is. Separate keys and
+    values let a position be found by one feature and pass on another.
 
-    The output Linear merges what came back into the size the rest of the
-    model uses. In 50_multihead it also mixes several heads together.
+    The output Linear layer maps the averaged values back to the size the rest
+    of the model uses. In 50_multihead it also combines the outputs of several
+    heads.
 
-    `.diagonal(dim1=-2, dim2=-1)` gives the diagonal of each matrix in a
+    `.diagonal(dim1=-2, dim2=-1)` returns the diagonal of each matrix in a
     batch.
 
     ```python
@@ -736,17 +780,20 @@ ATTENTION4_SOURCE = source_file(
         return q @ k.transpose(-2, -1) / math.sqrt(q.shape[-1])
 
 
-    # TODO: Return the average weight each position of x, of shape (..., steps,
-    #   features), puts on itself when x is its own queries and keys, with no
-    #   future mask, as a plain number.
+    # TODO: x has shape (..., steps, features). Use x as both the queries and
+    #   the keys, and compute the softmax weights with attention_scores and no
+    #   future mask. Find the weight each position puts on itself, and return
+    #   the average of those weights as a Python float.
+    #   Example: self_weight(torch.eye(2)) returns about 0.6698.
     def self_weight(x: Tensor) -> float:
         ...
 
 
-    # TODO: Finish SingleHead. __init__ adds self.value, an nn.Linear from
-    #   features to size with no bias, then self.out, an nn.Linear from size
-    #   back to features with its bias. forward averages the values with the
-    #   masked weights from the queries and keys, then runs self.out.
+    # TODO: Finish SingleHead. In __init__, add self.value, an nn.Linear from
+    #   features to size with no bias. Then add self.out, an nn.Linear from
+    #   size back to features that keeps its bias. In forward, compute the
+    #   masked weights from the queries and keys, as ScoreHead did. Use them
+    #   to average the values, then run self.out on the result.
     class SingleHead(nn.Module):
         def __init__(
             self,
@@ -852,13 +899,13 @@ def check_single_head(found: type) -> None:
             raise Mismatch(f"{call} should hold self.out, an nn.Linear from {size} back to {features}.")
 
         if out.bias is None:
-            raise Mismatch(f"{call} should keep the bias of self.out. Only the query, key and value Linears leave theirs out.")
+            raise Mismatch(f"{call} should keep the bias of self.out. Only the query, key and value layers have no bias.")
 
         reference = seeded_module(ReferenceSingleHead, features, size)
 
         # The check seeds the weights before __init__ runs, so layers made in another order start from other numbers.
         if not (torch.equal(value.weight, reference.value.weight) and torch.equal(out.weight, reference.out.weight)):
-            raise Mismatch(f"{call} starts from other weights than expected. Make self.value, then self.out, after the given layers, since the check seeds the weights in that order.")
+            raise Mismatch(f"{call} starts from different weights than expected. Make self.value and then self.out, after the given layers, because the check creates the weights from a fixed seed in that order.")
 
         x = small_tensor(490 + size, 2, 5, features) / 2
 
@@ -900,8 +947,8 @@ ATTENTION4 = Exercise(
     source=ATTENTION4_SOURCE,
     solution=ATTENTION4_SOLUTION,
     hints={
-        "self_weight": "torch.softmax of attention_scores(x, x) with dim=-1, then .diagonal(dim1=-2, dim2=-1), "
-        "then .mean().item().",
+        "self_weight": "Take torch.softmax of attention_scores(x, x) with dim=-1. Then take "
+        ".diagonal(dim1=-2, dim2=-1) and .mean().item().",
         "SingleHead.forward": "The weights are masked_weights of attention_scores(self.query(x), self.key(x)). "
         "Multiply self.value(x) by them from the left with @, then run self.out.",
     },
@@ -916,32 +963,36 @@ ATTENTION4 = Exercise(
 
 ATTENTION5_LESSON = prose(
     """
-    attention3 and attention4 built every piece. Put together, they are
-    scaled dot product attention.
+    attention3 and attention4 built every piece of attention. Put together,
+    the pieces are called scaled dot product attention.
 
     ```text
     attention(q, k, v) = softmax(q kᵀ / √d) v
     ```
 
-    With the future masked, it is the causal kind a model that writes text
-    uses. Without the mask, every position sees every other, which suits a
-    model that reads a whole sentence at once.
+    With the future masked, it is causal attention, the kind used by a model
+    that writes text. Without the mask, every position can see every other
+    position. That suits a model that reads a whole sentence at once.
 
-    The keys and values can come from a sequence of another length than the
-    queries, as long as the keys and values match each other. Then the scores
-    have shape `(q steps, k steps)`, and 51_cross_attention uses that. The
-    causal mask only makes sense when all three come from the same sequence.
+    The keys and values can come from a sequence of a different length than
+    the queries. Only the keys and values must have the same length. Then the
+    scores have shape `(q steps, k steps)`. 51_cross_attention
+    uses this. The causal mask only makes sense when the queries, keys and
+    values all come from the same sequence.
 
-    PyTorch has the whole computation as one call,
-    `F.scaled_dot_product_attention(q, k, v)`, which masks the future when
-    given `is_causal=True`. It runs a fused kernel, one piece of code that
-    does every step in a single pass. FlashAttention is the best known one.
-    It never stores the full weight matrix, which is large. At 2,048 steps and
-    4 heads it holds 16,777,216 numbers, 67 MB in float32, for one sequence.
+    PyTorch does the whole computation in one call,
+    `F.scaled_dot_product_attention(q, k, v)`. With `is_causal=True`, it also
+    masks the future. It runs a fused kernel, one piece of code that does
+    every step in a single pass. The best known fused kernel is
+    FlashAttention. It never stores the full weight matrix, which is large.
+    Take 2,048 steps and 4 heads, which are 4 attentions computed side by
+    side. Then the weights for one sequence are 16,777,216 numbers, which take
+    67 MB in float32.
 
-    PyTorch has such a kernel for this CPU too. Here it ran at that size with
-    the causal mask and heads of 64. Over three runs the call took 3.6 to 4.2
-    milliseconds, and the same work by hand 14 to 17.
+    PyTorch has a fused kernel for this CPU too. It was timed at that size,
+    with the causal mask and heads of size 64. Over three runs, the call took
+    3.6 to 4.2 milliseconds, and the same computation by hand took 14 to 17
+    milliseconds.
     """,
 )
 
@@ -959,9 +1010,11 @@ ATTENTION5_SOURCE = source_file(
     together = F.scaled_dot_product_attention(q, q, q)    # shape (1, 3, 4)
 
 
-    # TODO: Return scaled dot product attention of q, of shape (..., q steps, d),
-    #   over k and v, of shapes (..., k steps, d) and (..., k steps, size), by
-    #   hand. When causal is True, mask the future first.
+    # TODO: Compute scaled dot product attention by hand and return the result,
+    #   of shape (..., q steps, size). q has shape (..., q steps, d), k has
+    #   shape (..., k steps, d) and v has shape (..., k steps, size). When
+    #   causal is True, mask the future scores before the softmax. Do not call
+    #   F.scaled_dot_product_attention here.
     def attention(
         q: Tensor,
         k: Tensor,
@@ -971,7 +1024,8 @@ ATTENTION5_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the same with F.scaled_dot_product_attention.
+    # TODO: Return the same result as attention, computed with
+    #   F.scaled_dot_product_attention instead.
     def fast_attention(
         q: Tensor,
         k: Tensor,
@@ -981,8 +1035,10 @@ ATTENTION5_SOURCE = source_file(
         ...
 
 
-    # TODO: Return how many bytes the full weight matrices take for a batch of
-    #   sequences with this many steps and heads, at 4 bytes a number.
+    # TODO: Return how many bytes the full attention weight matrices take, for
+    #   batch sequences with the given number of heads and steps, at 4 bytes
+    #   per number.
+    #   Example: weight_bytes(1, 4, 2048) returns 67108864.
     def weight_bytes(
         batch: int,
         heads: int,
@@ -1066,8 +1122,8 @@ def check_attention_by_hand(found: object) -> None:
 
     if calls_to_attention(lambda: found(q, k, v, True)):
         raise Mismatch(
-            "attention called F.scaled_dot_product_attention. Work it out by hand here, with the scores, the mask and "
-            "the softmax, and leave the call to fast_attention.",
+            "attention called F.scaled_dot_product_attention. Compute it by hand here, with the scores, the mask and "
+            "the softmax, and use the PyTorch call only in fast_attention.",
         )
 
 
@@ -1094,7 +1150,7 @@ def check_attention5(checker: Checker) -> None:
     )
     checker.test(
         function="attention",
-        description="works it out by hand",
+        description="computes attention by hand, without the PyTorch call",
         run=check_attention_by_hand,
     )
     check_on_inputs(
@@ -1131,8 +1187,9 @@ ATTENTION5 = Exercise(
     source=ATTENTION5_SOURCE,
     solution=ATTENTION5_SOLUTION,
     hints={
-        "attention": "The scores are q @ k.transpose(-2, -1) over math.sqrt(q.shape[-1]). When causal, fill the "
-        "future, torch.triu of ones with diagonal=1, with float(\"-inf\"). Then softmax with dim=-1, then @ v.",
+        "attention": "The scores are q @ k.transpose(-2, -1) divided by math.sqrt(q.shape[-1]). When causal is True, "
+        "use masked_fill to set the future to float(\"-inf\"), with a mask from torch.triu of ones and diagonal=1. "
+        "Then take the softmax with dim=-1, and multiply by v with @.",
         "fast_attention": "Pass q, k and v to F.scaled_dot_product_attention, with causal as its is_causal.",
         "weight_bytes": "Each sequence and head has a steps by steps matrix, and each number takes 4 bytes.",
     },
@@ -1164,42 +1221,45 @@ def recall_sequences(
 
 ATTENTION6_LESSON = prose(
     """
-    This task shows why attention exists. A sequence holds pairs, each a key
-    and a value, both one of 16 ids. Then comes a query, one of the keys, and
-    the answer is the value stored with it.
+    This task shows why attention exists. A sequence holds pairs, each made
+    of a key and a value, and each of those is one of 16 ids. After the pairs
+    comes a query, which is one of the keys. The answer is the value that was
+    paired with that key.
 
-    An RNN reads the pairs one at a time, then the query. It has to keep
-    every pair in its fixed hidden state, before it knows which one the query
-    will ask for. Attention keeps every pair and compares the query with each
-    key when the query comes, as derive2 did.
+    An RNN reads the pairs one at a time, then the query. It has to store
+    every pair in its fixed size hidden state, because it does not yet know
+    which pair the query will ask for. Attention keeps every pair. When the
+    query arrives, attention compares it with each key, as derive2 did.
 
-    `GRURecaller` in the file is the RNN, and its `hidden` sets how many
-    numbers its state holds. `Recaller` is the attention, with queries, keys
-    and values of 16. Each GRU trained for 3,000 steps and the attention for
-    400. Here is the share of new sequences each got right, over three seeds.
+    `GRURecaller` in the file is the RNN, and its `hidden` argument sets how
+    many numbers its state holds. `Recaller` is the attention model, with
+    queries, keys and values of size 16. Each GRU trained for 3,000 steps and
+    the attention model for 400. The table shows the fraction of new
+    sequences each model got right, over three seeds.
 
-    | Pairs | GRU of 64 | GRU of 256 | Attention |
+    | Pairs | GRU, hidden 64 | GRU, hidden 256 | Attention |
     |---|---|---|---|
     | 2 | 0.878 to 0.965 | 0.994 to 0.999 | 1.000 |
     | 4 | 0.296 to 0.345 | 0.823 to 0.854 | 1.000 |
     | 8 | 0.244 to 0.275 | 0.225 to 0.274 | 1.000 |
     | 16 | 0.163 to 0.169 | 0.164 to 0.169 | 1.000 |
 
-    Guessing would get 1 in 16 right, 0.0625.
+    Random guessing would get 1 in 16 right, which is 0.0625.
 
-    A state of 64 numbers holds 2 pairs, and one of 256 holds 4. Neither
-    holds 8. Every pair is squeezed into the same fixed state, so a bigger
-    state holds more pairs, but any fixed size runs out. Attention's memory
-    grows with the sequence, one key and one value per pair, so no pair is
-    squeezed out. The price is that the query is compared with every key, so
-    the work grows with the sequence too. 48_linear_attention looks at that
-    trade.
+    A state of 64 numbers can hold 2 pairs, and a state of 256 can hold 4.
+    Neither can hold 8. Every pair has to be squeezed into the same fixed
+    state. A bigger state holds more pairs, but any fixed size runs out of
+    room eventually. Attention's memory grows with the sequence, one key and
+    one value per pair, so no pair gets pushed out. The cost is that the query
+    is compared with every key, so the computation also grows with the
+    sequence. 48_linear_attention looks at that tradeoff.
     """,
 )
 
 GRU_RECALLER = '''
-# The RNN to compare with, given. It reads each pair's key and value, then the query's key as one more step,
-# and answers from its last state. hidden is the size of that state.
+# The RNN to compare with, already written for you. It reads each pair's key and
+# value, then the query's key as one more step, and predicts the answer from its
+# last state. hidden is the size of that state.
 class GRURecaller(nn.Module):
     def __init__(
         self,
@@ -1237,16 +1297,17 @@ ATTENTION6_SOURCE = source_file(
     import torch.nn as nn
     from torch import Tensor
 
-    rows = torch.ones(2, 1, 4) @ torch.ones(2, 4, 3)    # shape (2, 1, 3), one row of scores each
+    rows = torch.ones(2, 1, 4) @ torch.ones(2, 4, 3)    # shape (2, 1, 3), one row of scores per sequence
 
 ''' + textwrap.indent(GRU_RECALLER.strip("\n"), "    ") + '''
 
 
-    # TODO: Finish forward. keys, values and query hold ids, of shapes (batch,
-    #   pairs), (batch, pairs) and (batch,). Compare each query with every key
-    #   of its sequence by scaled dot products, average the values with the
-    #   softmax weights, and give self.out's scores for every id, of shape
-    #   (batch, ids).
+    # TODO: Finish forward. keys, values and query hold ids, with shapes
+    #   (batch, pairs), (batch, pairs) and (batch,). Embed them with self.keys,
+    #   self.values and self.queries. Compare each query with every key in its
+    #   sequence by scaled dot products, with no future mask, and use the
+    #   softmax weights to average the values. Return self.out's scores for
+    #   every id, of shape (batch, ids).
     class Recaller(nn.Module):
         def __init__(
             self,
@@ -1296,7 +1357,7 @@ ATTENTION6_SOLUTION = source_file(
             self.values = nn.Embedding(ids, size)
             self.out = nn.Linear(size, ids)
 
-        # The query is one row per sequence, so its scores are one row against all the keys.
+        # Each sequence has one query, so its scores form one row against all of its keys.
         def forward(
             self,
             keys: Tensor,
@@ -1386,7 +1447,7 @@ def check_recaller_learns(found: type) -> None:
     accuracy = recall_accuracy(model, 16)
 
     if accuracy < 0.95:
-        raise Mismatch(f"After 400 steps on 16 pairs, Recaller gets {accuracy:.1%} of new sequences right, but it should pass 95%.")
+        raise Mismatch(f"After 400 steps on 16 pairs, Recaller gets {accuracy:.1%} of new sequences right, but it should get at least 95%.")
 
 
 def check_attention6(checker: Checker) -> None:
@@ -1414,7 +1475,8 @@ ATTENTION6 = Exercise(
     hints={
         "Recaller.forward": "k = self.keys(keys) has shape (batch, pairs, size). self.queries(query).unsqueeze(1) "
         "has shape (batch, 1, size), so q @ k.transpose(1, 2) gives (batch, 1, pairs). Divide by "
-        "math.sqrt(k.shape[-1]), softmax with dim=-1, @ self.values(values), .squeeze(1), then self.out.",
+        "math.sqrt(k.shape[-1]) and take the softmax with dim=-1. Multiply the weights by self.values(values) with @, "
+        "call .squeeze(1) on the result, then run self.out.",
     },
     introduces=(),
     check=check_attention6,
