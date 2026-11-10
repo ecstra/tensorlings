@@ -31,11 +31,11 @@ MODERN_LLMS = Chapter(
         """
         # From GPT-2 to Llama
 
-        Llama keeps GPT-2's plan and changes a few parts, each one measured in
-        an earlier paper. This chapter swaps them in one at a time, RMSNorm
-        and RoPE, then the SwiGLU MLP and its width, and counts a Llama block
-        against a GPT-2 block weight by weight, with the QK norm of recent
-        models.
+        Llama keeps the overall design of GPT-2 and changes a few parts. Each
+        change was tested in an earlier paper. This chapter adds the changes
+        one at a time. First come RMSNorm and RoPE, then the SwiGLU MLP and
+        its width. Last, it counts the weights of a Llama block and a GPT-2
+        block side by side, and adds the QK norm that recent models use.
 
         ## Further reading
 
@@ -60,7 +60,8 @@ def indented(part: str) -> str:
 # ---------------------------------------------------------------------------
 
 ROPE_PART = '''
-# rope1's RoPE on adjacent pairs of features, positions 0, 1, 2 and on along dim -2.
+# RoPE from rope1. It rotates adjacent pairs of features, and the positions
+# 0, 1, 2 and so on run along dim -2.
 def rope_angles(
     steps: int,
     size: int,
@@ -117,9 +118,10 @@ LLAMA_ATTENTION_FORWARD = '''
 
 LLAMA1_LESSON = prose(
     """
-    GPT-2 came out in 2019 and Llama in 2023. Llama keeps GPT-2's plan, pre
-    norm blocks of attention and an MLP, each with a residual. It changes a
-    few parts, and each change comes from an earlier paper that measured it.
+    GPT-2 came out in 2019 and Llama in 2023. Llama keeps GPT-2's overall
+    design, a stack of pre norm blocks. Each block has an attention layer and
+    an MLP, and each of those has a residual connection. Llama changes a few
+    parts, and each change comes from an earlier paper that tested it.
 
     | Part | GPT-2 | Llama |
     |---|---|---|
@@ -129,25 +131,27 @@ LLAMA1_LESSON = prose(
     | biases | in every Linear and norm | none |
     | output layer | shares the token embedding's weights | its own weights |
 
-    RMSNorm, from rmsnorm1, skips taking the mean away and has no bias. Its
+    RMSNorm, from rmsnorm1, does not subtract the mean and has no bias. Its
     paper reports quality close to LayerNorm's, with 7% to 64% less running
-    time. A LayerNorm of size d holds 2d weights, a scale and a bias, and an
-    RMSNorm holds d.
+    time. A LayerNorm of size `d` holds `2d` weights, a scale and a bias for
+    each feature. An RMSNorm of size `d` holds only the `d` scales.
 
-    GPT-2 small's position table has 1,024 rows of 768 numbers, 786,432
-    weights, and a position past 1,023 has no row at all. RoPE has no weights.
-    As rope1 did, it turns each pair of features of the queries and the keys
-    by an angle that grows with the position. Llama does this inside every
-    attention layer, head by head.
+    GPT-2 small learns a position table of 1,024 rows of 768 numbers, which
+    is 786,432 weights. A position past 1,023 has no row at all. RoPE has no
+    weights. As in rope1, it rotates each pair of features in the queries and
+    the keys by an angle that grows with the position. Llama applies RoPE
+    inside every attention layer, to each head separately.
 
     ```python
     q = torch.ones(1, 2, 3, 4)    # (batch, heads, steps, head size)
-    rope(q).shape                 # torch.Size([1, 2, 3, 4]), each head turned the same way
+    rope(q).shape                 # torch.Size([1, 2, 3, 4]), each head rotated the same way
     ```
 
-    The values aren't turned. The position should change where a query looks,
-    which the scores decide, and not what it brings back. LLaMA's code turns
-    adjacent pairs, features 0 and 1, then 2 and 3, with a base of 10,000.
+    The values are not rotated. The position should change which keys a
+    query attends to, and the scores decide that. The position should not
+    change the content that the values carry back. LLaMA's code rotates
+    adjacent pairs, features 0 and 1, then features 2 and 3, with a base of
+    10,000.
     """,
 )
 
@@ -167,9 +171,10 @@ LLAMA1_SOURCE = source_file(
 ''' + indented(ROPE_PART) + '''
 
 
-    # TODO: Return how many weights a model's positions take, for kind
-    #   "learned", a table of one row of size numbers per position up to
-    #   context, or "rope".
+    # TODO: Return how many weights a model uses to encode positions. kind is
+    #   "learned" or "rope". A learned table has one row of size numbers for
+    #   each of the context positions.
+    #   Example: position_weights("learned", 1024, 768) returns 786432.
     def position_weights(
         kind: str,
         context: int,
@@ -178,8 +183,9 @@ LLAMA1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return how many weights a norm of the given size holds, for kind
-    #   "layernorm" or "rmsnorm".
+    # TODO: Return how many weights a norm layer of the given size holds. kind
+    #   is "layernorm" or "rmsnorm".
+    #   Example: norm_weights("layernorm", 768) returns 1536.
     def norm_weights(
         kind: str,
         size: int,
@@ -187,11 +193,13 @@ LLAMA1_SOURCE = source_file(
         ...
 
 
-    # TODO: Finish forward, causal attention as Llama does it. Project x, of
-    #   shape (batch, steps, size), with wq, wk and wv, and split each into
-    #   heads, shape (batch, heads, steps, size // heads). Turn the queries and
-    #   the keys with rope, not the values, then F.scaled_dot_product_attention
-    #   with is_causal=True. Join the heads back and project with wo.
+    # TODO: Finish forward so it computes causal attention the way Llama does.
+    #   x has shape (batch, steps, size). Project x with wq, wk and wv to get
+    #   the queries, keys and values. Split each one into heads, with shape
+    #   (batch, heads, steps, size // heads). Apply rope to the queries and the
+    #   keys but not to the values. Then call F.scaled_dot_product_attention
+    #   with is_causal=True. Join the heads back into shape
+    #   (batch, steps, size) and project the result with wo.
 ''' + indented(LLAMA_ATTENTION_INIT) + '''
 
         def forward(self, x: Tensor) -> Tensor:
@@ -283,7 +291,7 @@ def check_llama1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="position_weights",
-        description="counts a learned table's weights, and RoPE's none",
+        description="counts the weights of a learned table, and zero for RoPE",
         inputs=(
             ("learned", 1024, 768),
             ("rope", 4096, 4096),
@@ -295,7 +303,7 @@ def check_llama1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="norm_weights",
-        description="counts a scale and a bias for LayerNorm, a scale for RMSNorm",
+        description="counts a scale and a bias per feature for LayerNorm, and only a scale for RMSNorm",
         inputs=(
             ("layernorm", 768),
             ("rmsnorm", 4096),
@@ -306,7 +314,7 @@ def check_llama1(checker: Checker) -> None:
     checker.test_method(
         class_name="LlamaAttention",
         method="forward",
-        description="turns the queries and keys with RoPE, then attends causally",
+        description="rotates the queries and keys with RoPE, then runs causal attention",
         run=check_llama_attention,
     )
 
@@ -319,11 +327,12 @@ LLAMA1 = Exercise(
     source=LLAMA1_SOURCE,
     solution=LLAMA1_SOLUTION,
     hints={
-        "position_weights": "A learned table has context rows of size numbers. RoPE computes its angles and has "
-        "no weights.",
+        "position_weights": "A learned table has context rows, and each row holds size numbers. RoPE computes its "
+        "angles from the position, so it has no weights.",
         "norm_weights": "LayerNorm learns a scale and a bias per feature. RMSNorm learns only the scale.",
-        "LlamaAttention.forward": "view each projection as (batch, steps, self.heads, size // self.heads) and "
-        "transpose(1, 2). After attention, transpose(1, 2) back and reshape to (batch, steps, size).",
+        "LlamaAttention.forward": "Use view to give each projection the shape (batch, steps, self.heads, size // "
+        "self.heads), then call transpose(1, 2). After attention, transpose(1, 2) back and reshape to "
+        "(batch, steps, size).",
     },
     introduces=(),
     check=check_llama1,
@@ -354,24 +363,27 @@ SWIGLU_FORWARD = '''
 
 LLAMA2_LESSON = prose(
     """
-    GPT-2's MLP widens each position four times, applies GELU, and narrows it
-    back, two weight matrices. Shazeer's 2020 paper tried gated versions with
-    three matrices. The one Llama took is SwiGLU.
+    GPT-2's MLP uses two weight matrices. The first widens the vector at each
+    position to four times its size. Then GELU is applied, and the second
+    matrix narrows the vector back. Shazeer's 2020 paper tried gated versions
+    that use three matrices. The one Llama adopted is called SwiGLU.
 
     ```text
     swiglu(x) = (silu(x W) * (x V)) W2
     ```
 
-    `silu(z)` is `z * sigmoid(z)`, also called Swish. One branch says how much
-    of each hidden feature gets through, and the other carries it. This is
-    gating1's gate, a weight computed from the input, inside every MLP.
+    `silu(z)` is `z * sigmoid(z)`, and it is also called Swish. The formula
+    multiplies two branches entry by entry, `silu(x W)` and `x V`. The first
+    branch decides how much of each hidden feature gets through, and the
+    second branch carries the feature's value. This is the gate from gating1,
+    a weight computed from the input, now placed inside every MLP.
 
     ```python
     F.silu(torch.tensor([-2.0, 0.0, 2.0]))    # tensor([-0.2384,  0.0000,  1.7616])
     ```
 
-    The paper trained the same T5 model with each MLP. It measured the cross
-    entropy loss on held out text, which it calls log perplexity, where lower
+    The paper trained the same T5 model with each kind of MLP. It measured the
+    cross entropy loss on held out text, which it calls log perplexity. Lower
     is better.
 
     | MLP | After 65,536 steps | After 524,288 steps |
@@ -380,15 +392,18 @@ LLAMA2_LESSON = prose(
     | GELU | 1.983 | 1.679 |
     | SwiGLU | 1.944 | 1.636 |
 
-    Three matrices hold more weights than two at the same width, so the
-    hidden width shrinks to keep the count equal. Two matrices of `d` by `4d`
-    hold `8d²` weights, and three of `d` by `h` hold `3dh`. They match at `h =
-    8d / 3`, two thirds of `4d`. At `d = 768` the paper went from 3,072 to
+    At the same width, three matrices hold more weights than two. So SwiGLU
+    uses a smaller hidden width to keep the total number of weights the same.
+    Two matrices of `d` by `4d` hold `8d²` weights, and three matrices of `d`
+    by `h` hold `3dh`. These are equal when `h = 8d / 3`, which is two thirds
+    of `4d`. For `d = 768`, the paper reduced the hidden width from 3,072 to
     2,048.
 
-    The LLaMA paper uses the same two thirds of `4d`. Its code then rounds up
-    to a multiple of 256 so the matrices suit the hardware. That gives 11,008
-    for the 7B model's `d` of 4,096, and 13,824 for the 13B model's 5,120.
+    The LLaMA paper also uses two thirds of `4d`. Its code then rounds the
+    width up to a multiple of 256, because matrices with sizes like that run
+    well on the hardware. That gives a hidden width of 11,008 for the 7B
+    model, whose `d` is 4,096. The 13B model has a `d` of 5,120 and a hidden
+    width of 13,824.
     """,
 )
 
@@ -405,8 +420,9 @@ LLAMA2_SOURCE = source_file(
     rounded_up = 256 * ((1000 + 255) // 256)            # 1024, the next multiple of 256
 
 
-    # TODO: Return SwiGLU of x, of shape (..., size), with W and V of shape
-    #   (size, hidden) and W2 of shape (hidden, size).
+    # TODO: Return swiglu(x) from the formula in the lesson. x has shape
+    #   (..., size), W and V have shape (size, hidden), and W2 has shape
+    #   (hidden, size). The result has the same shape as x.
     def swiglu(
         x: Tensor,
         W: Tensor,
@@ -416,18 +432,20 @@ LLAMA2_SOURCE = source_file(
         ...
 
 
-    # TODO: Finish forward, as LLaMA's code names the parts. w1 is the gate's
-    #   branch, which goes through silu, w3 is the other branch, and w2 brings
-    #   their product back down to size.
+    # TODO: Finish forward. The layers are named as in LLaMA's code. w1 is the
+    #   gate branch, whose output goes through silu. w3 is the other branch.
+    #   Multiply the two branches entry by entry, then w2 maps that product
+    #   back down to size.
 ''' + indented(SWIGLU_INIT) + '''
 
         def forward(self, x: Tensor) -> Tensor:
             ...
 
 
-    # TODO: Return LLaMA's hidden width for a model of size, two thirds of four
-    #   times size, made a whole number with int(), then rounded up to a
-    #   multiple of multiple_of.
+    # TODO: Return LLaMA's hidden width for a model of the given size. Compute
+    #   two thirds of 4 * size, turn it into a whole number with int(), then
+    #   round it up to the next multiple of multiple_of.
+    #   Example: swiglu_hidden(4096, 256) returns 11008.
     def swiglu_hidden(
         size: int,
         multiple_of: int,
@@ -435,8 +453,10 @@ LLAMA2_SOURCE = source_file(
         ...
 
 
-    # TODO: Return how many weights an MLP of size and hidden holds without
-    #   biases, for kind "gelu", two matrices, or "swiglu", three.
+    # TODO: Return how many weights an MLP holds, with no biases. size is the
+    #   model width and hidden is the hidden width. kind is "gelu", which uses
+    #   two matrices, or "swiglu", which uses three.
+    #   Example: mlp_weights("gelu", 768, 3072) returns 4718592.
     def mlp_weights(
         kind: str,
         size: int,
@@ -544,7 +564,7 @@ def check_llama2(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="swiglu",
-        description="gates one branch with silu of the other",
+        description="multiplies silu(x @ W) by x @ V, then applies W2",
         inputs=(
             (small_tensor(552, 2, 4) / 2, small_tensor(553, 4, 6) / 2, small_tensor(554, 4, 6) / 2, small_tensor(555, 6, 4) / 2),
             (small_tensor(556, 3, 2, 3) / 2, small_tensor(557, 3, 5) / 2, small_tensor(558, 3, 5) / 2, small_tensor(559, 5, 3) / 2),
@@ -555,13 +575,13 @@ def check_llama2(checker: Checker) -> None:
     checker.test_method(
         class_name="SwiGLU",
         method="forward",
-        description="runs w2 on silu of w1 times w3",
+        description="applies w2 to silu(w1(x)) * w3(x)",
         run=check_swiglu_module,
     )
     check_on_inputs(
         checker=checker,
         function="swiglu_hidden",
-        description="gives two thirds of four times the size, rounded up",
+        description="returns two thirds of 4 * size, rounded up to a multiple",
         inputs=(
             (4096, 256),
             (6656, 256),
@@ -593,12 +613,12 @@ LLAMA2 = Exercise(
     source=LLAMA2_SOURCE,
     solution=LLAMA2_SOLUTION,
     hints={
-        "swiglu": "F.silu of x @ W, times x @ V, then @ W2.",
-        "SwiGLU.forward": "self.w2 of F.silu(self.w1(x)) times self.w3(x).",
+        "swiglu": "Apply F.silu to x @ W, multiply that by x @ V, then multiply the product by W2 with @.",
+        "SwiGLU.forward": "Multiply F.silu(self.w1(x)) by self.w3(x), then pass the product through self.w2.",
         "swiglu_hidden": "Start from int(2 * 4 * size / 3). Rounding n up to a multiple of m is "
         "m * ((n + m - 1) // m).",
-        "mlp_weights": "GELU's two matrices are size by hidden and hidden by size. SwiGLU adds a third of size by "
-        "hidden.",
+        "mlp_weights": "GELU's two matrices are size by hidden and hidden by size. SwiGLU adds a third matrix of "
+        "size by hidden.",
     },
     introduces=(),
     check=check_llama2,
@@ -611,7 +631,8 @@ LLAMA2 = Exercise(
 
 LLAMA3_LESSON = prose(
     """
-    Here are the two blocks, weight by weight, for a model of size `d`.
+    Here are the weight counts of the two blocks, part by part, for a model of
+    size `d`. In the Llama column, `h` is the hidden width of the SwiGLU MLP.
 
     | Part | GPT-2 block | Llama block |
     |---|---|---|
@@ -621,26 +642,33 @@ LLAMA3_LESSON = prose(
     | second norm | `2d` | `d` |
     | MLP | `8d² + 5d` | `3dh` |
 
-    That makes `12d² + 13d` for GPT-2, or 7,087,872 at GPT-2 small's 768.
-    Twelve blocks, the embeddings and a last norm give its 124,439,808
-    weights. A Llama block makes `4d² + 3dh + 2d`, or 202,383,360 for the 7B
-    model, with `d` of 4,096 and `h` of 11,008. 32 blocks, two tables of
-    32,000 tokens and a last norm give 6,738,415,616.
+    The GPT-2 column adds up to `12d² + 13d`. For GPT-2 small, where `d` is
+    768, that is 7,087,872 weights per block. Twelve blocks, plus the
+    embeddings and a final norm, give GPT-2 small's total of 124,439,808. The
+    Llama column adds up to `4d² + 3dh + 2d`. For the 7B model, with `d` of
+    4,096 and `h` of 11,008, that is 202,383,360 per block. 32 blocks, plus a
+    final norm and two tables of 32,000 rows for the token embedding and the
+    output layer, give 6,738,415,616.
 
-    In both, the MLP holds two thirds of the block's weights and attention one
-    third. The width of llama2 keeps that split as it was.
+    In both blocks, the MLP holds about two thirds of the weights and
+    attention holds about one third. The hidden width from llama2 is what
+    keeps this split the same.
 
-    Recent models add one more piece, QK norm. Scaling vision transformers
-    toward 22 billion weights, Dehghani and colleagues saw a model of 8
-    billion diverge in training. Its
-    attention scores grew past 50,000, and a softmax of scores that large puts
-    all its weight on one key. Normalizing the queries and the keys before the
-    dot product stopped it. OLMo 2 and Qwen3 use RMSNorm there for the same
-    reason.
+    Recent models add one more piece, called QK norm. Dehghani and colleagues
+    scaled vision transformers up to 22 billion weights. Along the way, a
+    model with 8 billion weights diverged in training, which means its loss
+    blew up instead of going down. Its attention scores grew past 50,000. A
+    softmax of scores that large puts almost all of its weight on one key.
+    Normalizing the queries and the keys before the dot product fixed the
+    problem. OLMo 2 and Qwen3 apply RMSNorm to the queries and keys for the
+    same reason.
 
-    The table below scales 16 random queries and 16 keys of size 64, as
-    weights that grow during training would. The largest weight is averaged
-    over the 16 queries.
+    The table below takes 16 random queries and 16 random keys of size 64 and
+    multiplies them by a scale. Weights that grow during training scale the
+    queries and keys up in the same way. The largest score is taken over all
+    query and key pairs. The largest weight is each query's biggest softmax
+    weight, averaged over the 16 queries. The last column repeats both numbers
+    with QK norm.
 
     | Scale | Largest score | Largest weight | With QK norm |
     |---|---|---|---|
@@ -648,9 +676,10 @@ LLAMA3_LESSON = prose(
     | 4 | 52.37 | 0.917 | 3.15, 0.249 |
     | 16 | 837.9 | 0.998 | 3.15, 0.249 |
 
-    After an RMSNorm every query and key has the same size, so no scale can
-    blow the scores up. The norms' own learned weights can still sharpen the
-    softmax, but slowly, through training.
+    After an RMSNorm, every query and key has a root mean square of 1,
+    whatever scale it started with. So scaling cannot make the scores grow.
+    The learned weights of the two norms can still make the softmax sharper,
+    but only slowly, as training changes them.
     """,
 )
 
@@ -691,14 +720,17 @@ LLAMA3_SOURCE = source_file(
     rms = rows.pow(2).mean(dim=-1, keepdim=True).sqrt()    # tensor([[3.5355]])
 
 
-    # TODO: Return how many weights a GPT-2 block of size holds, with the
-    #   biases and both LayerNorms, from the table in the lesson.
+    # TODO: Return how many weights a GPT-2 block of the given size holds,
+    #   counting the biases and both LayerNorms. Use the table in the lesson.
+    #   Example: gpt2_block_weights(768) returns 7087872.
     def gpt2_block_weights(size: int) -> int:
         ...
 
 
-    # TODO: Return how many weights a Llama block of size and MLP width hidden
-    #   holds, from the table in the lesson.
+    # TODO: Return how many weights a Llama block holds, for a model of the
+    #   given size and an MLP of hidden width hidden. Use the table in the
+    #   lesson.
+    #   Example: llama_block_weights(4096, 11008) returns 202383360.
     def llama_block_weights(
         size: int,
         hidden: int,
@@ -706,8 +738,10 @@ LLAMA3_SOURCE = source_file(
         ...
 
 
-    # TODO: Return q and k after QK norm. RMSNorm each row of the last dimension,
-    #   with eps inside the root, then scale q by q_weight and k by k_weight.
+    # TODO: Return the pair (q, k) after QK norm. Apply RMSNorm along the last
+    #   dimension of both, which divides each row by the square root of the
+    #   mean of its squares plus eps. Then multiply q by q_weight and k by
+    #   k_weight.
     def qk_norm(
         q: Tensor,
         k: Tensor,
@@ -718,9 +752,10 @@ LLAMA3_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the largest softmax weight of each query over the keys,
-    #   averaged over the queries, as a plain number. The scores are
-    #   q @ k^T over the square root of the size.
+    # TODO: Compute the attention scores q @ k^T / sqrt(size), where size is
+    #   the last dimension of q, and take the softmax of each query's scores
+    #   over the keys. Return each query's largest softmax weight, averaged
+    #   over the queries, as a Python float.
     def top_weight(
         q: Tensor,
         k: Tensor,
@@ -832,7 +867,7 @@ def expect_qk_pair(
     expected: tuple[Tensor, Tensor],
 ) -> None:
     if not isinstance(actual, tuple) or len(actual) != 2:
-        raise Mismatch(f"{call} should give the normed q and k as two tensors in a tuple.")
+        raise Mismatch(f"{call} should return the normalized q and k as a tuple of two tensors.")
 
     for name, part, wanted in zip(("q", "k"), actual, expected):
         expect_tensor(
@@ -869,7 +904,7 @@ def check_llama3(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="qk_norm",
-        description="norms each query and key row, then scales it",
+        description="applies RMSNorm to each row of q and k, then multiplies by the weights",
         inputs=(
             (small_tensor(560, 3, 4), small_tensor(561, 5, 4), torch.tensor([1.0, 0.5, 2.0, 1.0]), torch.tensor([0.5, 1.0, 1.0, 3.0])),
             (small_tensor(562, 2, 2, 6) * 4, small_tensor(563, 2, 3, 6), torch.ones(6), torch.ones(6), 1e-3),
@@ -903,11 +938,12 @@ LLAMA3 = Exercise(
     source=LLAMA3_SOURCE,
     solution=LLAMA3_SOLUTION,
     hints={
-        "gpt2_block_weights": "Add up the GPT-2 column of the table, which comes to 12 size squared plus 13 size.",
-        "llama_block_weights": "Four size by size matrices for attention, three matrices of size by hidden for "
-        "the MLP, and two norms of size each.",
-        "qk_norm": "Divide each row by the root of the mean of its squares plus eps, which torch.rsqrt gives "
-        "as a factor to multiply by. Then multiply by the weights.",
+        "gpt2_block_weights": "Add up the GPT-2 column of the table. The total is 12 times size squared, plus 13 "
+        "times size.",
+        "llama_block_weights": "Attention has four matrices of size by size. The MLP has three matrices of size by "
+        "hidden. The two norms hold size weights each.",
+        "qk_norm": "Divide each row by the square root of the mean of its squares plus eps. torch.rsqrt gives one "
+        "over the square root, so you can multiply by it instead. Then multiply by the weights.",
         "top_weight": "Softmax over the last dimension, take .max(dim=-1).values, average them, and call .item().",
     },
     introduces=(),

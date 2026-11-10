@@ -51,11 +51,11 @@ GPT = Chapter(
         """
         # Project: a GPT that writes Shakespeare
 
-        Section 7's project. You assemble your transformer blocks into a GPT,
-        train it on a million characters of Shakespeare for minutes on the
-        fastest device the machine has, and sample new text from it, as in
-        Karpathy's GPT lecture and nanoGPT. Download the data once from the
-        project folder.
+        This is Section 7's project. You assemble your transformer blocks into
+        a GPT and train it on a million characters of Shakespeare. Training
+        takes a few minutes on the fastest device the machine has. Then you
+        sample new text from the model, as in Karpathy's GPT lecture and
+        nanoGPT. Download the data once from the project folder.
 
         ```bash
         .venv/bin/python run.py data shakespeare
@@ -121,8 +121,8 @@ GPT1_LESSON = prose(
     """
     This is Section 7's project. You build a GPT and train it on tiny
     Shakespeare, a million characters of the plays, as Karpathy does in his
-    GPT lecture. Download it once, about 1 MB, from the project folder with
-    `.venv/bin/python run.py data shakespeare`.
+    GPT lecture. Download the text once, about 1 MB, from the project folder
+    with `.venv/bin/python run.py data shakespeare`.
 
     ```python
     from tensorlings.data import load_shakespeare
@@ -132,27 +132,32 @@ GPT1_LESSON = prose(
     text[:14]        # 'First Citizen:'
     ```
 
-    The tokens here are characters, 65 of them, from the newline to `z`.
-    58_bpe's tokens would make sequences shorter, but on a million characters
-    a small vocabulary keeps the model small and quick to train. nanoGPT's
-    Shakespeare example makes the same choice.
+    The tokens here are characters, 65 different ones, from the newline
+    character to `z`. The BPE tokens from 58_bpe would make the sequences
+    shorter. But with only a million characters of text, a small vocabulary
+    keeps the model small and quick to train. nanoGPT's Shakespeare example
+    makes the same choice.
 
-    The first 90% of the text is for training and the last 10% for validation.
-    The split is one cut, not a shuffle, because overlapping stretches of text
-    would put the same lines on both sides.
+    The first 90% of the text is used for training and the last 10% for
+    validation. The split is a single cut, not a shuffle. Blocks of text
+    overlap, so after a shuffle the same lines would end up in both the
+    training and the validation data.
 
-    A batch takes random starting points. From each, `x` is a block of
-    `block_size` tokens, and `y` is the same block moved one token along. So
-    every position is one example, predicting the next character from all the
-    ones before it, and a block of 128 holds 128 of them.
+    A batch picks random starting points in the data. From each start, `x` is
+    a block of `block_size` tokens, and `y` is the same block shifted one
+    token to the right. So each position of `y` holds the character that
+    comes after the same position of `x`. Every position is one training
+    example, predicting the next character from all the characters before it.
+    A block of 128 tokens holds 128 examples.
 
     ```python
     data = torch.tensor([5, 6, 7, 8, 9])
     data[1:4], data[2:5]    # (tensor([6, 7, 8]), tensor([7, 8, 9]))
     ```
 
-    A model that knows nothing gives every character the same chance, a loss
-    of `log(65)`, which is 4.17. That is the number training starts from.
+    A model that knows nothing gives every character the same probability,
+    1/65. Its loss is `log(65)`, which is 4.17. That is the loss training
+    starts from.
     """,
 )
 
@@ -174,14 +179,18 @@ GPT1_SOURCE = source_file(
     index = {letter: position for position, letter in enumerate("abc")}    # {'a': 0, 'b': 1, 'c': 2}
 
 
-    # TODO: Return every character that appears in text, once each, sorted.
+    # TODO: Return a sorted list of every distinct character in text, each one
+    #   once.
+    #   Example: characters_of("banana") returns ['a', 'b', 'n'].
     def characters_of(text: str) -> list[str]:
         ...
 
 
-    # TODO: Return the id of every character of text, its position in
-    #   characters, as a tensor. Build a dict from character to position first,
-    #   since characters.index would search the list a million times.
+    # TODO: Return the ids of the characters of text as a tensor. The id of a
+    #   character is its position in characters. Build a dict from character
+    #   to position first, because characters.index would search the whole
+    #   list for each of a million characters.
+    #   Example: encode("cab", ["a", "b", "c"]) returns tensor([2, 0, 1]).
     def encode(
         text: str,
         characters: list[str],
@@ -189,7 +198,8 @@ GPT1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the text that ids spell.
+    # TODO: Return the text that ids spell, which reverses encode.
+    #   Example: decode(torch.tensor([2, 0, 1]), ["a", "b", "c"]) returns 'cab'.
     def decode(
         ids: Tensor,
         characters: list[str],
@@ -197,8 +207,11 @@ GPT1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the first fraction of data for training and the rest for
-    #   validation, cut at int(fraction * len(data)).
+    # TODO: Split data into a training part and a validation part with a
+    #   single cut at int(fraction * len(data)). Return the part before the
+    #   cut and the part after it.
+    #   Example: split(torch.arange(10), 0.8) returns
+    #   (tensor([0, 1, 2, 3, 4, 5, 6, 7]), tensor([8, 9])).
     def split(
         data: Tensor,
         fraction: float,
@@ -207,9 +220,10 @@ GPT1_SOURCE = source_file(
 
 
     # TODO: Return x and y, each of shape (batch_size, block_size). Draw the
-    #   starts with torch.randint(0, len(data) - block_size, (batch_size,),
-    #   generator=generator). x holds the block at each start, and y the block
-    #   one token further along.
+    #   starting points with torch.randint(0, len(data) - block_size,
+    #   (batch_size,), generator=generator). Row i of x is the block_size
+    #   tokens from start i, and row i of y is the same block shifted one
+    #   token to the right.
     def get_batch(
         data: Tensor,
         block_size: int,
@@ -283,7 +297,7 @@ def expect_pair(
     expected: tuple[Tensor, Tensor],
 ) -> None:
     if not isinstance(actual, tuple) or len(actual) != 2:
-        raise Mismatch(f"{call} should give two tensors in a tuple.")
+        raise Mismatch(f"{call} should return a tuple of two tensors.")
 
     for name, part, wanted in zip(("first", "second"), actual, expected):
         expect_tensor(
@@ -301,7 +315,7 @@ def check_gpt1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="characters_of",
-        description="gives each character once, sorted",
+        description="returns each character once, sorted",
         inputs=(
             (SAMPLE_TEXT,),
             ("banana bread\n",),
@@ -312,7 +326,7 @@ def check_gpt1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="encode",
-        description="gives each character's position",
+        description="returns each character's position",
         inputs=(
             ("not to be", Described(SAMPLE_CHARACTERS, "the characters of a line of Hamlet")),
             ("tis nobler\n", Described(SAMPLE_CHARACTERS, "the characters of a line of Hamlet")),
@@ -323,7 +337,7 @@ def check_gpt1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="decode",
-        description="spells the ids back out",
+        description="turns the ids back into text",
         inputs=(
             (reference_encode("the question", SAMPLE_CHARACTERS), Described(SAMPLE_CHARACTERS, "the characters of a line of Hamlet")),
         ),
@@ -333,7 +347,7 @@ def check_gpt1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="split",
-        description="cuts once, training first",
+        description="makes one cut, with the training part first",
         inputs=(
             (torch.arange(20), 0.9),
             (torch.arange(7), 0.5),
@@ -344,7 +358,7 @@ def check_gpt1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="get_batch",
-        description="gives blocks and the same blocks one token along",
+        description="returns blocks and the same blocks shifted one token",
         inputs=(
             (torch.arange(100, 140), 5, 3, seeded(590)),
             (torch.arange(12), 4, 6, seeded(591)),
@@ -365,10 +379,10 @@ GPT1 = Exercise(
         "characters_of": "set(text) keeps each character once, and sorted turns it into a sorted list.",
         "encode": "Make the dict with enumerate(characters), then look every character of text up in it and pass "
         "the list to torch.tensor.",
-        "decode": "characters[index] for each index of ids.tolist(), joined with \"\".join.",
+        "decode": "Look up characters[index] for each index in ids.tolist(), and join them with \"\".join.",
         "split": "Cut at int(fraction * len(data)), and slice data before and after the cut.",
         "get_batch": "Turn the starts into a list with .tolist(). torch.stack the slices data[start : start + "
-        "block_size] for x, and the slices one further along for y.",
+        "block_size] for x, and the slices shifted one token to the right for y.",
     },
     introduces=(),
     check=check_gpt1,
@@ -446,7 +460,7 @@ class GPT(nn.Module):
         self.h = nn.ModuleList([GPT2Block(size, heads) for _ in range(layers)])
         self.ln_f = nn.LayerNorm(size)
         self.lm_head = nn.Linear(size, vocabulary, bias=False)
-        # Tied, as in GPT-2: the same table reads tokens in and scores them out.
+        # Tied as in GPT-2, so the same table embeds the tokens and scores them.
         self.lm_head.weight = self.wte.weight
         self.apply(init_weights)
         scale_residuals_(self, layers)
@@ -471,43 +485,50 @@ INDENTED_GPT_FORWARD = textwrap.indent(GPT_FORWARD.strip("\n"), "    ")
 
 GPT2_LESSON = prose(
     """
-    A GPT is block2's block repeated, with two tables in front and a head
-    behind. `wte` turns each token into a row of numbers and `wpe` adds a row
-    for its position, as position2 did. The blocks follow, then a last
-    LayerNorm, and `lm_head` scores every token of the vocabulary as the next
-    one. The names are GPT-2's own. Its released weights load into this model
-    once four of its matrices are transposed, as block2 said.
+    A GPT is the block from block2 repeated several times, with two embedding
+    tables before the blocks and a head after them. `wte` turns each token
+    into a vector, and `wpe` adds a vector for its position, as in position2.
+    Then come the blocks and a final LayerNorm. Last, `lm_head` gives every
+    token in the vocabulary a score for being the next token. The names are
+    the ones GPT-2 uses. GPT-2's released weights load into this model once
+    four of its matrices are transposed, as block2 explained.
 
-    The head shares its weight with `wte`, as in GPT-2. A token's row reads it
-    in and also scores it on the way out, which saves a whole table.
+    The head shares its weight matrix with `wte`, as in GPT-2. This is called
+    tying the weights. The same row of numbers embeds a token at the input
+    and scores that token at the output, which saves a whole table.
 
-    nanoGPT starts every Linear and Embedding weight from a normal spread of
-    0.02, and every bias at 0. GPT-2's released code does the same, except
-    that it draws `wpe` at 0.01.
+    nanoGPT draws every Linear and Embedding weight from a normal
+    distribution with mean 0 and standard deviation 0.02. It sets every bias
+    to 0. GPT-2's released code does the same, except that it uses a standard
+    deviation of 0.01 for `wpe`.
 
-    The **residual stream** is residual2's main path, the `x` that every
-    block adds its attention and MLP outputs to. As the GPT-2 paper describes,
-    nanoGPT shrinks the layers that write into it, the `c_proj` of each
-    attention and each MLP. It divides their spread by the square root of how
-    many there are.
+    The **residual stream** is the main path from residual2. It is the `x`
+    that every block adds its attention and MLP outputs to. As the GPT-2
+    paper describes, nanoGPT starts the layers that write into the stream
+    with smaller weights. Those layers are the `c_proj` of each attention and
+    each MLP. Their standard deviation is divided by the square root of how
+    many such layers there are, `2 * layers`.
 
-    Here is why. These GPTs have gpt3's size of 128 and read 128 random
-    characters. The table gives the stream's spread after the last block, as
-    a multiple of its spread going in, the token and position rows added.
+    Here is why. The GPTs below have the size of gpt3's model, 128, and read
+    128 random characters. The table shows the standard deviation of the
+    stream after the last block. It is a multiple of the stream's standard
+    deviation at the input, after the token and position vectors are added.
     Each cell is the range over 3 seeds.
 
     | Blocks | 4 | 12 | 24 | 48 |
     |---|---|---|---|---|
-    | All weights at 0.02 | 4.2 to 4.5 | 7.7 to 7.8 | 11.1 to 11.5 | 15.7 to 16.5 |
+    | Every weight drawn with standard deviation 0.02 | 4.2 to 4.5 | 7.7 to 7.8 | 11.1 to 11.5 | 15.7 to 16.5 |
     | `c_proj` scaled down | 1.7 | 1.7 | 1.7 | 1.7 to 1.8 |
 
-    Every block adds its output to the stream. Without the scaling the stream
-    keeps growing with depth, as residual2 measured, here about like the
-    square root of the depth. With it, the stream's size stays the same
-    however deep the model, much as residual3's zero start kept it.
+    Every block adds its output to the stream. Without the scaling, the
+    stream keeps growing with depth, as residual2 measured. Here it grows
+    roughly like the square root of the number of blocks. With the scaling,
+    the stream's size stays the same however deep the model is, much as
+    starting at zero did in residual3.
 
-    `model.apply(fn)` calls `fn` on every module inside `model`, which is how
-    one function sets up every layer.
+    `model.apply(fn)` calls `fn` on every module inside `model`, including
+    `model` itself. That is how one function can set up the weights of every
+    layer.
 
     ```python
     net = nn.Sequential(nn.Linear(2, 3), nn.ReLU(), nn.Linear(3, 1))
@@ -528,24 +549,25 @@ GPT2_SOURCE = source_file(
     from torch import Tensor
 
     layer = nn.Linear(3, 2)
-    nn.init.normal_(layer.weight, mean=0.0, std=0.5)    # a fresh normal spread of 0.5
-    nn.init.zeros_(layer.bias)                          # every bias 0
+    nn.init.normal_(layer.weight, mean=0.0, std=0.5)    # redraws the weight with standard deviation 0.5
+    nn.init.zeros_(layer.bias)                          # sets every bias to 0
 
 
     # SelfAttention, GPT2MLP and GPT2Block from block2.
 ''' + INDENTED_GIVEN_MODEL + '''
 
 
-    # TODO: Start module as nanoGPT does, when it is an nn.Linear or an
-    #   nn.Embedding. Its weight is drawn from a normal spread of 0.02 around 0,
-    #   and a Linear's bias, when it has one, is set to 0.
+    # TODO: Initialize module the way nanoGPT does, if it is an nn.Linear or
+    #   an nn.Embedding. Draw its weight from a normal distribution with mean 0
+    #   and standard deviation 0.02. If it is a Linear with a bias, set the bias
+    #   to 0. Leave every other kind of module unchanged.
     def init_weights(module: nn.Module) -> None:
         ...
 
 
-    # TODO: Draw the c_proj weight of every block's attention and MLP again,
-    #   from a normal spread of 0.02 divided by the square root of 2 * layers.
-    #   model.h holds the blocks.
+    # TODO: Redraw the c_proj weights of every block's attention and MLP from
+    #   a normal distribution with mean 0 and standard deviation
+    #   0.02 / sqrt(2 * layers). model.h holds the blocks.
     def scale_residuals_(
         model: nn.Module,
         layers: int,
@@ -553,8 +575,10 @@ GPT2_SOURCE = source_file(
         ...
 
 
-    # TODO: Finish forward. Add wte of ids to wpe of their positions, from 0 up,
-    #   run every block of h in turn, then ln_f and lm_head.
+    # TODO: Finish forward. ids has shape (batch, steps). Add wte(ids) to the
+    #   wpe of the positions 0, 1, 2 and so on up to steps - 1. Run the result
+    #   through every block of h in turn, then through ln_f and lm_head, and
+    #   return the scores.
 ''' + INDENTED_GPT_INIT + '''
 
         def forward(self, ids: Tensor) -> Tensor:
@@ -633,15 +657,15 @@ def check_init_weights(found: object) -> None:
         spread = weight.std().item()
 
         if abs(spread - 0.02) > 0.002 or abs(weight.mean().item()) > 0.002:
-            raise Mismatch(f"After init_weights, {name} has a spread of {spread:.4f}, but it should be drawn with a spread of 0.02 around 0.")
+            raise Mismatch(f"After init_weights, {name} has a standard deviation of {spread:.4f}, but it should be drawn with mean 0 and standard deviation 0.02.")
 
         # A normal spread puts about 4.6% of its draws beyond two spreads, and an even spread of 0.02 puts none.
         tails = (weight.abs() > 0.04).float().mean().item()
 
         if not 0.03 < tails < 0.06:
             raise Mismatch(
-                f"After init_weights, {tails:.1%} of {name} lies beyond 0.04, two spreads out, but a normal draw puts "
-                "about 4.6% there. Draw it with nn.init.normal_.",
+                f"After init_weights, {tails:.1%} of {name} lies beyond 0.04, two standard deviations from 0, but a "
+                "normal distribution puts about 4.6% there. Draw it with nn.init.normal_.",
             )
 
     if not torch.all(linear.bias == 0):
@@ -651,7 +675,7 @@ def check_init_weights(found: object) -> None:
     found(norm)
 
     if not (torch.all(norm.weight == 1) and torch.all(norm.bias == 0)):
-        raise Mismatch("init_weights changed a LayerNorm, but it should touch only nn.Linear and nn.Embedding.")
+        raise Mismatch("init_weights changed a LayerNorm, but it should change only nn.Linear and nn.Embedding.")
 
 
 def check_scale_residuals(found: object) -> None:
@@ -674,12 +698,12 @@ def check_scale_residuals(found: object) -> None:
 
             if abs(spread - wanted) > 0.1 * wanted:
                 raise Mismatch(
-                    f"After scale_residuals_ on 8 layers, block {index}'s {name} has a spread of {spread:.5f}, "
-                    f"but it should be 0.02 over the square root of 16, {wanted:.5f}.",
+                    f"After scale_residuals_ on 8 layers, block {index}'s {name} has a standard deviation of "
+                    f"{spread:.5f}, but it should be 0.02 / sqrt(16), which is {wanted:.5f}.",
                 )
 
     if not torch.equal(model.h[0].attn.c_attn.weight, attention_before):
-        raise Mismatch("scale_residuals_ changed c_attn, but only the two c_proj layers of each block are scaled.")
+        raise Mismatch("scale_residuals_ changed c_attn, but only the two c_proj layers of each block should be redrawn.")
 
 
 def check_gpt_forward(found: type) -> None:
@@ -692,7 +716,7 @@ def check_gpt_forward(found: type) -> None:
     )
 
     if model.lm_head.weight is not model.wte.weight:
-        raise Mismatch("lm_head's weight should be wte's weight itself, tied, as the given __init__ sets it.")
+        raise Mismatch("lm_head's weight should be the same tensor as wte's weight, tied as the given __init__ sets it.")
 
     # The reference's weights go in first, so forward is checked on its own, whatever order the start drew in.
     with torch.no_grad():
@@ -713,12 +737,12 @@ def check_gpt_forward(found: type) -> None:
 def check_gpt2(checker: Checker) -> None:
     checker.test(
         function="init_weights",
-        description="draws Linear and Embedding weights with a spread of 0.02, biases at 0",
+        description="draws Linear and Embedding weights with standard deviation 0.02, biases at 0",
         run=check_init_weights,
     )
     checker.test(
         function="scale_residuals_",
-        description="shrinks every c_proj by the square root of twice the layers",
+        description="divides the standard deviation of every c_proj by sqrt(2 * layers)",
         run=check_scale_residuals,
     )
     checker.test_method(
@@ -737,12 +761,12 @@ GPT2 = Exercise(
     source=GPT2_SOURCE,
     solution=GPT2_SOLUTION,
     hints={
-        "init_weights": "isinstance(module, (nn.Linear, nn.Embedding)) picks both kinds. nn.init.normal_ with std=0.02 "
-        "for the weight, and nn.init.zeros_ for a Linear's bias when module.bias is not None.",
-        "scale_residuals_": "For each block of model.h, nn.init.normal_ block.attn.c_proj.weight and "
-        "block.mlp.c_proj.weight with std=0.02 / math.sqrt(2 * layers).",
-        "GPT.forward": "torch.arange(ids.shape[1], device=ids.device) gives the positions, on the device ids are on. "
-        "Add self.wte(ids) and self.wpe of them, loop over self.h, then self.ln_f and self.lm_head.",
+        "init_weights": "isinstance(module, (nn.Linear, nn.Embedding)) matches both kinds. Use nn.init.normal_ with "
+        "std=0.02 for the weight, and nn.init.zeros_ for a Linear's bias when module.bias is not None.",
+        "scale_residuals_": "For each block of model.h, call nn.init.normal_ on block.attn.c_proj.weight and on "
+        "block.mlp.c_proj.weight, with std=0.02 / math.sqrt(2 * layers).",
+        "GPT.forward": "torch.arange(ids.shape[1], device=ids.device) gives the positions, on the same device as ids. "
+        "Add self.wte(ids) and self.wpe of the positions, loop over self.h, then apply self.ln_f and self.lm_head.",
     },
     introduces=(),
     check=check_gpt2,
@@ -921,36 +945,35 @@ INDENTED_TRAIN_PARTS = textwrap.indent(TRAIN_PARTS.strip("\n"), "    ")
 
 GPT3_LESSON = prose(
     """
-    This step trains outside the app, as dna2 and adder2 did, and takes a few
-    minutes.
-    Once the checks above the last one pass, train from the project folder
-    with `.venv/bin/python run.py train gpt3`.
+    This step trains the model outside the app, as dna2 and adder2 did, and
+    takes a few minutes. Once every check except the last one passes, train
+    from the project folder with `.venv/bin/python run.py train gpt3`.
 
-    It trains the way nanoGPT does, with Section 4's tools together.
+    It trains the way nanoGPT does, combining the tools from Section 4.
 
     - AdamW, with weight decay on the matrices and none on the biases and norms, as adamw2 set it up.
-    - A rate that warms up for 150 steps, then follows a cosine down to a tenth of its peak, as in warmup1, schedule1 and broken2.
+    - A learning rate with 150 warmup steps, then a cosine decay to a tenth of its peak, as in warmup1, schedule1 and broken2.
     - Gradients clipped to a norm of 1, as clipping1 did.
 
-    The rate changes every step. `optimizer.param_groups` holds the rate of
-    each group, so setting `group["lr"]` before the step is how a loop of your
-    own drives it.
+    The learning rate changes every step. `optimizer.param_groups` holds the
+    learning rate of each parameter group. So your training loop sets
+    `group["lr"]` for every group before each step.
 
     ```python
     optimizer = torch.optim.SGD(nn.Linear(2, 2).parameters(), lr=0.1)
     optimizer.param_groups[0]["lr"] = 0.05    # the next step uses 0.05
     ```
 
-    Here are the runs behind this project, on 3 seeds, with seed 0 being the
-    file's own run. The GPT has 4 blocks of size 128, reads 128 characters at
-    a time, and holds 818,048 weights.
+    Here are the training runs behind this project, on 3 seeds. Seed 0 is the
+    run that this file's main makes. The GPT has 4 blocks of size 128, reads
+    128 characters at a time, and holds 818,048 weights.
 
     | Step | 0 | 500 | 1,000 | 2,000 | 3,000 |
     |---|---|---|---|---|---|
     | Validation loss | 4.16 to 4.20 | 1.98 to 2.01 | 1.71 to 1.74 | 1.56 to 1.58 | 1.52 to 1.55 |
 
     A run took 3.8 to 6.4 minutes on this Mac's GPU, an Apple M5, through
-    MPS. The check asks for a validation loss below 1.7. nanoGPT's own
+    MPS. The last check asks for a validation loss below 1.7. nanoGPT's own
     Shakespeare model, 6 blocks of size 384, reaches about 1.47 on a GPU.
     """,
 )
@@ -959,7 +982,7 @@ GPT3_SOURCE = source_file(
     '''
     # gpt3.py
     #
-    # Train once the checks above the last one pass, from the project folder.
+    # Once every check except the last one passes, train from the project folder.
     #
     #     .venv/bin/python run.py train gpt3
 
@@ -973,7 +996,7 @@ GPT3_SOURCE = source_file(
     from tensorlings.data import load_shakespeare
     from tensorlings.training import best_device, save_checkpoint
 
-    halfway = 0.5 * (1 + math.cos(math.pi * 0.5))    # 0.5, a cosine halfway down
+    halfway = 0.5 * (1 + math.cos(math.pi * 0.5))    # 0.5, the cosine factor halfway through
 
 
 ''' + INDENTED_SETTINGS + '''
@@ -995,9 +1018,11 @@ GPT3_SOURCE = source_file(
 ''' + INDENTED_DATA + '''
 
 
-    # TODO: Return the rate for step, counted from 0. For the first warmup steps
-    #   it climbs in a line to max_lr, reaching it at step warmup - 1. After
-    #   that it follows half a cosine from max_lr down to min_lr at step total.
+    # TODO: Return the learning rate for step, counted from 0. During the
+    #   first warmup steps it rises in a straight line, reaching max_lr at step
+    #   warmup - 1. After that it follows half a cosine curve, from max_lr at
+    #   step warmup down to min_lr at step total.
+    #   Example: learning_rate(0, 1e-3, 10, 100, 1e-4) returns 0.0001.
     def learning_rate(
         step: int,
         max_lr: float,
@@ -1008,8 +1033,9 @@ GPT3_SOURCE = source_file(
         ...
 
 
-    # TODO: Return AdamW at lr with betas (0.9, 0.95), with weight_decay on the
-    #   parameters of two or more dimensions and none on the rest.
+    # TODO: Return a torch.optim.AdamW optimizer with learning rate lr and
+    #   betas (0.9, 0.95). Use two parameter groups. Parameters with two or more
+    #   dimensions get weight_decay, and the rest get a weight decay of 0.
     def make_optimizer(
         model: nn.Module,
         lr: float,
@@ -1018,9 +1044,10 @@ GPT3_SOURCE = source_file(
         ...
 
 
-    # TODO: Set every group's rate to lr and take the cross entropy of model's
-    #   scores on x against y. Zero the old gradients, backpropagate, clip the
-    #   gradients to a norm of clip, step, and return the loss as a number.
+    # TODO: Set the learning rate of every parameter group to lr. Compute the
+    #   cross entropy between model's scores on x and the targets y. Then zero
+    #   the old gradients, backpropagate, clip the gradients to a total norm of
+    #   clip, take an optimizer step, and return the loss as a Python float.
     def train_step(
         model: nn.Module,
         optimizer: torch.optim.Optimizer,
@@ -1032,10 +1059,11 @@ GPT3_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the average loss over batches batches of 64 blocks from data,
-    #   each model.block_size tokens long, drawn with get_batch and generator
-    #   and moved to device. Run in eval mode without recording for autograd,
-    #   then put model back in training mode.
+    # TODO: Return the model's average loss on data, averaged over the number
+    #   of batches given by batches. Draw each batch with get_batch, as 64
+    #   blocks of model.block_size tokens, using generator, and move it to
+    #   device. Run in eval mode without letting autograd record, then put
+    #   model back in training mode.
     def validation_loss(
         model: nn.Module,
         data: Tensor,
@@ -1114,7 +1142,7 @@ def check_make_optimizer(found: object) -> None:
     optimizer = found(model, 0.003, 0.1)
 
     if not isinstance(optimizer, torch.optim.AdamW):
-        raise Mismatch(f"make_optimizer should give torch.optim.AdamW, but it gave {type(optimizer).__name__}.")
+        raise Mismatch(f"make_optimizer should return a torch.optim.AdamW, but it returned {type(optimizer).__name__}.")
 
     decay_of = {id(parameter): group["weight_decay"] for group in optimizer.param_groups for parameter in group["params"]}
 
@@ -1126,7 +1154,7 @@ def check_make_optimizer(found: object) -> None:
 
     for group in optimizer.param_groups:
         if group["lr"] != 0.003 or tuple(group["betas"]) != (0.9, 0.95):
-            raise Mismatch("Every group should have the rate lr and betas of (0.9, 0.95).")
+            raise Mismatch("Every parameter group should have the learning rate lr and betas (0.9, 0.95).")
 
 
 def check_train_step(found: object) -> None:
@@ -1148,7 +1176,7 @@ def check_train_step(found: object) -> None:
     (losses, weight, bias, rates), (expected_losses, expected_weight, expected_bias, _) = results
 
     if rates != [0.5, 0.5]:
-        raise Mismatch(f"After train_step at a rate of 0.5, the two groups' rates are {rates}. Set group[\"lr\"] for every group.")
+        raise Mismatch(f"After train_step with a learning rate of 0.5, the two groups' learning rates are {rates}. Set group[\"lr\"] for every group.")
 
     for number, (loss, expected_loss) in enumerate(zip(losses, expected_losses), start=1):
         expect_close(
@@ -1240,17 +1268,17 @@ def check_trained_gpt(found: type) -> None:
 def check_gpt3(checker: Checker) -> None:
     checker.test(
         function="learning_rate",
-        description="warms up in a line, then follows a cosine down",
+        description="rises in a straight line, then follows a cosine down",
         run=check_learning_rate,
     )
     checker.test(
         function="make_optimizer",
-        description="decays the matrices and nothing else",
+        description="applies weight decay to the matrices and nothing else",
         run=check_make_optimizer,
     )
     checker.test(
         function="train_step",
-        description="sets the rate, clips and steps",
+        description="sets the learning rate, clips the gradients and steps",
         run=check_train_step,
     )
     checker.test(
@@ -1261,7 +1289,7 @@ def check_gpt3(checker: Checker) -> None:
     checker.test_method(
         class_name="GPT",
         method="forward",
-        description="trained, gets below a validation loss of 1.7",
+        description="after training, reaches a validation loss below 1.7",
         run=check_trained_gpt,
     )
 
@@ -1274,14 +1302,15 @@ GPT3 = Exercise(
     source=GPT3_SOURCE,
     solution=GPT3_SOLUTION,
     hints={
-        "learning_rate": "Below warmup, scale max_lr by step + 1 over warmup. After it, progress is how far step is "
-        "past warmup, as a share of total minus warmup. The rate is min_lr plus half of max_lr - min_lr times 1 + "
-        "math.cos(math.pi * progress).",
+        "learning_rate": "Below warmup, multiply max_lr by (step + 1) / warmup. After that, progress is how far step "
+        "is past warmup, as a fraction of total - warmup. The rate is min_lr plus half of max_lr - min_lr, times "
+        "1 + math.cos(math.pi * progress).",
         "make_optimizer": "Split model.parameters() by parameter.dim() >= 2 into two groups, each a dict with "
         "\"params\" and \"weight_decay\", and pass the list to torch.optim.AdamW with betas=(0.9, 0.95).",
-        "train_step": "Loop over optimizer.param_groups to set \"lr\". scores.flatten(0, 1) against y.flatten() for "
-        "the loss, then zero_grad, backward, clip_grad_norm_ and step.",
-        "validation_loss": "model.eval(), then inside torch.no_grad() draw each batch with get_batch(data, "
+        "train_step": "Loop over optimizer.param_groups to set each group's \"lr\". For the loss, pass "
+        "scores.flatten(0, 1) and y.flatten() to F.cross_entropy. Then call zero_grad, backward, clip_grad_norm_ and "
+        "step.",
+        "validation_loss": "Call model.eval(). Then inside torch.no_grad(), draw each batch with get_batch(data, "
         "model.block_size, 64, generator), move it to device, and keep each loss.",
     },
     introduces=(),
@@ -1377,23 +1406,24 @@ INDENTED_SAMPLING = textwrap.indent(SAMPLING_PARTS.strip("\n"), "    ")
 
 GPT4_LESSON = prose(
     """
-    A trained GPT gives scores for the next character. Writing text means
-    picking one, adding it to the end, and asking again, as decoder1 did. The
-    block only holds `block_size` characters, so the model reads the last
-    ones each time.
+    A trained GPT gives a score to every possible next character. To write
+    text, pick one character, add it to the end, and run the model again, as
+    decoder1 did. The model can read only `block_size` characters at once, so
+    each time it reads the last `block_size` characters.
 
-    names3 sampled with `torch.multinomial`. Two knobs change what it picks.
+    names3 sampled the next character with `torch.multinomial`. Two settings
+    change which characters it picks.
 
-    - The temperature divides the scores before the softmax. Below 1 it sharpens the chances toward the likeliest characters, and above 1 it flattens them.
-    - Top k keeps only the k likeliest characters and sets every other score to minus infinity, so a rare mistake can never be picked.
+    - The temperature divides the scores before the softmax. Below 1 it concentrates the probability on the likeliest characters, and above 1 it spreads it out.
+    - Top k keeps only the k likeliest characters and sets every other score to minus infinity, so an unlikely character can never be picked.
 
     ```python
     scores = torch.tensor([2.0, 1.0, 0.5, -1.0])
     scores.topk(2).values    # tensor([2., 1.]), the two largest, largest first
     ```
 
-    Here is the trained model from gpt3, writing after `ROMEO:` with top k
-    of 20, the first lines of each.
+    Here is the trained model from gpt3 writing after `ROMEO:`, with top k of
+    20, at three temperatures. Only the first lines of each sample are shown.
 
     ```text
     0.5   The moon that setter of thee hath a dishonour steed
@@ -1404,14 +1434,15 @@ GPT4_LESSON = prose(
           Lestop thee hand, iddretcs froMech upon his:
     ```
 
-    At 0.5 the words are real and the lines play safe. At 1.5 the spelling
-    falls apart. At 1.0 with every character allowed, rare picks slip through,
-    like `kiss solemeRoH`. The model ranked its `k` 26th and its `H` 24th, so
-    top k of 20 would have cut both.
+    At 0.5 the words are real and the lines are predictable. At 1.5 the
+    spelling falls apart. At 1.0 with all 65 characters allowed, unlikely
+    characters get picked, as in `kiss solemeRoH`. The model ranked that `k`
+    26th and that `H` 24th, so top k of 20 would have removed both.
 
-    Here is the same model over 5 seeds of 2,000 characters each. The table
-    gives the share of written words found in the training text. It also
-    gives the distinct words per word written, which falls as text repeats.
+    Here is the same model over 5 seeds, writing 2,000 characters each time.
+    The table gives the fraction of written words that appear in the training
+    text. It also gives the number of distinct words divided by the number of
+    words written, which falls when the text repeats itself.
 
     | Temperature, top k | Real words | Distinct words per word |
     |---|---|---|
@@ -1421,14 +1452,15 @@ GPT4_LESSON = prose(
     | 1.0, all 65 | 83.3% to 89.6% | 0.62 to 0.67 |
     | 1.5, 20 | 66.0% to 70.6% | 0.74 to 0.79 |
 
-    A lower temperature writes more real words and repeats more. Top k cuts
-    the rare picks, which lifts the worst seed at 1.0 from 83.3% to 88.7%.
-    So pick the temperature for the trade you want, and keep a top k.
+    A lower temperature writes more real words but repeats itself more. Top k
+    removes the unlikely picks, which raises the worst seed at 1.0 from 83.3%
+    to 88.7% real words. So choose the temperature for the balance you want,
+    and keep a top k.
 
-    In 3.8 to 6.4 minutes and 818,048 weights the model learned spelling, line
-    breaks and the look of a speaker's name. GPT-2's largest model is the
-    same kind of stack with about 1,900 times as many weights, trained on 40
-    GB of web text.
+    With 818,048 weights and 3.8 to 6.4 minutes of training, the model learned
+    spelling, line breaks and what a speaker's name looks like. GPT-2's
+    largest model is the same kind of stack with about 1,900 times as many
+    weights, trained on 40 GB of web text.
     """,
 )
 
@@ -1468,8 +1500,11 @@ GPT4_SOURCE = source_file(
 ''' + INDENTED_DATA + '''
 
 
-    # TODO: Return scores with every entry below the k largest of its row set to
-    #   minus infinity, so only the k likeliest can be picked.
+    # TODO: Return a copy of scores where every entry that is not among the k
+    #   largest of its row is set to minus infinity. Then only the k likeliest
+    #   tokens can be picked.
+    #   Example: top_k_filter(torch.tensor([[2.0, -1.0, 0.5, 3.0]]), 2) returns
+    #   tensor([[2., -inf, -inf, 3.]]).
     def top_k_filter(
         scores: Tensor,
         k: int,
@@ -1477,9 +1512,11 @@ GPT4_SOURCE = source_file(
         ...
 
 
-    # TODO: Return one token per row of scores, of shape (batch, 1). Divide the
-    #   scores by temperature, keep the top_k, take the softmax, and draw with
-    #   torch.multinomial and generator.
+    # TODO: Sample one token id for each row of scores, which has shape
+    #   (batch, tokens). Divide the scores by temperature, keep only the top_k
+    #   largest with top_k_filter, and take the softmax. Then draw one sample
+    #   per row with torch.multinomial and generator. The result has shape
+    #   (batch, 1).
     def next_token(
         scores: Tensor,
         temperature: float,
@@ -1489,10 +1526,10 @@ GPT4_SOURCE = source_file(
         ...
 
 
-    # TODO: Return ids with steps more tokens written after it. Each step, run
-    #   model on the last model.block_size tokens, take the scores at the last
-    #   position, and add next_token's pick. Use eval mode and record nothing
-    #   for autograd.
+    # TODO: Return ids with steps more tokens appended after it. ids has shape
+    #   (batch, length). At each step, run model on the last model.block_size
+    #   tokens, take the scores at the last position, and append the token that
+    #   next_token picks. Use eval mode, and do not let autograd record.
     def generate(
         model: nn.Module,
         ids: Tensor,
@@ -1508,9 +1545,10 @@ GPT4_SOURCE = source_file(
     model = load_checkpoint(GPT(len(characters), BLOCK_SIZE, SIZE, LAYERS, HEADS), "gpt3")
     prompt = torch.tensor([[characters.index(character) for character in "ROMEO:"]])
 
-    # TODO: Set sample to the text of 200 tokens your model writes after the
-    #   prompt, at a temperature of 0.8 with top_k 20, drawn with a generator
-    #   seeded with 0. Spell the ids out with characters, prompt included.
+    # TODO: Set sample to the text your model writes when it generates 200
+    #   tokens after the prompt, with a temperature of 0.8 and top_k of 20. Use
+    #   a generator seeded with 0. Turn the ids into text with characters,
+    #   including the prompt.
     sample = ...
     ''',
 )
@@ -1605,7 +1643,7 @@ def check_generate(found: object) -> None:
         raise Mismatch("generate ran the model in training mode. Call model.eval() first.")
 
     if any(recording for _, recording in modes):
-        raise Mismatch("generate recorded for autograd. Write the tokens inside torch.no_grad().")
+        raise Mismatch("generate recorded for autograd. Generate the tokens inside torch.no_grad().")
 
     expect_tensor(
         call="generate of 6 tokens after 2 rows of 20, longer than the block of 16",
@@ -1639,7 +1677,7 @@ def check_gpt4(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="next_token",
-        description="draws from the sharpened, filtered chances",
+        description="samples from the softmax of the scaled, filtered scores",
         inputs=(
             (torch.tensor([[2.0, -1.0, 0.5, 3.0], [0.0, 1.0, 4.0, -2.0], [1.0, 1.0, 1.0, 1.0]]), 0.7, 3, seeded(601)),
             (torch.tensor([[1.0, 5.0, 2.0, 0.0, 3.0]]), 1.5, 2, seeded(602)),
@@ -1649,12 +1687,12 @@ def check_gpt4(checker: Checker) -> None:
     )
     checker.test(
         function="generate",
-        description="writes token after token from the last block",
+        description="appends one token at a time, reading the last block",
         run=check_generate,
     )
     checker.check_name(
         name="sample",
-        description="is your model writing after ROMEO:",
+        description="is the text your model writes after ROMEO:",
         run=check_sample,
     )
 
@@ -1667,14 +1705,15 @@ GPT4 = Exercise(
     source=GPT4_SOURCE,
     solution=GPT4_SOLUTION,
     hints={
-        "top_k_filter": "scores.topk(k, dim=-1).values[..., -1:] is the k-th largest of each row, kept as a column. "
-        "masked_fill the scores below it with float(\"-inf\").",
-        "next_token": "torch.softmax of top_k_filter(scores / temperature, top_k) over dim=-1, then "
-        "torch.multinomial of it with 1 draw and generator=generator.",
-        "generate": "model.eval() and torch.no_grad(). Each step, run model on the last model.block_size ids and keep "
-        "the scores at the final place. Then torch.cat next_token's pick onto ids on dim=1.",
-        "sample": "generate(model, prompt, 200, 0.8, 20, torch.Generator().manual_seed(0)), then join "
-        "characters[index] for each index of its first row.",
+        "top_k_filter": "scores.topk(k, dim=-1).values[..., -1:] is the smallest of the k largest entries of each row, "
+        "kept as a column. Use masked_fill to set the scores below it to float(\"-inf\").",
+        "next_token": "Pass scores / temperature through top_k_filter, then take torch.softmax over dim=-1. Draw from "
+        "the result with torch.multinomial, 1 sample, and generator=generator.",
+        "generate": "Call model.eval() and work inside torch.no_grad(). Each step, run model on the last "
+        "model.block_size ids and keep the scores at the last position. Then attach next_token's pick to ids with "
+        "torch.cat on dim=1.",
+        "sample": "Call generate with model, prompt, 200 steps, temperature 0.8, top_k 20 and "
+        "torch.Generator().manual_seed(0). Then join characters[index] for each index in the first row of the result.",
     },
     introduces=(),
     check=check_gpt4,

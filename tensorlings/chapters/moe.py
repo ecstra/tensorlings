@@ -33,12 +33,13 @@ MOE = Chapter(
         """
         # Mixture of experts
 
-        A mixture of experts keeps several MLPs and lets a router send each
-        token to a few of them, so a model holds far more parameters than it
-        runs per token. This chapter builds the router and the sparse layer,
-        shows why the router needs a balancing loss, measures when the extra
-        parameters pay off, and ties gates, SwiGLU, attention and routing
-        together as weights computed from the input.
+        A mixture of experts has several MLPs, called experts, and a router
+        that sends each token to only a few of them. So the model holds far
+        more parameters than it uses for any one token. This chapter builds
+        the router and the sparse layer. It shows why the router needs a
+        balancing loss and measures when the extra parameters are worth it.
+        Last, it shows that gates, SwiGLU, attention and routing all share one
+        idea, weights computed from the input.
 
         ## Further reading
 
@@ -89,14 +90,15 @@ def expert(
 
 MOE1_LESSON = prose(
     """
-    Every token so far went through the same MLP, all of its weights, every
-    time. A **mixture of experts** keeps several MLPs, the experts, and sends
-    each token to only a few of them.
+    So far, every token has gone through the same MLP and used all of its
+    weights. A **mixture of experts** has several MLPs, called the experts,
+    and sends each token to only a few of them.
 
-    A router picks them. It is a Linear that gives each expert a score for the
-    token. The top k scores win, and a softmax over only those k gives the
+    A router picks the experts for each token. The router is a Linear layer
+    that gives each expert a score for the token. The k experts with the
+    highest scores are chosen. A softmax over only those k scores gives the
     weights of the chosen experts. The layer's output is the weighted sum of
-    their outputs.
+    the chosen experts' outputs.
 
     ```python
     scores = torch.tensor([[2.0, -1.0, 0.5, 1.0]])
@@ -104,32 +106,37 @@ MOE1_LESSON = prose(
     torch.softmax(top.values, dim=-1)   # tensor([[0.7311, 0.2689]])
     ```
 
-    This is Mixtral's router, a softmax over the top k of `x W_g`, with 8
-    experts and k of 2. Each token runs 2 of the 8. So Mixtral holds about 47
-    billion parameters and uses about 13 billion per token.
+    This is the router Mixtral uses, a softmax over the top k of `x W_g`.
+    Mixtral has 8 experts and k of 2, so each token runs through 2 of the 8.
+    That is why Mixtral holds about 47 billion parameters but uses only about
+    13 billion for each token.
 
-    The Switch paper went further, with k of 1. A softmax over one score is
-    always 1, so that router would get no gradient and never learn. Switch
-    takes the softmax over every expert's score first, then weights the one
-    chosen expert by its probability. moe2's layer does this.
+    The Switch paper went further and used k of 1. A softmax over a single
+    score is always 1. So the weight would always be 1, the router would get
+    no gradient, and it would never learn. Instead, Switch takes the softmax
+    over all the experts' scores first. Then it multiplies the output of the
+    one chosen expert by that expert's probability. The layer in moe2 works
+    this way.
 
-    The saving comes from running only the chosen experts. For each expert,
-    find the tokens that picked it, run it on those rows alone, and add its
-    weighted output into theirs.
+    The layer saves computation by running only the chosen experts. For each
+    expert, find the tokens that picked it and run the expert on only those
+    rows. Multiply its output by each token's weight for it, and add the
+    result into those tokens' rows of the output.
 
     ```python
     chosen = torch.tensor([[0, 3], [3, 1]])
     rows, slots = (chosen == 3).nonzero(as_tuple=True)    # tensor([0, 1]), tensor([1, 0])
     ```
 
-    `rows` are the tokens that picked expert 3, and `slots` say where it sits
-    in their top k, which finds its weight. A token picks an expert at most
-    once, so adding into `out[rows]` touches each row once.
+    `rows` holds the tokens that picked expert 3. `slots` holds the position
+    of expert 3 in each of those tokens' top k, which is where to find its
+    weight. A token picks an expert at most once, so no row appears twice in
+    `rows`. That means adding into `out[rows]` updates each row exactly once.
 
-    Running every expert and giving the unchosen ones a weight of 0 gives the
-    same numbers. It also does all the work the router was meant to save.
-    Mixtral's experts are SwiGLU MLPs, from llama2. These experts use ReLU to
-    stay small.
+    You could also run every expert and give the unchosen ones a weight of 0.
+    That gives the same numbers, but it does all the work the router was
+    meant to save. Mixtral's experts are SwiGLU MLPs, from llama2. The experts
+    here use ReLU to keep them small.
     """,
 )
 
@@ -151,10 +158,13 @@ MOE1_SOURCE = source_file(
 ''' + indented(EXPERT_PART) + '''
 
 
-    # TODO: Return the weights and the chosen experts of each token, both of
-    #   shape (tokens, k), for router scores of shape (tokens, experts). The
-    #   weights are a softmax over the k largest scores of each row alone.
-    #   Keep the largest score first, as topk gives them.
+    # TODO: Return a pair (weights, chosen) for router scores of shape
+    #   (tokens, experts). chosen holds the indices of the k largest scores in
+    #   each row, and weights is a softmax over only those k scores. Both have
+    #   shape (tokens, k). Keep the largest score first, in the order topk
+    #   returns them.
+    #   Example: route(scores, 2) for the scores above returns
+    #   (tensor([[0.7311, 0.2689]]), tensor([[0, 3]])).
     def route(
         scores: Tensor,
         k: int,
@@ -162,9 +172,11 @@ MOE1_SOURCE = source_file(
         ...
 
 
-    # TODO: Finish forward for x of shape (tokens, features). Route the router's
-    #   scores, then run each expert only on the rows that chose it, and add its
-    #   output, times that row's weight for it, into the result.
+    # TODO: Finish forward for x of shape (tokens, features). Call route on
+    #   the router's scores to get each token's weights and chosen experts.
+    #   Then run each expert only on the rows of x that chose it. Multiply the
+    #   expert's output by each row's weight for that expert, and add it into
+    #   those rows of the result.
     class MoE(nn.Module):
         def __init__(
             self,
@@ -182,8 +194,11 @@ MOE1_SOURCE = source_file(
             ...
 
 
-    # TODO: Return the share of all the choices in chosen, of shape (tokens, k),
-    #   that went to each expert, one number per expert.
+    # TODO: Return the fraction of all the choices in chosen that went to each
+    #   expert, as a float tensor with one number per expert. chosen has shape
+    #   (tokens, k).
+    #   Example: expert_load(torch.tensor([[0, 3], [3, 1]]), 4) returns
+    #   tensor([0.2500, 0.2500, 0.0000, 0.5000]).
     def expert_load(
         chosen: Tensor,
         experts: int,
@@ -301,7 +316,7 @@ def expect_routes(
     expected: tuple[Tensor, Tensor],
 ) -> None:
     if not isinstance(actual, tuple) or len(actual) != 2:
-        raise Mismatch(f"{call} should give the weights and the chosen experts, two tensors in a tuple.")
+        raise Mismatch(f"{call} should return the weights and the chosen experts as a tuple of two tensors.")
 
     expect_tensor(
         call=f"the weights of {call}",
@@ -348,8 +363,8 @@ def check_moe_forward(found: type) -> None:
 
         if rows_run[0] != 7 * k:
             raise Mismatch(
-                f"MoE(4, 6, 5, {k}) ran its experts on {rows_run[0]} rows in all for 7 tokens, but it should run "
-                f"only the chosen ones, {7 * k} rows.",
+                f"MoE(4, 6, 5, {k}) ran its experts on {rows_run[0]} rows in total for 7 tokens. It should run "
+                f"only the chosen experts, which is {7 * k} rows.",
             )
 
         # With k of 1 every weight is a softmax over one score, always 1, so only k of 2 can show a gradient.
@@ -363,8 +378,8 @@ def check_moe_forward(found: type) -> None:
 
         if gradient is None or not gradient.abs().sum() > 0:
             raise Mismatch(
-                f"MoE(4, 6, 5, {k})'s router got no gradient. Keep the weights from route in the sum, outside "
-                "torch.no_grad() and without .detach(), since they are how the router learns.",
+                f"The router of MoE(4, 6, 5, {k}) got no gradient. The router learns through the weights from route, "
+                "so use them in the output sum, outside torch.no_grad() and without .detach().",
             )
 
 
@@ -372,7 +387,7 @@ def check_moe1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="route",
-        description="keeps the top k scores and softmaxes them alone",
+        description="takes a softmax over only the top k scores",
         inputs=(
             (torch.tensor([[2.0, -1.0, 0.5, 1.0], [0.0, 3.0, -2.0, 1.0]]), 2),
             (small_tensor(563, 5, 6) / 2 + torch.linspace(0.0, 0.1, 6), 3),
@@ -384,13 +399,13 @@ def check_moe1(checker: Checker) -> None:
     checker.test_method(
         class_name="MoE",
         method="forward",
-        description="runs only the chosen experts and weights their outputs",
+        description="runs only the chosen experts and adds their weighted outputs",
         run=check_moe_forward,
     )
     check_on_inputs(
         checker=checker,
         function="expert_load",
-        description="gives each expert's share of the choices",
+        description="returns the fraction of the choices that went to each expert",
         inputs=(
             (torch.tensor([[0, 3], [3, 1], [3, 0]]), 4),
             (torch.tensor([[2], [2], [0], [2], [1]]), 5),
@@ -410,11 +425,11 @@ MOE1 = Exercise(
     hints={
         "route": "scores.topk(k, dim=-1) gives .values and .indices. Return torch.softmax of the values over dim=-1, "
         "then the indices.",
-        "MoE.forward": "Call route on self.router's scores for x and self.k, which gives weights and chosen. For each "
-        "expert, (chosen == index).nonzero(as_tuple=True) gives rows and slots. Skip an expert with no rows, and add "
-        "weights[rows, slots].unsqueeze(1) times the expert's output on x[rows] into out[rows].",
-        "expert_load": "torch.bincount(chosen.flatten(), minlength=experts) counts the choices. Divide by "
-        "chosen.numel() as floats.",
+        "MoE.forward": "Call route with the router's scores for x and with self.k to get weights and chosen. For "
+        "each expert, (chosen == index).nonzero(as_tuple=True) gives rows and slots. Skip an expert with no rows. "
+        "Otherwise add weights[rows, slots].unsqueeze(1) times the expert's output on x[rows] into out[rows].",
+        "expert_load": "torch.bincount(chosen.flatten(), minlength=experts) counts the choices for each expert. "
+        "Convert the counts to floats and divide them by chosen.numel().",
     },
     introduces=(),
     check=check_moe1,
@@ -436,7 +451,8 @@ def target_of(x: Tensor) -> Tensor:
 '''
 
 SWITCH_PART = '''
-# A Switch layer, top 1 routing with a capacity for each expert, from the Switch paper.
+# A Switch layer from the Switch paper. It uses top 1 routing, with a
+# capacity for each expert.
 class Switch(nn.Module):
     def __init__(
         self,
@@ -450,7 +466,8 @@ class Switch(nn.Module):
         self.experts = nn.ModuleList([expert(features, hidden) for _ in range(experts)])
         self.factor = factor
 
-    # Each token goes to its likeliest expert, weighted by that probability, if the expert has room.
+    # Each token goes to its most likely expert, and the expert's output is
+    # multiplied by that probability. Tokens past an expert's capacity get 0.
     def forward(self, x: Tensor) -> tuple[Tensor, Tensor, Tensor, Tensor]:
         probs = torch.softmax(self.router(x), dim=-1)
         weight, chosen = probs.max(dim=-1)
@@ -515,51 +532,57 @@ def train_switch(
 
 MOE2_LESSON = prose(
     """
-    A router learns like any other layer, and left alone it picks favourites.
-    Shazeer and colleagues saw the imbalance feed itself. The favoured experts
-    train faster, so the router picks them even more.
+    A router is trained like any other layer, and without help it ends up
+    favouring a few experts. Shazeer and colleagues saw this imbalance
+    reinforce itself. The favoured experts train faster, so the router picks
+    them even more often.
 
-    Here are 4 runs of a top 1 router over 4 experts, 400 steps each, on the
-    same smooth target. Its router has a bias, which lets it favour one expert
-    for every input and shows the effect quickly. The routers of Switch and
-    Mixtral have no bias. This layer's softmax runs over all 4 scores, as
-    Switch's does. Each token's one expert is weighted by its probability,
-    for the reason moe1 gave.
+    The table below comes from 4 training runs of a layer with 4 experts and
+    a top 1 router. Each run trains for 400 steps on the same smooth target
+    function. This router has a bias, which lets it favour one expert for
+    every input, so the effect shows up quickly. The routers of Switch and
+    Mixtral have no bias. As in Switch, the softmax runs over all 4 scores.
+    Each token's one expert is weighted by its probability, for the reason
+    moe1 gave.
 
     | Balancing | Tokens to the busiest expert | Tokens dropped | Error |
     |---|---|---|---|
     | none | 53% to 65% | 23% to 34% | 0.096 to 0.120 |
     | weight 0.01 | 32% to 39% | 1% to 8% | 0.021 to 0.042 |
 
-    An even share is 25%, and always answering 0 has an error of 0.351.
+    With 4 experts, an even share is 25% each. For comparison, a model that
+    always outputs 0 has an error of 0.351.
 
-    Imbalance wastes the experts that get little, and it does worse than
-    that. Each expert runs on its own share of the hardware, with room for a
-    fixed number of tokens per batch, its **capacity**. The Switch paper sets
-    the capacity to a capacity factor times an even share, here 1.25.
+    Imbalance wastes the experts that get few tokens, and it causes a worse
+    problem too. Each expert runs on its own part of the hardware, which has
+    room for a fixed number of tokens per batch. That number is the expert's
+    **capacity**. The Switch paper sets the capacity to an even share of the
+    batch times a capacity factor, here 1.25.
 
     ```python
     math.ceil(1.25 * 256 / 4)    # 80 tokens per expert, for a batch of 256
     ```
 
-    Tokens past an expert's capacity are dropped, and the layer gives them 0.
-    With a residual around the layer they pass through unchanged, but the
-    layer has done nothing for them. The busier the favourite, the more of the
-    batch is dropped.
+    When more tokens choose an expert than its capacity allows, the extra
+    tokens are dropped, and the layer outputs 0 for them. With a residual
+    connection around the layer, a dropped token passes through unchanged,
+    but the layer has done nothing for it. The busier the favourite expert,
+    the more of the batch gets dropped.
 
-    The Switch paper's fix is a balancing loss, added to the task's loss with
-    a weight of 0.01.
+    The Switch paper fixes this with a balancing loss. The balancing loss is
+    multiplied by 0.01 and added to the task's loss.
 
     ```text
     balance = experts * sum over i of f_i * P_i
     ```
 
-    `f_i` is the share of tokens sent to expert i, and `P_i` is the router's
-    average probability for expert i. An even split gives exactly 1. One
-    expert with every token and all the probability gives the number of
-    experts. `f_i` comes from an argmax and passes no gradient, as soft1 showed.
-    So the gradient reaches the router through `P_i`, and it lowers the
-    probability of the busiest experts most.
+    `f_i` is the fraction of tokens sent to expert i, and `P_i` is the
+    router's average probability for expert i over the batch. An even split
+    gives a balancing loss of exactly 1. If one expert gets every token and
+    all the probability, the loss equals the number of experts. `f_i` comes
+    from an argmax, so it passes no gradient, as soft1 showed. The gradient
+    reaches the router only through `P_i`, and it lowers the probability of
+    the busiest experts the most.
     """,
 )
 
@@ -578,21 +601,24 @@ MOE2_SOURCE = source_file(
     room = math.ceil(1.25 * 256 / 4)                                    # 80
 
 
-    # moe1's experts.
+    # The experts from moe1.
 ''' + indented(EXPERT_PART) + '''
 
 
-    # The smooth target the layer learns.
+    # The smooth target function that the layer learns.
 ''' + indented(TARGET_PART) + '''
 
 
 ''' + indented(SWITCH_PART) + '''
 
 
-    # TODO: Return the Switch paper's balancing loss for router probabilities of
-    #   shape (tokens, experts) and the chosen expert of each token. It is
-    #   experts times the sum of f_i * P_i, with f_i the share of tokens sent to
-    #   expert i and P_i the mean of its column of probs.
+    # TODO: Return the Switch paper's balancing loss as a tensor. probs holds
+    #   the router probabilities, shape (tokens, experts), and chosen holds the
+    #   chosen expert of each token, shape (tokens,). The loss is experts times
+    #   the sum of f_i * P_i over the experts. f_i is the fraction of tokens
+    #   sent to expert i, and P_i is the mean of column i of probs.
+    #   Example: for probs = torch.full((4, 2), 0.5) and
+    #   chosen = torch.tensor([0, 1, 1, 0]), balancing_loss returns tensor(1.).
     def balancing_loss(
         probs: Tensor,
         chosen: Tensor,
@@ -601,9 +627,11 @@ MOE2_SOURCE = source_file(
         ...
 
 
-    # TODO: Return a tensor of True and False, one per token, that keeps the
-    #   first capacity tokens sent to each expert, in the order they come, and
-    #   drops the rest.
+    # TODO: Return a boolean tensor with one entry per token, True for the
+    #   tokens that are kept. For each expert, keep the first capacity tokens
+    #   sent to it, in the order they appear in chosen, and drop the rest.
+    #   Example: within_capacity(torch.tensor([1, 1, 0, 1, 2, 1, 0]), 3, 2)
+    #   returns tensor([ True,  True,  True, False,  True, False,  True]).
     def within_capacity(
         chosen: Tensor,
         experts: int,
@@ -613,7 +641,8 @@ MOE2_SOURCE = source_file(
 
 
     # TODO: Finish the line that sets loss. It is the mean squared error of
-    #   output against target_of(x), plus alpha times the balancing loss.
+    #   output against target_of(x), plus alpha times the balancing loss of
+    #   probs and chosen.
     def train_switch(
         model: nn.Module,
         steps: int,
@@ -737,7 +766,7 @@ def check_moe2(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="balancing_loss",
-        description="gives experts times the sum of f_i * P_i",
+        description="returns experts times the sum of f_i * P_i",
         inputs=(
             (torch.softmax(small_tensor(572, 6, 4) / 2, dim=-1), torch.tensor([0, 3, 3, 1, 3, 0]), 4),
             (torch.full((4, 2), 0.5), torch.tensor([0, 1, 1, 0]), 2),
@@ -754,7 +783,7 @@ def check_moe2(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="within_capacity",
-        description="keeps the first tokens up to each expert's capacity",
+        description="keeps the first capacity tokens sent to each expert",
         inputs=(
             (torch.tensor([1, 1, 0, 1, 2, 1, 0]), 3, 2),
             (torch.tensor([0, 0, 0, 0]), 2, 3),
@@ -765,7 +794,7 @@ def check_moe2(checker: Checker) -> None:
     )
     checker.test(
         function="train_switch",
-        description="adds the balancing loss, so the layer spreads its tokens",
+        description="adds the balancing loss, so the tokens spread across the experts",
         run=check_train_switch,
     )
 
@@ -773,16 +802,17 @@ def check_moe2(checker: Checker) -> None:
 MOE2 = Exercise(
     name="moe2",
     chapter=MOE,
-    title="Why the balancing loss",
+    title="Why the router needs a balancing loss",
     lesson=MOE2_LESSON,
     source=MOE2_SOURCE,
     solution=MOE2_SOLUTION,
     hints={
-        "balancing_loss": "torch.bincount(chosen, minlength=experts) over len(chosen) gives f as floats, and "
-        "probs.mean(dim=0) gives P. Return experts * (f * P).sum().",
+        "balancing_loss": "Divide torch.bincount(chosen, minlength=experts) by len(chosen) to get f as floats. "
+        "probs.mean(dim=0) gives P. Then return experts * (f * P).sum().",
         "within_capacity": "Start from torch.zeros(len(chosen), dtype=torch.bool). For each expert, "
-        "(chosen == index).nonzero().flatten() lists its tokens in order, and the first capacity of them are kept.",
-        "train_switch": "F.mse_loss(output, target_of(x)) + alpha * balancing_loss(probs, chosen, len(model.experts)).",
+        "(chosen == index).nonzero().flatten() lists its tokens in order. Set the first capacity of those to True.",
+        "train_switch": "Use F.mse_loss for the error against target_of(x). Then add alpha times balancing_loss, "
+        "called with probs, chosen and the number of experts, len(model.experts).",
     },
     introduces=(),
     check=check_moe2,
@@ -940,53 +970,63 @@ def measure_moe3(
 
 MOE3_LESSON = prose(
     """
-    A mixture of experts holds many parameters and runs few of them for each
-    token. This exercise counts both and measures when the trade pays.
+    A mixture of experts holds many parameters but uses only a few of them
+    for each token. The parameters a token runs through set its compute,
+    which is how much arithmetic the model does for that token. This exercise
+    counts both numbers and measures when the trade is worth it.
 
-    An expert from 8 features to 16 and back holds 280 parameters. Eight of
-    them and a router with a bias hold 2,312, yet each token runs one expert
-    and the router, 352. A dense MLP 128 wide holds 2,184 and runs every one.
+    An expert that maps 8 features to 16 hidden features and back holds 280
+    parameters. Eight experts plus a router with a bias hold 2,312. But each
+    token runs through only the router and one expert, which is 352
+    parameters. A dense MLP with a hidden width of 128 holds 2,184
+    parameters, and every token runs through all of them.
 
-    Here they are, trained 3,000 steps on two tasks, 3 seeds each. In the
-    regions task the input falls near one of 16 centres, and each region has
-    its own linear map. The smooth task is moe2's target, one function
-    everywhere.
+    The table compares these models after 3,000 training steps on two tasks,
+    with 3 seeds each. In the regions task, each input lies near one of 16
+    centres, and each region has its own linear map from input to target.
+    The smooth task uses the target from moe2, one smooth function for all
+    inputs.
 
-    | Model | Run per token | Regions error | Smooth error |
+    | Model | Used per token | Regions error | Smooth error |
     |---|---|---|---|
     | dense, 16 wide | 280 | 1.34 to 1.43 | 0.0148 to 0.0156 |
     | 8 experts | 352 | 0.105 to 0.151 | 0.0118 to 0.0123 |
     | dense, 128 wide | 2,184 | 0.262 to 0.270 | 0.0011 to 0.0013 |
 
-    On the regions task the router sent 99% or more of each region's inputs
-    to one expert. Each expert came to own a couple of regions and learned
-    their maps. The experts beat the dense layer of the same compute about
-    tenfold. They also beat the dense layer with as many parameters, with
-    about half its error.
+    On the regions task, the router sent 99% or more of each region's inputs
+    to a single expert. Each expert took over a couple of regions and learned
+    their maps. The experts had about a tenth of the error of the 16 wide
+    dense layer, which uses about the same compute. They also had about half
+    the error of the 128 wide dense layer, which has about as many
+    parameters.
 
-    On the smooth task the experts still beat the dense layer of the same
-    compute, 0.012 against 0.015. One function everywhere doesn't split into
-    parts, though. There the dense layer with as many parameters, all of them
-    running, does ten times better.
+    On the smooth task, the experts still beat the 16 wide dense layer, 0.012
+    against 0.015. But one smooth function does not split into parts that
+    different experts could handle. So on this task the 128 wide dense layer,
+    which runs all of its parameters for every token, does ten times better.
 
-    That is the trade. Experts buy parameters for the same compute, and they
-    pay most when the work splits into parts that different experts can own.
-    In Mixtral and in Google's ST-MoE the experts did not split by topic or by
-    language. They split by kinds of tokens, like punctuation, numbers, names,
-    or `self` in Python code.
+    That is the trade. Experts give a model more parameters for the same
+    compute. They help most when the work splits into parts that different
+    experts can each handle. In Mixtral and in Google's ST-MoE, the experts
+    did not specialize by topic or by language. They specialized by kinds of
+    tokens, like punctuation, numbers, names, or `self` in Python code.
 
-    The experts above ran with no limit on their load. With room for twice an
-    even share, a capacity factor of 2.0, under half a percent of the inputs
-    found their expert full. The regions error came out at 0.112 to 0.185.
+    The experts above had no limit on how many tokens each could take. Next
+    they ran with a capacity factor of 2.0, which gives each expert room for
+    twice an even share. Then under half a percent of the inputs found their
+    expert full, and the regions error was 0.112 to 0.185.
 
-    The Switch Transformer paper ran factors from 1.0 to 2.0, and each beat
-    the dense model of the same compute by about the same margin. There a token
-    with no room passes on through the residual. This layer has no residual, so
-    a dropped token gets 0, which is why it wants the room.
+    The Switch Transformer paper tried capacity factors from 1.0 to 2.0. Each
+    one beat the dense model of the same compute by about the same margin. In
+    that paper, a token that finds its expert full passes through unchanged
+    on the residual connection. The layer here has no residual connection, so
+    a dropped token gets an output of 0. That is why this layer needs the
+    extra room.
 
-    The cost is memory, every expert held at once, and a router to keep
-    balanced. That memory is why large models spread their experts across
-    many GPUs. The saving is multiplications per token.
+    The costs are memory, because every expert must be held at once, and a
+    router that must be kept balanced. That memory is why large models spread
+    their experts across many GPUs. The saving is in multiplications per
+    token.
     """,
 )
 
@@ -997,8 +1037,10 @@ MOE3_SOURCE = source_file(
     layer = 8 * 16 + 16    # 144, the weights and biases of a Linear from 8 to 16
 
 
-    # TODO: Return the parameters of one expert, a Linear with bias from features
-    #   to hidden and one from hidden back to features.
+    # TODO: Return the number of parameters in one expert. An expert is a
+    #   Linear with bias from features to hidden, then a Linear with bias from
+    #   hidden back to features.
+    #   Example: dense_parameters(8, 16) returns 280.
     def dense_parameters(
         features: int,
         hidden: int,
@@ -1006,9 +1048,10 @@ MOE3_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the parameters of a mixture of experts, experts copies of
-    #   that expert, plus a router with a bias, a Linear from features to
-    #   experts.
+    # TODO: Return the number of parameters in a mixture of experts. It has
+    #   experts copies of that expert, plus a router, which is a Linear with
+    #   bias from features to experts.
+    #   Example: moe_parameters(8, 16, 8) returns 2312.
     def moe_parameters(
         features: int,
         hidden: int,
@@ -1017,8 +1060,9 @@ MOE3_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the parameters one token runs through, the router and the k
-    #   experts it picks.
+    # TODO: Return the number of parameters one token runs through, which are
+    #   the router and the k experts it picks.
+    #   Example: active_parameters(8, 16, 8, 1) returns 352.
     def active_parameters(
         features: int,
         hidden: int,
@@ -1110,7 +1154,7 @@ def check_moe3(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="active_parameters",
-        description="counts the router and the k experts a token runs",
+        description="counts the router and the k experts a token runs through",
         inputs=(
             (8, 16, 8, 1),
             (6, 5, 4, 2),
@@ -1123,15 +1167,16 @@ def check_moe3(checker: Checker) -> None:
 MOE3 = Exercise(
     name="moe3",
     chapter=MOE,
-    title="When, more parameters for the same compute",
+    title="When more parameters for the same compute pay off",
     lesson=MOE3_LESSON,
     source=MOE3_SOURCE,
     solution=MOE3_SOLUTION,
     hints={
-        "dense_parameters": "Each Linear has in times out weights plus out biases. Add the two Linears.",
-        "moe_parameters": "experts times dense_parameters, plus the router's features * experts weights and experts "
-        "biases.",
-        "active_parameters": "k times dense_parameters, plus the whole router, which runs for every token.",
+        "dense_parameters": "A Linear from n inputs to m outputs has n * m weights plus m biases. Add up the two "
+        "Linears.",
+        "moe_parameters": "Multiply dense_parameters by experts. Then add the router's features * experts weights "
+        "and its experts biases.",
+        "active_parameters": "Multiply dense_parameters by k. Then add the whole router, which runs for every token.",
     },
     introduces=(),
     check=check_moe3,
@@ -1144,19 +1189,20 @@ MOE3 = Exercise(
 
 DYNAMIC1_LESSON = prose(
     """
-    Four layers in this course make some of their weights from the input
-    itself, fresh on every forward pass.
+    Four layers in this course compute some of their weights from the input
+    itself. They compute these weights again on every forward pass.
 
-    | Layer | Weights made from the input | What they weigh | Shown in |
+    | Layer | Weights computed from the input | What they multiply | Shown in |
     |---|---|---|---|
     | gate | `sigmoid(x W_g)` | each feature of `x W_v` | gating1, derive1 |
     | SwiGLU | `silu(x W_g)` | each feature of `x W_up` | llama2 |
     | attention | `softmax(q k^T / sqrt(d))` | the values of every position | attention5 |
     | routing | a softmax over the top k router scores | the outputs of the chosen experts | moe1 |
 
-    A Linear's weights stop changing once training ends, and the same numbers
-    multiply every input. In these four, the trained weights make other
-    weights, and the input decides those each time.
+    A Linear layer's weights stop changing once training ends, and the same
+    numbers multiply every input. In these four layers, the trained weights
+    are used to compute other weights, and those other weights depend on the
+    input each time.
 
     ```python
     W_g = torch.tensor([[1.0, -1.0]])
@@ -1164,22 +1210,25 @@ DYNAMIC1_LESSON = prose(
     torch.sigmoid(torch.tensor([[0.0, 2.0]]) @ W_g.T)    # tensor([[0.1192]])
     ```
 
-    One gate, two inputs, and two different weights.
+    The same gate gives two different weights for two different inputs.
 
-    That buys multiplication. A Linear scales its inputs and adds them. These
-    layers multiply one function of the input by another. So a gate can pass a
-    value only while a switch is on, as gating1 showed. Attention can fetch
-    whatever a query asks for, from any position. Routing multiplies the
-    skipped experts by 0, and so runs a different network for each token.
+    This lets a layer multiply parts of the input together. A Linear layer
+    can only scale its inputs and add them up. These layers multiply one
+    function of the input by another function of the input. So a gate can
+    pass a value only while a switch in the input is on, as gating1 showed.
+    Attention can fetch whatever a query asks for, from any position. Routing
+    multiplies the skipped experts by 0, so it runs a different network for
+    each token.
 
-    It is a design tool too. When a model must choose, look something up or
-    switch between paths, make the choice a weight computed from the input.
-    Make it soft so it passes a gradient, as 38_soft_design did, and train it.
+    Weights computed from the input are also a design tool. When a model must
+    choose, look something up or switch between paths, make that choice a
+    weight computed from the input. Make the weight soft so it passes a
+    gradient, as in 38_soft_design, and train it.
 
     Routing needs one more tool. `.scatter(dim, index, values)` writes each
-    value of a row into the column that `index` names for it, leaving every
-    other column as it was. On a row of zeros it turns the top k into a full
-    row of weights, 0 for each expert left out.
+    value in a row into the column that `index` gives for it, and leaves every
+    other column unchanged. Scattering the top k weights into a row of zeros
+    gives a full row of weights, with 0 for each expert that was left out.
 
     ```python
     torch.zeros(2, 4).scatter(1, torch.tensor([[3, 0], [1, 2]]), torch.tensor([[0.6, 0.4], [0.9, 0.1]]))
@@ -1203,8 +1252,9 @@ DYNAMIC1_SOURCE = source_file(
     picked = torch.zeros(2, 3).scatter(1, torch.tensor([[2], [0]]), torch.tensor([[0.7], [0.4]]))    # tensor([[0.0, 0.0, 0.7], [0.4, 0.0, 0.0]])
 
 
-    # TODO: Return each feature of x @ W_value.T times its gate,
-    #   sigmoid(x @ W_gate.T). x has shape (tokens, features).
+    # TODO: Return the output of a gate layer. Compute x @ W_value.T, and
+    #   multiply each feature of it by its gate, sigmoid(x @ W_gate.T). x has
+    #   shape (tokens, features).
     def gate_layer(
         x: Tensor,
         W_gate: Tensor,
@@ -1213,8 +1263,8 @@ DYNAMIC1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return llama2's SwiGLU before its last Linear, x @ W_up.T with
-    #   each feature weighted by F.silu(x @ W_gate.T).
+    # TODO: Return llama2's SwiGLU without its last Linear. Compute x @ W_up.T,
+    #   and multiply each feature of it by F.silu(x @ W_gate.T).
     def swiglu_layer(
         x: Tensor,
         W_gate: Tensor,
@@ -1224,8 +1274,10 @@ DYNAMIC1_SOURCE = source_file(
 
 
     # TODO: Return attention over x, of shape (steps, features), with no mask.
-    #   q, k and v are x times W_q.T, W_k.T and W_v.T, and the weights are a
-    #   softmax over each row of q k^T divided by the square root of q's size.
+    #   The queries, keys and values are q = x @ W_q.T, k = x @ W_k.T and
+    #   v = x @ W_v.T. The attention weights are a softmax over each row of
+    #   q @ k.T / sqrt(d), where d is the last dimension of q. The output
+    #   mixes the values with those weights.
     def attention_layer(
         x: Tensor,
         W_q: Tensor,
@@ -1235,10 +1287,12 @@ DYNAMIC1_SOURCE = source_file(
         ...
 
 
-    # TODO: Return a routed layer for x, of shape (tokens, features). Expert i is
-    #   x @ experts[i].T, and the router's scores are x @ router.T. Each token
-    #   weights its top k experts by a softmax over their scores alone and the
-    #   rest by 0. Running every expert is fine here.
+    # TODO: Return the output of a routed layer for x, of shape
+    #   (tokens, features). The output of expert i is x @ experts[i].T, and the
+    #   router's scores are x @ router.T. Each token gives its top k experts
+    #   the weights of a softmax over only their scores, and gives every other
+    #   expert a weight of 0. The result is the weighted sum of the experts'
+    #   outputs. Running every expert is fine here.
     def routed_layer(
         x: Tensor,
         router: Tensor,
@@ -1329,7 +1383,7 @@ def check_dynamic1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="gate_layer",
-        description="weights each feature by a gate made from the input",
+        description="multiplies each feature by a gate computed from the input",
         inputs=(
             (x, small_tensor(581, 3, 4) / 2, small_tensor(582, 3, 4) / 2),
         ),
@@ -1339,7 +1393,7 @@ def check_dynamic1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="swiglu_layer",
-        description="weights each feature by silu of another projection",
+        description="multiplies each feature by silu of another projection",
         inputs=(
             (x, small_tensor(583, 6, 4) / 2, small_tensor(584, 6, 4) / 2),
         ),
@@ -1349,7 +1403,7 @@ def check_dynamic1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="attention_layer",
-        description="mixes the values of every position by softmax weights",
+        description="takes a weighted sum of the values at every position, with softmax weights",
         inputs=(
             (x, small_tensor(585, 3, 4) / 2, small_tensor(586, 3, 4) / 2, small_tensor(587, 2, 4) / 2),
         ),
@@ -1381,12 +1435,14 @@ DYNAMIC1 = Exercise(
     source=DYNAMIC1_SOURCE,
     solution=DYNAMIC1_SOLUTION,
     hints={
-        "gate_layer": "torch.sigmoid(x @ W_gate.T) times (x @ W_value.T).",
-        "swiglu_layer": "F.silu(x @ W_gate.T) times (x @ W_up.T).",
-        "attention_layer": "q @ k.T over math.sqrt(q.shape[-1]), a softmax with dim=-1, then @ v.",
-        "routed_layer": "(x @ router.T).topk(k, dim=-1) gives the scores and the experts. scatter the softmax of the "
-        "scores into torch.zeros(len(x), len(experts)), then weight torch.stack([x @ e.T for e in experts], dim=1) by "
-        "it and sum over dim=1.",
+        "gate_layer": "Compute the gate with torch.sigmoid and the values with x @ W_value.T, then multiply them "
+        "entry by entry.",
+        "swiglu_layer": "Follow gate_layer, using F.silu instead of torch.sigmoid and W_up instead of W_value.",
+        "attention_layer": "Divide q @ k.T by math.sqrt(q.shape[-1]), take the softmax with dim=-1, then multiply "
+        "the weights by v with @.",
+        "routed_layer": "(x @ router.T).topk(k, dim=-1) gives the top scores and their experts. Scatter the softmax "
+        "of those scores into torch.zeros(len(x), len(experts)). Stack the expert outputs with "
+        "torch.stack([x @ e.T for e in experts], dim=1). Multiply them by the weights and sum over dim=1.",
     },
     introduces=(),
     check=check_dynamic1,

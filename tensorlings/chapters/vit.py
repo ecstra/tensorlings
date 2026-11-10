@@ -37,8 +37,8 @@ VIT = Chapter(
         A transformer reads a sequence of tokens. The Vision Transformer, ViT,
         reads an image the same way, by cutting it into patches and treating
         each patch as a token. This chapter builds the patch embedding and the
-        class token, then trains a small ViT on MNIST next to LeNet to see how
-        much data each needs.
+        class token. Then it trains a small ViT and LeNet on MNIST to compare
+        how much data each one needs.
 
         ## Further reading
 
@@ -124,12 +124,12 @@ VIT1_LESSON = prose(
     """
     A transformer reads a sequence of tokens. The Vision Transformer of
     Dosovitskiy and colleagues reads an image the same way, by cutting it into
-    patches and treating each patch as a token. Its paper's title says so, an
-    image is worth 16x16 words.
+    patches and treating each patch as a token. The paper's title puts it this
+    way, an image is worth 16x16 words.
 
-    A 28 by 28 MNIST digit cut into 7 by 7 patches gives 16 patches, 4 across
-    and 4 down. Each patch flattens to 49 numbers, one per pixel, row by row.
-    Here is a 4 by 4 image cut into patches of 2.
+    Cutting a 28 by 28 MNIST digit into 7 by 7 patches gives 16 patches, 4
+    across and 4 down. Each patch is flattened into 49 numbers, one per
+    pixel, row by row. Here is a 4 by 4 image cut into 2 by 2 patches.
 
     ```python
     grid = torch.arange(16.0).reshape(1, 1, 4, 4)
@@ -137,31 +137,35 @@ VIT1_LESSON = prose(
     cells.permute(0, 2, 4, 1, 3, 5).reshape(1, 4, 4)[0, 1]    # tensor([2., 3., 6., 7.]), the top right patch
     ```
 
-    The first `.reshape` splits each side into which patch and where inside
-    it. `.permute` moves the two patch dimensions in front, so the last
-    `.reshape` gives one row per patch.
+    The first `.reshape` splits the height into two dimensions, which row of
+    patches and which row inside the patch. It splits the width the same way.
+    `.permute` moves the two dimensions that pick the patch to the front. So
+    the last `.reshape` gives one row per patch.
 
-    One Linear embeds every patch, the same Linear for all of them. A Conv2d
-    whose kernel and stride both equal the patch size does exactly the same
-    sums. Real code uses it, since one call cuts and embeds at once.
+    One Linear layer embeds every patch, and all the patches share that same
+    Linear. A Conv2d whose kernel size and stride both equal the patch size
+    computes exactly the same sums. Real code uses the Conv2d, because one
+    call cuts out the patches and embeds them at once.
 
-    The Linear's weight has one row per output, holding a patch's numbers in
-    patchify's order, channel, then row, then column. So
-    `.reshape(size, channels, patch, patch)` lays each row out as one kernel
-    of that Conv2d.
+    The Linear's weight has one row per output feature. Each row holds one
+    weight per number of the patch, in patchify's order, which is by channel,
+    then row, then column. So `.reshape(size, channels, patch, patch)` turns
+    each row into one kernel of that Conv2d.
 
-    Two more pieces finish the input.
+    Two more pieces complete the input to the transformer blocks.
 
-    - The **class token** is a learned vector put in front of the patches. It belongs to no patch, so the head reads its output alone.
-    - A learned position vector is added to every token, the class token too, since attention ignores order, as position1 showed.
+    - The **class token** is a learned vector in front of the patch tokens. It belongs to no patch, and the head reads only its output.
+    - A learned position vector is added to every token, including the class token. Attention ignores order, as position1 showed.
 
-    One class token serves every image, so it is repeated along the batch.
-    `.expand(2, -1, -1)` turns a size 1 dimension into 2 copies without
-    copying memory, and each -1 keeps that size as it is.
+    Every image uses the same class token, so the token is repeated along the
+    batch dimension. `.expand(2, -1, -1)` turns a dimension of size 1 into 2
+    copies without copying any memory. Each -1 keeps that dimension's size
+    unchanged.
 
-    After the blocks, the class token has gathered from every patch what the
-    head needs. The paper took the idea from BERT's class token. It also found
-    that positions aware of the 2D grid did no better than a plain list of 17.
+    After the transformer blocks, the output at the class token holds what
+    the head needs, gathered from every patch. The paper took this idea from
+    BERT's class token. It also found that position vectors that know the 2D
+    grid did no better than a plain numbered list, like the 17 positions here.
     """,
 )
 
@@ -180,10 +184,13 @@ VIT1_SOURCE = source_file(
     first = torch.zeros(1, 1, 3).expand(2, -1, -1)    # shape (2, 1, 3), one copy per image
 
 
-    # TODO: Return the patches of images, of shape (batch, channels, height,
-    #   width), as rows of shape (batch, patches, channels * patch * patch).
-    #   The patches go row by row, and each one flattens channel by channel,
-    #   then row by row, as in the lesson.
+    # TODO: Cut images, of shape (batch, channels, height, width), into
+    #   squares of patch by patch pixels. Return them as a tensor of shape
+    #   (batch, patches, channels * patch * patch), with one row per patch.
+    #   The patches go in order row by row across the image. Each patch is
+    #   flattened by channel, then row, then column, as in the lesson.
+    #   Example: patchify(grid, 2)[0, 1] for the grid above is
+    #   tensor([2., 3., 6., 7.]).
     def patchify(
         images: Tensor,
         patch: int,
@@ -191,18 +198,20 @@ VIT1_SOURCE = source_file(
         ...
 
 
-    # TODO: Finish forward. Embed the patches of images with self.project, put
-    #   the class token in front of each image's patches, and add the
-    #   positions. The result has shape (batch, patches + 1, size).
+    # TODO: Finish forward. Cut images into patches and embed them with
+    #   self.project. Put the class token in front of each image's patch
+    #   tokens, then add self.positions. The result has shape
+    #   (batch, patches + 1, size).
 ''' + indented(PATCH_EMBEDDING_INIT) + '''
 
         def forward(self, images: Tensor) -> Tensor:
             ...
 
 
-    # TODO: Return an nn.Conv2d whose kernel and stride are both patch, holding
-    #   the weights and bias of project, so it embeds every patch as project
+    # TODO: Return an nn.Conv2d that embeds every patch exactly as project
     #   does. project is an nn.Linear from channels * patch * patch to size.
+    #   The Conv2d's kernel size and stride are both patch, and it holds the
+    #   weights and bias of project.
     def conv_embedding(
         project: nn.Linear,
         channels: int,
@@ -235,7 +244,7 @@ VIT1_SOLUTION = source_file(
 ''' + indented(PATCH_EMBEDDING_FORWARD) + '''
 
 
-    # The Linear's weight row for one output is the patch's 49 numbers in order, so it folds back into a kernel.
+    # Each row of the Linear's weight holds the patch's numbers in patchify's order, so it reshapes into a kernel.
     def conv_embedding(
         project: nn.Linear,
         channels: int,
@@ -288,10 +297,10 @@ def check_conv_embedding(found: object) -> None:
         conv = found(project, channels, patch)
 
         if not isinstance(conv, nn.Conv2d):
-            raise Mismatch(f"{call} should be an nn.Conv2d.")
+            raise Mismatch(f"{call} should return an nn.Conv2d.")
 
         if conv.kernel_size != (patch, patch) or conv.stride != (patch, patch):
-            raise Mismatch(f"{call} should have a kernel and a stride of {patch}.")
+            raise Mismatch(f"{call} should return a Conv2d with a kernel size and a stride of {patch}.")
 
         images = torch.randn(2, channels, 4 * patch, 2 * patch, generator=torch.Generator().manual_seed(574))
 
@@ -310,7 +319,7 @@ def check_vit1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="patchify",
-        description="cuts images into rows of patches",
+        description="cuts images into patches, one row per patch",
         inputs=(
             (Described(torch.arange(16.0).reshape(1, 1, 4, 4), "one 4 by 4 image of 0 to 15"), 2),
             (small_tensor(575, 2, 3, 4, 6), 2),
@@ -342,12 +351,12 @@ VIT1 = Exercise(
     hints={
         "patchify": "Reshape to (batch, channels, height // patch, patch, width // patch, patch). Then "
         ".permute(0, 2, 4, 1, 3, 5), and reshape to (batch, -1, channels * patch * patch).",
-        "PatchEmbedding.forward": "self.project(patchify(images, self.patch)) embeds the patches. "
-        "self.class_token.expand(len(images), -1, -1) gives one class token per image to torch.cat in front on "
-        "dim=1. Then add self.positions.",
-        "conv_embedding": "nn.Conv2d(channels, size, patch, stride=patch), with size from project.out_features. "
-        "Inside torch.no_grad(), copy project.weight reshaped to (size, channels, patch, patch) into conv.weight, "
-        "and project.bias into conv.bias.",
+        "PatchEmbedding.forward": "Call patchify with self.patch and pass the result through self.project. "
+        "self.class_token.expand(len(images), -1, -1) gives one class token per image. Put it in front with "
+        "torch.cat on dim=1, then add self.positions.",
+        "conv_embedding": "Build nn.Conv2d(channels, size, patch, stride=patch), taking size from "
+        "project.out_features. Inside torch.no_grad(), copy project.weight reshaped to (size, channels, patch, "
+        "patch) into conv.weight, and copy project.bias into conv.bias.",
     },
     introduces=("class token",),
     check=check_vit1,
@@ -452,37 +461,44 @@ def data_curve(
 
 VIT2_LESSON = prose(
     """
-    A ViT is a stack of transformer blocks over patches, read out at the class
-    token. The one here is small, of size 64 with 2 blocks of 4 heads, 72,074
-    weights in all. Next to it is LeNet from lenet1, with 61,706.
+    A ViT is a stack of transformer blocks that runs over the patch tokens.
+    Its prediction is read from the output at the class token. The ViT here
+    is small, with size 64 and 2 blocks of 4 heads, which is 72,074 weights in
+    total. It is compared with LeNet from lenet1, which has 61,706 weights.
 
-    PyTorch's `nn.TransformerEncoderLayer` is block2's block without the mask.
-    `norm_first=True` gives the pre norm order. Its defaults are a ReLU and a
-    dropout of 0.1, so the ViT here sets a GELU and no dropout.
+    PyTorch's `nn.TransformerEncoderLayer` is the block from block2, without
+    the causal mask. `norm_first=True` gives the pre norm order. By default
+    the layer uses a ReLU and a dropout of 0.1, so the ViT here sets GELU and
+    no dropout instead.
 
     ```python
     block = nn.TransformerEncoderLayer(16, 2, 32, batch_first=True, norm_first=True)
-    block(torch.zeros(3, 5, 16)).shape    # torch.Size([3, 5, 16]), the shape it was given
+    block(torch.zeros(3, 5, 16)).shape    # torch.Size([3, 5, 16]), the same shape as the input
     ```
 
-    A convolution builds in two assumptions. Nearby pixels go together, which
-    is called **locality**. A pattern means the same thing anywhere in the
-    image, which is **translation equivariance**. The assumptions a layer
-    builds in are its **inductive bias**. A ViT has almost none. Only the cut
-    into patches keeps neighbours together, and attention lets any patch use
-    any other from the first block on.
+    A convolution builds in two assumptions. The first is that nearby pixels
+    belong together, which is called **locality**. The second is that a
+    pattern means the same thing anywhere in the image, which is called
+    **translation equivariance**. The assumptions built into a layer are its
+    **inductive bias**. A ViT has almost none. Only the cutting into patches
+    keeps neighbouring pixels together. Attention lets any patch use any other
+    patch, starting from the first block.
 
-    Both models trained 3,000 steps of AdamW on batches of 128, on the first N
-    training images, and were scored on the 10,000 validation images. On plain
-    digits, whose layout holds, LeNet led at every size on one seed. It scored
-    89.8% to the ViT's 76.2% at 500 images, and 98.6% to 97.2% at 50,000.
+    Both models were trained for 3,000 steps of AdamW on batches of 128,
+    using the first N training images. Then each model was scored on the
+    10,000 validation images. On normal digits, where LeNet's assumptions
+    hold, LeNet had the higher accuracy at every training size, on one seed.
+    At 500 images it scored 89.8% against the ViT's 76.2%. At 50,000 it
+    scored 98.6% against 97.2%.
 
-    MLP-Mixer's authors tested what a convolution assumes by taking it away.
-    Shuffle every image the same fixed way, the 16 patches and the 49 pixels
-    inside each. The patch Linear and the learned positions can absorb that
-    shuffle, so the ViT meets the same task as before. LeNet's neighbouring
-    pixels are no longer neighbours. Here are three seeds of each, all run on
-    this Mac's GPU.
+    The authors of MLP-Mixer tested these assumptions by breaking them.
+    Shuffle every image in the same fixed way, both the order of the 16
+    patches and the order of the 49 pixels inside each patch. For the ViT, a
+    fixed shuffle of a patch's pixels only reorders the weights its patch
+    Linear needs. A fixed shuffle of the patches only reorders the learned
+    positions. So the ViT faces the same task as before. For LeNet, pixels
+    that were neighbours are no longer neighbours. Here are three seeds of
+    each model, all run on this Mac's GPU.
 
     | Shuffled, training images | 500 | 2,000 | 10,000 | 50,000 |
     |---|---|---|---|---|
@@ -490,15 +506,16 @@ VIT2_LESSON = prose(
     | ViT | 73.5% to 77.8% | 87.3% to 89.4% | 94.3% to 96.0% | 96.4% to 97.1% |
 
     LeNet still leads at 2,000 images and below, on every seed. The ViT
-    scores about what it scored on plain digits. From 10,000 images on, the
-    ViT won on every seed, by 0.1 to 1.7 points at 10,000 and 0.6 to 1.3 at
-    50,000.
+    scores about what it scored on the normal digits. From 10,000 images up,
+    the ViT won on every seed. It won by 0.1 to 1.7 points at 10,000 images,
+    and by 0.6 to 1.3 points at 50,000.
 
-    That is the trade the ViT paper measured. A model with little inductive
-    bias needs more data, and with enough "large scale training trumps
-    inductive bias". There the bias held, on photos, and ViT-B/32 needed 90
-    million JFT images to pass ResNet50. MNIST has 50,000, so here the
-    shuffle takes LeNet's bias away instead.
+    This is the trade the ViT paper measured. A model with little inductive
+    bias needs more data, and with enough data "large scale training trumps
+    inductive bias". The paper worked on photos, where the CNN's assumptions
+    held. There, ViT-B/32 needed 90 million JFT images to beat ResNet50.
+    MNIST has only 50,000 training images, so here the shuffle makes LeNet's
+    assumptions wrong instead.
     """,
 )
 
@@ -526,21 +543,23 @@ VIT2_SOURCE = source_file(
 ''' + indented(PATCH_EMBEDDING_FORWARD) + '''
 
 
-    # accuracy, as lenet1 measured it.
+    # accuracy, measured as in lenet1.
 ''' + indented(ACCURACY_PART) + '''
 
 
-    # TODO: Finish forward. Embed images, run the blocks, take the final
-    #   LayerNorm, and return the head's scores from the class token's output
-    #   alone, of shape (batch, 10).
+    # TODO: Finish forward. Embed images with self.embed, run the result
+    #   through self.blocks, then apply the final LayerNorm, self.norm. Pass
+    #   only the class token's output, at position 0, to self.head. Return the
+    #   scores, of shape (batch, 10).
 ''' + indented(SMALL_VIT_INIT) + '''
 
         def forward(self, images: Tensor) -> Tensor:
             ...
 
 
-    # TODO: Finish the line that sets loss, the cross entropy of model's scores
-    #   on the batch of x against its labels, so this trains with AdamW.
+    # TODO: Finish the line that sets loss, so this function trains the model
+    #   with AdamW. The loss is the cross entropy between the model's scores on
+    #   the batch of x and the matching labels in y.
     def train_steps(
         model: nn.Module,
         x: Tensor,
@@ -560,9 +579,11 @@ VIT2_SOURCE = source_file(
         return loss.item()
 
 
-    # TODO: Return the validation accuracy of a fresh model from make_model for
-    #   each size in sizes, in order. Train each one with train_steps for steps
-    #   on the first size images of x, all with the one generator.
+    # TODO: Return a list with one validation accuracy for each size in sizes,
+    #   in order. For each size, build a fresh model with make_model. Train it
+    #   with train_steps on the first size images of x and their labels in y,
+    #   passing steps and the same generator every time. Then measure its
+    #   accuracy on validation_x and validation_y.
     def data_curve(
         make_model: Callable[[], nn.Module],
         x: Tensor,
@@ -695,7 +716,7 @@ def check_data_curve(found: object) -> None:
     expected = VIT2_REFERENCE["data_curve"](*arguments, torch.Generator().manual_seed(580))
 
     if not isinstance(actual, list):
-        raise Mismatch(f"data_curve should give a list of accuracies, one per size, but it gave {type(actual).__name__}.")
+        raise Mismatch(f"data_curve should return a list of accuracies, one per size, but it returned {type(actual).__name__}.")
 
     expect_value(
         call="data_curve of a small classifier at 50 and 400 images, 4 steps each",
@@ -718,7 +739,7 @@ def check_vit_learns(found: type) -> None:
     if right < 0.55:
         raise Mismatch(
             f"SmallViT(32, 1, 2), trained for 150 steps on 2,000 images, labels {right:.1%} of 2,000 validation images "
-            "right, but it should pass 55%.",
+            "correctly, but it should get more than 55% right.",
         )
 
 
@@ -726,7 +747,7 @@ def check_vit2(checker: Checker) -> None:
     checker.test_method(
         class_name="SmallViT",
         method="forward",
-        description="embeds, runs the blocks and scores the class token",
+        description="embeds the images, runs the blocks and scores the class token",
         run=check_small_vit,
     )
     checker.test(
@@ -755,9 +776,9 @@ VIT2 = Exercise(
     source=VIT2_SOURCE,
     solution=VIT2_SOLUTION,
     hints={
-        "SmallViT.forward": "self.blocks(self.embed(images)), then self.norm. Its output at position 0 is the class "
-        "token's, which goes to self.head.",
-        "train_steps": "F.cross_entropy(model(x[batch]), y[batch]).",
+        "SmallViT.forward": "Run self.embed, then self.blocks, then self.norm. The output at position 0 belongs to "
+        "the class token, and only that output goes to self.head.",
+        "train_steps": "Call F.cross_entropy with the model's scores on x[batch] and the labels y[batch].",
         "data_curve": "For each size, build a fresh model with make_model. Train it with train_steps on the first size "
         "rows of x and y, for steps, with generator. Then append accuracy(model, validation_x, validation_y).",
     },

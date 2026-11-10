@@ -32,11 +32,12 @@ BPE = Chapter(
         """
         # Byte pair encoding
 
-        How text becomes tokens. Text starts as UTF-8 bytes, the first 256
-        tokens, and byte pair encoding merges the commonest pair of neighbours
-        into a new token, again and again. You build the tokenizer GPT-2 uses,
-        in the style of Karpathy's minbpe, then measure why it beats characters
-        and words, and where it gets odd.
+        This chapter is about how text becomes tokens. Text starts as UTF-8
+        bytes, which give the first 256 tokens. Byte pair encoding then finds
+        the most common pair of neighbouring tokens and merges it into a new
+        token, again and again. You build the kind of tokenizer GPT-2 uses, in
+        the style of Karpathy's minbpe. Then you measure why it works better
+        than characters or words, and where it behaves strangely.
 
         ## Further reading
 
@@ -60,8 +61,8 @@ def indented_part(part: str) -> str:
 
 BPE1_LESSON = prose(
     """
-    A model reads tokens, so text has to become ids before anything else. A
-    computer already keeps text as numbers, bytes from 0 to 255, in an
+    A model reads tokens, so text has to be turned into token ids first. A
+    computer already stores text as numbers, bytes from 0 to 255, in an
     encoding called UTF-8.
 
     ```python
@@ -70,18 +71,18 @@ BPE1_LESSON = prose(
     bytes([104, 105]).decode("utf-8")    # 'hi'
     ```
 
-    An English letter takes one byte. Other characters take two to four, so
-    an accented letter takes 2 bytes and an emoji 4.
+    An English letter takes one byte. Other characters take two to four
+    bytes. For example, an accented letter takes 2 bytes and an emoji takes 4.
 
-    The 256 byte values make a first vocabulary of tokens. Every text there is
-    can be written with them, so a model never meets text it has no token for.
-    GPT-2's tokenizer starts here, and every merge of bpe2 and bpe3 builds on
-    these 256.
+    The 256 byte values make a first vocabulary of tokens. Any text can be
+    written with them, so a model never meets text it has no token for.
+    GPT-2's tokenizer starts from these 256 tokens, and every merge in bpe2
+    and bpe3 builds on them.
 
-    Not every list of bytes is valid UTF-8. A model can write the first byte of
-    a 2 byte character and stop, and `.decode("utf-8")` then raises an error.
-    With `errors="replace"`, the character � stands in for the broken bytes
-    instead. minbpe's decode does this.
+    Not every list of bytes is valid UTF-8. A model might write the first
+    byte of a 2 byte character and then stop. Then `.decode("utf-8")` raises
+    an error. With `errors="replace"`, decode puts the character � in place
+    of the broken bytes instead. minbpe's decode does this.
 
     ```python
     bytes([195]).decode("utf-8", errors="replace")    # '\\ufffd', the character �
@@ -99,22 +100,28 @@ BPE1_SOURCE = source_file(
 
 
     # TODO: Return the UTF-8 bytes of text as a list of ints from 0 to 255.
+    #   Example: to_bytes("hé") returns [104, 195, 169].
     def to_bytes(text: str) -> list[int]:
         ...
 
 
-    # TODO: Return the text that the bytes ids spell, with � standing in for any
-    #   bytes that aren't valid UTF-8.
+    # TODO: Decode the list of bytes ids as UTF-8 and return the text. Put �
+    #   in place of any bytes that are not valid UTF-8.
+    #   Example: from_bytes([104, 105, 226, 130]) returns 'hi�'.
     def from_bytes(ids: list[int]) -> str:
         ...
 
 
-    # TODO: Return how many bytes each character of text takes, in order.
+    # TODO: Return a list with the number of UTF-8 bytes each character of text
+    #   takes, in order.
+    #   Example: byte_lengths("aé€😀") returns [1, 2, 3, 4].
     def byte_lengths(text: str) -> list[int]:
         ...
 
 
-    # TODO: Return the number of bytes text takes per character, on average.
+    # TODO: Return the average number of UTF-8 bytes per character of text,
+    #   which is the total number of bytes divided by the number of characters.
+    #   Example: bytes_per_character("aé€😀") returns 2.5.
     def bytes_per_character(text: str) -> float:
         ...
     ''',
@@ -151,7 +158,7 @@ def check_bpe1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="to_bytes",
-        description="gives the UTF-8 bytes",
+        description="returns the UTF-8 bytes",
         inputs=(
             ("tensor",),
             ("Ünïcödé 😀",),
@@ -162,7 +169,7 @@ def check_bpe1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="from_bytes",
-        description="reads the bytes back, with � for broken ones",
+        description="decodes the bytes, with � for invalid bytes",
         inputs=(
             ([104, 195, 169, 33],),
             ([240, 159, 152, 128, 32, 104, 105],),
@@ -174,7 +181,7 @@ def check_bpe1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="byte_lengths",
-        description="gives each character's number of bytes",
+        description="returns the number of bytes in each character",
         inputs=(
             ("aé€😀",),
             ("plain",),
@@ -185,7 +192,7 @@ def check_bpe1(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="bytes_per_character",
-        description="gives the bytes per character",
+        description="returns the average bytes per character",
         inputs=(
             ("aé€😀",),
             ("hello",),
@@ -206,8 +213,8 @@ BPE1 = Exercise(
     hints={
         "to_bytes": "text.encode(\"utf-8\") gives the bytes, and list turns them into ints.",
         "from_bytes": "bytes(ids) turns the ints back into bytes. Decode them with errors=\"replace\".",
-        "byte_lengths": "For each character of text, the length of its own .encode(\"utf-8\").",
-        "bytes_per_character": "The length of the whole text's bytes over len(text).",
+        "byte_lengths": "For each character of text, take the length of that character's .encode(\"utf-8\").",
+        "bytes_per_character": "Divide the number of bytes in the whole text by len(text).",
     },
     introduces=(),
     check=check_bpe1,
@@ -258,30 +265,34 @@ def merge(
 BPE2_LESSON = prose(
     """
     **Byte pair encoding**, BPE, grows the vocabulary one token at a time.
-    Count every pair of neighbouring tokens, take the commonest pair, and give
-    it a new id. Then put that id in place of the pair everywhere it appears.
-    Sennrich and colleagues brought it to neural translation in 2016, and
-    GPT-2 runs it on bytes.
+    Count every pair of neighbouring tokens, take the most common pair, and
+    give it a new id. Then put that id in place of the pair everywhere it
+    appears. This step is called a merge. Sennrich and colleagues brought BPE
+    to neural translation in 2016, and GPT-2 applies it to bytes.
 
     ```python
     ids = [97, 97, 97, 98]          # 'aaab'
     list(zip(ids, ids[1:]))         # [(97, 97), (97, 97), (97, 98)]
     ```
 
-    `zip(ids, ids[1:])` walks every pair of neighbours. Here (97, 97) comes up
-    twice, so it becomes token 256, and the ids become `[256, 97, 98]`.
+    `zip(ids, ids[1:])` goes through every pair of neighbours. Here (97, 97)
+    appears twice, so it becomes token 256. Merging it turns the ids into
+    `[256, 97, 98]`.
 
-    The replacing goes left to right and never overlaps. In `aaa` the pair
-    `aa` is replaced once, at the start, and the last `a` stays as it was.
+    The replacement goes from left to right, and replacements never overlap.
+    In `aaa` the pair `aa` is replaced only once, at the start, and the last
+    `a` stays as it was.
 
-    Each merge makes the ids shorter and the vocabulary one bigger. On the
-    first 100,000 characters of tiny Shakespeare, the text of the GPT project,
-    the first merges are `e `, `th`, `t `, `s ` and `ou`. These are the
-    commonest pairs of English, spaces included.
+    Each merge makes the list of ids shorter and the vocabulary one token
+    bigger. Tiny Shakespeare is the text the GPT project trains on. On its
+    first 100,000 characters, the first merges are `e `, `th`, `t `, `s ` and
+    `ou`. These are the most common pairs of characters in English, counting
+    spaces.
 
-    Two pairs can tie. Then the pair seen first wins. Python's `max` over a
-    dict gives exactly that, since a dict keeps its keys in the order they
-    came in.
+    Two pairs can tie for the highest count. Then the pair that appeared
+    first wins. Python's `max` over a dict does exactly that. A dict keeps its
+    keys in the order they were added, and `max` returns the first key with
+    the highest score.
 
     ```python
     scores = {"x": 2, "y": 2}
@@ -300,20 +311,25 @@ BPE2_SOURCE = source_file(
     best = max(tally, key=tally.get)         # 'y'
 
 
-    # TODO: Return how many times each pair of neighbours appears in ids, as a
-    #   dict from the pair to its count, in the order the pairs first appear.
+    # TODO: Count how many times each pair of neighbouring ids appears in ids.
+    #   Return a dict from each pair to its count, with the pairs in the order
+    #   they first appear.
+    #   Example: pair_counts([1, 2, 1, 2, 3]) returns
+    #   {(1, 2): 2, (2, 1): 1, (2, 3): 1}.
     def pair_counts(ids: list[int]) -> dict[tuple[int, int], int]:
         ...
 
 
-    # TODO: Return the pair of neighbours that appears most often in ids. A tie
-    #   goes to the pair that appears first.
+    # TODO: Return the pair of neighbouring ids that appears most often in ids.
+    #   If several pairs tie, return the one that appears first.
+    #   Example: most_common_pair([4, 5, 6, 4, 5, 6]) returns (4, 5).
     def most_common_pair(ids: list[int]) -> tuple[int, int]:
         ...
 
 
-    # TODO: Return ids with new_id in place of every pair of neighbours equal to
-    #   pair, going left to right, so the replacements never overlap.
+    # TODO: Return a new list where every occurrence of pair in ids is replaced
+    #   by new_id. Go from left to right, so the replacements never overlap.
+    #   Example: merge([97, 97, 97, 98], (97, 97), 256) returns [256, 97, 98].
     def merge(
         ids: list[int],
         pair: tuple[int, int],
@@ -368,7 +384,7 @@ def check_bpe2(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="most_common_pair",
-        description="gives the commonest pair, the first one on a tie",
+        description="returns the most common pair, the first one on a tie",
         inputs=(
             ([1, 2, 3, 1, 2, 3, 2, 3],),
             ([4, 5, 6, 4, 5, 6],),
@@ -405,9 +421,9 @@ BPE2 = Exercise(
     solution=BPE2_SOLUTION,
     hints={
         "pair_counts": "Loop over zip(ids, ids[1:]) and add 1 to counts.get(pair, 0) for each pair.",
-        "most_common_pair": "max over pair_counts(ids) with key set to that dict's .get.",
-        "merge": "Walk a position along ids with a while loop. When ids[position] and the next one make pair, append "
-        "new_id and step 2, otherwise append ids[position] and step 1.",
+        "most_common_pair": "Call max on the dict from pair_counts(ids), with key set to that dict's .get method.",
+        "merge": "Move a position along ids with a while loop. When ids[position] and the next id form pair, append "
+        "new_id and move forward 2. Otherwise append ids[position] and move forward 1.",
     },
     introduces=(),
     check=check_bpe2,
@@ -475,37 +491,41 @@ def decode(
 
 BPE3_LESSON = prose(
     """
-    Training repeats bpe2's step. Start from the text's bytes, and for each
-    new id from 256 up to the vocabulary size, merge the commonest pair and
-    write it down. That dict from each pair to its new id is the whole
-    tokenizer.
+    Training repeats the merge step from bpe2. Start from the text's bytes.
+    For each new id from 256 up to the vocabulary size, merge the most common
+    pair and record it. The resulting dict, from each merged pair to its new
+    id, is the whole tokenizer.
 
-    Decoding needs the bytes each token stands for. Token 256 might stand for
-    the pair (101, 32), the bytes of `e `. A token built from other tokens
-    stands for both their bytes joined. So build that table in the order the
-    merges were made, and both halves always have their bytes already.
+    Decoding needs the bytes that each token stands for. Token 256 might
+    stand for the pair (101, 32), which is the bytes of `e `. A token built
+    from two other tokens stands for their bytes joined together. So build
+    this table of bytes in the order the merges were made. Then both halves
+    of each pair already have their bytes when you need them.
 
-    Encoding new text has to apply the merges in the order training made them.
-    Merge 300 may be built from merge 270, so it can't come first. At each step
-    find the pair in the ids with the earliest merge, the smallest new id, and
-    apply it. Stop when no pair has a merge.
+    Encoding new text has to apply the merges in the order training made
+    them. Token 300 may be built from token 270, so merge 300 cannot be
+    applied before merge 270. At each step, find the pair in the ids whose
+    merge came earliest. That is the pair with the smallest new id. Apply its
+    merge, and stop when no pair in the ids has a merge.
 
     ```python
     merges = {(104, 105): 256}
     min([(105, 33), (104, 105)], key=lambda pair: merges.get(pair, float("inf")))    # (104, 105)
     ```
 
-    A pair with no merge counts as infinity, so it wins only when nothing can
-    merge, and `pair not in merges` then ends the loop.
+    A pair with no merge gets the key infinity, so `min` picks it only when no
+    pair can merge. In that case `pair not in merges` is true and ends the
+    loop.
 
-    `decode(encode(text, merges), merges)` has to give back `text` exactly, for
-    any text at all. That round trip is the test of a tokenizer, and the
-    bytes underneath make it hold even for text unlike the training text.
+    `decode(encode(text, merges), merges)` has to give back exactly `text`,
+    for any text at all. This round trip is the test of a tokenizer. Because
+    every token is made of bytes, it works even for text that looks nothing
+    like the training text.
 
-    This `train` is plain Python, so it is slow on big texts. 768 merges on
-    100,000 characters of tiny Shakespeare took 4.35 to 4.45 seconds on this
-    Mac's CPU, an Apple M5. tiktoken, the tokenizer OpenAI's models use,
-    encodes far faster.
+    This `train` is plain Python, so it is slow on big texts. Learning 768
+    merges on 100,000 characters of tiny Shakespeare took 4.35 to 4.45
+    seconds on this Mac's CPU, an Apple M5. tiktoken, the tokenizer library
+    OpenAI's models use, encodes far faster.
     """,
 )
 
@@ -518,14 +538,17 @@ BPE3_SOURCE = source_file(
     joined = b"h" + b"i"    # b'hi'
 
 
-    # bpe2's pieces.
+    # The functions from bpe2.
 ''' + indented_part(PAIR_PARTS) + '''
 
 
-    # TODO: Return the merges that training on text learns, a dict from each
-    #   merged pair to its new id. Start from text's UTF-8 bytes, and for each
-    #   new id from 256 up to vocab_size, merge the commonest pair. Stop early
-    #   when fewer than 2 ids are left.
+    # TODO: Train a tokenizer on text and return its merges, a dict from each
+    #   merged pair to its new id. Start from the UTF-8 bytes of text. For each
+    #   new id from 256 up to but not including vocab_size, find the most
+    #   common pair, merge it into the ids, and record it. Stop early when
+    #   fewer than 2 ids are left.
+    #   Example: train("aaabdaaabac", 259) returns
+    #   {(97, 97): 256, (256, 97): 257, (257, 98): 258}.
     def train(
         text: str,
         vocab_size: int,
@@ -533,15 +556,19 @@ BPE3_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the bytes each token stands for, a dict from each id to its
-    #   bytes. Ids 0 to 255 are their own byte, and each merged id is the bytes
-    #   of its pair joined, filled in the order of merges.
+    # TODO: Return the bytes each token stands for, as a dict from each id to
+    #   its bytes. Each id from 0 to 255 stands for that single byte. Each
+    #   merged id stands for the bytes of its two halves joined together. Fill
+    #   them in the order of merges.
+    #   Example: vocabulary({(104, 105): 256})[256] is b'hi'.
     def vocabulary(merges: dict[tuple[int, int], int]) -> dict[int, bytes]:
         ...
 
 
-    # TODO: Finish the line that picks pair, the pair of neighbours in ids with
-    #   the earliest merge, the smallest new id in merges.
+    # TODO: Finish the line that sets pair. It should pick the pair of
+    #   neighbours in ids whose merge came earliest, which is the pair with the
+    #   smallest new id in merges.
+    #   Example: encode("hi!", {(104, 105): 256}) returns [256, 33].
     def encode(
         text: str,
         merges: dict[tuple[int, int], int],
@@ -559,8 +586,9 @@ BPE3_SOURCE = source_file(
         return ids
 
 
-    # TODO: Return the text that ids spell, with � standing in for any bytes
-    #   that aren't valid UTF-8.
+    # TODO: Return the text that ids spell. Join the bytes of every token, then
+    #   decode them as UTF-8, with � in place of any bytes that are not valid.
+    #   Example: decode([256, 33], {(104, 105): 256}) returns 'hi!'.
     def decode(
         ids: list[int],
         merges: dict[tuple[int, int], int],
@@ -595,14 +623,14 @@ def expect_vocabulary(
     expected: dict[int, bytes],
 ) -> None:
     if not isinstance(actual, dict):
-        raise Mismatch(f"{call} should be a dict from each id to its bytes.")
+        raise Mismatch(f"{call} should return a dict from each id to its bytes.")
 
     for index, wanted in expected.items():
         if actual.get(index) != wanted:
             raise Mismatch(f"In {call}, id {index} is {actual.get(index)!r}, but it should be {wanted!r}.")
 
     if len(actual) != len(expected):
-        raise Mismatch(f"{call} has {len(actual)} ids, but it should have {len(expected)}, 256 bytes and one per merge.")
+        raise Mismatch(f"{call} has {len(actual)} ids, but it should have {len(expected)}, which is 256 bytes plus one per merge.")
 
 
 def check_round_trip(found: object) -> None:
@@ -622,7 +650,7 @@ def check_bpe3(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="train",
-        description="learns the merges, commonest pair first",
+        description="learns the merges, most common pair first",
         inputs=(
             ("aaabdaaabac", 259),
             ("the cat in the hat sat on the mat", 270),
@@ -665,7 +693,7 @@ def check_bpe3(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="decode",
-        description="spells the ids back out",
+        description="turns the ids back into text",
         inputs=(
             ([258, 100, 258, 97, 99], {(97, 97): 256, (256, 97): 257, (257, 98): 258}),
             ([104, 105, 226, 130], {}),
@@ -675,7 +703,7 @@ def check_bpe3(checker: Checker) -> None:
     )
     checker.test(
         function="decode",
-        description="gives back any text that encode was given",
+        description="returns any text that encode was given",
         run=check_round_trip,
     )
 
@@ -688,12 +716,15 @@ BPE3 = Exercise(
     source=BPE3_SOURCE,
     solution=BPE3_SOLUTION,
     hints={
-        "train": "ids = list(text.encode(\"utf-8\")). Loop new_id over range(256, vocab_size), and break once "
-        "len(ids) < 2. Otherwise take most_common_pair, merge it into ids and record new_id under that pair in merges.",
+        "train": "Start from list(text.encode(\"utf-8\")), as encode does. Loop new_id over range(256, vocab_size), "
+        "and break once len(ids) < 2. Otherwise find most_common_pair, merge it into ids, and record new_id under that "
+        "pair in merges.",
         "vocabulary": "Start from {index: bytes([index]) for index in range(256)}. Then for each (first, second), "
         "new_id in merges.items(), join the bytes of first and second.",
-        "encode": "min over pair_counts(ids), with key=lambda pair: merges.get(pair, float(\"inf\")).",
-        "decode": "b\"\".join the bytes of each id from vocabulary(merges), then .decode(\"utf-8\", errors=\"replace\").",
+        "encode": "Use min over pair_counts(ids). Its key looks up each pair in merges and gives float(\"inf\") for "
+        "a missing pair, as in the lesson's example.",
+        "decode": "Get each id's bytes from vocabulary(merges) and join them with b\"\".join. Then call "
+        ".decode(\"utf-8\", errors=\"replace\").",
     },
     introduces=(),
     check=check_bpe3,
@@ -745,9 +776,9 @@ def encode_chunks(
 
 BPE4_LESSON = prose(
     """
-    Why bytes and merges, and not characters or words? Here is tiny
-    Shakespeare. Each tokenizer learned from its first 100,000 characters and
-    was measured on the next 50,000. A word here is a run of letters, as
+    Why use bytes and merges instead of characters or words? Here is a
+    comparison on tiny Shakespeare. Each tokenizer learned from its first
+    100,000 characters and was measured on the next 50,000. A word here is a run of letters, as
     `re.findall(r"[A-Za-z]+", text)` finds them.
 
     | Tokens | Vocabulary | Tokens for the 50,000 characters |
@@ -757,30 +788,32 @@ BPE4_LESSON = prose(
     | BPE, 768 merges | 1,024 | 18,643, 2.68 bytes each |
     | words | 3,290 | 9,307 words, 11.7% of them unknown |
 
-    Bytes make the longest sequences, and a model's cost grows with length,
-    the cost of comparing every pair of positions with its square. Words make
-    the shortest, but 11.7% of the words in the later text never appeared in
-    the first part. A model has no id for them. All of tiny Shakespeare holds
-    13,320 different words, and real text holds far more.
+    Bytes make the longest sequences, and a model's cost grows with the
+    length. The cost of attention, which compares every pair of positions,
+    grows with the square of the length. Words make the shortest sequences.
+    But 11.7% of the words in the later text never appeared in the first
+    part, so a word vocabulary has no id for them. All of tiny Shakespeare
+    holds 13,320 different words, and real text holds far more.
 
-    BPE sits between. Common words become single tokens, rare ones split into
-    pieces, and nothing is ever unknown, since the bytes are always there.
+    BPE sits in between. Common words become single tokens, and rare words
+    split into pieces. No text is ever unknown, because the 256 byte tokens
+    are always there.
 
-    It has quirks. With 768 merges, `the` is one token, `The` is two, `T` and
-    `he`, and `the king` splits as `the `, `k`, `ing`. A word's tokens change
-    with its capital and with the spaces around it.
+    BPE has quirks. With 768 merges, `the` is one token, but `The` is two,
+    `T` and `he`. And `the king` splits as `the `, `k`, `ing`. So the tokens
+    of a word change with its capitalization and with the spaces around it.
 
-    Numbers split by how often pairs showed up, not by place value. Trained on
-    the numbers 0 to 1999, ` 1999` becomes ` 1`, `99`, `9`, and ` 123456`
-    becomes ` 1`, `23`, `45`, `6`. That is part of why arithmetic is hard for
-    language models.
+    Numbers split according to which pairs of digits were common in training,
+    not by place value. After training on the numbers 0 to 1999, ` 1999`
+    becomes ` 1`, `99`, `9`, and ` 123456` becomes ` 1`, `23`, `45`, `6`.
+    That is part of why arithmetic is hard for language models.
 
-    GPT-2 first splits text with a regular expression into words, runs of
-    digits and other symbols, each with the space before it. Merges then stay
-    inside each chunk. Its vocabulary is 50,257 tokens, the 256 bytes, 50,000
-    merges and one token that marks the end of a text. GPT-4's tokenizer,
-    cl100k_base, has about 100,000 tokens and splits numbers into runs of at
-    most 3 digits.
+    GPT-2 first uses a regular expression to split text into chunks. Each
+    chunk is a word, a run of digits or a run of other symbols, together with
+    the space before it. Merges then happen only inside each chunk. GPT-2's
+    vocabulary has 50,257 tokens, which are the 256 bytes, 50,000 merges, and
+    one token that marks the end of a text. GPT-4's tokenizer, cl100k_base,
+    has about 100,000 tokens and splits numbers into runs of at most 3 digits.
     """,
 )
 
@@ -791,10 +824,10 @@ BPE4_SOURCE = source_file(
     import re
 
     words = re.findall(r"[A-Za-z]+", "To be, or not to be")    # ['To', 'be', 'or', 'not', 'to', 'be']
-    unique = set(words)                                         # 5 words, To and to apart
+    unique = set(words)                                         # 5 words, since To and to differ
 
 
-    # bpe2's pieces and bpe3's tokenizer.
+    # The functions from bpe2 and the tokenizer from bpe3.
 ''' + indented_part(PAIR_PARTS) + '''
 
 
@@ -804,8 +837,9 @@ BPE4_SOURCE = source_file(
 ''' + indented_part(SPLIT_PART) + '''
 
 
-    # TODO: Return the number of UTF-8 bytes of text per token that encode
-    #   gives it.
+    # TODO: Return the average number of UTF-8 bytes per token when text is
+    #   encoded with merges. That is the number of bytes in text divided by the
+    #   number of ids that encode returns.
     def bytes_per_token(
         text: str,
         merges: dict[tuple[int, int], int],
@@ -813,8 +847,10 @@ BPE4_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the share of test_words that never appear in train_words, the
-    #   words a vocabulary of the training words has no id for.
+    # TODO: Return the fraction of test_words that never appear in
+    #   train_words. A vocabulary built from the training words would have no
+    #   id for these words.
+    #   Example: unseen_share(["a", "b", "c"], ["a", "d", "d", "b"]) returns 0.5.
     def unseen_share(
         train_words: list[str],
         test_words: list[str],
@@ -822,8 +858,10 @@ BPE4_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the text of each token that encode gives text, in order, with
-    #   � standing in for any bytes that aren't valid UTF-8 alone.
+    # TODO: Encode text with merges and return the text of each token, in
+    #   order, as a list of strings. Decode each token's bytes on its own, with
+    #   � in place of bytes that are not valid UTF-8 by themselves.
+    #   Example: pieces("é", {}) returns ['�', '�'].
     def pieces(
         text: str,
         merges: dict[tuple[int, int], int],
@@ -831,8 +869,9 @@ BPE4_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the ids of text encoded one chunk at a time, the chunks that
-    #   re.findall(SPLIT, text) gives, so no merge joins two chunks.
+    # TODO: Split text into chunks with re.findall(SPLIT, text), encode each
+    #   chunk on its own, and return all the ids in one list, in order. This
+    #   way no merge joins two chunks.
     def encode_chunks(
         text: str,
         merges: dict[tuple[int, int], int],
@@ -886,7 +925,7 @@ def check_bpe4(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="unseen_share",
-        description="gives the share of test words never seen in training",
+        description="returns the fraction of test words never seen in training",
         inputs=(
             (["a", "b", "c"], ["a", "d", "d", "b"]),
             (["to", "be", "or"], ["To", "be", "to", "not"]),
@@ -909,7 +948,7 @@ def check_bpe4(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="encode_chunks",
-        description="encodes each chunk alone, so no merge crosses a chunk",
+        description="encodes each chunk separately, so no merge crosses a chunk boundary",
         inputs=(
             ("the cat sat on the mat", CAT_MERGES),
             ("that rat, 1999 hats", CAT_MERGES),
@@ -927,10 +966,11 @@ BPE4 = Exercise(
     source=BPE4_SOURCE,
     solution=BPE4_SOLUTION,
     hints={
-        "bytes_per_token": "len(text.encode(\"utf-8\")) over len(encode(text, merges)).",
+        "bytes_per_token": "Divide the length of text.encode(\"utf-8\") by the number of ids that encode(text, merges) "
+        "returns.",
         "unseen_share": "Make a set of train_words, then count the test words not in it and divide by len(test_words).",
-        "pieces": "vocabulary(merges) gives each id's bytes. Decode each one with errors=\"replace\", for each id that "
-        "encode gives.",
+        "pieces": "vocabulary(merges) gives each id's bytes. For each id that encode returns, decode its bytes with "
+        "errors=\"replace\".",
         "encode_chunks": "For each chunk of re.findall(SPLIT, text), add the ids of encode(chunk, merges) to one list.",
     },
     introduces=(),
@@ -977,15 +1017,15 @@ def measure_bpe() -> dict[str, object]:
 
 QUIZ9_LESSON = prose(
     """
-    This quiz has no examples and no new tools. Each function combines moves
+    This quiz has no examples and no new tools. Each function combines steps
     from the attention chapters of Section 7. If a step is unclear, the
-    exercise in the table shows it.
+    exercise listed in the table shows how to do it.
 
-    | Function | Moves | Shown in |
+    | Function | Steps | Shown in |
     |---|---|---|
-    | `padded_causal_attention` | the future and the padding blocked together, scores scaled by the square root of the size, a softmax, the values mixed | attention2, mask1, attention5 |
-    | `rope_causal_scores` | each position's query and key turned by its angles, the scores scaled, the future set to minus infinity | rope1, attention3, attention2 |
-    | `heads_padded_attention` | each head's slice of the features, padded causal attention on it, the heads joined back | multihead1, this quiz |
+    | `padded_causal_attention` | the future and padding masked, scores divided by the square root of the size, a softmax, a weighted sum of values | attention2, mask1, attention5 |
+    | `rope_causal_scores` | each position's query and key rotated by its angles, the scores scaled, the future set to minus infinity | rope1, attention3, attention2 |
+    | `heads_padded_attention` | each head's slice of the features, padded causal attention on that slice, the heads' outputs joined back together | multihead1, this quiz |
     """,
 )
 
@@ -993,7 +1033,7 @@ QUIZ9_SOURCE = source_file(
     '''
     # quiz9.py
     #
-    # No examples and no new tools. Each function combines moves from Section 7.
+    # No examples and no new tools. Each function combines steps from Section 7.
 
     import math
 
@@ -1001,11 +1041,13 @@ QUIZ9_SOURCE = source_file(
     from torch import Tensor
 
 
-    # TODO: Return attention of q, k and v, each of shape (batch, steps, size),
-    #   by hand. A query may not look at a key in its future, or at a key at
-    #   or past its sequence's length in lengths, of shape (batch,). Scale the
-    #   scores by the square root of size, set every blocked one to minus
-    #   infinity, take the softmax and mix the values.
+    # TODO: Compute attention of q, k and v by hand and return the output. q,
+    #   k and v each have shape (batch, steps, size). A query may not attend
+    #   to a key in its future. It also may not attend to a padding key, which
+    #   is a key at or past its sequence's length in lengths, of shape
+    #   (batch,). Divide the scores by the square root of size, set every
+    #   blocked score to minus infinity, take the softmax over the keys, and
+    #   return the weighted sum of the values.
     def padded_causal_attention(
         q: Tensor,
         k: Tensor,
@@ -1015,12 +1057,13 @@ QUIZ9_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the causal scores of q and k, each of shape (steps, size),
-    #   after RoPE. Turn each adjacent pair of features (0 and 1, 2 and 3, and
-    #   so on) of row m of q and of k by its angle in angles[m], of shape
-    #   (steps, size // 2). A pair (a, b) turned by phi becomes
-    #   (a cos phi - b sin phi, a sin phi + b cos phi). Then divide q k^T by
-    #   the square root of size, and set the future to minus infinity.
+    # TODO: Return the causal attention scores of q and k after RoPE. q and k
+    #   each have shape (steps, size), and angles has shape (steps, size // 2).
+    #   In row m of q and of k, rotate each adjacent pair of features (0 and 1,
+    #   2 and 3, and so on) by its angle in angles[m]. A pair (a, b) rotated by
+    #   phi becomes (a cos phi - b sin phi, a sin phi + b cos phi). Then divide
+    #   q @ k^T by the square root of size, and set the scores of future keys
+    #   to minus infinity.
     def rope_causal_scores(
         q: Tensor,
         k: Tensor,
@@ -1029,11 +1072,12 @@ QUIZ9_SOURCE = source_file(
         ...
 
 
-    # TODO: Return padded causal attention of q, k and v, each of shape
-    #   (batch, steps, size), run in heads heads. Head h reads the features
-    #   from h * head_size up to (h + 1) * head_size, where head_size is
-    #   size // heads. Run padded_causal_attention on each head's features,
-    #   then join the heads' outputs back along the features, in order.
+    # TODO: Return padded causal attention of q, k and v, split into heads
+    #   heads. q, k and v each have shape (batch, steps, size). head_size is
+    #   size // heads, and head h uses the features from h * head_size up to
+    #   but not including (h + 1) * head_size. Run padded_causal_attention on
+    #   each head's features. Then join the heads' outputs back together along
+    #   the features, in order.
     def heads_padded_attention(
         q: Tensor,
         k: Tensor,
@@ -1168,7 +1212,7 @@ def check_quiz9(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="padded_causal_attention",
-        description="blocks the future and the padding, then attends",
+        description="masks the future and the padding, then computes attention",
         inputs=(
             (quiz_tensor(930, 2, 5, 4), quiz_tensor(931, 2, 5, 4), quiz_tensor(932, 2, 5, 3), torch.tensor([5, 3])),
             (quiz_tensor(933, 3, 6, 8), quiz_tensor(934, 3, 6, 8), quiz_tensor(935, 3, 6, 8), torch.tensor([6, 1, 4])),
@@ -1179,7 +1223,7 @@ def check_quiz9(checker: Checker) -> None:
     check_on_inputs(
         checker=checker,
         function="rope_causal_scores",
-        description="turns q and k by RoPE, then scales and masks the scores",
+        description="rotates q and k with RoPE, then scales and masks the scores",
         inputs=(
             (quiz_tensor(942, 3, 4), quiz_tensor(943, 3, 4), quiz_tensor(944, 3, 2)),
             (quiz_tensor(945, 5, 6), quiz_tensor(946, 5, 6), quiz_tensor(947, 5, 3)),
@@ -1209,12 +1253,13 @@ QUIZ9 = Exercise(
     solution=QUIZ9_SOLUTION,
     hints={
         "padded_causal_attention": "torch.triu of a square of True with diagonal=1 marks the future. "
-        "torch.arange(steps) >= lengths.unsqueeze(1) marks each sequence's padded keys. Join the two with |, with "
-        "the padding unsqueezed to (batch, 1, steps), and masked_fill the scaled scores.",
-        "rope_causal_scores": "q[:, 0::2] and q[:, 1::2] are the pairs' halves. torch.stack the two turned halves on "
-        "dim=-1 and .flatten(-2) zips them back. Do the same for k, then mask the scaled q @ k.T as attention2 did.",
-        "heads_padded_attention": "Loop over the heads, slicing q[:, :, start:end] and the same for k and v. "
-        "torch.cat the outputs on dim=-1.",
+        "torch.arange(steps) >= lengths.unsqueeze(1) marks each sequence's padded keys. Unsqueeze the padding to "
+        "(batch, 1, steps) and combine the two masks with |. Then masked_fill the scaled scores.",
+        "rope_causal_scores": "q[:, 0::2] holds the first feature of every pair, and q[:, 1::2] holds the second. "
+        "torch.stack the two rotated halves on dim=-1, and .flatten(-2) interleaves them back into pairs. Do the same "
+        "for k, then mask the scaled q @ k.T as in attention2.",
+        "heads_padded_attention": "Loop over the heads, slicing q[:, :, start:end] and the same for k and v. Join "
+        "the outputs with torch.cat on dim=-1.",
     },
     introduces=(),
     check=check_quiz9,
@@ -1227,17 +1272,17 @@ QUIZ9 = Exercise(
 
 QUIZ10_LESSON = prose(
     """
-    This quiz has no examples and no new tools. Each function combines moves
-    from the transformer chapters of Section 7, and `greedy_text` brings back
-    the greedy writing of Section 6. If a step is unclear, the exercise in
-    the table shows it.
+    This quiz has no examples and no new tools. Each function combines steps
+    from the transformer chapters of Section 7. `greedy_text` also uses the
+    greedy text generation from Section 6. If a step is unclear, the exercise
+    listed in the table shows how to do it.
 
-    | Function | Moves | Shown in |
+    | Function | Steps | Shown in |
     |---|---|---|
-    | `mixtral_layer` | each token's top k experts and their softmax, every expert a SwiGLU MLP, the outputs weighted and summed | moe1, llama2, dynamic1 |
-    | `embed_patches` | an image cut into patches, each embedded by one matrix, a class token in front and positions added | vit1 |
+    | `mixtral_layer` | each token's top k experts and the softmax of their scores, every expert a SwiGLU MLP, the outputs weighted and summed | moe1, llama2, dynamic1 |
+    | `embed_patches` | an image cut into patches, each embedded with the same matrix, a class token in front and positions added | vit1 |
     | `apply_merges` | every merge applied in the order it was made, each replacing its pair from left to right | bpe3, bpe2 |
-    | `greedy_text` | the model's best last id fed back each step, the new ids spelled by the merges' bytes | bidir2, greedy1, bpe3 |
+    | `greedy_text` | the highest scoring id at the last position appended each step, the new ids decoded with the merges' bytes | bidir2, greedy1, bpe3 |
     """,
 )
 
@@ -1245,7 +1290,7 @@ QUIZ10_SOURCE = source_file(
     '''
     # quiz10.py
     #
-    # No examples and no new tools. Each function combines moves from Sections
+    # No examples and no new tools. Each function combines steps from Sections
     # 6 and 7.
 
     import torch
@@ -1254,11 +1299,13 @@ QUIZ10_SOURCE = source_file(
     from torch import Tensor
 
 
-    # TODO: Return Mixtral's layer for x, of shape (tokens, size). The router's
-    #   scores are x @ router.T. Each token weights its k largest scores'
-    #   experts by a softmax over those scores alone, and the rest by 0.
-    #   Expert i is a SwiGLU MLP, F.silu(x @ W_gate[i].T) times x @ W_up[i].T,
-    #   then @ W_down[i].T. Running every expert is fine here.
+    # TODO: Return the output of a Mixtral layer for x, of shape
+    #   (tokens, size). The router's scores are x @ router.T. Each token gives
+    #   the experts with its k largest scores the weights of a softmax over
+    #   only those scores, and gives every other expert a weight of 0. Expert
+    #   i is a SwiGLU MLP, (F.silu(x @ W_gate[i].T) * (x @ W_up[i].T)) @
+    #   W_down[i].T. The result is the weighted sum of the experts' outputs.
+    #   Running every expert is fine here.
     def mixtral_layer(
         x: Tensor,
         router: Tensor,
@@ -1270,11 +1317,13 @@ QUIZ10_SOURCE = source_file(
         ...
 
 
-    # TODO: Return a ViT's input for images, of shape (batch, channels, height,
-    #   width), of shape (batch, patches + 1, size). Cut the images into
-    #   patches, row by row, each flattened by channel, then row, then column.
-    #   Embed each patch's row as row @ W.T, put class_token, of shape (size,),
-    #   in front of each image's patches, and add positions to every token.
+    # TODO: Return a ViT's input for images, of shape
+    #   (batch, channels, height, width). The result has shape
+    #   (batch, patches + 1, size). Cut the images into patch by patch squares,
+    #   in order row by row, and flatten each patch by channel, then row, then
+    #   column. Embed each flattened patch row as row @ W.T. Put class_token,
+    #   of shape (size,), in front of each image's patches, and add positions
+    #   to every token.
     def embed_patches(
         images: Tensor,
         patch: int,
@@ -1285,9 +1334,11 @@ QUIZ10_SOURCE = source_file(
         ...
 
 
-    # TODO: Return ids with every merge in merges applied, in the order merges
-    #   holds them. Each merge puts its new id in place of its pair wherever the
-    #   pair sits, from left to right and without overlaps.
+    # TODO: Return ids after applying every merge in merges, in the order the
+    #   dict holds them. Each merge replaces every occurrence of its pair with
+    #   its new id, from left to right and without overlaps.
+    #   Example: apply_merges([5, 5, 5, 5, 5], {(5, 5): 260, (260, 260): 261})
+    #   returns [261, 5].
     def apply_merges(
         ids: list[int],
         merges: dict[tuple[int, int], int],
@@ -1295,13 +1346,14 @@ QUIZ10_SOURCE = source_file(
         ...
 
 
-    # TODO: Return the text model writes after ids, a list of token ids. model
-    #   takes ids of shape (1, steps) and gives scores of shape (1, steps,
-    #   tokens). Run it on every id so far, append the highest scoring id at
-    #   the last position, and repeat until count new ids are written,
-    #   recording nothing for autograd. Then spell the new ids alone with the
-    #   bytes of the tokens merges builds, with � for bytes that aren't valid
-    #   UTF-8.
+    # TODO: Return the text that model writes after ids, a list of token ids.
+    #   model takes ids of shape (1, steps) and returns scores of shape
+    #   (1, steps, tokens). At each step, run model on all the ids so far and
+    #   append the id with the highest score at the last position. Repeat
+    #   until count new ids are written, without letting autograd record.
+    #   Then decode only the new ids. Join the bytes of their tokens, using the
+    #   tokens that merges builds, and decode them as UTF-8 with � in place of
+    #   invalid bytes.
     def greedy_text(
         model: nn.Module,
         ids: list[int],
@@ -1480,8 +1532,8 @@ class ScriptedWriter(nn.Module):
     def forward(self, ids: Tensor) -> Tensor:
         if ids.dim() != 2:
             raise Mismatch(
-                f"model was given ids of shape {tuple(ids.shape)}, but it takes shape (1, steps). Make the ids so "
-                "far one row of a batch of one.",
+                f"model was given ids of shape {tuple(ids.shape)}, but it takes shape (1, steps). Pass the ids so "
+                "far as a batch with one row.",
             )
 
         self.recorded = self.recorded or torch.is_grad_enabled()
@@ -1592,14 +1644,15 @@ QUIZ10 = Exercise(
     source=QUIZ10_SOURCE,
     solution=QUIZ10_SOLUTION,
     hints={
-        "mixtral_layer": "topk the router's scores, then scatter their softmax into torch.zeros(len(x), len(router)), "
-        "as dynamic1 did. torch.stack every expert's SwiGLU output on dim=1, weight it and sum over dim=1.",
-        "embed_patches": "vit1's reshape, permute and reshape cut the patches. class_token.expand(batch, 1, -1) gives "
-        "one per image to torch.cat in front on dim=1.",
-        "apply_merges": "Loop over merges.items(), and for each one walk a position along ids as bpe2's merge did, "
+        "mixtral_layer": "Take the topk of the router's scores, then scatter their softmax into "
+        "torch.zeros(len(x), len(router)), as in dynamic1. Stack every expert's SwiGLU output with torch.stack on "
+        "dim=1, multiply by the weights, and sum over dim=1.",
+        "embed_patches": "Cut the patches with the reshape, permute and reshape from vit1. "
+        "class_token.expand(batch, 1, -1) gives one class token per image. Put it in front with torch.cat on dim=1.",
+        "apply_merges": "Loop over merges.items(). For each merge, move a position along ids as bpe2's merge did, "
         "building a new list.",
-        "greedy_text": "Keep a list of every id so far. Each step, run model on it as one row, as generate does in "
-        "bidir2. Append the argmax at the last position, as greedy_decode does in greedy1. Then build each token's "
+        "greedy_text": "Keep a list of every id so far. Each step, run model on the list as a batch with one row, as "
+        "generate does in bidir2. Append the argmax at the last position, as greedy_decode does in greedy1. Then build each token's "
         "bytes as vocabulary does in bpe3, and join the new ids' bytes before decoding, as decode does.",
     },
     introduces=(),
