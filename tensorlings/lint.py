@@ -104,7 +104,7 @@ FILLER: tuple[str, ...] = (
 )
 
 LONGEST_SENTENCE = 25
-TALLEST_LESSON = 60
+TALLEST_LESSON = 80
 LESSON_WIDTH = 96
 
 # A paragraph that opens with a bold label, like "**Why it exists.**", reads as a filled in template.

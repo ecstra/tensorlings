@@ -1,5 +1,10 @@
 # AGENTS.md
 
+## 0. Project Rules
+
+1. All work goes straight onto main. No branches and no code reviews, by the owner's word on 2026-11-10. This replaces section 9 of SYSTEM.md and the line in 10.1 that keeps commits off main.
+2. Course text, the lessons, TODOs, hints and check messages, is written in clear, natural English that a programmer understands on the first read. The writing rules in `.agents/docs/research/tensorlings-course-design.md` say how.
+
 <!-- The kit's words start here. Section 0 goes above this line. -->
 
 The rules for working in this repo are in @.agents/SYSTEM.md and every

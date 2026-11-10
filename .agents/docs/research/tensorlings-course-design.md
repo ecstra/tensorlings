@@ -2,7 +2,7 @@
 name: tensorlings-course-design
 kind: doc
 description: the tensorlings curriculum, how each block is taught, the combination rules, the design method, the exercise format, the app and the writing rules
-updated: 2026-10-30
+updated: 2026-11-10
 links: []
 ---
 
@@ -117,12 +117,15 @@ Each rule gets exercises where the wrong combination fails and the right one wor
 From [the research](tensorlings-research.md#research-on-writing-that-sounds-human).
 
 - Write for someone who can program and knows no deep learning. Skip what a programmer knows, like tuples, ints and floats, and explain every deep learning term in plain words where it first appears.
+- Write the way a clear textbook explains things to a friend who programs, in full natural sentences that make sense on the first read. Connecting words like because, so and which means show how one fact leads to the next.
+- Use the standard word for a thing, like derivative, standard deviation, increases or changes, and explain it where it first appears. Never swap it for a made up phrase. In November 2026 the owner could not read the TODO "Return how far f(x) moves when x grows by 0.001, divided by 0.001". It now says to compute `f(x + 0.001) - f(x)`, the change in the output when x increases by 0.001, and divide it by 0.001.
+- When a formula or a line of code says something most clearly, write it, like `(f(x + h) - f(x)) / h`, and say in words what it means.
 - No story examples and no comparisons. The owner rejected shops, apples and "picture a grid". Examples are plain tensors, tasks are plain operations like making a grid or dropping a column, and a short paragraph says where models use the idea.
 - Show code and its output first, then give the name. One new idea per paragraph.
 - No bold labels on paragraphs, no clauses bolted onto the end of a sentence, no tidy closing summary.
 - Every term explained where it first appears, never relying on a later lesson.
 - Give the why as a case the learner will meet, inside the lesson's flow.
-- Sentences mostly under 20 words. Read it aloud, and rewrite what you would not say to a friend.
+- Sentences mostly under 20 words, but never cut so short that they lose the words that make them clear. Read it aloud, and rewrite what you would not say to a friend.
 
 ## Tasks
 
@@ -138,13 +141,13 @@ From [the research](tensorlings-research.md#research-on-tasks-that-make-the-lear
 - The lesson teaches every tool its tasks need, on its own small example. A task never needs a function or argument that no lesson showed.
 - No line of a solution appears in the lesson or the hints as the task writes it.
 - The file gives the scaffolding and leaves the tensor work as `TODO`s, as rustlings does.
-- The TODO says the operation in plain programming words, like "convert the list of lists into a tensor of floats", and shows an example call with its result. A deep learning word in a TODO is explained right there, and the lint fails a starting file that uses one no lesson or TODO has explained. A TODO carries no why section, since the owner found one on every task to be noise.
+- The TODO says the operation in plain programming words and standard terms, like "convert the list of lists into a tensor of floats", with the formula when that is clearest, and shows an example call with its result. A deep learning word in a TODO is explained right there, and the lint fails a starting file that uses one no lesson or TODO has explained. A TODO carries no why section, since the owner found one on every task to be noise.
 - The tests include the case that catches the likely mistake, such as a square batch where rows and columns mix up.
 
 ## Verification
 
 - `run.py dev check` runs every exercise twice. The starting file must fail and the solution must pass.
-- A lesson lint in the dev check flags sentences over 25 words, filler words, dashes and semicolons, a paragraph that opens with a bold label, a lesson taller than 60 lines at width 96, any term from `JARGON` in `tensorlings/lint.py` used before an exercise lists it in `introduces`, and any solution body that shows up word for word in the lesson or the hints. A new technical term gets added to `JARGON` the first time a lesson needs it.
+- A lesson lint in the dev check flags sentences over 25 words, filler words, dashes and semicolons, a paragraph that opens with a bold label, a lesson taller than 80 lines at width 96, any term from `JARGON` in `tensorlings/lint.py` used before an exercise lists it in `introduces`, and any solution body that shows up word for word in the lesson or the hints. A new technical term gets added to `JARGON` the first time a lesson needs it.
 - A separate reviewer agent reads every lesson as a complete beginner before the owner sees it.
 - `dev/wrong_answers.py` runs common wrong answers through the checks. Every one must fail with a message a beginner can act on, and the script exits with 1 if one passes. New exercises add their likely mistakes to its `CASES`.
 - `dev/screens.py` drives the app headless with Textual's Pilot on a scratch copy of the course and saves SVG screenshots, which `qlmanage` turns into PNGs to look at. It runs before each hand over, at a normal size and at 80 by 24. Its docstring has the command.
