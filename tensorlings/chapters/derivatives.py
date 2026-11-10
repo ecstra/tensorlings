@@ -293,18 +293,28 @@ DERIVATIVES2_LESSON = prose(
     undoes it. Both turn up all through deep learning. In Python they are
     `math.exp` and `math.log`.
 
-    Here is the derivative of `x ** 3 + 4 * x` at 2, by the rules and by
-    nudging.
+    The expressions here are written as Python code. Python computes `**`
+    first, then `*` and `/`, then `+` and `-`. So `x ** 3 + 4 * x` means
+    `(x ** 3) + (4 * x)`. It is two terms added together.
+
+    The sum rule says to take the derivative of each term and add the results.
+    The derivative of `x ** 3` is `3 * x ** 2`, by the power rule. The
+    derivative of `4 * x` is `4 * 1`, by the constant factor rule. So the
+    derivative of `x ** 3 + 4 * x` is `3 * x ** 2 + 4`. Here it is at `x = 2`,
+    by the rules and by nudging.
 
     ```python
-    3 * 2 ** 2 + 4                                  # 16, by the power, constant factor and sum rules
+    3 * 2 ** 2 + 4                                  # 16, by the rules
     f = lambda x: x ** 3 + 4 * x
     (f(2.000001) - f(1.999999)) / 0.000002          # 16.00000000046009
     ```
 
-    The product rule handles two parts multiplied together. For
-    `x ** 2 * exp(x)` the parts are `x ** 2` and `exp(x)`, so the derivative
-    at 1 is `2 * 1 * e + 1 * e`, about 8.15.
+    The product rule handles two parts multiplied together. Python reads
+    `x ** 2 * exp(x)` as `(x ** 2) * exp(x)`, so the two parts are
+    `f(x) = x ** 2` and `g(x) = exp(x)`. Their derivatives are `f'(x) = 2 * x`
+    and `g'(x) = exp(x)`. The product rule gives
+    `2 * x * exp(x) + x ** 2 * exp(x)`. At `x = 1` that is `2 * e + e`, about
+    8.15.
     """,
 )
 
@@ -320,7 +330,10 @@ DERIVATIVES2_SOURCE = source_file(
         return 3 * x ** 2 + 4
 
 
-    # TODO: Return the derivative of 5 * x ** 4 - 2 * x + 7 at x.
+    # TODO: Return the derivative of 5 * x ** 4 - 2 * x + 7 at x. Python reads
+    #   this as (5 * (x ** 4)) - (2 * x) + 7, so it has three terms. Take the
+    #   derivative of each term, then add or subtract them the same way.
+    #   Example: d_quartic(2.0) returns 158.0.
     def d_quartic(x: float) -> float:
         ...
 
@@ -331,13 +344,17 @@ DERIVATIVES2_SOURCE = source_file(
 
 
     # TODO: Return the derivative of x ** 3 * log(x) at x, by the product rule.
-    #   x is always above 0, where log works.
+    #   Python reads this as (x ** 3) * log(x), so the two parts are x ** 3
+    #   and log(x). x is always above 0, where log is defined.
+    #   Example: d_cube_times_log(1.0) returns 1.0.
     def d_cube_times_log(x: float) -> float:
         ...
 
 
-    # TODO: Return the derivative of exp(x) + log(x) + x ** 0.5 at x. x ** 0.5 is
-    #   the square root of x, and the power rule covers it too.
+    # TODO: Return the derivative of exp(x) + log(x) + x ** 0.5 at x. The three
+    #   terms are exp(x), log(x) and x ** 0.5. x ** 0.5 is the square root of
+    #   x, and the power rule works for it too, with n = 0.5.
+    #   Example: d_three_terms(1.0) returns about 4.218.
     def d_three_terms(x: float) -> float:
         ...
     ''',
